@@ -1,0 +1,1932 @@
+/*
+ * Racetagger Desktop - Delight System
+ * Transform potentially frustrating moments into positive, memorable experiences
+ * 
+ * Focus Areas:
+ * 1. WAITING MOMENTS - Make processing time enjoyable
+ * 2. ERROR HANDLING - Friendly, helpful error experiences
+ * 3. SUCCESS CELEBRATIONS - Reward user achievements
+ * 4. EMPTY STATES - Guide users with personality
+ * 5. MICRO-INTERACTIONS - Add life to every interaction
+ */
+
+:root {
+  /* Delight Color Palette */
+  --delight-success: #10b981;
+  --delight-warning: #f59e0b;
+  --delight-error: #ef4444;
+  --delight-info: #3b82f6;
+  --delight-racing-orange: #ff6b35;
+  --delight-racing-blue: #4c9aff;
+  --delight-racing-yellow: #ffcc02;
+  
+  /* Animation Curves */
+  --bounce: cubic-bezier(0.68, -0.55, 0.265, 1.55);
+  --smooth: cubic-bezier(0.4, 0, 0.2, 1);
+  --quick: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  
+  /* Timing */
+  --fast: 0.2s;
+  --normal: 0.3s;
+  --slow: 0.5s;
+  
+  /* Shadows */
+  --glow-success: 0 0 20px rgba(16, 185, 129, 0.3);
+  --glow-error: 0 0 20px rgba(239, 68, 68, 0.3);
+  --glow-racing: 0 0 20px rgba(255, 107, 53, 0.3);
+}
+
+/* =================================
+   1. WAITING MOMENTS DELIGHT
+   ================================= */
+
+/* Enhanced Loading States */
+.delight-loading-container {
+  background: linear-gradient(135deg, #f8fafc 0%, #ffffff 100%);
+  border-radius: 12px;
+  padding: 2rem;
+  text-align: center;
+  border: 2px solid #e2e8f0;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+  animation: gentlePulse 3s ease-in-out infinite;
+}
+
+@keyframes gentlePulse {
+  0%, 100% { box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1); }
+  50% { box-shadow: 0 15px 35px rgba(0, 0, 0, 0.15); }
+}
+
+.delight-loading-race-car {
+  font-size: 3rem;
+  margin-bottom: 1rem;
+  animation: raceCarBounce 2s ease-in-out infinite;
+}
+
+@keyframes raceCarBounce {
+  0%, 100% { transform: translateX(0) rotate(0deg); }
+  25% { transform: translateX(10px) rotate(2deg); }
+  75% { transform: translateX(-5px) rotate(-1deg); }
+}
+
+.delight-loading-message {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #1e293b;
+  margin-bottom: 0.5rem;
+  animation: messageSlide 4s ease-in-out infinite;
+}
+
+@keyframes messageSlide {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+.delight-loading-submessage {
+  font-size: 0.9rem;
+  color: #64748b;
+  font-style: italic;
+  animation: fadeInOut 3s ease-in-out infinite alternate;
+}
+
+@keyframes fadeInOut {
+  0% { opacity: 0.5; }
+  100% { opacity: 1; }
+}
+
+/* Progress with Racing Theme */
+.delight-progress-track {
+  background: linear-gradient(90deg, #e2e8f0 0%, #f1f5f9 100%);
+  height: 12px;
+  border-radius: 20px;
+  margin: 1.5rem 0;
+  position: relative;
+  overflow: hidden;
+  border: 2px solid #cbd5e1;
+}
+
+.delight-progress-car {
+  height: 100%;
+  background: linear-gradient(90deg, var(--delight-racing-orange), var(--delight-racing-yellow));
+  border-radius: 20px;
+  position: relative;
+  transition: width 0.8s var(--bounce);
+  box-shadow: 0 0 10px rgba(255, 107, 53, 0.4);
+}
+
+.delight-progress-car::after {
+  content: '🏎️';
+  position: absolute;
+  right: -15px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 16px;
+  animation: carShake 0.5s ease-in-out infinite;
+}
+
+@keyframes carShake {
+  0%, 100% { transform: translateY(-50%) rotate(0deg); }
+  50% { transform: translateY(-50%) rotate(1deg); }
+}
+
+/* Milestone Celebrations */
+.delight-milestone {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: white;
+  border-radius: 20px;
+  padding: 2rem;
+  text-align: center;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+  z-index: 2000;
+  animation: milestonePopIn 0.6s var(--bounce);
+}
+
+@keyframes milestonePopIn {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.5);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+.delight-milestone-icon {
+  font-size: 4rem;
+  margin-bottom: 1rem;
+  animation: celebrationBounce 1s ease-in-out infinite;
+}
+
+@keyframes celebrationBounce {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.2); }
+}
+
+.delight-milestone-title {
+  font-size: 1.5rem;
+  font-weight: bold;
+  color: var(--delight-racing-orange);
+  margin-bottom: 0.5rem;
+}
+
+.delight-milestone-message {
+  color: #64748b;
+  font-size: 1rem;
+}
+
+/* Processing Entertainment */
+.delight-processing-fun {
+  background: linear-gradient(135deg, #fff7ed 0%, #ffffff 100%);
+  border: 2px solid #fed7aa;
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin: 1rem 0;
+  animation: funSlideIn 0.5s ease-out;
+}
+
+@keyframes funSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.delight-fun-fact {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  font-size: 0.9rem;
+  color: #92400e;
+  line-height: 1.5;
+}
+
+.delight-fun-icon {
+  font-size: 2rem;
+  animation: iconFloat 3s ease-in-out infinite;
+}
+
+@keyframes iconFloat {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-5px); }
+}
+
+/* =================================
+   2. ERROR HANDLING DELIGHT
+   ================================= */
+
+.delight-error-container {
+  background: linear-gradient(135deg, #fef2f2 0%, #ffffff 100%);
+  border: 2px solid #fca5a5;
+  border-radius: 12px;
+  padding: 2rem;
+  margin: 1rem 0;
+  animation: gentleShake 0.5s ease-in-out;
+}
+
+@keyframes gentleShake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-5px); }
+  75% { transform: translateX(5px); }
+}
+
+.delight-error-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.delight-error-icon {
+  font-size: 2.5rem;
+  animation: errorWiggle 2s ease-in-out infinite;
+}
+
+@keyframes errorWiggle {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(-10deg); }
+  75% { transform: rotate(10deg); }
+}
+
+.delight-error-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #dc2626;
+  margin: 0;
+}
+
+.delight-error-message {
+  color: #7f1d1d;
+  margin-bottom: 1.5rem;
+  font-size: 1rem;
+  line-height: 1.6;
+}
+
+.delight-error-suggestions {
+  background: rgba(255, 255, 255, 0.7);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.delight-error-suggestions h4 {
+  color: #dc2626;
+  font-size: 1rem;
+  margin: 0 0 0.5rem 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.delight-error-suggestions ul {
+  margin: 0;
+  padding-left: 1.5rem;
+  color: #7f1d1d;
+}
+
+.delight-error-actions {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.delight-retry-btn {
+  background: linear-gradient(135deg, var(--delight-error), #dc2626);
+  color: white;
+  border: none;
+  padding: 0.75rem 1.5rem;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--normal) var(--smooth);
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+}
+
+.delight-retry-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(239, 68, 68, 0.4);
+}
+
+.delight-help-btn {
+  background: transparent;
+  color: var(--delight-error);
+  border: 2px solid var(--delight-error);
+  padding: 0.75rem 1.5rem;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--normal) var(--smooth);
+}
+
+.delight-help-btn:hover {
+  background: var(--delight-error);
+  color: white;
+  transform: translateY(-1px);
+}
+
+/* =================================
+   3. SUCCESS CELEBRATIONS
+   ================================= */
+
+.delight-success-container {
+  background: linear-gradient(135deg, #ecfdf5 0%, #ffffff 100%);
+  border: 2px solid #a7f3d0;
+  border-radius: 12px;
+  padding: 2rem;
+  margin: 1rem 0;
+  animation: successPopIn 0.6s var(--bounce);
+  position: relative;
+  overflow: hidden;
+}
+
+@keyframes successPopIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.8) rotate(-5deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+.delight-success-container::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: linear-gradient(45deg, transparent, rgba(16, 185, 129, 0.1), transparent);
+  animation: successShimmer 2s ease-in-out infinite;
+}
+
+@keyframes successShimmer {
+  0% { transform: translateX(-100%) translateY(-100%); }
+  100% { transform: translateX(100%) translateY(100%); }
+}
+
+.delight-success-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  position: relative;
+  z-index: 1;
+}
+
+.delight-success-icon {
+  font-size: 3rem;
+  animation: successSpin 2s ease-in-out infinite;
+}
+
+@keyframes successSpin {
+  0% { transform: scale(1) rotate(0deg); }
+  25% { transform: scale(1.1) rotate(90deg); }
+  50% { transform: scale(1) rotate(180deg); }
+  75% { transform: scale(0.9) rotate(270deg); }
+  100% { transform: scale(1) rotate(360deg); }
+}
+
+.delight-success-title {
+  font-size: 1.5rem;
+  font-weight: bold;
+  color: #059669;
+  margin: 0;
+}
+
+.delight-success-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0;
+  position: relative;
+  z-index: 1;
+}
+
+.delight-stat-card {
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 8px;
+  padding: 1rem;
+  text-align: center;
+  border: 1px solid rgba(16, 185, 129, 0.2);
+  transition: transform var(--normal) var(--smooth);
+}
+
+.delight-stat-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 20px rgba(16, 185, 129, 0.2);
+}
+
+.delight-stat-number {
+  font-size: 2rem;
+  font-weight: bold;
+  color: #059669;
+  display: block;
+  animation: countUp 1s ease-out;
+}
+
+@keyframes countUp {
+  from { opacity: 0; transform: scale(0.5); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.delight-stat-label {
+  font-size: 0.9rem;
+  color: #047857;
+  margin-top: 0.5rem;
+}
+
+.delight-confetti-container {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 3000;
+  overflow: hidden;
+}
+
+.delight-confetti {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  animation: confettiFall 3s linear infinite;
+}
+
+@keyframes confettiFall {
+  0% {
+    transform: translateY(-100vh) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(100vh) rotate(720deg);
+    opacity: 0;
+  }
+}
+
+.delight-confetti:nth-child(odd) {
+  background: var(--delight-racing-orange);
+  animation-delay: -0.5s;
+}
+
+.delight-confetti:nth-child(even) {
+  background: var(--delight-racing-blue);
+  animation-delay: -1s;
+}
+
+/* =================================
+   4. EMPTY STATES DELIGHT
+   ================================= */
+
+.delight-empty-state {
+  text-align: center;
+  padding: 3rem 2rem;
+  background: linear-gradient(135deg, #f8fafc 0%, #ffffff 100%);
+  border-radius: 16px;
+  border: 2px dashed #cbd5e1;
+  margin: 2rem 0;
+  transition: all var(--normal) var(--smooth);
+}
+
+.delight-empty-state:hover {
+  border-color: var(--delight-racing-orange);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(255, 107, 53, 0.1);
+}
+
+.delight-empty-icon {
+  font-size: 4rem;
+  margin-bottom: 1.5rem;
+  opacity: 0.7;
+  animation: emptyFloat 4s ease-in-out infinite;
+}
+
+@keyframes emptyFloat {
+  0%, 100% { transform: translateY(0px) scale(1); }
+  50% { transform: translateY(-10px) scale(1.05); }
+}
+
+.delight-empty-title {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: #475569;
+  margin-bottom: 0.5rem;
+}
+
+.delight-empty-message {
+  font-size: 1rem;
+  color: #64748b;
+  margin-bottom: 2rem;
+  line-height: 1.6;
+  max-width: 400px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.delight-empty-actions {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.delight-cta-primary {
+  background: linear-gradient(135deg, var(--delight-racing-orange), #ff8c5a);
+  color: white;
+  border: none;
+  padding: 1rem 2rem;
+  border-radius: 25px;
+  font-weight: 600;
+  font-size: 1.1rem;
+  cursor: pointer;
+  transition: all var(--normal) var(--smooth);
+  box-shadow: 0 6px 20px rgba(255, 107, 53, 0.3);
+}
+
+.delight-cta-primary:hover {
+  transform: translateY(-3px) scale(1.05);
+  box-shadow: 0 10px 30px rgba(255, 107, 53, 0.4);
+}
+
+.delight-cta-secondary {
+  background: transparent;
+  color: var(--delight-racing-orange);
+  border: 2px solid var(--delight-racing-orange);
+  padding: 1rem 2rem;
+  border-radius: 25px;
+  font-weight: 600;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all var(--normal) var(--smooth);
+}
+
+.delight-cta-secondary:hover {
+  background: var(--delight-racing-orange);
+  color: white;
+  transform: translateY(-2px);
+}
+
+/* =================================
+   5. MICRO-INTERACTIONS DELIGHT
+   ================================= */
+
+/* Enhanced Button Interactions */
+.delight-button {
+  position: relative;
+  overflow: hidden;
+  transform: translateZ(0);
+  transition: all var(--normal) var(--smooth);
+}
+
+.delight-button::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  transition: width 0.3s, height 0.3s;
+}
+
+.delight-button:active::before {
+  width: 300px;
+  height: 300px;
+}
+
+.delight-button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2);
+}
+
+/* File Drop Zone Enhancement */
+.delight-drop-zone {
+  border: 3px dashed #cbd5e1;
+  border-radius: 16px;
+  padding: 3rem;
+  text-align: center;
+  background: linear-gradient(135deg, #f8fafc 0%, #ffffff 100%);
+  transition: all var(--normal) var(--smooth);
+  cursor: pointer;
+}
+
+.delight-drop-zone:hover {
+  border-color: var(--delight-racing-orange);
+  background: linear-gradient(135deg, #fff7ed 0%, #ffffff 100%);
+  transform: scale(1.02);
+}
+
+.delight-drop-zone.active {
+  border-color: var(--delight-success);
+  background: linear-gradient(135deg, #ecfdf5 0%, #ffffff 100%);
+  animation: dropPulse 1s ease-in-out infinite;
+}
+
+@keyframes dropPulse {
+  0%, 100% { transform: scale(1.02); }
+  50% { transform: scale(1.05); }
+}
+
+.delight-drop-icon {
+  font-size: 3rem;
+  margin-bottom: 1rem;
+  transition: transform var(--normal) var(--smooth);
+}
+
+.delight-drop-zone:hover .delight-drop-icon {
+  transform: scale(1.2) rotate(5deg);
+}
+
+/* Image Preview Enhancement */
+.delight-image-preview {
+  border-radius: 12px;
+  overflow: hidden;
+  position: relative;
+  transition: all var(--normal) var(--smooth);
+  cursor: pointer;
+}
+
+.delight-image-preview:hover {
+  transform: scale(1.05);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.2);
+}
+
+.delight-image-preview::after {
+  content: '🔍 Click to enlarge';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(0, 0, 0, 0.7);
+  color: white;
+  padding: 0.5rem;
+  text-align: center;
+  transform: translateY(100%);
+  transition: transform var(--normal) var(--smooth);
+  font-size: 0.9rem;
+}
+
+.delight-image-preview:hover::after {
+  transform: translateY(0);
+}
+
+/* Input Field Enhancement */
+.delight-input {
+  border: 2px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  transition: all var(--normal) var(--smooth);
+  position: relative;
+}
+
+.delight-input:focus {
+  border-color: var(--delight-racing-orange);
+  box-shadow: 0 0 0 3px rgba(255, 107, 53, 0.1);
+  transform: scale(1.02);
+}
+
+.delight-input:valid {
+  border-color: var(--delight-success);
+}
+
+.delight-input:invalid:not(:placeholder-shown) {
+  border-color: var(--delight-error);
+  animation: inputShake 0.3s ease-in-out;
+}
+
+@keyframes inputShake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-5px); }
+  75% { transform: translateX(5px); }
+}
+
+/* Table Row Animation */
+.delight-table-row {
+  transition: all var(--normal) var(--smooth);
+  animation: rowSlideIn 0.5s ease-out;
+}
+
+@keyframes rowSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.delight-table-row:hover {
+  background: linear-gradient(135deg, rgba(255, 107, 53, 0.1) 0%, rgba(76, 154, 255, 0.1) 100%);
+  transform: scale(1.01);
+}
+
+/* Loading Spinner Enhancement */
+.delight-spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #e2e8f0;
+  border-top: 4px solid var(--delight-racing-orange);
+  border-radius: 50%;
+  animation: delightSpin 1s linear infinite, spinPulse 2s ease-in-out infinite;
+  margin: 0 auto;
+}
+
+@keyframes delightSpin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes spinPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+}
+
+/* =================================
+   6. ACCESSIBILITY & PREFERENCES
+   ================================= */
+
+/* Respect reduced motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  
+  .delight-confetti {
+    display: none;
+  }
+  
+  .delight-milestone {
+    animation: none;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+/* High contrast mode */
+@media (prefers-contrast: high) {
+  .delight-loading-container,
+  .delight-error-container,
+  .delight-success-container,
+  .delight-empty-state {
+    border-width: 3px;
+    border-style: solid;
+  }
+}
+
+/* Dark mode adjustments */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --delight-success: #34d399;
+    --delight-error: #f87171;
+    --delight-racing-orange: #fb923c;
+  }
+  
+  .delight-loading-container,
+  .delight-success-container,
+  .delight-empty-state {
+    background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+    color: #f1f5f9;
+  }
+  
+  .delight-error-container {
+    background: linear-gradient(135deg, #451a03 0%, #7c2d12 100%);
+    color: #fef2f2;
+  }
+}
+
+/* =================================
+   7. UTILITY CLASSES
+   ================================= */
+
+.delight-hidden {
+  opacity: 0;
+  transform: scale(0.8);
+  pointer-events: none;
+}
+
+.delight-visible {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+}
+
+.delight-bounce-in {
+  animation: bounceIn 0.6s var(--bounce);
+}
+
+@keyframes bounceIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
+  70% {
+    transform: scale(0.9);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.delight-slide-up {
+  animation: slideUp 0.5s ease-out;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.delight-fade-in {
+  animation: fadeIn 0.5s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Professional Racing Theme Toggle */
+.delight-professional-mode .delight-loading-race-car,
+.delight-professional-mode .delight-milestone-icon,
+.delight-professional-mode .delight-fun-icon {
+  font-size: 2rem;
+}
+
+.delight-professional-mode .delight-confetti-container {
+  display: none;
+}
+
+.delight-professional-mode .delight-milestone {
+  background: #f8fafc;
+  border: 2px solid #e2e8f0;
+  animation-duration: 0.3s;
+}
+
+/* Settings for delight level control */
+.delight-level-minimal .delight-loading-race-car,
+.delight-level-minimal .delight-confetti-container,
+.delight-level-minimal .delight-fun-fact {
+  display: none;
+}
+
+.delight-level-full .delight-confetti-container {
+  display: block;
+}
+
+/* =================================
+   8. RACING-SPECIFIC DELIGHT FEATURES
+   ================================= */
+
+/* Queue Information */
+.delight-queue-info {
+  background: linear-gradient(135deg, #fff7ed 0%, #ffffff 100%);
+  border: 2px solid #fed7aa;
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin: 1rem 0;
+  animation: slideInFromLeft 0.5s ease-out;
+}
+
+@keyframes slideInFromLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-50px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.delight-queue-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.delight-queue-icon {
+  font-size: 2rem;
+  animation: queuePulse 2s ease-in-out infinite;
+}
+
+@keyframes queuePulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+}
+
+.delight-queue-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #9a3412;
+}
+
+.delight-queue-subtitle {
+  font-size: 0.9rem;
+  color: #c2410c;
+}
+
+.delight-queue-cars {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+  margin: 1rem 0;
+}
+
+.delight-queue-car {
+  font-size: 1.5rem;
+  animation: carQueue 3s ease-in-out infinite;
+}
+
+@keyframes carQueue {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-5px); }
+}
+
+.delight-queue-message {
+  text-align: center;
+  color: #92400e;
+  font-style: italic;
+  font-size: 0.9rem;
+}
+
+/* Quick Win Notifications */
+.delight-quick-win {
+  margin-bottom: 0.5rem;
+  animation: quickWinSlide 0.4s ease-out;
+}
+
+@keyframes quickWinSlide {
+  from {
+    opacity: 0;
+    transform: translateX(50px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.delight-quick-win-content {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.delight-quick-win-icon {
+  font-size: 1.5rem;
+  animation: quickWinBounce 1s ease-in-out;
+}
+
+@keyframes quickWinBounce {
+  0% { transform: scale(0.5); }
+  50% { transform: scale(1.2); }
+  100% { transform: scale(1); }
+}
+
+.delight-quick-win-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.delight-quick-win-message {
+  font-size: 0.8rem;
+  opacity: 0.9;
+}
+
+/* Achievement Notifications */
+.delight-achievement {
+  animation: achievementSlideIn 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+@keyframes achievementSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(100px) scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+.delight-achievement-content {
+  text-align: center;
+}
+
+.delight-achievement-icon {
+  font-size: 2.5rem;
+  margin-bottom: 0.5rem;
+  animation: achievementGlow 2s ease-in-out infinite;
+}
+
+@keyframes achievementGlow {
+  0%, 100% { 
+    text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+    transform: scale(1);
+  }
+  50% { 
+    text-shadow: 0 0 20px rgba(255, 255, 255, 0.8);
+    transform: scale(1.1);
+  }
+}
+
+.delight-achievement-title {
+  font-weight: bold;
+  font-size: 1.1rem;
+  margin-bottom: 0.25rem;
+}
+
+.delight-achievement-message {
+  font-size: 0.9rem;
+  opacity: 0.9;
+}
+
+/* Workflow Tips */
+.delight-workflow-tip {
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 1rem;
+  margin: 1rem 0;
+  backdrop-filter: blur(10px);
+  animation: tipFadeIn 0.5s ease-out;
+}
+
+@keyframes tipFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.delight-tip-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.delight-tip-icon {
+  font-size: 1.3rem;
+}
+
+.delight-tip-title {
+  color: #374151;
+  font-size: 0.95rem;
+}
+
+.delight-tip-message {
+  color: #6b7280;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* Progressive Disclosure */
+.delight-progressive-disclosure {
+  background: rgba(248, 250, 252, 0.95);
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 1rem;
+  margin: 1rem 0;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.delight-disclosure-stage {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.5);
+  animation: stageReveal 0.3s ease-out;
+}
+
+@keyframes stageReveal {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.delight-disclosure-stage:last-child {
+  border-bottom: none;
+}
+
+.delight-disclosure-check {
+  color: #10b981;
+  font-weight: bold;
+  font-size: 1.1rem;
+  animation: checkAppear 0.5s ease-out;
+}
+
+@keyframes checkAppear {
+  from {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.delight-disclosure-message {
+  color: #475569;
+  font-size: 0.9rem;
+}
+
+/* Enhanced Confetti for Racing Theme */
+.delight-confetti.racing-flag {
+  background: linear-gradient(45deg, #000 25%, transparent 25%, transparent 75%, #000 75%, #000),
+              linear-gradient(45deg, #fff 25%, #000 25%, #000 75%, #fff 75%, #fff);
+  background-size: 8px 8px;
+  background-position: 0 0, 4px 4px;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .delight-quick-win,
+  .delight-achievement {
+    position: fixed !important;
+    left: 10px !important;
+    right: 10px !important;
+    max-width: none !important;
+  }
+  
+  .delight-queue-cars {
+    gap: 0.25rem;
+  }
+  
+  .delight-queue-car {
+    font-size: 1.2rem;
+  }
+  
+  .race-mode-active .delight-button {
+    transform: none !important;
+  }
+  
+  .efficiency-meter,
+  .performance-indicator {
+    display: none !important;
+  }
+  
+  body.dragover::after {
+    font-size: 1.2rem;
+    padding: 1.5rem 2rem;
+  }
+  
+  .process-options {
+    grid-template-columns: 1fr;
+  }
+  
+  .process-option-btn {
+    padding: 0.75rem 1rem;
+    font-size: 0.9rem;
+  }
+  
+  .drop-options-modal .modal-content {
+    padding: 1.5rem;
+    margin: 1rem;
+  }
+}
+
+/* Performance optimizations */
+.delight-loading-container,
+.delight-success-container,
+.delight-error-container,
+.delight-notification,
+.completion-celebration {
+  will-change: transform, opacity;
+}
+
+.delight-confetti {
+  will-change: transform, opacity;
+}
+
+.delight-quick-win,
+.delight-achievement,
+.image-card.processing,
+.image-card.completed,
+.image-card.failed {
+  will-change: transform, opacity;
+}
+
+/* Additional Animation Classes */
+.delight-pulse {
+  animation: delightPulse 2s ease-in-out infinite;
+}
+
+@keyframes delightPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+.delight-wiggle {
+  animation: delightWiggle 0.5s ease-in-out;
+}
+
+@keyframes delightWiggle {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(-2deg); }
+  75% { transform: rotate(2deg); }
+}
+
+/* =================================
+   9. RACE MODE & POWER USER FEATURES
+   ================================= */
+
+/* Race Mode Enhancements */
+.race-mode-active {
+  --delight-racing-orange: #ff4500;
+  --delight-racing-blue: #0066ff;
+}
+
+.race-mode-active .delight-progress-car {
+  background: linear-gradient(90deg, #ff4500, #ff6b35, #ffcc02);
+  box-shadow: 0 0 15px rgba(255, 69, 0, 0.6);
+  animation: raceCarTurbo 1s ease-in-out infinite;
+}
+
+@keyframes raceCarTurbo {
+  0%, 100% { transform: translateX(0) scale(1); }
+  50% { transform: translateX(2px) scale(1.05); }
+}
+
+.race-mode-active .delight-progress-car::after {
+  content: '🏎️';
+  animation: carShake 0.3s ease-in-out infinite;
+}
+
+.race-mode-active .delight-loading-container {
+  border-color: #ff4500;
+  box-shadow: 0 0 25px rgba(255, 69, 0, 0.2);
+}
+
+.race-mode-active .delight-button:hover {
+  transform: translateY(-3px) scale(1.02);
+  box-shadow: 0 12px 25px rgba(255, 69, 0, 0.3);
+}
+
+/* Weekend Workflow Enhancements */
+.weekend-mode {
+  --primary-color: #8b5cf6;
+}
+
+.weekend-mode .delight-loading-container {
+  background: linear-gradient(135deg, #f3e8ff 0%, #ffffff 100%);
+  border-color: #c4b5fd;
+}
+
+/* Time-based Themes */
+@media (prefers-color-scheme: dark) {
+  .race-mode-active .delight-loading-container {
+    background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+    color: #ffffff;
+  }
+}
+
+/* Special Occasions */
+.christmas-mode .delight-confetti {
+  background: #dc2626;
+}
+
+.christmas-mode .delight-confetti:nth-child(even) {
+  background: #16a34a;
+}
+
+/* Championship Mode (for major events) */
+.championship-mode .delight-success-container {
+  background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 50%, #d97706 100%);
+  border-color: #92400e;
+  box-shadow: 0 0 30px rgba(251, 191, 36, 0.4);
+}
+
+.championship-mode .delight-success-container::before {
+  background: linear-gradient(45deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+}
+
+/* Performance Indicators */
+.performance-indicator {
+  position: fixed;
+  bottom: 10px;
+  left: 10px;
+  background: rgba(0, 0, 0, 0.8);
+  color: #10b981;
+  padding: 0.5rem;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 0.8rem;
+  z-index: 1000;
+  display: none;
+}
+
+.race-mode-active .performance-indicator {
+  display: block;
+}
+
+/* Drag and Drop Enhancements */
+body.dragover {
+  background: linear-gradient(135deg, rgba(255, 107, 53, 0.1) 0%, rgba(76, 154, 255, 0.1) 100%);
+  transition: background 0.3s ease;
+}
+
+body.dragover::after {
+  content: '🏁 Drop your racing photos anywhere! 🏁';
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(0, 0, 0, 0.9);
+  color: white;
+  padding: 2rem 3rem;
+  border-radius: 12px;
+  font-size: 1.5rem;
+  text-align: center;
+  z-index: 3000;
+  animation: dropZoneAppear 0.3s ease-out;
+}
+
+@keyframes dropZoneAppear {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+/* Power User Indicators */
+.power-user-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+  color: white;
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  border-radius: 8px;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  animation: badgePulse 2s ease-in-out infinite;
+}
+
+@keyframes badgePulse {
+  0%, 100% { 
+    box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.7);
+  }
+  50% { 
+    box-shadow: 0 0 0 8px rgba(139, 92, 246, 0);
+  }
+}
+
+/* Efficiency Tracking */
+.efficiency-meter {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  background: rgba(255, 255, 255, 0.95);
+  border: 2px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 0.5rem;
+  font-size: 0.8rem;
+  z-index: 1000;
+  display: none;
+}
+
+.race-mode-active .efficiency-meter {
+  display: block;
+  animation: slideInRight 0.3s ease-out;
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(50px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.efficiency-bar {
+  width: 100px;
+  height: 4px;
+  background: #e5e7eb;
+  border-radius: 2px;
+  overflow: hidden;
+  margin: 0.25rem 0;
+}
+
+.efficiency-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #10b981, #059669);
+  border-radius: 2px;
+  transition: width 0.5s ease;
+}
+
+/* Seasonal Themes */
+.theme-spring .delight-confetti {
+  background: #22c55e;
+}
+
+.theme-summer .delight-confetti {
+  background: #fbbf24;
+}
+
+.theme-autumn .delight-confetti {
+  background: #ea580c;
+}
+
+.theme-winter .delight-confetti {
+  background: #3b82f6;
+}
+
+/* =================================
+   10. MODAL & OVERLAY ENHANCEMENTS
+   ================================= */
+
+/* Drop Processing Options Modal */
+.drop-options-modal .modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 3000;
+  animation: modalFadeIn 0.3s ease-out;
+}
+
+.drop-options-modal .modal-content {
+  background: white;
+  border-radius: 16px;
+  padding: 2rem;
+  max-width: 500px;
+  width: 90%;
+  box-shadow: 0 25px 50px rgba(0, 0, 0, 0.3);
+  animation: modalSlideUp 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+  text-align: center;
+}
+
+@keyframes modalFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes modalSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(50px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.drop-options-modal h3 {
+  color: #1f2937;
+  margin-bottom: 1rem;
+  font-size: 1.5rem;
+}
+
+.drop-options-modal p {
+  color: #6b7280;
+  margin-bottom: 2rem;
+  line-height: 1.6;
+}
+
+.process-options {
+  display: grid;
+  gap: 1rem;
+}
+
+.process-option-btn {
+  padding: 1rem 1.5rem;
+  border: none;
+  border-radius: 12px;
+  font-weight: 600;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  text-align: center;
+}
+
+.process-option-btn small {
+  font-weight: normal;
+  opacity: 0.8;
+  font-size: 0.85rem;
+}
+
+.process-option-btn.primary {
+  background: linear-gradient(135deg, #ff6b35, #ff8c5a);
+  color: white;
+  box-shadow: 0 8px 25px rgba(255, 107, 53, 0.3);
+}
+
+.process-option-btn.primary:hover {
+  transform: translateY(-3px) scale(1.02);
+  box-shadow: 0 12px 35px rgba(255, 107, 53, 0.4);
+}
+
+.process-option-btn.secondary {
+  background: linear-gradient(135deg, #4c9aff, #6bb6ff);
+  color: white;
+  box-shadow: 0 8px 25px rgba(76, 154, 255, 0.3);
+}
+
+.process-option-btn.secondary:hover {
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 12px 35px rgba(76, 154, 255, 0.4);
+}
+
+.process-option-btn.tertiary {
+  background: transparent;
+  color: #6b7280;
+  border: 2px solid #e5e7eb;
+}
+
+.process-option-btn.tertiary:hover {
+  background: #f9fafb;
+  border-color: #d1d5db;
+  transform: translateY(-1px);
+}
+
+/* Success Drop Notification */
+.delight-drop-success {
+  animation: dropSuccessSlide 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+@keyframes dropSuccessSlide {
+  from {
+    opacity: 0;
+    transform: translateX(100px) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+/* Global Drag State Enhancements */
+body.dragover * {
+  pointer-events: none;
+}
+
+body.dragover::after {
+  pointer-events: auto;
+}
+
+/* Racing Weekend Special Themes */
+.theme-monaco {
+  --delight-racing-orange: #dc143c;
+  --delight-racing-blue: #ffffff;
+}
+
+.theme-silverstone {
+  --delight-racing-orange: #008000;
+  --delight-racing-blue: #ffffff;
+}
+
+.theme-monza {
+  --delight-racing-orange: #dc143c;
+  --delight-racing-blue: #ffffff;
+  --delight-racing-yellow: #ffcc02;
+}
+
+/* Time-sensitive Features */
+.pre-race-mode .delight-loading-message::after {
+  content: ' - Pre-race preparation mode';
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+
+.race-day-mode .delight-loading-container {
+  border: 3px solid #dc143c;
+  background: linear-gradient(135deg, #fef2f2 0%, #ffffff 100%);
+}
+
+.post-race-mode .delight-success-container {
+  background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+}
+
+/* Photo Quality Indicators */
+.quality-excellent .delight-image-preview {
+  border: 3px solid #10b981;
+  box-shadow: 0 0 15px rgba(16, 185, 129, 0.3);
+}
+
+.quality-good .delight-image-preview {
+  border: 2px solid #3b82f6;
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.2);
+}
+
+.quality-needs-work .delight-image-preview {
+  border: 2px solid #f59e0b;
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.2);
+}
+
+/* Batch Processing Visual Cues */
+.batch-processing-active .delight-progress-track {
+  background: linear-gradient(90deg, 
+    rgba(255, 107, 53, 0.1) 0%, 
+    rgba(76, 154, 255, 0.1) 50%, 
+    rgba(255, 204, 2, 0.1) 100%);
+}
+
+.batch-processing-active .delight-loading-race-car {
+  animation: batchRaceCar 1.5s ease-in-out infinite;
+}
+
+@keyframes batchRaceCar {
+  0%, 100% { transform: translateX(0) rotate(0deg) scale(1); }
+  25% { transform: translateX(15px) rotate(3deg) scale(1.1); }
+  50% { transform: translateX(0) rotate(0deg) scale(1); }
+  75% { transform: translateX(-10px) rotate(-2deg) scale(1.05); }
+}
+
+/* =================================
+   11. NOTIFICATION SYSTEM ENHANCEMENTS
+   ================================= */
+
+/* Notification Base Styles */
+.delight-notification {
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 12px;
+  padding: 1rem;
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  animation: notificationSlideIn 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+  max-width: 350px;
+  margin-bottom: 10px;
+}
+
+@keyframes notificationSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(100px) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+.delight-notification-content {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.delight-notification-icon {
+  font-size: 1.8rem;
+  animation: iconBounce 0.6s ease-out;
+  flex-shrink: 0;
+}
+
+@keyframes iconBounce {
+  0% { transform: scale(0.3); }
+  50% { transform: scale(1.2); }
+  100% { transform: scale(1); }
+}
+
+.delight-notification-text {
+  flex: 1;
+}
+
+.delight-notification-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: #1f2937;
+  margin-bottom: 0.25rem;
+}
+
+.delight-notification-message {
+  font-size: 0.85rem;
+  color: #6b7280;
+  line-height: 1.4;
+}
+
+/* Notification Type Variants */
+.delight-startup-notification {
+  background: linear-gradient(135deg, #fff7ed 0%, #ffffff 100%);
+  border-left: 4px solid var(--delight-racing-orange);
+}
+
+.delight-quick-win {
+  background: linear-gradient(135deg, #ecfdf5 0%, #ffffff 100%);
+  border-left: 4px solid var(--delight-success);
+}
+
+.delight-quick-win-success {
+  border-left-color: var(--delight-success);
+}
+
+.delight-quick-win-info {
+  border-left-color: var(--delight-info);
+  background: linear-gradient(135deg, #eff6ff 0%, #ffffff 100%);
+}
+
+.delight-error-encouragement {
+  background: linear-gradient(135deg, #fef2f2 0%, #ffffff 100%);
+  border-left: 4px solid var(--delight-racing-orange);
+}
+
+/* Completion Celebration Specific Styles */
+.completion-celebration {
+  margin: 2rem auto;
+  max-width: 600px;
+  text-align: center;
+}
+
+.completion-celebration.perfect {
+  background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 50%, #d97706 100%);
+  color: #ffffff;
+  border: 3px solid #92400e;
+  box-shadow: 0 0 40px rgba(251, 191, 36, 0.6);
+}
+
+.completion-celebration.excellent {
+  background: linear-gradient(135deg, #c0c0c0 0%, #e5e7eb 50%, #f3f4f6 100%);
+  border: 3px solid #9ca3af;
+  box-shadow: 0 0 30px rgba(156, 163, 175, 0.4);
+}
+
+.completion-celebration.great {
+  background: linear-gradient(135deg, #cd7f32 0%, #d97706 50%, #f59e0b 100%);
+  color: #ffffff;
+  border: 3px solid #92400e;
+  box-shadow: 0 0 25px rgba(205, 127, 50, 0.4);
+}
+
+.completion-celebration .celebration-message {
+  margin-top: 1.5rem;
+  font-size: 1.1rem;
+  font-style: italic;
+  opacity: 0.9;
+}
+
+/* =================================
+   12. IMAGE CARD DELIGHT ENHANCEMENTS
+   ================================= */
+
+/* Enhanced Image Card States */
+.image-card {
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.image-card.processing {
+  animation: cardProcessing 2s ease-in-out infinite;
+}
+
+@keyframes cardProcessing {
+  0%, 100% { 
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    transform: scale(1);
+  }
+  50% { 
+    box-shadow: 0 4px 16px rgba(255, 107, 53, 0.3);
+    transform: scale(1.02);
+  }
+}
+
+.image-card.completed {
+  animation: cardSuccess 0.6s ease-out;
+}
+
+@keyframes cardSuccess {
+  0% { transform: scale(1); }
+  50% { 
+    transform: scale(1.05);
+    box-shadow: 0 8px 25px rgba(16, 185, 129, 0.4);
+  }
+  100% { 
+    transform: scale(1);
+    box-shadow: 0 2px 8px rgba(16, 185, 129, 0.2);
+  }
+}
+
+.image-card.failed {
+  animation: cardError 0.5s ease-out;
+}
+
+@keyframes cardError {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-5px); }
+  75% { transform: translateX(5px); }
+}
+
+/* Confidence Score Enhancements */
+.confidence-score.high {
+  background: linear-gradient(135deg, var(--delight-success), #22c55e);
+  animation: confidenceGlow 3s ease-in-out infinite;
+}
+
+@keyframes confidenceGlow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
+  50% { box-shadow: 0 0 0 4px rgba(16, 185, 129, 0); }
+}
+
+/* Race Number Detection Animation */
+.race-number-detected {
+  animation: numberFound 0.8s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+@keyframes numberFound {
+  0% {
+    opacity: 0;
+    transform: scale(0.5) rotate(-10deg);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.2) rotate(5deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+/* Mobile Responsive Enhancements */
+@media (max-width: 768px) {
+  /* Mobile-specific notification adjustments */
+  .delight-notification {
+    left: 10px !important;
+    right: 10px !important;
+    max-width: none !important;
+    margin-bottom: 5px;
+  }
+  
+  .delight-milestone {
+    width: 90% !important;
+    max-width: none !important;
+    padding: 1.5rem !important;
+  }
+  
+  .completion-celebration {
+    margin: 1rem !important;
+    padding: 1.5rem !important;
+  }
+  
+  .delight-success-stats {
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 0.75rem !important;
+  }
+  
+  /* Reduce animations on mobile for performance */
+  .image-card.processing,
+  .image-card.completed,
+  .image-card.failed {
+    animation-duration: 0.3s !important;
+  }
+}

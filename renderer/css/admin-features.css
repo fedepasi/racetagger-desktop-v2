@@ -1,0 +1,266 @@
+/* FOLDER ORGANIZATION: Styling for folder organization features (now public) */
+
+/* Public feature badge styling */
+.public-feature-badge {
+  display: inline-block;
+  background: linear-gradient(135deg, #00b894, #00cec9);
+  color: white;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-left: 8px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  animation: publicGlow 2s ease-in-out infinite alternate;
+}
+
+@keyframes publicGlow {
+  from { box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+  to { box-shadow: 0 2px 8px rgba(0,184,148,0.3); }
+}
+
+/* Legacy admin badge styling (kept for backward compatibility) */
+.admin-feature-badge {
+  display: inline-block;
+  background: linear-gradient(135deg, #ff6b6b, #feca57);
+  color: white;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-left: 8px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  animation: adminGlow 2s ease-in-out infinite alternate;
+}
+
+@keyframes adminGlow {
+  from { box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+  to { box-shadow: 0 2px 8px rgba(255,107,107,0.3); }
+}
+
+/* Folder organization section styling (now public) */
+.folder-organization-section {
+  border: 2px solid #74b9ff;
+  background: linear-gradient(135deg, #74b9ff 0%, #0984e3 100%);
+  background-size: 200% 200%;
+  animation: publicBackground 4s ease infinite;
+  border-radius: 8px;
+  padding: 16px;
+  position: relative;
+  overflow: hidden;
+}
+
+@keyframes publicBackground {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.folder-organization-section::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+  animation: publicShimmer 3s ease-in-out infinite;
+}
+
+@keyframes publicShimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+/* Legacy admin animations (kept for backward compatibility) */
+@keyframes adminBackground {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes adminShimmer {
+  0% { left: -100%; }
+  100% { left: 100%; }
+}
+
+/* Folder organization options styling */
+.folder-org-options {
+  background: rgba(255,255,255,0.9);
+  border-radius: 8px;
+  padding: 16px;
+  border: 1px solid rgba(255,255,255,0.5);
+}
+
+.folder-org-options h5 {
+  color: #1e293b;
+  font-weight: 600;
+  font-size: 16px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  letter-spacing: -0.025em;
+}
+
+.folder-org-options h5::before {
+  content: '📁';
+  margin-right: 8px;
+}
+
+/* Radio group for folder organization */
+.radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.radio-group .radio-option {
+  background: white;
+  border: 2px solid #ddd;
+  border-radius: 8px;
+  padding: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.radio-group .radio-option:hover {
+  border-color: #0984e3;
+  box-shadow: 0 2px 8px rgba(9,132,227,0.1);
+}
+
+.radio-group .radio-option input[type="radio"]:checked + .radio-content {
+  color: #0984e3;
+}
+
+/* Ensure radio titles are readable in admin sections */
+.folder-org-options .radio-title {
+  color: #1e293b !important;
+  font-weight: 600;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  letter-spacing: -0.025em;
+}
+
+.radio-group .radio-option input[type="radio"]:checked ~ * {
+  border-color: #0984e3;
+}
+
+/* Warning styling for move option */
+.warning-option {
+  border-color: #fdcb6e !important;
+  background: #fff5e1;
+}
+
+.warning-option:hover {
+  border-color: #e17055 !important;
+}
+
+.warning-text {
+  color: #e17055 !important;
+  font-weight: 500;
+}
+
+/* Custom pattern input */
+.custom-input-container {
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.custom-input-container input {
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 8px 12px;
+  width: 100%;
+  margin-bottom: 8px;
+}
+
+/* Organization warning */
+.organization-warning {
+  background: #e8f4fd;
+  border: 1px solid #74b9ff;
+  border-radius: 6px;
+  padding: 12px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.organization-warning .info-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.organization-warning .info-text {
+  color: #1e293b;
+  margin: 0;
+  font-weight: 500;
+}
+
+/* Section headers in admin features */
+.folder-org-options .section-header h4,
+.folder-organization-section .section-header h4 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #1e293b !important;
+  font-weight: 600;
+  font-size: 18px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  letter-spacing: -0.025em;
+}
+
+/* Folder organization is now always visible as a main feature */
+.folder-organization-section {
+  display: block !important;
+}
+
+/* Legacy support for admin class - maintained for backward compatibility */
+body.admin-user .folder-organization-section,
+body.folder-org-user .folder-organization-section {
+  display: block !important;
+}
+
+/* Admin user indicator */
+body.admin-user::after {
+  content: '🔐 Admin Mode Active';
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  background: rgba(0,0,0,0.8);
+  color: white;
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  z-index: 10000;
+  animation: adminIndicator 2s ease-in-out infinite alternate;
+}
+
+@keyframes adminIndicator {
+  from { opacity: 0.7; }
+  to { opacity: 1; }
+}
+
+/* Responsive design for admin features */
+@media (max-width: 768px) {
+  .folder-org-options {
+    padding: 12px;
+  }
+  
+  .radio-group .radio-option {
+    padding: 10px;
+  }
+  
+  .admin-feature-badge {
+    display: block;
+    margin-left: 0;
+    margin-top: 4px;
+    width: fit-content;
+  }
+}

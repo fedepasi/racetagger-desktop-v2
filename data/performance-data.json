@@ -1,0 +1,2249 @@
+{
+  "metrics": [
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 46514176,
+        "heapTotal": 7716864,
+        "heapUsed": 5360816,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1754720638827,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 46514176,
+        "heapTotal": 7716864,
+        "heapUsed": 5363280,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1754720638928,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 182.93504113198563,
+      "memoryUsage": {
+        "rss": 46514176,
+        "heapTotal": 7716864,
+        "heapUsed": 5365824,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1754720639111,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 46514176,
+        "heapTotal": 7716864,
+        "heapUsed": 5368304,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1754720639212,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 195.72594342980597,
+      "memoryUsage": {
+        "rss": 46514176,
+        "heapTotal": 7716864,
+        "heapUsed": 5370208,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1754720639409,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 162.06404568412628,
+      "memoryUsage": {
+        "rss": 46563328,
+        "heapTotal": 7716864,
+        "heapUsed": 5372072,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1754720639572,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 116.40690327751119,
+      "memoryUsage": {
+        "rss": 46612480,
+        "heapTotal": 7716864,
+        "heapUsed": 5374112,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1754720639690,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 110.02427645159446,
+      "memoryUsage": {
+        "rss": 46645248,
+        "heapTotal": 7716864,
+        "heapUsed": 5376056,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1754720639801,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 46678016,
+        "heapTotal": 7716864,
+        "heapUsed": 5378032,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1754720639903,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 161.56691941852108,
+      "memoryUsage": {
+        "rss": 46678016,
+        "heapTotal": 7716864,
+        "heapUsed": 5379976,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1754720640065,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 33996800,
+        "heapTotal": 7716864,
+        "heapUsed": 5460856,
+        "external": 700090,
+        "arrayBuffers": 21876
+      },
+      "timestamp": 1754720641170,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 117.22474529509626,
+      "memoryUsage": {
+        "rss": 34095104,
+        "heapTotal": 7716864,
+        "heapUsed": 5462704,
+        "external": 700090,
+        "arrayBuffers": 21876
+      },
+      "timestamp": 1754720641290,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 34111488,
+        "heapTotal": 7716864,
+        "heapUsed": 5464824,
+        "external": 700090,
+        "arrayBuffers": 21876
+      },
+      "timestamp": 1754720641391,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 34111488,
+        "heapTotal": 7716864,
+        "heapUsed": 5466608,
+        "external": 700090,
+        "arrayBuffers": 21876
+      },
+      "timestamp": 1754720641492,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 119.68746933246607,
+      "memoryUsage": {
+        "rss": 34111488,
+        "heapTotal": 7716864,
+        "heapUsed": 5468568,
+        "external": 700090,
+        "arrayBuffers": 21876
+      },
+      "timestamp": 1754720641612,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 122.11579612657215,
+      "memoryUsage": {
+        "rss": 34111488,
+        "heapTotal": 7716864,
+        "heapUsed": 5470384,
+        "external": 700090,
+        "arrayBuffers": 21876
+      },
+      "timestamp": 1754720641736,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 107.37210451355907,
+      "memoryUsage": {
+        "rss": 34111488,
+        "heapTotal": 7716864,
+        "heapUsed": 5472344,
+        "external": 700090,
+        "arrayBuffers": 21876
+      },
+      "timestamp": 1754720641845,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 34111488,
+        "heapTotal": 7716864,
+        "heapUsed": 5474128,
+        "external": 700090,
+        "arrayBuffers": 21876
+      },
+      "timestamp": 1754720641946,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 34144256,
+        "heapTotal": 7716864,
+        "heapUsed": 5476416,
+        "external": 700090,
+        "arrayBuffers": 21876
+      },
+      "timestamp": 1754720642048,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 165.05101633695637,
+      "memoryUsage": {
+        "rss": 34144256,
+        "heapTotal": 7716864,
+        "heapUsed": 5478360,
+        "external": 700090,
+        "arrayBuffers": 21876
+      },
+      "timestamp": 1754720642214,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 34340864,
+        "heapTotal": 7716864,
+        "heapUsed": 5530848,
+        "external": 709101,
+        "arrayBuffers": 30887
+      },
+      "timestamp": 1754720643320,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 141.72039978580924,
+      "memoryUsage": {
+        "rss": 34340864,
+        "heapTotal": 7716864,
+        "heapUsed": 5532808,
+        "external": 709101,
+        "arrayBuffers": 30887
+      },
+      "timestamp": 1754720643462,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 110.05805545019912,
+      "memoryUsage": {
+        "rss": 34340864,
+        "heapTotal": 7716864,
+        "heapUsed": 5534624,
+        "external": 709101,
+        "arrayBuffers": 30887
+      },
+      "timestamp": 1754720643573,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 123.08819459050785,
+      "memoryUsage": {
+        "rss": 34340864,
+        "heapTotal": 7716864,
+        "heapUsed": 5536584,
+        "external": 709101,
+        "arrayBuffers": 30887
+      },
+      "timestamp": 1754720643697,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 34340864,
+        "heapTotal": 7716864,
+        "heapUsed": 5538368,
+        "external": 709101,
+        "arrayBuffers": 30887
+      },
+      "timestamp": 1754720643798,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 147.2085957575017,
+      "memoryUsage": {
+        "rss": 34340864,
+        "heapTotal": 7716864,
+        "heapUsed": 5540328,
+        "external": 709101,
+        "arrayBuffers": 30887
+      },
+      "timestamp": 1754720643947,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 184.35730729220728,
+      "memoryUsage": {
+        "rss": 34340864,
+        "heapTotal": 7716864,
+        "heapUsed": 5542144,
+        "external": 709101,
+        "arrayBuffers": 30887
+      },
+      "timestamp": 1754720644134,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 34340864,
+        "heapTotal": 7716864,
+        "heapUsed": 5544072,
+        "external": 709101,
+        "arrayBuffers": 30887
+      },
+      "timestamp": 1754720644235,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 34357248,
+        "heapTotal": 7716864,
+        "heapUsed": 5545856,
+        "external": 709101,
+        "arrayBuffers": 30887
+      },
+      "timestamp": 1754720644335,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 171.3216562941563,
+      "memoryUsage": {
+        "rss": 34357248,
+        "heapTotal": 7716864,
+        "heapUsed": 5547816,
+        "external": 709101,
+        "arrayBuffers": 30887
+      },
+      "timestamp": 1754720644508,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 162.53714212917714,
+      "memoryUsage": {
+        "rss": 45203456,
+        "heapTotal": 7716864,
+        "heapUsed": 5382752,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1754721227075,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 45203456,
+        "heapTotal": 7716864,
+        "heapUsed": 5385624,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1754721227176,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 194.78598399617573,
+      "memoryUsage": {
+        "rss": 45203456,
+        "heapTotal": 7716864,
+        "heapUsed": 5387528,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1754721227370,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 151.4814582105708,
+      "memoryUsage": {
+        "rss": 45203456,
+        "heapTotal": 7716864,
+        "heapUsed": 5390040,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1754721227522,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 105.16064030801132,
+      "memoryUsage": {
+        "rss": 45203456,
+        "heapTotal": 7716864,
+        "heapUsed": 5391944,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1754721227628,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 45219840,
+        "heapTotal": 7716864,
+        "heapUsed": 5393776,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1754721227730,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 45236224,
+        "heapTotal": 7716864,
+        "heapUsed": 5395784,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1754721227831,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 194.1630673807114,
+      "memoryUsage": {
+        "rss": 45268992,
+        "heapTotal": 7716864,
+        "heapUsed": 5397728,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1754721228026,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 162.03013362432816,
+      "memoryUsage": {
+        "rss": 45301760,
+        "heapTotal": 7716864,
+        "heapUsed": 5399736,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1754721228191,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 124.43864245336972,
+      "memoryUsage": {
+        "rss": 45301760,
+        "heapTotal": 7716864,
+        "heapUsed": 5401680,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1754721228317,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100.79471866607254,
+      "memoryUsage": {
+        "rss": 45563904,
+        "heapTotal": 7716864,
+        "heapUsed": 5544280,
+        "external": 713516,
+        "arrayBuffers": 35302
+      },
+      "timestamp": 1754721229428,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 45580288,
+        "heapTotal": 7716864,
+        "heapUsed": 5546096,
+        "external": 713516,
+        "arrayBuffers": 35302
+      },
+      "timestamp": 1754721229534,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 45580288,
+        "heapTotal": 7716864,
+        "heapUsed": 5548216,
+        "external": 713516,
+        "arrayBuffers": 35302
+      },
+      "timestamp": 1754721229635,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 45580288,
+        "heapTotal": 7716864,
+        "heapUsed": 5550000,
+        "external": 713516,
+        "arrayBuffers": 35302
+      },
+      "timestamp": 1754721229737,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 45580288,
+        "heapTotal": 7716864,
+        "heapUsed": 5551928,
+        "external": 713516,
+        "arrayBuffers": 35302
+      },
+      "timestamp": 1754721229837,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 45580288,
+        "heapTotal": 7716864,
+        "heapUsed": 5553712,
+        "external": 713516,
+        "arrayBuffers": 35302
+      },
+      "timestamp": 1754721229938,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 45580288,
+        "heapTotal": 7716864,
+        "heapUsed": 5555640,
+        "external": 713516,
+        "arrayBuffers": 35302
+      },
+      "timestamp": 1754721230039,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 147.2172893249337,
+      "memoryUsage": {
+        "rss": 45580288,
+        "heapTotal": 7716864,
+        "heapUsed": 5557456,
+        "external": 713516,
+        "arrayBuffers": 35302
+      },
+      "timestamp": 1754721230188,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 45580288,
+        "heapTotal": 7716864,
+        "heapUsed": 5559384,
+        "external": 713516,
+        "arrayBuffers": 35302
+      },
+      "timestamp": 1754721230289,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 45580288,
+        "heapTotal": 7716864,
+        "heapUsed": 5561296,
+        "external": 713516,
+        "arrayBuffers": 35302
+      },
+      "timestamp": 1754721230392,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 45613056,
+        "heapTotal": 7716864,
+        "heapUsed": 5730496,
+        "external": 735908,
+        "arrayBuffers": 57694
+      },
+      "timestamp": 1754721231500,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 106.38316143520544,
+      "memoryUsage": {
+        "rss": 45613056,
+        "heapTotal": 7716864,
+        "heapUsed": 5732456,
+        "external": 735908,
+        "arrayBuffers": 57694
+      },
+      "timestamp": 1754721231607,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 181.8268314806032,
+      "memoryUsage": {
+        "rss": 45613056,
+        "heapTotal": 7716864,
+        "heapUsed": 5734272,
+        "external": 735908,
+        "arrayBuffers": 57694
+      },
+      "timestamp": 1754721231789,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 134.07795178612983,
+      "memoryUsage": {
+        "rss": 45613056,
+        "heapTotal": 7716864,
+        "heapUsed": 5736232,
+        "external": 735908,
+        "arrayBuffers": 57694
+      },
+      "timestamp": 1754721231924,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 139.14161524103838,
+      "memoryUsage": {
+        "rss": 45613056,
+        "heapTotal": 7716864,
+        "heapUsed": 5738048,
+        "external": 735908,
+        "arrayBuffers": 57694
+      },
+      "timestamp": 1754721232064,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 139.0682904900779,
+      "memoryUsage": {
+        "rss": 45613056,
+        "heapTotal": 7716864,
+        "heapUsed": 5740008,
+        "external": 735908,
+        "arrayBuffers": 57694
+      },
+      "timestamp": 1754721232204,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 45613056,
+        "heapTotal": 7716864,
+        "heapUsed": 5741792,
+        "external": 735908,
+        "arrayBuffers": 57694
+      },
+      "timestamp": 1754721232305,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 45613056,
+        "heapTotal": 7716864,
+        "heapUsed": 5743720,
+        "external": 735908,
+        "arrayBuffers": 57694
+      },
+      "timestamp": 1754721232406,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 45613056,
+        "heapTotal": 7716864,
+        "heapUsed": 5745504,
+        "external": 735908,
+        "arrayBuffers": 57694
+      },
+      "timestamp": 1754721232506,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 153.49656266725333,
+      "memoryUsage": {
+        "rss": 45613056,
+        "heapTotal": 7716864,
+        "heapUsed": 5747464,
+        "external": 735908,
+        "arrayBuffers": 57694
+      },
+      "timestamp": 1754721232660,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 69.95124087214549,
+      "memoryUsage": {
+        "rss": 37257216,
+        "heapTotal": 5079040,
+        "heapUsed": 4585248,
+        "external": 521206,
+        "arrayBuffers": 76984
+      },
+      "timestamp": 1754722334592,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "analysis",
+      "success": true
+    },
+    {
+      "processingTime": 61.26255205378554,
+      "memoryUsage": {
+        "rss": 37257216,
+        "heapTotal": 5079040,
+        "heapUsed": 4588248,
+        "external": 521206,
+        "arrayBuffers": 76984
+      },
+      "timestamp": 1754722334643,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "analysis",
+      "success": true
+    },
+    {
+      "processingTime": 62.0199369506649,
+      "memoryUsage": {
+        "rss": 37257216,
+        "heapTotal": 5079040,
+        "heapUsed": 4590032,
+        "external": 521206,
+        "arrayBuffers": 76984
+      },
+      "timestamp": 1754722334694,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "analysis",
+      "success": true
+    },
+    {
+      "processingTime": 60.72707772945099,
+      "memoryUsage": {
+        "rss": 37273600,
+        "heapTotal": 5079040,
+        "heapUsed": 4591816,
+        "external": 521206,
+        "arrayBuffers": 76984
+      },
+      "timestamp": 1754722334745,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "analysis",
+      "success": true
+    },
+    {
+      "processingTime": 66.6790026976868,
+      "memoryUsage": {
+        "rss": 37339136,
+        "heapTotal": 5079040,
+        "heapUsed": 4593968,
+        "external": 521206,
+        "arrayBuffers": 76984
+      },
+      "timestamp": 1754722334797,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "analysis",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 47300608,
+        "heapTotal": 7716864,
+        "heapUsed": 5487136,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1756982519484,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 103.5001496042682,
+      "memoryUsage": {
+        "rss": 47300608,
+        "heapTotal": 7716864,
+        "heapUsed": 5491104,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1756982519588,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 47300608,
+        "heapTotal": 7716864,
+        "heapUsed": 5492976,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1756982519689,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 185.2744603842927,
+      "memoryUsage": {
+        "rss": 47300608,
+        "heapTotal": 7716864,
+        "heapUsed": 5495488,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1756982519875,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 179.65412333609638,
+      "memoryUsage": {
+        "rss": 47300608,
+        "heapTotal": 7716864,
+        "heapUsed": 5497392,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1756982520055,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 146.8381236455047,
+      "memoryUsage": {
+        "rss": 47300608,
+        "heapTotal": 7716864,
+        "heapUsed": 5499256,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1756982520203,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 47316992,
+        "heapTotal": 7716864,
+        "heapUsed": 5500928,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1756982520304,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 47333376,
+        "heapTotal": 7716864,
+        "heapUsed": 5502840,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1756982520405,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 142.52208120228556,
+      "memoryUsage": {
+        "rss": 47333376,
+        "heapTotal": 7716864,
+        "heapUsed": 5504848,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1756982520548,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 47333376,
+        "heapTotal": 7716864,
+        "heapUsed": 5506760,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1756982520649,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 47726592,
+        "heapTotal": 7716864,
+        "heapUsed": 5709136,
+        "external": 729189,
+        "arrayBuffers": 50975
+      },
+      "timestamp": 1756982521757,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 47759360,
+        "heapTotal": 7716864,
+        "heapUsed": 5710952,
+        "external": 729189,
+        "arrayBuffers": 50975
+      },
+      "timestamp": 1756982521858,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 47759360,
+        "heapTotal": 7716864,
+        "heapUsed": 5713072,
+        "external": 729189,
+        "arrayBuffers": 50975
+      },
+      "timestamp": 1756982521959,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 186.5594599697465,
+      "memoryUsage": {
+        "rss": 47759360,
+        "heapTotal": 7716864,
+        "heapUsed": 5714888,
+        "external": 729189,
+        "arrayBuffers": 50975
+      },
+      "timestamp": 1756982522146,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 47759360,
+        "heapTotal": 7716864,
+        "heapUsed": 5716816,
+        "external": 729189,
+        "arrayBuffers": 50975
+      },
+      "timestamp": 1756982522247,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 47759360,
+        "heapTotal": 7716864,
+        "heapUsed": 5718600,
+        "external": 729189,
+        "arrayBuffers": 50975
+      },
+      "timestamp": 1756982522347,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 139.35420384748542,
+      "memoryUsage": {
+        "rss": 47759360,
+        "heapTotal": 7716864,
+        "heapUsed": 5720560,
+        "external": 729189,
+        "arrayBuffers": 50975
+      },
+      "timestamp": 1756982522488,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 47759360,
+        "heapTotal": 7716864,
+        "heapUsed": 5722344,
+        "external": 729189,
+        "arrayBuffers": 50975
+      },
+      "timestamp": 1756982522589,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 112.44687555349344,
+      "memoryUsage": {
+        "rss": 47775744,
+        "heapTotal": 7716864,
+        "heapUsed": 5724304,
+        "external": 729189,
+        "arrayBuffers": 50975
+      },
+      "timestamp": 1756982522702,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 182.05575481135594,
+      "memoryUsage": {
+        "rss": 47775744,
+        "heapTotal": 7716864,
+        "heapUsed": 5726248,
+        "external": 729189,
+        "arrayBuffers": 50975
+      },
+      "timestamp": 1756982522885,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 47792128,
+        "heapTotal": 7716864,
+        "heapUsed": 5933584,
+        "external": 767282,
+        "arrayBuffers": 89068
+      },
+      "timestamp": 1756982523989,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 118.54840298867892,
+      "memoryUsage": {
+        "rss": 34652160,
+        "heapTotal": 7716864,
+        "heapUsed": 5935544,
+        "external": 767282,
+        "arrayBuffers": 89068
+      },
+      "timestamp": 1756982524108,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 142.40773693890043,
+      "memoryUsage": {
+        "rss": 34652160,
+        "heapTotal": 7716864,
+        "heapUsed": 5937360,
+        "external": 767282,
+        "arrayBuffers": 89068
+      },
+      "timestamp": 1756982524251,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 152.1518597770242,
+      "memoryUsage": {
+        "rss": 34652160,
+        "heapTotal": 7716864,
+        "heapUsed": 5939320,
+        "external": 767282,
+        "arrayBuffers": 89068
+      },
+      "timestamp": 1756982524404,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 34652160,
+        "heapTotal": 7716864,
+        "heapUsed": 5941104,
+        "external": 767282,
+        "arrayBuffers": 89068
+      },
+      "timestamp": 1756982524505,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 34652160,
+        "heapTotal": 7716864,
+        "heapUsed": 5943032,
+        "external": 767282,
+        "arrayBuffers": 89068
+      },
+      "timestamp": 1756982524606,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 177.9596853641337,
+      "memoryUsage": {
+        "rss": 34668544,
+        "heapTotal": 7716864,
+        "heapUsed": 5944848,
+        "external": 767282,
+        "arrayBuffers": 89068
+      },
+      "timestamp": 1756982524785,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 34668544,
+        "heapTotal": 7716864,
+        "heapUsed": 5946776,
+        "external": 767282,
+        "arrayBuffers": 89068
+      },
+      "timestamp": 1756982524886,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 34668544,
+        "heapTotal": 7716864,
+        "heapUsed": 5948560,
+        "external": 767282,
+        "arrayBuffers": 89068
+      },
+      "timestamp": 1756982524987,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 193.75802137987748,
+      "memoryUsage": {
+        "rss": 34668544,
+        "heapTotal": 7716864,
+        "heapUsed": 5950520,
+        "external": 767282,
+        "arrayBuffers": 89068
+      },
+      "timestamp": 1756982525181,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 104.24025299127386,
+      "memoryUsage": {
+        "rss": 46579712,
+        "heapTotal": 7716864,
+        "heapUsed": 5566360,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1757658456463,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 174.85938821282573,
+      "memoryUsage": {
+        "rss": 46579712,
+        "heapTotal": 7716864,
+        "heapUsed": 5570048,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1757658456638,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 147.1335049273552,
+      "memoryUsage": {
+        "rss": 46579712,
+        "heapTotal": 7716864,
+        "heapUsed": 5571952,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1757658456786,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 130.04924630617137,
+      "memoryUsage": {
+        "rss": 46596096,
+        "heapTotal": 7716864,
+        "heapUsed": 5574464,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1757658456917,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 157.95119343474136,
+      "memoryUsage": {
+        "rss": 46596096,
+        "heapTotal": 7716864,
+        "heapUsed": 5576368,
+        "external": 695540,
+        "arrayBuffers": 17326
+      },
+      "timestamp": 1757658457074,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 189.03392336119526,
+      "memoryUsage": {
+        "rss": 46596096,
+        "heapTotal": 7716864,
+        "heapUsed": 5814440,
+        "external": 740077,
+        "arrayBuffers": 61863
+      },
+      "timestamp": 1757658457266,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 173.81823575804316,
+      "memoryUsage": {
+        "rss": 46628864,
+        "heapTotal": 7716864,
+        "heapUsed": 5816144,
+        "external": 740077,
+        "arrayBuffers": 61863
+      },
+      "timestamp": 1757658457440,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 117.88298166923823,
+      "memoryUsage": {
+        "rss": 46645248,
+        "heapTotal": 7716864,
+        "heapUsed": 5818088,
+        "external": 740077,
+        "arrayBuffers": 61863
+      },
+      "timestamp": 1757658457559,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 176.82480696007613,
+      "memoryUsage": {
+        "rss": 46645248,
+        "heapTotal": 7716864,
+        "heapUsed": 5820096,
+        "external": 740077,
+        "arrayBuffers": 61863
+      },
+      "timestamp": 1757658457736,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 125.4814945681633,
+      "memoryUsage": {
+        "rss": 46645248,
+        "heapTotal": 7716864,
+        "heapUsed": 5822040,
+        "external": 740077,
+        "arrayBuffers": 61863
+      },
+      "timestamp": 1757658457862,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 124.17520198979233,
+      "memoryUsage": {
+        "rss": 46743552,
+        "heapTotal": 7716864,
+        "heapUsed": 6100248,
+        "external": 787163,
+        "arrayBuffers": 108949
+      },
+      "timestamp": 1757658458990,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100.12732374458236,
+      "memoryUsage": {
+        "rss": 46776320,
+        "heapTotal": 7716864,
+        "heapUsed": 6102096,
+        "external": 787163,
+        "arrayBuffers": 108949
+      },
+      "timestamp": 1757658459092,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 122.52388734944006,
+      "memoryUsage": {
+        "rss": 46776320,
+        "heapTotal": 7716864,
+        "heapUsed": 6104248,
+        "external": 787163,
+        "arrayBuffers": 108949
+      },
+      "timestamp": 1757658459215,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 178.28346680775704,
+      "memoryUsage": {
+        "rss": 46776320,
+        "heapTotal": 7716864,
+        "heapUsed": 6106064,
+        "external": 787163,
+        "arrayBuffers": 108949
+      },
+      "timestamp": 1757658459394,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 46776320,
+        "heapTotal": 7716864,
+        "heapUsed": 6107992,
+        "external": 787163,
+        "arrayBuffers": 108949
+      },
+      "timestamp": 1757658459495,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 193.75380030537934,
+      "memoryUsage": {
+        "rss": 46776320,
+        "heapTotal": 7716864,
+        "heapUsed": 6109808,
+        "external": 787163,
+        "arrayBuffers": 108949
+      },
+      "timestamp": 1757658459689,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 169.8299822349455,
+      "memoryUsage": {
+        "rss": 46776320,
+        "heapTotal": 7716864,
+        "heapUsed": 6111768,
+        "external": 787163,
+        "arrayBuffers": 108949
+      },
+      "timestamp": 1757658459859,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 46776320,
+        "heapTotal": 7716864,
+        "heapUsed": 6113552,
+        "external": 787163,
+        "arrayBuffers": 108949
+      },
+      "timestamp": 1757658459959,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 46776320,
+        "heapTotal": 7716864,
+        "heapUsed": 6115480,
+        "external": 787163,
+        "arrayBuffers": 108949
+      },
+      "timestamp": 1757658460061,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 46776320,
+        "heapTotal": 7716864,
+        "heapUsed": 6117392,
+        "external": 787163,
+        "arrayBuffers": 108949
+      },
+      "timestamp": 1757658460161,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 119.65860797165104,
+      "memoryUsage": {
+        "rss": 46006272,
+        "heapTotal": 7192576,
+        "heapUsed": 5815544,
+        "external": 747112,
+        "arrayBuffers": 68898
+      },
+      "timestamp": 1757658461285,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 188.56067407814265,
+      "memoryUsage": {
+        "rss": 46006272,
+        "heapTotal": 7192576,
+        "heapUsed": 5817504,
+        "external": 747112,
+        "arrayBuffers": 68898
+      },
+      "timestamp": 1757658461473,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 118.16686509852534,
+      "memoryUsage": {
+        "rss": 46006272,
+        "heapTotal": 7192576,
+        "heapUsed": 5819320,
+        "external": 747112,
+        "arrayBuffers": 68898
+      },
+      "timestamp": 1757658461596,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 148.8955162909455,
+      "memoryUsage": {
+        "rss": 46006272,
+        "heapTotal": 7192576,
+        "heapUsed": 5821280,
+        "external": 747112,
+        "arrayBuffers": 68898
+      },
+      "timestamp": 1757658461743,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 115.99627812939306,
+      "memoryUsage": {
+        "rss": 46006272,
+        "heapTotal": 7192576,
+        "heapUsed": 5823096,
+        "external": 747112,
+        "arrayBuffers": 68898
+      },
+      "timestamp": 1757658461859,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 183.56102362783815,
+      "memoryUsage": {
+        "rss": 46006272,
+        "heapTotal": 7192576,
+        "heapUsed": 5825056,
+        "external": 747112,
+        "arrayBuffers": 68898
+      },
+      "timestamp": 1757658462043,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 175.37519966817348,
+      "memoryUsage": {
+        "rss": 46006272,
+        "heapTotal": 7192576,
+        "heapUsed": 5826872,
+        "external": 747112,
+        "arrayBuffers": 68898
+      },
+      "timestamp": 1757658462219,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 144.95330056407448,
+      "memoryUsage": {
+        "rss": 46006272,
+        "heapTotal": 7192576,
+        "heapUsed": 5828832,
+        "external": 747112,
+        "arrayBuffers": 68898
+      },
+      "timestamp": 1757658462364,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 100,
+      "memoryUsage": {
+        "rss": 46006272,
+        "heapTotal": 7192576,
+        "heapUsed": 5830616,
+        "external": 747112,
+        "arrayBuffers": 68898
+      },
+      "timestamp": 1757658462464,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    },
+    {
+      "processingTime": 176.322067309529,
+      "memoryUsage": {
+        "rss": 46006272,
+        "heapTotal": 7192576,
+        "heapUsed": 5832576,
+        "external": 747112,
+        "arrayBuffers": 68898
+      },
+      "timestamp": 1757658462642,
+      "imageCount": 1,
+      "batchSize": 10,
+      "phase": "SIMULATION",
+      "taskType": "IMAGE_PROCESS",
+      "success": true
+    }
+  ],
+  "benchmarks": [
+    {
+      "testName": "Batch_benchmark-small-batch-balanced-0-1754720638726",
+      "imageCount": 10,
+      "totalTime": 1339,
+      "averageTimePerImage": 133.9,
+      "throughputPerSecond": 7.468259895444362,
+      "memoryPeak": 5379976,
+      "memoryAverage": 5370868,
+      "successRate": 1,
+      "timestamp": 1754720640065,
+      "optimizationsEnabled": [
+        "Performance Monitoring",
+        "Parallel Processing",
+        "RAW Processing",
+        "Database Optimization",
+        "Memory Optimization",
+        "Streaming Processing"
+      ]
+    },
+    {
+      "testName": "Batch_benchmark-small-batch-balanced-1-1754720641068",
+      "imageCount": 10,
+      "totalTime": 1145,
+      "averageTimePerImage": 114.5,
+      "throughputPerSecond": 8.73362445414847,
+      "memoryPeak": 5478360,
+      "memoryAverage": 5469519.2,
+      "successRate": 1,
+      "timestamp": 1754720642214,
+      "optimizationsEnabled": [
+        "Performance Monitoring",
+        "Parallel Processing",
+        "RAW Processing",
+        "Database Optimization",
+        "Memory Optimization",
+        "Streaming Processing"
+      ]
+    },
+    {
+      "testName": "Batch_benchmark-small-batch-balanced-2-1754720643218",
+      "imageCount": 10,
+      "totalTime": 1289,
+      "averageTimePerImage": 128.9,
+      "throughputPerSecond": 7.757951900698216,
+      "memoryPeak": 5547816,
+      "memoryAverage": 5539344.8,
+      "successRate": 1,
+      "timestamp": 1754720644508,
+      "optimizationsEnabled": [
+        "Performance Monitoring",
+        "Parallel Processing",
+        "RAW Processing",
+        "Database Optimization",
+        "Memory Optimization",
+        "Streaming Processing"
+      ]
+    },
+    {
+      "testName": "Batch_benchmark-small-batch-balanced-0-1754721226911",
+      "imageCount": 10,
+      "totalTime": 1406,
+      "averageTimePerImage": 140.6,
+      "throughputPerSecond": 7.112375533428165,
+      "memoryPeak": 5401680,
+      "memoryAverage": 5392659.2,
+      "successRate": 1,
+      "timestamp": 1754721228318,
+      "optimizationsEnabled": [
+        "Performance Monitoring",
+        "Parallel Processing",
+        "RAW Processing",
+        "Database Optimization",
+        "Memory Optimization",
+        "Streaming Processing"
+      ]
+    },
+    {
+      "testName": "Batch_benchmark-small-batch-balanced-1-1754721229326",
+      "imageCount": 10,
+      "totalTime": 1066,
+      "averageTimePerImage": 106.6,
+      "throughputPerSecond": 9.380863039399626,
+      "memoryPeak": 5561296,
+      "memoryAverage": 5552800.8,
+      "successRate": 1,
+      "timestamp": 1754721230393,
+      "optimizationsEnabled": [
+        "Performance Monitoring",
+        "Parallel Processing",
+        "RAW Processing",
+        "Database Optimization",
+        "Memory Optimization",
+        "Streaming Processing"
+      ]
+    },
+    {
+      "testName": "Batch_benchmark-small-batch-balanced-2-1754721231398",
+      "imageCount": 10,
+      "totalTime": 1261,
+      "averageTimePerImage": 126.1,
+      "throughputPerSecond": 7.9302141157811255,
+      "memoryPeak": 5747464,
+      "memoryAverage": 5738999.2,
+      "successRate": 1,
+      "timestamp": 1754721232660,
+      "optimizationsEnabled": [
+        "Performance Monitoring",
+        "Parallel Processing",
+        "RAW Processing",
+        "Database Optimization",
+        "Memory Optimization",
+        "Streaming Processing"
+      ]
+    },
+    {
+      "testName": "Batch_test-batch",
+      "imageCount": 10,
+      "totalTime": 257,
+      "averageTimePerImage": 25.7,
+      "throughputPerSecond": 38.91050583657588,
+      "memoryPeak": 4593968,
+      "memoryAverage": 4589862.4,
+      "successRate": 1,
+      "timestamp": 1754722334797,
+      "optimizationsEnabled": [
+        "Performance Monitoring",
+        "Parallel Processing",
+        "RAW Processing",
+        "Database Optimization",
+        "Memory Optimization",
+        "Streaming Processing"
+      ]
+    },
+    {
+      "testName": "Batch_benchmark-small-batch-balanced-0-1756982519382",
+      "imageCount": 10,
+      "totalTime": 1267,
+      "averageTimePerImage": 126.7,
+      "throughputPerSecond": 7.892659826361484,
+      "memoryPeak": 5506760,
+      "memoryAverage": 5497872.8,
+      "successRate": 1,
+      "timestamp": 1756982520650,
+      "optimizationsEnabled": [
+        "Performance Monitoring",
+        "Parallel Processing",
+        "RAW Processing",
+        "Database Optimization",
+        "Memory Optimization",
+        "Streaming Processing"
+      ]
+    },
+    {
+      "testName": "Batch_benchmark-small-batch-balanced-1-1756982521655",
+      "imageCount": 10,
+      "totalTime": 1229,
+      "averageTimePerImage": 122.9,
+      "throughputPerSecond": 8.136696501220506,
+      "memoryPeak": 5726248,
+      "memoryAverage": 5717692,
+      "successRate": 1,
+      "timestamp": 1756982522885,
+      "optimizationsEnabled": [
+        "Performance Monitoring",
+        "Parallel Processing",
+        "RAW Processing",
+        "Database Optimization",
+        "Memory Optimization",
+        "Streaming Processing"
+      ]
+    },
+    {
+      "testName": "Batch_benchmark-small-batch-balanced-2-1756982523888",
+      "imageCount": 10,
+      "totalTime": 1293,
+      "averageTimePerImage": 129.3,
+      "throughputPerSecond": 7.733952049497293,
+      "memoryPeak": 5950520,
+      "memoryAverage": 5942064.8,
+      "successRate": 1,
+      "timestamp": 1756982525181,
+      "optimizationsEnabled": [
+        "Performance Monitoring",
+        "Parallel Processing",
+        "RAW Processing",
+        "Database Optimization",
+        "Memory Optimization",
+        "Streaming Processing"
+      ]
+    },
+    {
+      "testName": "Batch_benchmark-small-batch-balanced-0-1757658456357",
+      "imageCount": 10,
+      "totalTime": 1504,
+      "averageTimePerImage": 150.4,
+      "throughputPerSecond": 6.648936170212766,
+      "memoryPeak": 5822040,
+      "memoryAverage": 5695000,
+      "successRate": 1,
+      "timestamp": 1757658457862,
+      "optimizationsEnabled": [
+        "Performance Monitoring",
+        "Parallel Processing",
+        "RAW Processing",
+        "Database Optimization",
+        "Memory Optimization",
+        "Streaming Processing"
+      ]
+    },
+    {
+      "testName": "Batch_benchmark-small-batch-balanced-1-1757658458865",
+      "imageCount": 10,
+      "totalTime": 1296,
+      "averageTimePerImage": 129.6,
+      "throughputPerSecond": 7.716049382716049,
+      "memoryPeak": 6117392,
+      "memoryAverage": 6108864.8,
+      "successRate": 1,
+      "timestamp": 1757658460161,
+      "optimizationsEnabled": [
+        "Performance Monitoring",
+        "Parallel Processing",
+        "RAW Processing",
+        "Database Optimization",
+        "Memory Optimization",
+        "Streaming Processing"
+      ]
+    },
+    {
+      "testName": "Batch_benchmark-small-batch-balanced-2-1757658461164",
+      "imageCount": 10,
+      "totalTime": 1478,
+      "averageTimePerImage": 147.8,
+      "throughputPerSecond": 6.7658998646820026,
+      "memoryPeak": 5832576,
+      "memoryAverage": 5824069.6,
+      "successRate": 1,
+      "timestamp": 1757658462642,
+      "optimizationsEnabled": [
+        "Performance Monitoring",
+        "Parallel Processing",
+        "RAW Processing",
+        "Database Optimization",
+        "Memory Optimization",
+        "Streaming Processing"
+      ]
+    }
+  ],
+  "lastUpdated": 1757658462642
+}

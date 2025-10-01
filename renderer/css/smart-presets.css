@@ -1,0 +1,411 @@
+/*
+ * Racetagger Desktop - Smart Presets System  
+ * Simplified workflow selection replacing complex advanced options
+ */
+
+/* Container for preset replacement */
+.presets-replacement {
+  margin-bottom: var(--spacing-lg);
+}
+
+/* Smart Presets Header */
+.presets-header {
+  margin-bottom: var(--spacing-lg);
+  text-align: center;
+}
+
+.presets-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: var(--spacing-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-sm);
+}
+
+.presets-title::before {
+  content: '⚡';
+  font-size: 24px;
+}
+
+.presets-subtitle {
+  color: var(--text-secondary);
+  font-size: 15px;
+  line-height: 1.5;
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+/* Quick Select Toggle */
+.quick-mode-toggle {
+  display: none; /* Temporarily hidden for release - toggle not functional yet */
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-lg);
+  padding: var(--spacing-md);
+  background: rgba(59, 130, 246, 0.05);
+  border-radius: var(--border-radius-lg);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+}
+
+.toggle-label {
+  color: var(--text-primary);
+  font-weight: 500;
+  font-size: 15px;
+}
+
+.mode-switch {
+  position: relative;
+  width: 60px;
+  height: 32px;
+  background-color: var(--border-color);
+  border-radius: 16px;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+}
+
+.mode-switch.active {
+  background-color: var(--accent-primary);
+}
+
+.mode-switch::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 28px;
+  height: 28px;
+  background-color: white;
+  border-radius: 50%;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.mode-switch.active::before {
+  transform: translateX(28px);
+}
+
+/* Preset Cards Grid */
+.preset-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--spacing-lg);
+  margin-bottom: var(--spacing-xl);
+}
+
+/* Individual Preset Card */
+.preset-card {
+  background: var(--bg-card, var(--background-light));
+  border: 2px solid var(--border-color);
+  border-radius: var(--border-radius-lg, var(--radius-lg));
+  padding: var(--spacing-xl);
+  cursor: pointer;
+  position: relative;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+}
+
+.preset-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.1), transparent);
+  transition: left 0.6s ease;
+}
+
+.preset-card:hover::before {
+  left: 100%;
+}
+
+.preset-card:hover {
+  transform: translateY(-4px);
+  border-color: var(--accent-primary, var(--primary-color));
+  box-shadow: 0 12px 40px rgba(59, 130, 246, 0.15);
+}
+
+.preset-card.selected {
+  border-color: var(--accent-primary, var(--primary-color));
+  background: rgba(59, 130, 246, 0.1);
+  box-shadow: 0 0 20px rgba(59, 130, 246, 0.2);
+}
+
+.preset-card.selected::after {
+  content: '✓';
+  position: absolute;
+  top: var(--spacing-md, 12px);
+  right: var(--spacing-md, 12px);
+  width: 32px;
+  height: 32px;
+  background: var(--accent-primary, var(--primary-color));
+  color: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  font-size: 18px;
+}
+
+/* Preset Header */
+.preset-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: var(--spacing-md);
+}
+
+.preset-icon {
+  font-size: 40px;
+  margin-right: var(--spacing-md);
+  flex-shrink: 0;
+}
+
+.preset-info {
+  flex: 1;
+}
+
+.preset-name {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: var(--spacing-xs);
+  line-height: 1.2;
+}
+
+.preset-tagline {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  opacity: 0.8;
+}
+
+/* Preset Content */
+.preset-description {
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.5;
+  margin-bottom: var(--spacing-lg);
+}
+
+.preset-features {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
+  margin-bottom: var(--spacing-md);
+}
+
+.preset-feature {
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  color: var(--accent-success);
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.preset-settings {
+  background: rgba(51, 65, 85, 0.3);
+  border-radius: var(--border-radius-md);
+  padding: var(--spacing-md);
+  margin-top: var(--spacing-md);
+}
+
+.preset-setting {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--spacing-sm);
+  font-size: 13px;
+}
+
+.preset-setting:last-child {
+  margin-bottom: 0;
+}
+
+.setting-label {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.setting-value {
+  color: var(--text-primary);
+  font-weight: 600;
+  background: rgba(59, 130, 246, 0.1);
+  padding: 2px 8px;
+  border-radius: 8px;
+  font-size: 11px;
+}
+
+/* Advanced Toggle (Hidden by default in preset mode) */
+.advanced-options-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-sm);
+  margin-top: var(--spacing-lg);
+  padding: var(--spacing-md);
+  background: transparent;
+  border: 1px dashed var(--border-color);
+  border-radius: var(--border-radius-md);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.advanced-options-toggle:hover {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+  background: rgba(59, 130, 246, 0.05);
+}
+
+.advanced-options-toggle::before {
+  content: '⚙️';
+  font-size: 16px;
+}
+
+/* Advanced Panel (Initially Hidden) */
+.advanced-panel.preset-mode {
+  display: none;
+}
+
+.advanced-panel.advanced-mode {
+  display: block;
+  margin-top: var(--spacing-lg);
+  padding: var(--spacing-lg);
+  background: rgba(51, 65, 85, 0.2);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-lg);
+  animation: slideDown 0.3s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Preset Quick Stats */
+.preset-stats {
+  display: flex;
+  justify-content: space-around;
+  margin-top: var(--spacing-md);
+  padding-top: var(--spacing-md);
+  border-top: 1px solid rgba(51, 65, 85, 0.3);
+}
+
+.stat-item {
+  text-align: center;
+  flex: 1;
+}
+
+.stat-value {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--accent-primary);
+  line-height: 1;
+}
+
+.stat-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 2px;
+}
+
+/* Performance Indicators */
+.performance-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.performance-indicator.speed::before {
+  content: '⚡';
+  color: var(--accent-warning);
+}
+
+.performance-indicator.accuracy::before {
+  content: '🎯';
+  color: var(--accent-success);
+}
+
+.performance-indicator.balance::before {
+  content: '⚖️';
+  color: var(--accent-primary);
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .preset-cards-grid {
+    grid-template-columns: 1fr;
+    gap: var(--spacing-md);
+  }
+  
+  .preset-card {
+    padding: var(--spacing-lg);
+  }
+  
+  .preset-header {
+    flex-direction: column;
+    text-align: center;
+    gap: var(--spacing-sm);
+  }
+  
+  .preset-icon {
+    margin-right: 0;
+    margin-bottom: var(--spacing-sm);
+  }
+}
+
+/* Animation States */
+.preset-cards-grid.loading .preset-card {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.preset-cards-grid.loaded .preset-card {
+  animation: fadeInUp 0.5s ease-out forwards;
+}
+
+.preset-card:nth-child(1) {
+  animation-delay: 0.1s;
+}
+
+.preset-card:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.preset-card:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

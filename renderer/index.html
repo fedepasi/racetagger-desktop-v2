@@ -1,0 +1,1223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Racetagger Desktop</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <link rel="stylesheet" href="css/sidebar.css">
+  <link rel="stylesheet" href="css/auth.css">
+  <link rel="stylesheet" href="css/desktop-theme.css">
+  
+  <!-- Enhanced UI Components -->
+  <link rel="stylesheet" href="css/smart-presets.css">
+  <link rel="stylesheet" href="css/enhanced-progress.css">
+  <link rel="stylesheet" href="css/processing-status.css">
+  <link rel="stylesheet" href="css/enhanced-file-browser.css">
+  
+  <!-- Delight System -->
+  <link rel="stylesheet" href="css/delight-system.css">
+  
+  <!-- Admin Features -->
+  <link rel="stylesheet" href="css/admin-features.css">
+
+  <!-- Home Page User-Friendly Styles -->
+  <link rel="stylesheet" href="css/home-user.css">
+  <link rel="stylesheet" href="css/participants.css">
+</head>
+<body>
+  <!-- Window Chrome (macOS style) -->
+  <div class="window-chrome">
+    <div class="window-controls">
+      <div class="window-control window-close"></div>
+      <div class="window-control window-minimize"></div>
+      <div class="window-control window-maximize"></div>
+      <div class="window-title">Racetagger Desktop</div>
+    </div>
+    <div class="window-actions">
+      <button class="window-action-button">
+        <span>Support</span>
+      </button>
+    </div>
+  </div>
+  <!-- User Menu -->
+  <div id="user-bar" class="user-bar" style="display: none;">
+    <div id="logo" class="app-logo">
+      <img src="../racetagger-logo.png" alt="RaceTagger" class="logo-icon">
+      <span class="logo-text">RaceTagger</span>
+    </div>
+    <div id="token-balance-widget" class="token-balance-widget">
+      <div class="token-info">
+        <span class="token-icon">🪙</span>
+        <span class="token-amount" id="token-balance">0</span>
+        <span class="token-label">images remaining</span>
+        <button id="refresh-tokens-btn" class="refresh-btn" title="Refresh token balance">⟳</button>
+      </div>
+      <button id="request-tokens-btn" class="btn btn-outline btn-sm">Request more analyses</button>
+    </div>
+    <div class="user-actions">
+      <div id="user-info" class="user-info"></div>
+      <button id="logout-button" class="btn small">Logout</button>
+    </div>
+  </div>
+
+  <!-- Auth Container -->
+  <div id="auth-container" class="auth-container" style="display: none;">
+    <div class="auth-modal">
+      <div class="auth-layout">
+        <!-- Left column with app information -->
+        <div class="auth-sidebar">
+          <div class="auth-sidebar-content">
+            <h1>Racetagger Desktop</h1>
+            <p class="auth-tagline">Automatic race image analysis</p>
+            
+            <div class="auth-features">
+              <div class="auth-feature-item">
+                <span class="auth-feature-icon">🔍</span>
+                <p>AI-powered race number recognition</p>
+              </div>
+              <div class="auth-feature-item">
+                <span class="auth-feature-icon">📊</span>
+                <p>Single image or batch folder analysis</p>
+              </div>
+              <div class="auth-feature-item">
+                <span class="auth-feature-icon">📝</span>
+                <p>CSV integration for metadata</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Right column with login form -->
+        <div class="auth-content">
+          <div class="auth-tabs">
+            <button id="login-tab" class="auth-tab active">Login</button>
+            <!-- Registration tab temporarily hidden -->
+            <!-- <button id="register-tab" class="auth-tab">Sign Up</button> -->
+          </div>
+        
+          <div id="login-panel" class="auth-panel">
+            <form id="login-form">
+              <div class="form-group">
+                <label for="login-email">Email</label>
+                <input type="email" id="login-email" required>
+              </div>
+              <div class="form-group">
+                <label for="login-password">Password</label>
+                <input type="password" id="login-password" required>
+              </div>
+              <div class="form-actions">
+                <button type="submit" class="btn primary">Sign In</button>
+              </div>
+              <div id="login-error" class="error-message" style="display: none;"></div>
+              <div class="early-access-info">
+                <p>Don't have an account yet? <a href="#" id="get-early-access-link">Sign up for early access on racetagger.cloud</a></p>
+              </div>
+            </form>
+          </div>
+          
+          <div id="register-panel" class="auth-panel" style="display: none;">
+            <form id="register-form">
+              <div class="form-group">
+                <label for="register-email">Email</label>
+                <input type="email" id="register-email" required>
+              </div>
+              <div class="form-group">
+                <label for="register-password">Password</label>
+                <input type="password" id="register-password" required minlength="6">
+              </div>
+              <div class="form-group">
+                <label for="register-name">Full Name</label>
+                <input type="text" id="register-name">
+              </div>
+              <div class="form-actions">
+                <button type="submit" class="btn primary">Sign Up</button>
+                <button type="button" id="back-to-login" class="btn secondary">Back to Login</button>
+              </div>
+              <div id="register-error" class="error-message"></div>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Access Code Container -->
+  <div id="access-code-container" class="access-code-container">
+    <div class="access-code-box">
+      <div class="logo-container">
+        <h1>Racetagger Desktop</h1>
+        <p>Early Access</p>
+      </div>
+      
+      <div class="access-code-content">
+        <h2>Enter Your Access Code</h2>
+        <p>Please enter the access code you received via email to continue.</p>
+        
+        <form id="access-code-form" class="access-code-form">
+          <div class="input-group">
+            <input 
+              type="text" 
+              id="access-code-input" 
+              placeholder="Your access code" 
+              required
+              autocomplete="off"
+            />
+            <p id="access-code-error" class="error-text"></p>
+          </div>
+          
+          <button type="submit" class="access-button">Continue</button>
+        </form>
+        
+        <div class="access-info">
+          <p>Don't have an access code? <a href="#" id="get-access-link">Get early access</a></p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main App Container -->
+  <div id="main-app-container" class="app-container hidden">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <nav class="sidebar-nav">
+        <a href="#" class="nav-item active">
+          <div class="nav-icon">🏠</div>
+          <div class="nav-text">Home</div>
+        </a>
+        <a href="#" class="nav-item">
+          <div class="nav-icon">🔍</div>
+          <div class="nav-text">Analysis</div>
+        </a>
+        <a href="#" class="nav-item">
+          <div class="nav-icon">📁</div>
+          <div class="nav-text">Projects</div>
+        </a>
+        <a href="#" class="nav-item">
+          <div class="nav-icon">👥</div>
+          <div class="nav-text">Participants</div>
+        </a>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="user-avatar">FP</div>
+        <div class="user-info">
+          <div id="sidebar-user-name" class="user-name">Guest</div>
+          <div class="user-status">Free Trial</div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <!-- Home Section (Dashboard) -->
+      <div id="section-home" class="content-section active-section">
+        <!-- Welcome Hero Section -->
+        <div class="home-hero">
+          <div class="hero-content">
+            <h1 class="hero-title">Welcome back, <span id="user-name-hero">Photographer</span>!</h1>
+            <p class="hero-subtitle">Ready to analyze your next racing event?</p>
+
+            <div class="hero-stats">
+              <div class="stat-item">
+                <div class="stat-number" id="monthly-photos">0</div>
+                <div class="stat-label">Photos (Last 30 Days)</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-number" id="completed-events">0</div>
+                <div class="stat-label">Executions (Last 30 Days)</div>
+              </div>
+            </div>
+
+            <button class="hero-cta" onclick="navigateToAnalysis()">
+              🚀 Start New Analysis
+            </button>
+          </div>
+        </div>
+
+        <!-- Recent Executions Section -->
+        <div class="home-section">
+          <h2 class="section-title">Recent Executions</h2>
+          <div id="recent-work-grid" class="recent-work-grid">
+            <!-- Recent executions will be loaded here dynamically -->
+            <div class="empty-state" id="empty-recent-work">
+              <div class="empty-icon">🔄</div>
+              <h3>No recent executions yet</h3>
+              <p>Start your first analysis to see your executions here!</p>
+              <button class="btn btn-primary" onclick="navigateToAnalysis()">Get Started</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Quick Start Guide -->
+        <div class="home-section">
+          <h2 class="section-title">Quick Start Guide</h2>
+          <div class="quick-start-steps">
+            <div class="step-card">
+              <div class="step-icon">📁</div>
+              <div class="step-content">
+                <h3>Select Photos</h3>
+                <p>Choose your racing photos folder</p>
+              </div>
+            </div>
+            <div class="step-arrow">→</div>
+            <div class="step-card">
+              <div class="step-icon">🏎️</div>
+              <div class="step-content">
+                <h3>AI Recognition</h3>
+                <p>AI automatically detects race numbers</p>
+              </div>
+            </div>
+            <div class="step-arrow">→</div>
+            <div class="step-card">
+              <div class="step-icon">💾</div>
+              <div class="step-content">
+                <h3>Get Results</h3>
+                <p>Receive organized results instantly</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="home-section">
+          <h2 class="section-title">Quick Actions</h2>
+          <div class="quick-actions">
+            <div class="action-card" onclick="navigateToAnalysis()">
+              <div class="action-icon">📸</div>
+              <div class="action-content">
+                <h3>Analyze Photos</h3>
+                <p>Start a new race analysis</p>
+              </div>
+            </div>
+            <div class="action-card" onclick="navigateToAnalysis()">
+              <div class="action-icon">📁</div>
+              <div class="action-content">
+                <h3>Organize by Number</h3>
+                <p>Auto-organize photos into folders</p>
+              </div>
+            </div>
+            <div class="action-card" onclick="navigateToParticipants()">
+              <div class="action-icon">👥</div>
+              <div class="action-content">
+                <h3>Manage Participants</h3>
+                <p>Create and manage participant presets</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tips Carousel -->
+        <div class="home-section">
+          <h2 class="section-title">Tips & Tricks</h2>
+          <div class="tips-carousel">
+            <div class="tip-card active" data-tip="0">
+              <div class="tip-icon">💡</div>
+              <p>You can automatically organize photos into folders by race number</p>
+            </div>
+            <div class="tip-card" data-tip="1">
+              <div class="tip-icon">📸</div>
+              <p>We support RAW files from Canon, Nikon, Sony and more</p>
+            </div>
+            <div class="tip-card" data-tip="2">
+              <div class="tip-icon">⚡</div>
+              <p>For live events, analyze while shooting for immediate results</p>
+            </div>
+            <div class="tip-card" data-tip="3">
+              <div class="tip-icon">🎯</div>
+              <p>Best results with frontal vehicle shots</p>
+            </div>
+          </div>
+          <div class="tip-indicators">
+            <div class="indicator active" data-tip="0"></div>
+            <div class="indicator" data-tip="1"></div>
+            <div class="indicator" data-tip="2"></div>
+            <div class="indicator" data-tip="3"></div>
+          </div>
+        </div>
+
+        <!-- Popular Use Cases -->
+        <div class="home-section">
+          <h2 class="section-title">Popular Use Cases</h2>
+          <div class="use-cases">
+            <div class="use-case">
+              <div class="use-case-icon">🏁</div>
+              <h3>Rally</h3>
+              <p>Track rally cars through stages</p>
+            </div>
+            <div class="use-case">
+              <div class="use-case-icon">🏎️</div>
+              <h3>Circuit Racing</h3>
+              <p>Monitor lap times and positions</p>
+            </div>
+            <div class="use-case">
+              <div class="use-case-icon">⏰</div>
+              <h3>Endurance</h3>
+              <p>Long-distance race tracking</p>
+            </div>
+            <div class="use-case">
+              <div class="use-case-icon">🏃</div>
+              <h3>Karting</h3>
+              <p>High-speed kart competitions</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Analysis Section -->
+      <div id="section-analysis" class="content-section">
+        <div class="card mb-lg">
+          <div class="card-header">
+            <div class="card-title">Image Analysis</div>
+        </div>
+        <div class="card-body">
+          <div id="error-message" class="error-message" style="display: none;"></div>
+          
+          <!-- Unified Folder & Category Selection -->
+          <div class="selection-group mb-md">
+            <label class="form-label selection-group-label">📁 Select Images Folder & Category</label>
+            
+            <div class="selection-controls">
+              <div class="folder-section">
+                <div class="folder-selector-enhanced">
+                  <div class="step-badge">1</div>
+                  <label class="folder-label">
+                    <span class="folder-icon">📂</span>
+                    Select Images Folder
+                  </label>
+                  <button id="folder-select-button" class="btn btn-secondary folder-btn">
+                    📂 Select Folder
+                  </button>
+                  <div id="selected-folder" class="form-text folder-selected"></div>
+                  <div id="image-count" class="form-text folder-hint">No images selected</div>
+                </div>
+              </div>
+
+              <div class="category-section">
+                <div class="category-selector-enhanced">
+                  <div class="step-badge">2</div>
+                  <label class="category-label" for="category-select">
+                    <span class="category-icon">🏎️</span>
+                    Event Type
+                  </label>
+                  <select class="form-control category-control" id="category-select">
+                    <option value="motorsport">🏎️ Motorsport</option>
+                    <option value="running">🏃 Running & Cycling</option>
+                    <option value="other">⚡ Other Sports</option>
+                  </select>
+                  <div class="form-text category-hint">
+                    Choose sport type for better AI recognition
+                  </div>
+                  <div class="form-text category-current">
+                    <strong>Current:</strong> <span id="current-category-display">Motorsport</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="preset-section">
+                <div class="preset-selector-enhanced">
+                  <div class="step-badge step-new">3</div>
+                  <div class="preset-new-indicator">✨ NEW</div>
+                  <label class="preset-label" for="preset-select">
+                    <span class="preset-icon">🎯</span>
+                    Participant Preset
+                  </label>
+                  <select class="form-control preset-control" id="preset-select">
+                    <option value="">🎯 Enhance Recognition Accuracy</option>
+                  </select>
+                  <div class="form-text preset-hint">
+                    Load participant data for precise race number matching and sponsor detection
+                  </div>
+                  <div class="preset-details" id="preset-details" style="display: none;">
+                    <div class="preset-info">
+                      <div class="preset-participants">
+                        <span id="preset-participant-count">0</span> participants loaded
+                      </div>
+                      <div class="preset-actions">
+                        <button type="button" class="btn btn-link preset-manage-btn" onclick="navigateToParticipants()">
+                          ⚙️ Manage Presets
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- FOLDER ORGANIZATION: Now available as a main feature -->
+          <div id="folder-organization-section" class="folder-organization-section mb-md">
+            <div class="section-header mb-sm">
+              <h4>📁 Folder Organization</h4>
+              <div class="public-feature-badge">✨ Available for all users</div>
+              <p class="form-text">Automatically organize photos into folders based on race numbers:</p>
+            </div>
+            
+            <div class="toggle-option">
+              <label class="toggle-container" for="folder-organization-enabled">
+                <input type="checkbox" id="folder-organization-enabled" class="toggle-input">
+                <div class="toggle-slider"></div>
+                <div class="toggle-content">
+                  <div class="toggle-title">Enable folder organization</div>
+                  <div class="form-text">Create folders named after race numbers and organize photos accordingly</div>
+                </div>
+              </label>
+            </div>
+            
+            <div id="folder-organization-options" class="folder-org-options mt-md" style="display: none;">
+              <div class="org-mode-section mb-md">
+                <h5>Operation Mode:</h5>
+                <div class="radio-group space-y-2">
+                  <label class="radio-option" for="org-mode-copy">
+                    <input type="radio" id="org-mode-copy" name="org-mode" value="copy" checked>
+                    <div class="radio-content">
+                      <div class="radio-title">📄 Copy files</div>
+                      <div class="form-text">Safe option - creates copies in organized folders (preserves originals)</div>
+                    </div>
+                  </label>
+                  
+                  <label class="radio-option warning-option" for="org-mode-move">
+                    <input type="radio" id="org-mode-move" name="org-mode" value="move">
+                    <div class="radio-content">
+                      <div class="radio-title">🔄 Move files</div>
+                      <div class="form-text warning-text">⚠️ Moves originals to organized folders (use with caution)</div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+              
+              <div class="folder-naming-section mb-md">
+                <h5>Folder Naming Pattern:</h5>
+                <div class="radio-group space-y-2">
+                  <label class="radio-option" for="pattern-number">
+                    <input type="radio" id="pattern-number" name="folder-pattern" value="number" checked>
+                    <div class="radio-content">
+                      <div class="radio-title">Number only</div>
+                      <div class="form-text">Creates folders like: 123, 456, 789</div>
+                    </div>
+                  </label>
+                  
+                  <label class="radio-option" for="pattern-number-name">
+                    <input type="radio" id="pattern-number-name" name="folder-pattern" value="number_name">
+                    <div class="radio-content">
+                      <div class="radio-title">Number + Name</div>
+                      <div class="form-text">Creates folders like: 123_Rossi, 456_Bianchi (requires CSV)</div>
+                    </div>
+                  </label>
+                  
+                  <label class="radio-option" for="pattern-custom">
+                    <input type="radio" id="pattern-custom" name="folder-pattern" value="custom">
+                    <div class="radio-content">
+                      <div class="radio-title">Custom pattern</div>
+                      <div class="form-text">Use placeholders: {number}, {name}, {categoria}, {squadra}</div>
+                    </div>
+                  </label>
+                </div>
+                
+                <div id="custom-pattern-container" class="custom-input-container mt-sm" style="display: none;">
+                  <input type="text" id="custom-pattern-input" class="form-control" placeholder="e.g: Car_{number}_{name}" value="{number}">
+                  <div class="form-text">Available placeholders: {number}, {name}, {categoria}, {squadra}</div>
+                </div>
+              </div>
+              
+              <div class="special-options-section">
+                <h5>Special Cases:</h5>
+                <div class="toggle-option">
+                  <label class="toggle-container" for="create-unknown-folder">
+                    <input type="checkbox" id="create-unknown-folder" class="toggle-input" checked>
+                    <div class="toggle-slider"></div>
+                    <div class="toggle-content">
+                      <div class="toggle-title">Create "Unknown" folder</div>
+                      <div class="form-text">For photos where no race number was detected</div>
+                    </div>
+                  </label>
+                </div>
+                
+                <div class="toggle-option">
+                  <label class="toggle-container" for="include-xmp-files">
+                    <input type="checkbox" id="include-xmp-files" class="toggle-input" checked>
+                    <div class="toggle-slider"></div>
+                    <div class="toggle-content">
+                      <div class="toggle-title">Include XMP sidecar files</div>
+                      <div class="form-text">Copy XMP files alongside RAW images (recommended for Lightroom users)</div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+              
+              <div class="organization-warning info-box mt-md">
+                <span class="info-icon">💡</span>
+                <div class="info-text">
+                  <strong>Note:</strong> Folder organization works alongside metadata writing. 
+                  Both features can be enabled simultaneously for maximum workflow flexibility.
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <div class="mb-md">
+            <button id="advanced-toggle" class="btn btn-secondary" style="display: none;">Advanced Options</button>
+            <div id="advanced-panel" class="card mt-sm" style="display: none;">
+              <div class="card-body">
+              <div class="model-selection-section">
+                <div class="section-header mb-sm">
+                  <h4>Analysis Configuration</h4>
+                  <p class="form-text">Select the AI model to use for analysis:</p>
+                </div>
+                
+
+                <div class="form-group">
+                  <label class="form-label" for="model-select">Analysis mode:</label>
+                  <select class="form-control" id="model-select">
+                    <option value="gemini-2.5-flash-lite-preview-06-17">⚡ FAST - Quick results for live events (10x speed, ~85% accuracy, low cost)</option>
+                    <option value="gemini-2.5-flash-preview-04-17">⚖️ BALANCED - Optimal for most events (3x speed, ~92% accuracy, medium cost)</option>
+                    <option value="gemini-2.5-pro-preview-05-06">💎 ADVANCED - Maximum precision results (~98% accuracy, premium cost)</option>
+                  </select>
+                  <div class="form-text">
+                    <strong>Current mode:</strong> <span id="current-model-display">FAST</span>
+                  </div>
+                </div>
+              </div>
+              
+              <div class="csv-section mt-md">
+                <div class="section-header mb-sm">
+                  <h4>Starting List</h4>
+                  <p class="form-text">Optionally upload a CSV file with the starting list to compare race numbers and add metadata to images:</p>
+                </div>
+                <div class="form-group">
+                  <label class="form-label" for="csv-upload">Starting list CSV (optional):</label>
+                  <input 
+                    class="form-control"
+                    id="csv-upload" 
+                    name="csv-upload" 
+                    type="file" 
+                    accept=".csv"
+                  />
+                </div>
+                <button id="download-csv-template" class="btn btn-secondary">Download CSV Template</button>
+                <div id="csv-info" class="form-text mt-sm" style="display: none;">
+                  <div id="csv-filename"></div>
+                  <div id="csv-entries"></div>
+                </div>
+              </div>
+              
+              <div class="metadata-section mt-md">
+                <div class="section-header mb-sm">
+                  <h4>Metadata Management</h4>
+                  <p class="form-text">Choose how to handle image metadata:</p>
+                </div>
+                
+                <div class="metadata-options space-y-3">
+                  <label class="radio-option" for="metadata-strategy-no">
+                    <input type="radio" id="metadata-strategy-no" name="metadata-strategy" value="no_metadata" checked>
+                    <div class="radio-content">
+                      <div class="radio-title">Don't add metadata</div>
+                      <div class="form-text">Don't modify the image or create XMP files</div>
+                    </div>
+                  </label>
+                  
+                  <label class="radio-option" for="metadata-strategy-default">
+                    <input type="radio" id="metadata-strategy-default" name="metadata-strategy" value="default">
+                    <div class="radio-content">
+                      <div class="radio-title">Use default metatag</div>
+                      <div class="form-text">Automatically add filename and date as metatag</div>
+                    </div>
+                  </label>
+                  
+                  <label class="radio-option" for="metadata-strategy-manual">
+                    <input type="radio" id="metadata-strategy-manual" name="metadata-strategy" value="manual">
+                    <div class="radio-content">
+                      <div class="radio-title">Enter metatag manually</div>
+                      <div class="form-text">Specify a custom metatag for all images</div>
+                    </div>
+                  </label>
+                  
+                  <div id="manual-metatag-container" class="manual-input-container" style="display: none;">
+                    <input type="text" id="manual-metatag" class="form-control" placeholder="e.g: Race XYZ, 05/10/2025">
+                  </div>
+                  
+                  <label class="radio-option" for="metadata-strategy-full">
+                    <input type="radio" id="metadata-strategy-full" name="metadata-strategy" value="full">
+                    <div class="radio-content">
+                      <div class="radio-title">Use all analysis data</div>
+                      <div class="form-text">Embed all analysis results as metadata</div>
+                    </div>
+                  </label>
+                </div>
+                
+                <div class="metadata-note">
+                  <p><strong>Note:</strong> If the CSV file contains a <code>metatag</code> field, it will always be used for matching images.</p>
+                </div>
+
+                <!-- Metadata Overwrite Options -->
+                <div class="metadata-overwrite-section mt-md">
+                  <div class="section-header mb-sm">
+                    <h5>Metadata Write Mode</h5>
+                    <p class="form-text">Choose how to handle existing metadata in images:</p>
+                  </div>
+
+                  <div class="overwrite-options space-y-2">
+                    <label class="checkbox-option" for="keywords-overwrite">
+                      <input type="checkbox" id="keywords-overwrite" name="keywords-overwrite">
+                      <div class="checkbox-content">
+                        <div class="checkbox-title">Overwrite keywords</div>
+                        <div class="form-text">Replace existing IPTC keywords instead of appending</div>
+                      </div>
+                    </label>
+
+                    <label class="checkbox-option" for="description-overwrite" id="description-overwrite-container" style="display: none;">
+                      <input type="checkbox" id="description-overwrite" name="description-overwrite">
+                      <div class="checkbox-content">
+                        <div class="checkbox-title">Overwrite description</div>
+                        <div class="form-text">Replace existing description instead of appending</div>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="resize-optimization-section mt-md">
+                <div class="section-header mb-sm">
+                  <h4>Upload Optimization</h4>
+                  <p class="form-text">Automatically reduce image sizes to speed up upload (original image is not modified):</p>
+                </div>
+                
+                <div class="toggle-option">
+                  <label class="toggle-container" for="resize-enabled">
+                    <input type="checkbox" id="resize-enabled" class="toggle-input">
+                    <div class="toggle-slider"></div>
+                    <div class="toggle-content">
+                      <div class="toggle-title">Enable upload optimization</div>
+                      <div class="form-text">When enabled, large images are resized for upload while maintaining optimal quality for AI analysis</div>
+                    </div>
+                  </label>
+                </div>
+                
+                <div id="resize-presets-container" class="preset-options mt-md" style="display: none;">
+                  <div class="preset-header">
+                    <h5>Optimization level:</h5>
+                    <p class="form-text">Choose the balance between upload speed and analysis quality</p>
+                  </div>
+                  
+                  <div class="preset-list space-y-3">
+                    <label class="preset-option" for="preset-fast">
+                      <input type="radio" id="preset-fast" name="resize-preset" value="fast">
+                      <div class="preset-content">
+                        <div class="preset-name">⚡ Fast</div>
+                        <div class="preset-description">1080px, 75% quality - Faster upload</div>
+                      </div>
+                    </label>
+                    
+                    <label class="preset-option" for="preset-balanced">
+                      <input type="radio" id="preset-balanced" name="resize-preset" value="balanced" checked>
+                      <div class="preset-content">
+                        <div class="preset-name">⚖️ Balanced</div>
+                        <div class="preset-description">1440px, 85% quality - Speed/quality balance (recommended)</div>
+                        <div class="preset-badge">Recommended</div>
+                      </div>
+                    </label>
+                    
+                    <label class="preset-option" for="preset-quality">
+                      <input type="radio" id="preset-quality" name="resize-preset" value="quality">
+                      <div class="preset-content">
+                        <div class="preset-name">🎯 Quality</div>
+                        <div class="preset-description">1920px, 90% quality - Maximum analysis precision</div>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+                
+                <div id="resize-estimate" class="resize-info mt-sm" style="display: none;">
+                  <div class="info-box">
+                    <span class="info-icon">📊</span>
+                    <span class="info-text">Estimated size reduction: <strong id="size-reduction-estimate">60-80%</strong></span>
+                  </div>
+                </div>
+              </div>
+
+              </div>
+            </div>
+          </div>
+
+
+          <button id="upload-button" class="btn btn-primary" disabled>Analyze Folder</button>
+
+          <!-- Enhanced Progress Tracking -->
+          <div id="progress-container" class="processing-status-panel" style="display: none;">
+            <div class="processing-header">
+              <h3 class="processing-title">Processing Images...</h3>
+              <button id="cancel-processing-btn" class="btn btn-secondary btn-sm">Cancel</button>
+            </div>
+            
+            <div class="processing-stats">
+              <div class="processing-counter">
+                <span id="current-image-number">1</span> of <span id="total-images">0</span> images
+              </div>
+              <div class="processing-percentage">
+                <span id="progress-percent">0</span>%
+              </div>
+              <div class="processing-eta">
+                ETA: <span id="progress-eta-time">Calculating...</span>
+              </div>
+            </div>
+            
+            <div class="processing-bar-container">
+              <div id="progress-bar" class="processing-main-bar">
+                <div id="progress-fill" class="processing-fill"></div>
+              </div>
+            </div>
+            
+            <div class="processing-current">
+              <div class="processing-current-image">
+                <div class="processing-image-preview" id="current-image-preview">
+                  <div class="processing-image-placeholder">📸</div>
+                </div>
+                <div class="processing-image-info">
+                  <span class="processing-image-status" id="current-image-status">⏳</span>
+                  <span class="processing-image-name" id="current-image-name">Preparing...</span>
+                </div>
+              </div>
+            </div>
+            
+            <div class="processing-details" id="progress-details">
+              <div class="processing-detail-row">
+                <span class="processing-detail-label">⏳ Queued:</span>
+                <span class="processing-detail-value" id="queued-count">0</span>
+              </div>
+              <div class="processing-detail-row">
+                <span class="processing-detail-label">🔄 Processing:</span>
+                <span class="processing-detail-value" id="processing-active-count">0</span>
+              </div>
+              <div class="processing-detail-row">
+                <span class="processing-detail-label">✅ Completed:</span>
+                <span class="processing-detail-value" id="completed-count">0</span>
+              </div>
+              <div class="processing-detail-row">
+                <span class="processing-detail-label">❌ Failed:</span>
+                <span class="processing-detail-value" id="failed-count">0</span>
+              </div>
+            </div>
+
+            <!-- Performance Telemetry -->
+            <div class="processing-telemetry">
+              <div class="telemetry-item">
+                <span class="telemetry-label">Average Speed:</span>
+                <span class="telemetry-value" id="telemetry-average-time">-</span>
+              </div>
+              <div class="telemetry-item">
+                <span class="telemetry-label">Processing Time:</span>
+                <span class="telemetry-value" id="telemetry-processing-time">-</span>
+              </div>
+              <div class="telemetry-item">
+                <span class="telemetry-label">Images/min:</span>
+                <span class="telemetry-value" id="telemetry-throughput">-</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- END Analysis Section -->
+    </div>
+
+
+    <!-- OLD RESULTS CONTAINER REMOVED - NOW USING STREAMING VIEW FOR ALL BATCHES -->
+
+    <!-- Projects Section -->
+      <div id="section-progetti" class="content-section">
+        <div class="card">
+          <div class="card-header"><div class="card-title">Project Management</div></div>
+          <div class="card-body">
+            <p>Here you can create and manage your projects.</p>
+            <button id="create-new-project-btn" class="btn btn-primary">Create New Project</button>
+            <div id="projects-list-container" class="mt-md">
+              <!-- Project list will be loaded here -->
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Participants Management Section -->
+      <div id="section-participants" class="content-section">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Participant Presets</div>
+            <div class="card-header-actions">
+              <button id="create-new-preset-btn" class="btn btn-primary">
+                <span class="btn-icon">+</span>
+                New Preset
+              </button>
+              <button id="import-csv-preset-btn" class="btn btn-secondary">
+                <span class="btn-icon">📄</span>
+                Import CSV
+              </button>
+            </div>
+          </div>
+          <div class="card-body">
+            <div id="presets-list-container">
+              <div class="empty-state" id="empty-presets-state">
+                <div class="empty-icon">👥</div>
+                <h3>No participant presets yet</h3>
+                <p>Create your first preset to start managing participants efficiently</p>
+                <button class="btn btn-primary" onclick="createNewPreset()">Create First Preset</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Preset Editor Modal -->
+        <div id="preset-editor-modal" class="modal">
+          <div class="modal-content participants-modal">
+            <div class="modal-header">
+              <h2 id="preset-editor-title">New Participant Preset</h2>
+              <button class="modal-close" onclick="closePresetEditor()">&times;</button>
+            </div>
+            <div class="modal-body">
+              <!-- Preset Info -->
+              <div class="preset-info-section">
+                <div class="form-group">
+                  <label for="preset-name">Preset Name *</label>
+                  <input type="text" id="preset-name" placeholder="e.g., Monza 2024 GT Championship">
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="preset-description">Description</label>
+                    <input type="text" id="preset-description" placeholder="Optional description">
+                  </div>
+                </div>
+              </div>
+
+              <!-- Participants Table -->
+              <div class="participants-table-section">
+                <div class="table-header">
+                  <h3>Participants</h3>
+                  <div class="table-actions">
+                    <button class="btn btn-secondary btn-sm" onclick="addParticipantRow()">
+                      <span class="btn-icon">+</span>
+                      Add Row
+                    </button>
+                    <button class="btn btn-secondary btn-sm" onclick="clearAllParticipants()">
+                      <span class="btn-icon">🗑️</span>
+                      Clear All
+                    </button>
+                  </div>
+                </div>
+
+                <div class="participants-table-container">
+                  <table id="participants-table" class="participants-table">
+                    <thead>
+                      <tr>
+                        <th>Number</th>
+                        <th>Driver</th>
+                        <th>Navigator</th>
+                        <th>Team</th>
+                        <th>Sponsors</th>
+                        <th>Meta Tag</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody id="participants-tbody">
+                      <!-- Participants rows will be added here -->
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-secondary" onclick="closePresetEditor()">Cancel</button>
+              <button class="btn btn-primary" onclick="savePreset()" id="save-preset-btn">
+                <span class="btn-icon">💾</span>
+                Save Preset
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- CSV Import Modal -->
+        <div id="csv-import-modal" class="modal">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h2>Import Participants from CSV</h2>
+              <button class="modal-close" onclick="closeCsvImportModal()">&times;</button>
+            </div>
+            <div class="modal-body" style="padding: 2rem;">
+              <!-- Preset Name Section -->
+              <div class="form-group" style="margin-bottom: 2rem;">
+                <label for="csv-preset-name" style="display: block; margin-bottom: 0.75rem; font-weight: 600; color: var(--text-primary);">
+                  📋 Preset Name *
+                </label>
+                <input
+                  type="text"
+                  id="csv-preset-name"
+                  class="form-input-sm"
+                  placeholder="e.g., Monza 2024 Starting List"
+                  style="width: 100%; font-size: 1rem; padding: 0.75rem 1rem;"
+                >
+                <small class="form-hint" style="display: block; margin-top: 0.5rem;">
+                  Give this participant list a meaningful name
+                </small>
+              </div>
+
+              <!-- CSV File Upload Section -->
+              <div class="form-group" style="margin-bottom: 2rem;">
+                <label for="csv-file-input" style="display: block; margin-bottom: 0.75rem; font-weight: 600; color: var(--text-primary);">
+                  📂 CSV File *
+                </label>
+                <div style="border: 2px dashed var(--border-color); border-radius: 8px; padding: 2rem; text-align: center; transition: all 0.2s ease; background: var(--surface-color-light);">
+                  <input
+                    type="file"
+                    id="csv-file-input"
+                    accept=".csv"
+                    onchange="previewCsvFile()"
+                    style="margin-bottom: 1rem; font-size: 0.95rem;"
+                  >
+                  <div style="color: var(--text-secondary); font-size: 0.875rem;">
+                    <strong>Expected columns:</strong> number, name, team, category, navigator, sponsor, metatag<br>
+                    <small>Upload a CSV file with participant data</small>
+                  </div>
+                  <button class="btn btn-secondary btn-sm" onclick="downloadCsvTemplate()" style="margin-top: 1rem;">
+                    <span class="btn-icon">📥</span>
+                    Download CSV Template
+                  </button>
+                </div>
+              </div>
+
+              <!-- CSV Preview Section -->
+              <div id="csv-preview" class="csv-preview-container" style="display: none; margin-top: 2rem;">
+                <h4 style="color: var(--text-primary); margin-bottom: 1rem; display: flex; align-items: center;">
+                  👁️ Preview (first 5 rows):
+                </h4>
+                <div id="csv-preview-table" style="border-radius: 6px; overflow: hidden; border: 1px solid var(--border-color);"></div>
+                <small class="form-hint" style="display: block; margin-top: 0.75rem; text-align: center;">
+                  Verify the data looks correct before importing
+                </small>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-secondary" onclick="closeCsvImportModal()">Cancel</button>
+              <button class="btn btn-primary" onclick="importCsvPreset()" id="import-csv-btn" disabled>
+                <span class="btn-icon">📥</span>
+                Import
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    <footer class="app-footer">
+      <p>
+        <strong>RaceTagger Desktop</strong> <span id="app-version">v1.0.8</span><br>
+        <small>Developed by Federico Pasinetti</small>
+      </p>
+    </footer>
+
+    </main>
+  </div>
+
+  <script src="js/streaming-view.js"></script>
+  <script src="js/log-visualizer.js"></script>
+  <script src="js/renderer.js"></script>
+  <script src="js/access-code.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/desktop-ui.js"></script>
+  
+  <!-- Enhanced UI Components -->
+  <script src="js/smart-presets.js"></script>
+  <script src="js/enhanced-progress.js"></script>
+  <script src="js/enhanced-processing.js"></script>
+  <script>
+    // Mobile Menu Handler
+    document.addEventListener('DOMContentLoaded', () => {
+      const mobileMenuToggle = document.getElementById('mobile-menu-toggle');
+      const sidebar = document.getElementById('sidebar');
+      const sidebarOverlay = document.getElementById('sidebar-overlay');
+      
+      if (mobileMenuToggle && sidebar && sidebarOverlay) {
+        // Toggle sidebar on button click
+        mobileMenuToggle.addEventListener('click', () => {
+          sidebar.classList.toggle('mobile-active');
+          sidebarOverlay.classList.toggle('active');
+        });
+        
+        // Close sidebar on overlay click
+        sidebarOverlay.addEventListener('click', () => {
+          sidebar.classList.remove('mobile-active');
+          sidebarOverlay.classList.remove('active');
+        });
+        
+        // Close sidebar on escape key
+        document.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape' && sidebar.classList.contains('mobile-active')) {
+            sidebar.classList.remove('mobile-active');
+            sidebarOverlay.classList.remove('active');
+          }
+        });
+      }
+    });
+  </script>
+  <!-- Participants Management (must load before enhanced-file-browser) -->
+  <script src="js/participants-manager.js"></script>
+
+  <script src="js/enhanced-file-browser.js"></script>
+  <script src="js/enhanced-ui-coordinator.js"></script>
+
+  <!-- Delight System -->
+  <script src="js/delight-system.js"></script>
+  <script src="js/delight-integration.js"></script>
+
+  <!-- Admin Features -->
+  <script src="js/admin-features.js"></script>
+
+  <!-- Home Page Logic -->
+  <script src="js/home.js"></script>
+
+  <!-- Image Modal -->
+  <div id="image-modal" class="image-modal">
+    <div class="image-modal-content">
+      <div class="modal-header">
+        <h3 id="modal-image-title">View Image</h3>
+        <button class="modal-close" id="modal-close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <img id="modal-image" class="modal-image" src="" alt="Enlarged image">
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal for Project Creation/Editing -->
+  <div id="project-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-content">
+      <h2 id="project-modal-title">New Project</h2>
+      <form id="project-form">
+        <div class="form-group">
+          <label for="project-name-input">Project Name:</label>
+          <input type="text" id="project-name-input" class="form-control" required>
+        </div>
+        <div class="form-group">
+          <label for="project-csv-input">Base CSV File (optional):</label>
+          <input type="file" id="project-csv-input" class="form-control" accept=".csv">
+          <small id="project-csv-info" class="form-text"></small>
+        </div>
+        <input type="hidden" id="project-id-input"> <!-- For edit mode -->
+        <div class="modal-actions">
+          <button type="button" id="cancel-project-modal" class="btn btn-secondary">Cancel</button>
+          <button type="submit" id="save-project-button" class="btn btn-primary">Save Project</button>
+        </div>
+        <div id="project-modal-error" class="error-message" style="display: none;"></div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Mobile Sidebar Overlay -->
+  <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+  <!-- Token Request Modal -->
+  <div id="token-request-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-content token-request-modal">
+      <div class="modal-header">
+        <h2>Request/Buy More Tokens</h2>
+        <button type="button" id="close-token-modal" class="btn btn-secondary btn-sm">×</button>
+      </div>
+      
+      <div class="modal-body">
+        <!-- Area per messaggi di successo/errore -->
+        <div id="token-request-messages" class="token-messages" style="display: none;"></div>
+        
+        <div class="early-access-notice">
+          <div class="notice-icon">🎯</div>
+          <div class="notice-content">
+            <h3>Early Access Phase</h3>
+            <p>During this phase, we're providing tokens for testing and will work with you personally for any additional needs.</p>
+            <p><strong>🎁 FREE: Up to 500 tokens/month</strong> | <strong>💰 Payment required: Over 500 tokens/month</strong></p>
+          </div>
+        </div>
+
+        <form id="token-request-form">
+          <div class="form-group">
+            <label for="request-email">Email Address</label>
+            <input type="email" id="request-email" class="form-control" required placeholder="your@email.com">
+          </div>
+
+
+          <div class="form-group">
+            <label for="request-tokens">Number of Tokens Requested</label>
+            <div class="token-suggestions">
+              <button type="button" class="token-suggestion-btn" data-tokens="100">100 tokens</button>
+              <button type="button" class="token-suggestion-btn" data-tokens="500">500 tokens</button>
+              <button type="button" class="token-suggestion-btn" data-tokens="1000">1,000 tokens</button>
+              <button type="button" class="token-suggestion-btn" data-tokens="custom">Custom</button>
+            </div>
+            <input type="number" id="request-tokens" class="form-control" min="1" placeholder="Enter number of tokens" required>
+          </div>
+
+          <div class="form-group">
+            <label for="request-message">Additional Notes (Optional)</label>
+            <textarea id="request-message" class="form-control" rows="3" placeholder="Tell us about your use case, timeline, or any specific requirements..."></textarea>
+          </div>
+
+          <div class="pricing-info">
+            <div class="info-box">
+              <strong>💡 What happens next?</strong>
+              <ul>
+                <li>We'll review your request within 24 hours</li>
+                <li>You'll receive a personalized quote via email</li>
+                <li>We'll work with you on the best pricing and payment options</li>
+                <li>Tokens will be added to your account once payment is processed</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="modal-actions">
+            <button type="button" id="cancel-token-request" class="btn btn-secondary">Cancel</button>
+            <button type="submit" id="submit-token-request" class="btn btn-primary">Send Request</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Adobe DNG Converter Required Modal -->
+  <div id="adobe-dng-modal" class="modal" style="display: none;">
+    <div class="modal-content adobe-dng-modal-content">
+      <div class="modal-header adobe-dng-modal-header">
+        <h2><i class="fas fa-exclamation-triangle"></i> Adobe DNG Converter Required</h2>
+      </div>
+      <div class="modal-body adobe-dng-modal-body">
+        <p>
+          <strong>RAW files detected:</strong> This folder contains RAW image files that require 
+          Adobe DNG Converter for processing.
+        </p>
+        <p>
+          Adobe DNG Converter is not currently installed on your system. 
+          Please download and install it to process RAW images.
+        </p>
+        
+        <div class="download-section">
+          <p><strong>Download Adobe DNG Converter:</strong></p>
+          <a href="https://helpx.adobe.com/camera-raw/using/adobe-dng-converter.html" 
+             target="_blank" 
+             class="download-link">
+            <i class="fas fa-download"></i> Official Adobe Download Page
+          </a>
+          <p class="download-note">
+            <i class="fas fa-info-circle"></i> 
+            The download page will automatically detect your operating system.
+          </p>
+        </div>
+
+        <div class="warning-section">
+          <p><strong>Note:</strong> Without Adobe DNG Converter, RAW files cannot be processed. 
+          Only JPEG files in the selected folder will be analyzed.</p>
+        </div>
+      </div>
+      <div class="modal-footer adobe-dng-modal-footer">
+        <button class="btn btn-secondary" onclick="closeAdobeDngModal()">
+          <i class="fas fa-times"></i> Cancel Selection
+        </button>
+        <button class="btn btn-warning" onclick="continueWithoutDng()">
+          <i class="fas fa-forward"></i> Continue Without RAW Support
+        </button>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RaceTagger - Analysis Results</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <link rel="stylesheet" href="css/processing-status.css">
+  <link rel="stylesheet" href="css/results-integrated.css">
+</head>
+<body>
+  <div class="results-page">
+    <!-- Header -->
+    <div class="results-header">
+      <div class="results-title">
+        <div class="results-breadcrumb">
+          <span>🏠 Main</span>
+          <span>→</span>
+          <span>📊 Results</span>
+          <span id="execution-badge"></span>
+        </div>
+        <h1 id="results-title">Analysis Results</h1>
+        <p class="results-subtitle" id="results-subtitle">Loading execution data...</p>
+      </div>
+
+      <div class="results-actions">
+        <a href="index.html" class="btn-new-analysis">
+          <span>← New Analysis</span>
+        </a>
+      </div>
+    </div>
+
+    <!-- Content -->
+    <div class="results-content">
+      <!-- Loading State -->
+      <div class="results-loading" id="results-loading">
+        <div class="loading-spinner"></div>
+        <h3>Loading Results...</h3>
+        <p>Please wait while we load your analysis results</p>
+      </div>
+
+      <!-- Error State -->
+      <div class="results-error" id="results-error">
+        <div class="error-icon">❌</div>
+        <h3>Failed to Load Results</h3>
+        <p id="error-message">An error occurred while loading the results</p>
+        <a href="index.html" class="btn-new-analysis">← Back to Main</a>
+      </div>
+
+      <!-- Empty State -->
+      <div class="results-empty" id="results-empty">
+        <div class="empty-icon">📋</div>
+        <h3>No Results Found</h3>
+        <p>This execution doesn't have any results yet</p>
+        <a href="index.html" class="btn-new-analysis">← Back to Main</a>
+      </div>
+
+      <!-- Log Visualizer Container -->
+      <div id="log-visualizer-container" style="display: none;">
+        <!-- Il LogVisualizer sarà inserito qui -->
+      </div>
+    </div>
+  </div>
+
+  <script src="js/log-visualizer.js"></script>
+  <script src="js/results-page.js"></script>
+</body>
+</html>

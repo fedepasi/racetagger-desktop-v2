@@ -1,0 +1,632 @@
+/**
+ * Participants Management Styles
+ */
+
+/* Base Modal Styles - Enhanced for better visibility */
+.modal {
+  display: none;  /* Hidden by default */
+  position: fixed;
+  z-index: 2000; /* Higher than desktop-theme modals */
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.65); /* Darker backdrop */
+  backdrop-filter: blur(8px) saturate(180%); /* More pronounced blur */
+  justify-content: center;
+  align-items: center;
+  opacity: 0;
+  transition: opacity 0.3s ease, backdrop-filter 0.3s ease;
+}
+
+.modal.show {
+  display: flex;  /* Show with flexbox for centering */
+  opacity: 1;
+}
+
+.modal-content {
+  background: var(--surface-color);
+  border-radius: 12px; /* Slightly more rounded */
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4), 0 8px 20px rgba(0, 0, 0, 0.15); /* Enhanced shadows */
+  border: 1px solid var(--border-color-light);
+  position: relative;
+  transform: translateY(-20px) scale(0.96); /* Slight scale animation */
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;
+}
+
+.modal.show .modal-content {
+  transform: translateY(0) scale(1); /* Smooth scale in */
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.25rem 1.5rem; /* More generous padding */
+  border-bottom: 2px solid var(--border-color); /* Thicker border */
+  background: linear-gradient(135deg, var(--surface-color) 0%, var(--surface-color-light) 100%);
+  border-radius: 12px 12px 0 0;
+}
+
+.modal-header h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 1.375rem; /* Larger heading */
+  font-weight: 600;
+  letter-spacing: -0.025em; /* Slight tracking */
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  font-size: 1.25rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0.75rem; /* Larger touch target */
+  border-radius: 6px;
+  transition: all 0.2s ease;
+  min-width: 44px; /* Touch-friendly */
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-close:hover {
+  background-color: var(--error-color);
+  color: white;
+  transform: scale(1.05);
+}
+
+.modal-body {
+  padding: 1.5rem;
+  max-height: 70vh;
+  overflow-y: auto;
+  font-size: 0.9375rem; /* Slightly larger base font */
+  line-height: 1.6; /* Better line spacing */
+}
+
+.modal-footer {
+  padding: 1.25rem 1.5rem;
+  border-top: 2px solid var(--border-color); /* Thicker border */
+  background: var(--surface-color-light);
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
+  border-radius: 0 0 12px 12px;
+}
+
+/* Modal animations with accessibility support */
+@keyframes modalSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-20px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Respect reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  .modal,
+  .modal-content,
+  .modal-close {
+    transition: none;
+  }
+
+  @keyframes modalSlideIn {
+    from, to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+}
+
+/* Focus management and accessibility */
+.modal:focus-within {
+  outline: 2px solid var(--accent-color);
+  outline-offset: -2px;
+}
+
+.modal-close:focus {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+  background-color: var(--accent-color-20);
+}
+
+/* Presets Grid */
+.presets-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+/* Preset Card */
+.preset-card {
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 1rem;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.preset-card:hover {
+  border-color: var(--accent-color);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.preset-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 0.75rem;
+}
+
+.preset-title {
+  font-weight: 600;
+  font-size: 1rem;
+  color: var(--text-primary);
+  line-height: 1.2;
+  flex: 1;
+  margin-right: 0.5rem;
+}
+
+.preset-actions {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.preset-info {
+  margin-bottom: 0.75rem;
+}
+
+.preset-category {
+  display: inline-block;
+  background: var(--accent-color-20);
+  color: var(--accent-color);
+  padding: 0.2rem 0.5rem;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-transform: capitalize;
+  margin-bottom: 0.5rem;
+}
+
+.preset-description {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+.preset-stats {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-color-light);
+}
+
+.preset-stats .stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.stat-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+}
+
+.stat-value {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.preset-actions-bottom {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* Participants Modal */
+.participants-modal {
+  max-width: 1200px;
+  width: 90vw;
+  max-height: 90vh;
+}
+
+.participants-modal .modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.participants-modal label {
+  color: #fff !important;
+}
+
+/* CSV Import Modal */
+#csv-import-modal .modal-content {
+  min-width: 700px;
+}
+
+#csv-import-modal .modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+#csv-import-modal label {
+  color: #000 !important;
+}
+
+.preset-info-section {
+  background: var(--surface-color-light);
+  padding: 1rem;
+  border-radius: 6px;
+  margin-bottom: 1.5rem;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 1rem;
+}
+
+/* Participants Table */
+.participants-table-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.table-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.table-header h3 {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.table-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.participants-table-container {
+  flex: 1;
+  overflow: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  min-height: 300px;
+  max-height: 400px;
+}
+
+.participants-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.participants-table th {
+  background: var(--surface-color-light);
+  padding: 0.75rem 0.5rem;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-bottom: 2px solid var(--border-color);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.participants-table td {
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--border-color-light);
+  vertical-align: middle;
+}
+
+.participants-table tr:hover {
+  background: var(--surface-color-light);
+}
+
+.form-input-sm {
+  width: 100%;
+  padding: 0.5rem 0.75rem; /* More generous padding */
+  border: 2px solid var(--border-color); /* Thicker border */
+  border-radius: 6px;
+  font-size: 0.9375rem; /* Slightly larger font */
+  background: var(--input-bg);
+  color: var(--text-primary);
+  transition: all 0.2s ease;
+  line-height: 1.4;
+}
+
+.form-input-sm:focus {
+  outline: none;
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 3px var(--accent-color-20); /* Larger focus ring */
+  transform: translateY(-1px); /* Subtle lift */
+  background: var(--surface-color);
+}
+
+.form-input-sm::placeholder {
+  color: var(--text-placeholder);
+  font-style: italic;
+  opacity: 0.8;
+}
+
+/* CSV Import Modal */
+.csv-preview-container {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: var(--surface-color-light);
+  border-radius: 6px;
+}
+
+.csv-preview-container h4 {
+  margin: 0 0 0.75rem 0;
+  color: var(--text-primary);
+}
+
+.csv-preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  overflow: hidden;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+}
+
+.csv-preview-table th,
+.csv-preview-table td {
+  padding: 0.5rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color-light);
+}
+
+.csv-preview-table th {
+  background: var(--surface-color);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.csv-preview-table tr:nth-child(even) {
+  background: var(--surface-color-light);
+}
+
+/* Card Header Actions */
+.card-header-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* Button Variants - Enhanced for accessibility */
+.btn-sm {
+  padding: 0.5rem 1rem; /* Larger touch targets */
+  font-size: 0.9375rem;
+  min-height: 44px; /* Touch-friendly */
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.btn-danger {
+  background: var(--error-color);
+  border-color: var(--error-color);
+  color: white;
+  font-weight: 600; /* Bold text for danger buttons */
+}
+
+.btn-danger:hover {
+  background: var(--error-color-dark);
+  border-color: var(--error-color-dark);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+}
+
+/* Form Hint */
+.form-hint {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+/* Enhanced Mobile Responsive Design */
+@media (max-width: 768px) {
+  .participants-modal {
+    width: 100vw;
+    height: 100vh;
+    max-height: 100vh;
+    border-radius: 0; /* Full screen on mobile */
+  }
+
+  .modal-content {
+    border-radius: 0;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .modal-body {
+    flex: 1;
+    padding: 1rem;
+    overflow-y: auto;
+  }
+
+  .form-row {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+
+  .presets-grid {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+
+  .preset-header {
+    flex-direction: column;
+    gap: 0.75rem;
+    align-items: flex-start;
+  }
+
+  .preset-stats {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .participants-table-container {
+    font-size: 0.875rem; /* Larger than before for better readability */
+    border-radius: 4px;
+  }
+
+  .participants-table th,
+  .participants-table td {
+    padding: 0.75rem 0.5rem; /* More padding */
+  }
+
+  .table-actions {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .card-header {
+    flex-direction: column;
+    gap: 1rem;
+    align-items: flex-start;
+    padding: 1rem;
+  }
+
+  .card-header-actions {
+    width: 100%;
+    justify-content: flex-start;
+    gap: 0.5rem;
+  }
+
+  /* Touch-friendly buttons on mobile */
+  .btn, .btn-sm {
+    min-height: 48px;
+    font-size: 1rem;
+    padding: 0.75rem 1rem;
+  }
+
+  .form-input-sm {
+    font-size: 1rem; /* Prevent zoom on iOS */
+    padding: 0.75rem;
+    min-height: 48px;
+  }
+
+  .modal-close {
+    min-width: 48px;
+    min-height: 48px;
+    font-size: 1.5rem;
+  }
+}
+
+/* Small mobile screens */
+@media (max-width: 480px) {
+  .modal-header,
+  .modal-footer {
+    padding: 1rem;
+  }
+
+  .preset-card {
+    padding: 0.75rem;
+  }
+
+  .preset-title {
+    font-size: 0.9375rem;
+  }
+
+  .participants-table-container {
+    font-size: 0.8125rem;
+  }
+
+  .table-actions {
+    gap: 0.25rem;
+  }
+
+  .card-header-actions {
+    flex-wrap: wrap;
+  }
+}
+
+/* Enhanced Dark mode support */
+@media (prefers-color-scheme: dark) {
+  /* Modal backdrop darker in dark mode */
+  .modal {
+    background-color: rgba(0, 0, 0, 0.8);
+  }
+
+  /* Modal content adjustments */
+  .modal-content {
+    background: var(--bg-dark);
+    border: 1px solid var(--border-light);
+    box-shadow: 0 25px 80px rgba(0, 0, 0, 0.6), 0 10px 30px rgba(0, 0, 0, 0.3);
+  }
+
+  .modal-header {
+    background: linear-gradient(135deg, var(--bg-dark) 0%, var(--bg-medium) 100%);
+    border-bottom: 2px solid var(--border-light);
+  }
+
+  .modal-footer {
+    background: var(--bg-medium);
+    border-top: 2px solid var(--border-light);
+  }
+
+  /* Enhanced hover states */
+  .preset-card:hover {
+    box-shadow: 0 4px 20px rgba(59, 130, 246, 0.2);
+    border-color: var(--accent-color);
+  }
+
+  .participants-table tr:hover {
+    background: rgba(59, 130, 246, 0.08);
+  }
+
+  .csv-preview-table tr:nth-child(even) {
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .csv-preview-table tr:hover {
+    background: rgba(59, 130, 246, 0.06);
+  }
+
+  /* Form inputs in dark mode */
+  .form-input-sm {
+    background: var(--bg-medium);
+    border-color: var(--border-light);
+    color: var(--text-primary);
+  }
+
+  .form-input-sm:focus {
+    background: var(--bg-dark);
+    border-color: var(--accent-color);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+  }
+
+  /* Button enhancements */
+  .btn-secondary {
+    background: var(--bg-medium);
+    border-color: var(--border-light);
+    color: var(--text-primary);
+  }
+
+  .btn-secondary:hover {
+    background: var(--bg-light);
+    border-color: var(--accent-color);
+  }
+}

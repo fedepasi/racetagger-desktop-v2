@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "types": ["electron", "node", "jest"]
+  },
+  "include": ["src/**/*", "tests/performance/**/*"],
+  "exclude": ["tests/**/*.test.ts", "tests/__mocks__/**/*", "tests/setup.ts", "tests/*.test.ts"]
+}
