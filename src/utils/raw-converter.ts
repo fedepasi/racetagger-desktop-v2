@@ -668,9 +668,9 @@ export class RawConverter {
 
   /**
    * Estrae thumbnail usando i metodi tradizionali (dcraw, Adobe DNG)
-   * @private
+   * @public - Usato anche da RawPreviewExtractor per prevenire loop ricorsivo
    */
-  private async extractThumbnailWithTraditionalMethods(rawFilePath: string, outputPath: string): Promise<string> {
+  public async extractThumbnailWithTraditionalMethods(rawFilePath: string, outputPath: string): Promise<string> {
     // Check if we should force Adobe DNG fallback for testing
     if (process.env.FORCE_ADOBE_DNG_FALLBACK === 'true') {
       console.log(`[RawConverter] 🧪 FORCE_ADOBE_DNG_FALLBACK enabled - skipping dcraw methods`);

@@ -9,8 +9,8 @@ const writeFilePromise = promisify(fs.writeFile);
 const unlinkPromise = promisify(fs.unlink);
 const chmodPromise = promisify(fs.chmod);
 
-const EXIFTOOL_VERSION = "13.31"; // Updated to latest version
-const EXIFTOOL_WIN_URL = `https://exiftool.org/exiftool-${EXIFTOOL_VERSION}.zip`;
+const EXIFTOOL_VERSION = "13.38"; // Updated to latest version (Oct 2025)
+const EXIFTOOL_WIN_URL = `https://exiftool.org/exiftool-${EXIFTOOL_VERSION}_64.zip`; // 64-bit version for Windows
 const EXIFTOOL_LINUX_URL = `https://exiftool.org/Image-ExifTool-${EXIFTOOL_VERSION}.tar.gz`; // Corrected URL and extension
 
 const ROOT_DIR = path.resolve(__dirname, '..');
@@ -39,28 +39,45 @@ async function setupWindows() {
     await downloadFile(EXIFTOOL_WIN_URL, exiftoolWinZip);
 
     const zip = new AdmZip(exiftoolWinZip);
-    const zipEntries = zip.getEntries();
-    let exiftoolExeEntry = null;
 
-    for (const entry of zipEntries) {
-        if (entry.entryName.match(/exiftool.*\.exe$/i)) {
-            exiftoolExeEntry = entry;
-            break;
-        }
-    }
-
-    if (!exiftoolExeEntry) {
-        throw new Error("Could not find exiftool.exe in the downloaded zip.");
-    }
-
+    // Extract entire zip to temp directory
     const extractPath = path.join(TEMP_DIR, 'exiftool-win-extract');
     await mkdirPromise(extractPath, { recursive: true });
-    zip.extractEntryTo(exiftoolExeEntry.entryName, extractPath, false, true);
+    zip.extractAllTo(extractPath, true);
 
-    const extractedExePath = path.join(extractPath, exiftoolExeEntry.entryName);
+    // The 64-bit version has structure: exiftool-13.38_64/exiftool_files/
+    const exiftoolFilesDir = path.join(extractPath, `exiftool-${EXIFTOOL_VERSION}_64`, 'exiftool_files');
+
+    if (!fs.existsSync(exiftoolFilesDir)) {
+        throw new Error(`Could not find exiftool_files directory at: ${exiftoolFilesDir}`);
+    }
+
+    // Copy entire exiftool_files directory to vendor/win32
     await mkdirPromise(WIN32_DIR, { recursive: true });
-    fs.copyFileSync(extractedExePath, path.join(WIN32_DIR, 'exiftool.exe'));
-    console.log(`ExifTool for Windows installed at: ${path.join(WIN32_DIR, 'exiftool.exe')}`);
+
+    // Recursively copy all files
+    const copyRecursive = (src, dest) => {
+        if (fs.statSync(src).isDirectory()) {
+            fs.mkdirSync(dest, { recursive: true });
+            fs.readdirSync(src).forEach(item => {
+                copyRecursive(path.join(src, item), path.join(dest, item));
+            });
+        } else {
+            fs.copyFileSync(src, dest);
+        }
+    };
+
+    copyRecursive(exiftoolFilesDir, WIN32_DIR);
+
+    // Rename perl.exe to exiftool.exe
+    const perlExe = path.join(WIN32_DIR, 'perl.exe');
+    const exiftoolExe = path.join(WIN32_DIR, 'exiftool.exe');
+    if (fs.existsSync(perlExe)) {
+        fs.copyFileSync(perlExe, exiftoolExe);
+    }
+
+    console.log(`ExifTool for Windows installed at: ${exiftoolExe}`);
+    console.log(`Installed ${fs.readdirSync(WIN32_DIR).length} files to vendor/win32`);
 }
 
 async function setupLinuxOrDarwinPerl() {

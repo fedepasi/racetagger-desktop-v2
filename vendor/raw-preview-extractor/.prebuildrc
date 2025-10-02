@@ -1,0 +1,9 @@
+{
+  "runtime": "napi",
+  "target": "6",
+  "strip": true,
+  "all": false,
+  "force": false,
+  "debug": false,
+  "verbose": false
+}

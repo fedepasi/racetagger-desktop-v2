@@ -160,68 +160,37 @@ export class RawPreviewExtractor {
   }
 
   /**
-   * Estrazione con libreria nativa usando strategia Medium → Full
+   * Estrazione con libreria nativa
    */
   private async extractWithNativeLibrary(filePath: string, options: Required<NativePreviewOptions>): Promise<NativePreviewResult> {
     try {
       console.log('[RawPreviewExtractor] Attempting native library extraction...');
-      
+
       const nativeLib = await import('raw-preview-extractor');
-      
-      // Opzioni per le funzioni specifiche (più semplici)
-      const quickOptions = {
+
+      // Opzioni per extractPreview - RawPreviewOptions ha targetSize come oggetto {min, max}
+      const extractOptions = {
+        targetSize: {
+          min: options.targetMinSize,
+          max: options.targetMaxSize
+        },
+        preferQuality: options.preferQuality,
         timeout: options.timeout,
-        strictValidation: false // Disabilitiamo la validazione stretta
+        includeMetadata: options.includeMetadata
       };
 
-      let result: any = null;
-      let extractionMethod = '';
+      // Usa extractPreview che ritorna ExtractorResult con preview?: RawPreview
+      const result = await nativeLib.extractPreview(filePath, extractOptions);
 
-      // STRATEGIA 1: extractMediumPreview (default)
-      try {
-        console.log('[RawPreviewExtractor] Trying extractMediumPreview...');
-        result = await nativeLib.extractMediumPreview(filePath, quickOptions);
-        extractionMethod = 'Medium';
-        
-        if (result.success && result.preview) {
-          console.log(`[RawPreviewExtractor] ✅ Medium preview successful: ${result.preview.data.length} bytes, type: ${result.preview.type || 'unknown'}`);
-        } else {
-          console.log('[RawPreviewExtractor] Medium preview failed or empty, trying full preview...');
-          result = null; // Reset per tentativo successivo
-        }
-      } catch (mediumError: any) {
-        console.log(`[RawPreviewExtractor] Medium preview error: ${mediumError.message}`);
-        result = null;
-      }
+      if (result.success && result.preview) {
+        console.log(`[RawPreviewExtractor] ✅ Native extraction successful: ${result.preview.data.length} bytes`);
 
-      // STRATEGIA 2: extractFullPreview (se medium fallisce)
-      if (!result || !result.success || !result.preview) {
-        try {
-          console.log('[RawPreviewExtractor] Trying extractFullPreview...');
-          result = await nativeLib.extractFullPreview(filePath, quickOptions);
-          extractionMethod = 'Full';
-          
-          if (result.success && result.preview) {
-            console.log(`[RawPreviewExtractor] ✅ Full preview successful: ${result.preview.data.length} bytes, type: ${result.preview.type || 'unknown'}`);
-          } else {
-            console.log('[RawPreviewExtractor] Full preview also failed');
-          }
-        } catch (fullError: any) {
-          console.log(`[RawPreviewExtractor] Full preview error: ${fullError.message}`);
-          result = null;
-        }
-      }
-
-      // Verifica risultato finale
-      if (result && result.success && result.preview) {
-        console.log(`[RawPreviewExtractor] ✅ Native extraction successful via ${extractionMethod}: ${result.preview.data.length} bytes`);
-        
         return {
           success: true,
           data: result.preview.data,
           width: result.preview.width,
           height: result.preview.height,
-          format: result.preview.format,
+          format: 'JPEG', // Il preview estratto è sempre JPEG
           metadata: result.preview.metadata ? {
             orientation: result.preview.metadata.orientation,
             camera: result.preview.metadata.camera,
@@ -232,10 +201,10 @@ export class RawPreviewExtractor {
         };
       }
 
-      console.log(`[RawPreviewExtractor] ❌ Both native extraction methods failed`);
+      console.log(`[RawPreviewExtractor] ❌ Native extraction failed: ${result.error || 'Unknown error'}`);
       return {
         success: false,
-        error: result?.error || 'Both medium and full preview extraction failed'
+        error: result.error || 'Native preview extraction failed'
       };
 
     } catch (error: any) {
@@ -247,13 +216,13 @@ export class RawPreviewExtractor {
   }
 
   /**
-   * Estrazione con dcraw fallback (implementazione attuale)
-   * Usa il sistema esistente raw-converter ma con interfaccia ottimizzata
+   * Estrazione con ExifTool fallback
+   * Usa ExifTool per estrarre le preview JPEG embedded dai file RAW
    */
   private async extractWithDcrawFallback(filePath: string, options: Required<NativePreviewOptions>): Promise<NativePreviewResult> {
     try {
-      console.log('[RawPreviewExtractor] Using dcraw fallback for:', path.basename(filePath));
-      
+      console.log('[RawPreviewExtractor] Using ExifTool fallback for:', path.basename(filePath));
+
       // Verifica che il file esista
       if (!fs.existsSync(filePath)) {
         return {
@@ -262,62 +231,115 @@ export class RawPreviewExtractor {
         };
       }
 
-      // Usa il RawConverter esistente del sistema RaceTagger
-      const { RawConverter } = await import('./raw-converter');
-      const rawConverter = new RawConverter();
-      
+      // Determina il percorso di ExifTool in base alla piattaforma e ambiente
+      const platform = process.platform;
+      let exiftoolPath: string;
+
+      // Determina se siamo in development o production
+      let isDev = true;
       try {
-        // Usa il metodo esistente per estrarre thumbnail con timeout
+        const { app } = require('electron');
+        isDev = !app || !app.isPackaged;
+      } catch {
+        isDev = true;
+      }
+
+      let vendorDir: string;
+      if (isDev) {
+        // In development: da dist/utils/ alla root del progetto, poi a vendor/
+        vendorDir = path.join(__dirname, '../../../vendor', platform);
+      } else {
+        // In production: vendor files sono unpacked dall'asar
+        vendorDir = path.join(process.resourcesPath, 'app.asar.unpacked', 'vendor', platform);
+      }
+
+      if (platform === 'win32') {
+        // Windows: usa perl.exe + exiftool.pl
+        const perlExe = path.join(vendorDir, 'perl.exe');
+        const exiftoolPl = path.join(vendorDir, 'exiftool.pl');
+        exiftoolPath = `"${perlExe}" "${exiftoolPl}"`;
+      } else if (platform === 'darwin') {
+        // macOS
+        exiftoolPath = path.join(vendorDir, 'exiftool');
+      } else {
+        // Linux
+        exiftoolPath = path.join(vendorDir, 'exiftool');
+      }
+
+      try {
+        const { exec } = await import('child_process');
+        const { promisify } = await import('util');
+        const execAsync = promisify(exec);
+
+        // Genera percorso output temporaneo
+        const tempDir = os.tmpdir();
+        const randomId = Math.random().toString(36).substring(2, 15);
+        const tempOutputPath = path.join(tempDir, `exiftool_preview_${randomId}.jpg`);
+
+        // Usa ExifTool per estrarre la preview JPEG embedded
+        const command = `${exiftoolPath} -b -PreviewImage "${filePath}" > "${tempOutputPath}"`;
+        console.log(`[RawPreviewExtractor] Executing ExifTool command`);
+
         const timeoutPromise = new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error('dcraw timeout after 30 seconds')), 30000);
+          setTimeout(() => reject(new Error('ExifTool timeout after 30 seconds')), 30000);
         });
 
-        const outputPath = await Promise.race([
-          rawConverter.extractThumbnailFromRaw(filePath),
+        await Promise.race([
+          execAsync(command, { maxBuffer: 50 * 1024 * 1024 }), // 50MB buffer
           timeoutPromise
         ]);
 
-        if (!outputPath || !fs.existsSync(outputPath)) {
+        // Verifica che il file sia stato creato e non sia vuoto
+        if (!fs.existsSync(tempOutputPath)) {
           return {
             success: false,
-            error: 'dcraw extraction failed - no output file'
+            error: 'ExifTool extraction failed - no output file'
           };
         }
-        
+
+        const stats = await fsPromises.stat(tempOutputPath);
+        if (stats.size === 0) {
+          await fsPromises.unlink(tempOutputPath);
+          return {
+            success: false,
+            error: 'ExifTool extraction failed - empty preview'
+          };
+        }
+
         // Leggi il file generato
-        const thumbnailData = await fsPromises.readFile(outputPath);
-        
+        const thumbnailData = await fsPromises.readFile(tempOutputPath);
+
         // Cleanup temporary file
         try {
-          await fsPromises.unlink(outputPath);
+          await fsPromises.unlink(tempOutputPath);
         } catch (cleanupError) {
-          console.log('[RawPreviewExtractor] Warning: Could not cleanup temp file:', outputPath);
+          console.log('[RawPreviewExtractor] Warning: Could not cleanup temp file:', tempOutputPath);
         }
-        
-        console.log(`[RawPreviewExtractor] ✅ dcraw extraction successful: ${thumbnailData.length} bytes`);
-        
+
+        console.log(`[RawPreviewExtractor] ✅ ExifTool extraction successful: ${thumbnailData.length} bytes`);
+
         return {
           success: true,
           data: thumbnailData,
-          width: 0, // dcraw doesn't provide dimensions easily
+          width: 0, // ExifTool doesn't provide dimensions in this mode
           height: 0,
           format: 'JPEG',
           metadata: {
             orientation: 1
           }
         };
-        
+
       } catch (converterError: any) {
         return {
           success: false,
-          error: `dcraw conversion failed: ${converterError.message}`
+          error: `ExifTool extraction failed: ${converterError.message}`
         };
       }
 
     } catch (error: any) {
       return {
         success: false,
-        error: `Dcraw fallback error: ${error.message}`
+        error: `ExifTool fallback error: ${error.message}`
       };
     }
   }

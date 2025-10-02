@@ -173,7 +173,7 @@
     "node-fetch": "^3.3.2",
     "p-limit": "^3.1.0",
     "piexifjs": "^1.0.6",
-    "raw-preview-extractor": "file:../../RAW-ingest",
+    "raw-preview-extractor": "file:./vendor/raw-preview-extractor",
     "sharp": "^0.34.3"
   },
   "devDependencies": {
@@ -184,7 +184,7 @@
     "@types/node": "^22.7.2",
     "concurrently": "^8.2.2",
     "cross-env": "^7.0.3",
-    "electron": "^36.0.0",
+    "electron": "^36.9.3",
     "electron-builder": "^24.13.0",
     "electron-rebuild": "^3.2.9",
     "jest": "^29.7.0",

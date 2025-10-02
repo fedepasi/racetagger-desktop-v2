@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./vendor/win32/exiftool.exe:*)",
+      "Bash(unzip:*)",
+      "Bash(./exiftool.exe exiftool.pl)",
+      "Bash(./perl.exe exiftool.pl -ver)",
+      "Bash(Select-String -Pattern \"RawPreviewExtractor|ExifTool extraction|preview extraction|Native extraction|extraction successful|extraction failed\")",
+      "Bash(powershell:*)",
+      "Bash(npm run build:*)"
+    ],
+    "deny": [],
+    "ask": []
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "supabase"
+  ]
+}

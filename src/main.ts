@@ -851,9 +851,8 @@ function createWindow() {
     }
   });
   
-  // DevTools rimossi per la build di produzione
-  // Se necessario per il debug, decommentare la riga seguente:
-  // mainWindow.webContents.openDevTools();
+  // DevTools abilitati temporaneamente per debug
+  mainWindow.webContents.openDevTools();
 }
 
 function setupDatabaseIpcHandlers() {
@@ -3593,16 +3592,19 @@ async function updateImageExif(
 
         // Path to ExifTool (use system ExifTool if available, fallback to bundled)
         let exiftoolPath = 'exiftool'; // Try system ExifTool first
-        
+
         // Check if we can use system ExifTool, otherwise use bundled version
         try {
           const { execSync } = require('child_process');
-          execSync('which exiftool', { stdio: 'ignore' });
+          const whichCommand = process.platform === 'win32' ? 'where exiftool' : 'which exiftool';
+          execSync(whichCommand, { stdio: 'ignore' });
           console.log('Using system ExifTool');
         } catch {
-          // Fallback to bundled ExifTool
-          exiftoolPath = path.join(__dirname, '..', 'vendor', 'darwin', 'exiftool');
-          console.log('Using bundled ExifTool');
+          // Fallback to bundled ExifTool - multi-platform support
+          const platform = process.platform; // 'win32', 'darwin', 'linux'
+          const exiftoolName = platform === 'win32' ? 'exiftool.exe' : 'exiftool';
+          exiftoolPath = path.join(__dirname, '..', 'vendor', platform, exiftoolName);
+          console.log(`Using bundled ExifTool for ${platform}`);
         }
 
         // Use writeKeywordsToImage to handle keywords array properly

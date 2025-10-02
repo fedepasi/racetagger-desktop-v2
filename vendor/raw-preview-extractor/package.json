@@ -1,0 +1,89 @@
+{
+  "name": "raw-preview-extractor",
+  "version": "1.0.0",
+  "description": "Native RAW image preview extraction library optimized for Electron applications",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "npm run build:native && npm run build:ts",
+    "build:native": "node-gyp configure build",
+    "build:debug": "node-gyp configure build --debug",
+    "build:ts": "tsc",
+    "clean": "rimraf build dist prebuilds",
+    "rebuild": "npm run clean && npm run build",
+    "electron-rebuild": "electron-rebuild",
+    "prebuild": "prebuildify --napi --strip",
+    "prebuild:win": "prebuildify --napi --strip --platform win32 --arch x64",
+    "prebuild:mac": "prebuildify --napi --strip --platform darwin --arch x64+arm64",
+    "prebuild:linux": "prebuildify --napi --strip --platform linux --arch x64",
+    "prebuild:all": "npm run prebuild:win && npm run prebuild:mac && npm run prebuild:linux",
+    "install": "prebuild-install --runtime napi || npm run build:native",
+    "test": "jest",
+    "test:memory": "node --expose-gc test/memory-test.js",
+    "test:performance": "node test/performance-test.js",
+    "lint": "eslint src/ts/**/*.ts test/**/*.ts",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build && npm run test"
+  },
+  "keywords": [
+    "raw",
+    "image",
+    "preview",
+    "electron",
+    "native",
+    "jpeg",
+    "tiff",
+    "cr2",
+    "cr3",
+    "nef",
+    "arw",
+    "dng"
+  ],
+  "author": "Federico Pasinetti",
+  "license": "MIT",
+  "dependencies": {
+    "node-addon-api": "^6.1.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.0.0",
+    "@types/node": "^20.0.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "electron-rebuild": "^3.2.9",
+    "eslint": "^8.0.0",
+    "jest": "^29.0.0",
+    "node-gyp": "^10.0.0",
+    "prebuild-install": "^7.1.1",
+    "prebuildify": "^6.0.1",
+    "rimraf": "^5.0.0",
+    "ts-jest": "^29.0.0",
+    "typescript": "^5.0.0"
+  },
+  "peerDependencies": {
+    "electron": ">=20.0.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "os": [
+    "win32",
+    "darwin",
+    "linux"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "gypfile": true,
+  "binary": {
+    "module_name": "raw_extractor",
+    "module_path": "./prebuilds/{platform}-{arch}/",
+    "package_name": "{module_name}-{platform}-{arch}.tar.gz"
+  },
+  "files": [
+    "dist/",
+    "src/cpp/",
+    "binding.gyp",
+    "prebuilds/"
+  ]
+}
