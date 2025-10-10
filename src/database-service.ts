@@ -1,4 +1,3 @@
-import { app } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
@@ -7,14 +6,25 @@ import { SUPABASE_CONFIG, PERFORMANCE_CONFIG } from './config'; // Assumendo che
 import { authService } from './auth-service'; // Per ottenere user_id
 import { EventEmitter } from 'events';
 
+// Lazy import of electron app to avoid circular dependencies
+let electronApp: any = null;
+function getElectronApp() {
+  if (!electronApp) {
+    electronApp = require('electron').app;
+  }
+  return electronApp;
+}
+
 // --- Supabase Client Initialization ---
 // Utilizziamo il client Supabase da authService per assicurarci che utilizzi lo stesso token di autenticazione
-let supabase: SupabaseClient = authService.getSupabaseClient();
+let supabase: SupabaseClient;
 
 // Funzione per ottenere un client Supabase aggiornato
 export function getSupabaseClient(): SupabaseClient {
-  // Aggiorniamo il riferimento al client Supabase da authService
-  supabase = authService.getSupabaseClient();
+  // Aggiorniamo il riferimento al client Supabase da authService se non ancora inizializzato
+  if (!supabase) {
+    supabase = authService.getSupabaseClient();
+  }
   return supabase;
 }
 
@@ -429,6 +439,7 @@ let isDbInitialized = false;
 function initializeLocalCacheSchema(): void {
   // This function is called from main.ts after app is ready.
   try {
+    const app = getElectronApp();
     if (app && !app.isReady()) {
       console.error("CRITICAL ERROR: initializeLocalCacheSchema called before app is ready. This should not happen.");
       // Attempt to defer, though main.ts should handle this.
@@ -445,6 +456,7 @@ function initializeLocalCacheSchema(): void {
   }
 
   try {
+    const app = getElectronApp();
     const userDataPath = app.getPath('userData') || path.join(process.cwd(), 'userData');
     const dbFolderPath = path.join(userDataPath, 'RacetaggerData');
     const dbCachePath = path.join(dbFolderPath, 'racetagger_cache.db');
@@ -576,7 +588,7 @@ function initializeLocalCacheSchema(): void {
     isDbInitialized = true;
 
     // Setup DB close handler only after successful initialization
-    app.on('quit', async () => {
+    getElectronApp().on('quit', async () => {
       if (connectionPool) {
         await connectionPool.shutdown();
         connectionPool = null;

@@ -21,6 +21,7 @@ export interface ExecutionSettingsData {
   // AI Configuration (Critical)
   ai_model: string;
   sport_category: string;
+  enable_bounding_boxes: boolean;  // V3 Edge Function with bounding box detection
 
   // Performance Metrics (Phase 2 - Important)
   execution_duration_ms?: number;
@@ -107,6 +108,9 @@ export interface BatchProcessConfig {
   category?: string;
   executionName?: string;
   projectId?: string;
+
+  // AI Settings
+  enableAdvancedAnnotations?: boolean;  // Use V3 Edge Function with bounding boxes
 
   // Processing options
   updateExif: boolean;
@@ -195,6 +199,7 @@ export function mapConfigToExecutionSettings(
     // AI Configuration
     ai_model: config.model || 'unknown',
     sport_category: config.category || 'unknown',
+    enable_bounding_boxes: config.enableAdvancedAnnotations === true,
 
     // Performance Metrics
     execution_duration_ms: stats.executionDurationMs,

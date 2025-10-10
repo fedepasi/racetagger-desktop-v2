@@ -413,19 +413,19 @@ Respond ONLY with a valid JSON array where each object represents one detected v
 
     switch (modelToUse) {
         case 'gemini-2.5-flash-lite':
-            INPUT_PRICE_PER_MILLION_TOKENS = 0.075; // $0.075/million tokens
-            OUTPUT_PRICE_PER_MILLION_TOKENS = 0.30; // $0.30/million tokens
+            INPUT_PRICE_PER_MILLION_TOKENS = 0.10; // $0.10/million tokens
+            OUTPUT_PRICE_PER_MILLION_TOKENS = 0.40; // $0.40/million tokens
             analysisProviderString = 'gemini_2.5_flash_lite';
             break;
         case 'gemini-2.5-pro':
             INPUT_PRICE_PER_MILLION_TOKENS = 1.25; // $1.25/million tokens
             OUTPUT_PRICE_PER_MILLION_TOKENS = 10.00; // $10.00/million tokens
-            analysisProviderString = 'gemini_2.5_pro_multi';
+            analysisProviderString = 'gemini_2.5_pro';
             break;
         case 'gemini-2.5-flash':
             INPUT_PRICE_PER_MILLION_TOKENS = 0.30; // $0.30/million tokens
             OUTPUT_PRICE_PER_MILLION_TOKENS = 2.50; // $2.50/million tokens
-            analysisProviderString = 'gemini_2.5_flash_multi';
+            analysisProviderString = 'gemini_2.5_flash';
             break;
         // Add cases for other models (GPT, Claude) here later
         default:

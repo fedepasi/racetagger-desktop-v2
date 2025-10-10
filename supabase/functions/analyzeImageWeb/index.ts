@@ -167,39 +167,39 @@ Respond ONLY with a valid JSON array where each object represents one detected v
 
     switch (modelToUse) {
         case 'gemini-2.5-flash-lite':
-            INPUT_PRICE_PER_MILLION_TOKENS = 0.075; // $0.075/million tokens (stable version pricing)
-            OUTPUT_PRICE_PER_MILLION_TOKENS = 0.30; // $0.30/million tokens (stable version pricing)
-            analysisProviderString = 'gemini_2.5_flash_lite_multi';
+            INPUT_PRICE_PER_MILLION_TOKENS = 0.10; // $0.10/million tokens
+            OUTPUT_PRICE_PER_MILLION_TOKENS = 0.40; // $0.40/million tokens
+            analysisProviderString = 'gemini_2.5_flash_lite';
             break;
         case 'gemini-2.5-flash-lite-preview-06-17':
             INPUT_PRICE_PER_MILLION_TOKENS = 0.10; // $0.10/million tokens
             OUTPUT_PRICE_PER_MILLION_TOKENS = 0.40; // $0.40/million tokens
-            analysisProviderString = 'gemini_2.5_flash_lite_preview_multi';
+            analysisProviderString = 'gemini_2.5_flash_lite_preview';
             break;
         case 'gemini-2.5-pro':
             INPUT_PRICE_PER_MILLION_TOKENS = 1.25; // $1.25/million tokens
             OUTPUT_PRICE_PER_MILLION_TOKENS = 10.00; // $10.00/million tokens
-            analysisProviderString = 'gemini_2.5_pro_multi';
+            analysisProviderString = 'gemini_2.5_pro';
             break;
         case 'gemini-2.5-flash':
             INPUT_PRICE_PER_MILLION_TOKENS = 0.30; // $0.30/million tokens
             OUTPUT_PRICE_PER_MILLION_TOKENS = 2.50; // $2.50/million tokens
-            analysisProviderString = 'gemini_2.5_flash_multi';
+            analysisProviderString = 'gemini_2.5_flash';
             break;
         case 'gemini-2.5-pro-preview-03-25':
             INPUT_PRICE_PER_MILLION_TOKENS = 1.20; // Legacy pricing
             OUTPUT_PRICE_PER_MILLION_TOKENS = 15.00; // Legacy pricing
-            analysisProviderString = 'gemini_2.5_pro_preview_multi';
+            analysisProviderString = 'gemini_2.5_pro_preview';
             break;
         case 'gemini-2.5-pro-preview-05-06':
             INPUT_PRICE_PER_MILLION_TOKENS = 1.20; // Legacy pricing
             OUTPUT_PRICE_PER_MILLION_TOKENS = 15.00; // Legacy pricing
-            analysisProviderString = 'gemini_2.5_pro_may2025_multi';
+            analysisProviderString = 'gemini_2.5_pro_may2025';
             break;
         case 'gemini-2.5-flash-preview-04-17':
             INPUT_PRICE_PER_MILLION_TOKENS = 0.15; // Legacy pricing
             OUTPUT_PRICE_PER_MILLION_TOKENS = 3.50; // Legacy pricing
-            analysisProviderString = 'gemini_2.5_flash_preview_multi';
+            analysisProviderString = 'gemini_2.5_flash_preview';
             break;
         case 'gemini-2.0-flash-lite':
             INPUT_PRICE_PER_MILLION_TOKENS = 0.075; // Legacy pricing

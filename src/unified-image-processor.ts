@@ -61,6 +61,7 @@ export interface UnifiedProcessorConfig {
   executionId?: string; // Add execution_id for linking images to desktop executions
   keywordsMode?: 'append' | 'overwrite'; // How to handle existing keywords
   descriptionMode?: 'append' | 'overwrite'; // How to handle existing description
+  enableAdvancedAnnotations?: boolean; // V3 bounding box annotations
   // ADMIN FEATURE: Folder organization configuration
   folderOrganization?: {
     enabled: boolean;
@@ -98,6 +99,11 @@ class UnifiedImageWorker extends EventEmitter {
 
   private constructor(config: UnifiedProcessorConfig, analysisLogger?: AnalysisLogger) {
     super();
+    // TEMPORARY: Force V3 bounding box detection to be enabled by default for testing
+    if (config.enableAdvancedAnnotations === undefined) {
+      config.enableAdvancedAnnotations = true;
+      console.log('[UnifiedProcessor] ✅ V3 Bounding Box Detection ENABLED by default');
+    }
     this.config = config;
     this.csvData = config.csvData || []; // Legacy support
     this.participantsData = [];
@@ -463,6 +469,12 @@ class UnifiedImageWorker extends EventEmitter {
             team: vehicle.teamName || vehicle.team,
             sponsors: vehicle.otherText || [],
             confidence: vehicle.confidence || 0,
+            boundingBox: vehicle.boundingBox ? {
+              x: vehicle.boundingBox.x,
+              y: vehicle.boundingBox.y,
+              width: vehicle.boundingBox.width,
+              height: vehicle.boundingBox.height
+            } : undefined,
             corrections: corrections.filter((c: any) => c.vehicleIndex === index),
             participantMatch: csvMatch,
             // Temporal information from SmartMatcher (FIXED)
@@ -959,18 +971,23 @@ class UnifiedImageWorker extends EventEmitter {
       console.log(`[UnifiedWorker] Sending participant preset with ${this.participantsData.length} participants to edge function`);
     }
 
-    console.log(`🔥 [UnifiedProcessor] About to call analyzeImageDesktopV2 for ${fileName} with userId: ${userId}, executionId: ${this.config.executionId || 'none'}`);
+    // Determine which Edge Function to use based on settings
+    const functionName = this.config.enableAdvancedAnnotations
+      ? 'analyzeImageDesktopV3'
+      : 'analyzeImageDesktopV2';
+
+    console.log(`🔥 [UnifiedProcessor] About to call ${functionName} for ${fileName} with userId: ${userId}, executionId: ${this.config.executionId || 'none'}`);
 
     let response: any;
     try {
       response = await Promise.race([
-        this.supabase.functions.invoke('analyzeImageDesktopV2', { body: invokeBody }),
+        this.supabase.functions.invoke(functionName, { body: invokeBody }),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('Function invocation timeout')), 60000)
         )
       ]) as any;
 
-      console.log(`🔥 [UnifiedProcessor] analyzeImageDesktopV2 response for ${fileName}:`, {
+      console.log(`🔥 [UnifiedProcessor] ${functionName} response for ${fileName}:`, {
         hasError: !!response.error,
         hasData: !!response.data,
         dataSuccess: response.data?.success,
@@ -979,7 +996,7 @@ class UnifiedImageWorker extends EventEmitter {
       });
 
       if (response.error) {
-        console.error(`🔥 [UnifiedProcessor] analyzeImageDesktopV2 function error for ${fileName}:`, response.error);
+        console.error(`🔥 [UnifiedProcessor] ${functionName} function error for ${fileName}:`, response.error);
         console.error(`🔥 [UnifiedProcessor] Full response data for debugging:`, response.data);
         console.error(`🔥 [UnifiedProcessor] Error details - name:`, response.error.name);
         console.error(`🔥 [UnifiedProcessor] Error details - message:`, response.error.message);

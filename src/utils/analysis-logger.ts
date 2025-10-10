@@ -33,6 +33,12 @@ export interface VehicleAnalysisData {
   team?: string;
   sponsors?: string[];
   confidence: number;
+  boundingBox?: {
+    x: number;      // Percentage 0-100 from left edge
+    y: number;      // Percentage 0-100 from top edge
+    width: number;  // Percentage 0-100 of image width
+    height: number; // Percentage 0-100 of image height
+  };
   corrections: CorrectionData[];
   participantMatch?: any;
   finalResult: {

@@ -241,6 +241,22 @@ class LogVisualizer {
           <button id="lv-export-csv" class="lv-action-btn lv-btn-secondary">
             📊 Export Results
           </button>
+          <div class="lv-dropdown" style="position: relative; display: inline-block;">
+            <button id="lv-export-labels-btn" class="lv-action-btn lv-btn-secondary">
+              🏷️ Download Training Labels ▼
+            </button>
+            <div id="lv-export-labels-menu" class="lv-dropdown-menu" style="display: none; position: absolute; bottom: 100%; left: 0; background: white; border: 1px solid #ccc; border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); min-width: 200px; z-index: 1000;">
+              <button class="lv-dropdown-item" data-format="coco" style="display: block; width: 100%; padding: 8px 12px; text-align: left; border: none; background: transparent; cursor: pointer;">
+                📦 COCO JSON
+              </button>
+              <button class="lv-dropdown-item" data-format="yolo" style="display: block; width: 100%; padding: 8px 12px; text-align: left; border: none; background: transparent; cursor: pointer;">
+                📝 YOLO TXT
+              </button>
+              <button class="lv-dropdown-item" data-format="csv" style="display: block; width: 100%; padding: 8px 12px; text-align: left; border: none; background: transparent; cursor: pointer;">
+                📊 CSV
+              </button>
+            </div>
+          </div>
           <button id="lv-view-log" class="lv-action-btn lv-btn-secondary">
             📋 View Full Log
           </button>
@@ -418,6 +434,43 @@ class LogVisualizer {
 
     if (saveAllBtn) {
       saveAllBtn.addEventListener('click', () => this.saveAllChanges());
+    }
+
+    // Export Training Labels dropdown
+    const exportLabelsBtn = document.getElementById('lv-export-labels-btn');
+    const exportLabelsMenu = document.getElementById('lv-export-labels-menu');
+    const exportLabelsItems = document.querySelectorAll('.lv-dropdown-item');
+
+    if (exportLabelsBtn && exportLabelsMenu) {
+      // Toggle dropdown
+      exportLabelsBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isVisible = exportLabelsMenu.style.display === 'block';
+        exportLabelsMenu.style.display = isVisible ? 'none' : 'block';
+      });
+
+      // Close dropdown when clicking outside
+      document.addEventListener('click', () => {
+        exportLabelsMenu.style.display = 'none';
+      });
+
+      // Handle format selection
+      exportLabelsItems.forEach(item => {
+        item.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const format = item.dataset.format;
+          exportLabelsMenu.style.display = 'none';
+          await this.exportTrainingLabels(format);
+        });
+
+        // Hover effects
+        item.addEventListener('mouseenter', () => {
+          item.style.background = '#f0f0f0';
+        });
+        item.addEventListener('mouseleave', () => {
+          item.style.background = 'transparent';
+        });
+      });
     }
   }
 
@@ -2394,6 +2447,82 @@ class LogVisualizer {
     });
 
     return rows.join('\n');
+  }
+
+  /**
+   * Export training labels in specified format
+   */
+  async exportTrainingLabels(format) {
+    try {
+      if (!this.executionId) {
+        this.showNotification('ℹ️ No execution available for export', 'info');
+        return;
+      }
+
+      const formatLabels = {
+        coco: 'COCO JSON',
+        yolo: 'YOLO TXT',
+        csv: 'CSV'
+      };
+
+      this.showNotification(`🏷️ Exporting training labels (${formatLabels[format]})...`, 'info');
+      console.log(`[LogVisualizer] Exporting training labels for execution ${this.executionId} in ${format} format`);
+
+      // Get Supabase client from window
+      const supabase = window.supabaseClient;
+      if (!supabase) {
+        throw new Error('Supabase client not available');
+      }
+
+      // Call export edge function
+      const { data, error } = await supabase.functions.invoke('export-training-labels', {
+        body: {
+          executionId: this.executionId,
+          format: format,
+          minConfidence: 0.0
+        }
+      });
+
+      if (error) {
+        console.error('[LogVisualizer] Export error:', error);
+        throw error;
+      }
+
+      // Handle the response based on format
+      let blob;
+      let filename;
+
+      if (format === 'coco') {
+        blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        filename = `training_labels_${this.executionId}_coco.json`;
+      } else if (format === 'yolo') {
+        // YOLO format returns JSON with file contents
+        blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        filename = `training_labels_${this.executionId}_yolo.json`;
+      } else if (format === 'csv') {
+        blob = new Blob([data], { type: 'text/csv' });
+        filename = `training_labels_${this.executionId}.csv`;
+      }
+
+      // Trigger download
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      this.showNotification(`✅ Training labels exported (${formatLabels[format]})`, 'success');
+
+    } catch (error) {
+      console.error('[LogVisualizer] Export training labels error:', error);
+
+      if (error.message?.includes('No annotations with bounding boxes found')) {
+        this.showNotification('ℹ️ No bounding box data found. Enable Advanced Annotations in settings.', 'info');
+      } else {
+        this.showNotification('❌ Error exporting training labels', 'error');
+      }
+    }
   }
 
   /**

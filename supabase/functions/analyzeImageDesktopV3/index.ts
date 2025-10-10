@@ -102,48 +102,54 @@ serve(async (req) => {
     // Image processed
 
 
-    // 6. Define category-specific prompts with optional preset enhancement
-    function getPromptForCategory(category: string, preset?: any): string {
+    // 6. Load dynamic category configuration from database
+    let dynamicPrompt = '';
+    let fallbackPrompt = '';
+    let categoryName = 'Unknown';
+    let usedDatabasePrompt = false;
+    let categoryData = null;
+
+    try {
+      console.log(`[CATEGORY] Loading dynamic category config for: ${category || 'motorsport'}`);
+      const { data: fetchedCategoryData, error: categoryError } = await supabaseAdmin
+        .from('sport_categories')
+        .select('name, ai_prompt, fallback_prompt, recognition_config')
+        .eq('code', category || 'motorsport')
+        .eq('is_active', true)
+        .single();
+
+      if (categoryError || !fetchedCategoryData) {
+        console.warn(`[CATEGORY] Category '${category}' not found or inactive in database, using fallback`);
+        dynamicPrompt = getHardcodedPromptForCategory(category || 'motorsport');
+        categoryName = getCategoryDisplayName(category || 'motorsport');
+      } else {
+        console.log(`[CATEGORY] Successfully loaded database prompt for: ${fetchedCategoryData.name}`);
+        categoryData = fetchedCategoryData;
+        dynamicPrompt = categoryData.ai_prompt;
+        fallbackPrompt = categoryData.fallback_prompt || '';
+        categoryName = categoryData.name;
+        usedDatabasePrompt = true;
+      }
+    } catch (error) {
+      console.error('[CATEGORY] Error fetching category from database:', error);
+      dynamicPrompt = getHardcodedPromptForCategory(category || 'motorsport');
+      categoryName = getCategoryDisplayName(category || 'motorsport');
+    }
+
+    // 7. Define hardcoded fallback prompts for backward compatibility
+    function getHardcodedPromptForCategory(category: string): string {
       switch (category) {
         case 'motorsport':
-          let motorsportPrompt = `Analyze the provided image for all identifiable race vehicles (cars, motorcycles, karts, etc.). For each vehicle detected, extract the following information if clearly visible:
+          return `Analyze the provided image for all identifiable race vehicles (cars, motorcycles, karts, etc.). For each vehicle detected, extract the following information if clearly visible:
 - raceNumber: The primary race number (string, or null if not found/readable) don't invent data.
 - drivers: An array of driver names (strings, empty array if none found). Include co-drivers or multiple drivers if applicable and identifiable don't invent data.
 - category: The race category if visible (string, or null) don't invent data.
 - teamName: The team name if visible (string, or null) don't invent data.
 - otherText: An array of other relevant short texts found on the vehicle (e.g., main sponsors, max 5 items), don't invent data.
-- confidence: An estimated confidence score (number 0.00-1.00) for the identified raceNumber.`;
+- confidence: An estimated confidence score (number 0.00-1.00) for the identified raceNumber.
+- boundingBox: A tight bounding box around the vehicle in format {x, y, width, height} where all values are percentages (0-100) relative to the image dimensions. x and y represent the top-left corner.
 
-          // Add preset-specific context if available
-          if (preset && preset.participants && preset.participants.length > 0) {
-            const numbers = preset.participants.map((p: any) => p.numero || p.number).filter(Boolean);
-            const sponsors = preset.participants
-              .map((p: any) => p.sponsor || p.sponsors)
-              .filter(Boolean)
-              .flat()
-              .filter((s: string) => s && s.length > 2);
-            const teams = preset.participants.map((p: any) => p.squadra || p.team).filter(Boolean);
-
-            motorsportPrompt += `\n\nCONTEXT: This image is from an event with known participants. Pay special attention to these details:`;
-
-            if (numbers.length > 0) {
-              motorsportPrompt += `\n- Expected race numbers: ${numbers.slice(0, 20).join(', ')}${numbers.length > 20 ? '...' : ''}`;
-            }
-
-            if (sponsors.length > 0) {
-              const uniqueSponsors = [...new Set(sponsors)];
-              motorsportPrompt += `\n- Known sponsors to look for: ${uniqueSponsors.slice(0, 15).join(', ')}${uniqueSponsors.length > 15 ? '...' : ''}`;
-            }
-
-            if (teams.length > 0) {
-              const uniqueTeams = [...new Set(teams)];
-              motorsportPrompt += `\n- Known teams: ${uniqueTeams.slice(0, 10).join(', ')}${uniqueTeams.length > 10 ? '...' : ''}`;
-            }
-          }
-
-          motorsportPrompt += `\n\nRespond ONLY with a valid JSON array where each object represents one detected vehicle and contains the fields above. If no vehicles or data are found, return an empty array []. Do not include explanations or markdown formatting in the response. List vehicles generally from foreground to background or left to right if possible. Example object: {"raceNumber": "99", "drivers": ["J. Doe"], "category": "GT3", "teamName": "Racing Team", "otherText": ["Sponsor A", "Sponsor B"], "confidence": 0.9}`;
-
-          return motorsportPrompt;
+Respond ONLY with a valid JSON array where each object represents one detected vehicle and contains the fields above. If no vehicles or data are found, return an empty array []. Do not include explanations or markdown formatting in the response. List vehicles generally from foreground to background or left to right if possible. Example object: {"raceNumber": "99", "drivers": ["J. Doe"], "category": "GT3", "teamName": "Racing Team", "otherText": ["Sponsor A", "Sponsor B"], "confidence": 0.9, "boundingBox": {"x": 25.5, "y": 30.0, "width": 45.0, "height": 60.0}}`;
 
         case 'running':
           return `Analyze the provided image for all identifiable runners or cyclists. For each athlete detected, extract the following information if clearly visible:
@@ -153,8 +159,21 @@ serve(async (req) => {
 - teamName: The team name, club, or organization if visible (string, or null) don't invent data.
 - otherText: An array of other relevant short texts found on the athlete (e.g., sponsors, event name, max 5 items), don't invent data.
 - confidence: An estimated confidence score (number 0.00-1.00) for the identified raceNumber.
+- boundingBox: A tight bounding box around the athlete in format {x, y, width, height} where all values are percentages (0-100) relative to the image dimensions. x and y represent the top-left corner.
 
-Respond ONLY with a valid JSON array where each object represents one detected athlete and contains the fields above. If no athletes or data are found, return an empty array []. Do not include explanations or markdown formatting in the response. List athletes generally from foreground to background or left to right if possible. Example object: {"raceNumber": "1234", "drivers": ["M. Runner"], "category": "Marathon", "teamName": "Running Club", "otherText": ["Nike", "Boston Marathon"], "confidence": 0.9}`;
+Respond ONLY with a valid JSON array where each object represents one detected athlete and contains the fields above. If no athletes or data are found, return an empty array []. Do not include explanations or markdown formatting in the response. List athletes generally from foreground to background or left to right if possible. Example object: {"raceNumber": "1234", "drivers": ["M. Runner"], "category": "Marathon", "teamName": "Running Club", "otherText": ["Nike", "Boston Marathon"], "confidence": 0.9, "boundingBox": {"x": 40.0, "y": 20.0, "width": 15.0, "height": 50.0}}`;
+
+        case 'cycling':
+          return `Analyze the provided image for cyclists. For each cyclist detected, extract the following information if clearly visible:
+- raceNumber: The rider number on jersey or bike (string, or null if not found/readable) don't invent data.
+- drivers: An array of rider names (strings, empty array if none found) don't invent data.
+- category: The race category if visible (string, or null) don't invent data.
+- teamName: The team name if visible (string, or null) don't invent data.
+- otherText: An array of other relevant short texts found (e.g., sponsors, max 5 items), don't invent data.
+- confidence: An estimated confidence score (number 0.00-1.00) for the identified raceNumber.
+- boundingBox: A tight bounding box around the cyclist in format {x, y, width, height} where all values are percentages (0-100) relative to the image dimensions. x and y represent the top-left corner.
+
+Respond ONLY with a valid JSON array where each object represents one detected cyclist and contains the fields above. If no cyclists or data are found, return an empty array []. Do not include explanations or markdown formatting in the response. Example object: {"raceNumber": "42", "drivers": ["Cyclist Name"], "category": "Pro", "teamName": "Team Sky", "otherText": ["Sponsor"], "confidence": 0.85, "boundingBox": {"x": 35.0, "y": 25.0, "width": 20.0, "height": 45.0}}`;
 
         case 'altro':
           return `Analyze the provided image for all identifiable participants or competitors. For each participant detected, extract the following information if clearly visible:
@@ -164,8 +183,9 @@ Respond ONLY with a valid JSON array where each object represents one detected a
 - teamName: The team name or organization if visible (string, or null) don't invent data.
 - otherText: An array of other relevant short texts found on the participant (e.g., sponsors, event details, max 5 items), don't invent data.
 - confidence: An estimated confidence score (number 0.00-1.00) for the identified raceNumber.
+- boundingBox: A tight bounding box around the participant in format {x, y, width, height} where all values are percentages (0-100) relative to the image dimensions. x and y represent the top-left corner.
 
-Respond ONLY with a valid JSON array where each object represents one detected participant and contains the fields above. If no participants or data are found, return an empty array []. Do not include explanations or markdown formatting in the response. List participants generally from foreground to background or left to right if possible. Example object: {"raceNumber": "42", "drivers": ["A. Competitor"], "category": "Open", "teamName": "Local Team", "otherText": ["Sponsor X", "Event 2024"], "confidence": 0.9}`;
+Respond ONLY with a valid JSON array where each object represents one detected participant and contains the fields above. If no participants or data are found, return an empty array []. Do not include explanations or markdown formatting in the response. List participants generally from foreground to background or left to right if possible. Example object: {"raceNumber": "42", "drivers": ["A. Competitor"], "category": "Open", "teamName": "Local Team", "otherText": ["Sponsor X", "Event 2024"], "confidence": 0.9, "boundingBox": {"x": 30.0, "y": 15.0, "width": 25.0, "height": 55.0}}`;
 
         default:
           // Default to motorsport if category is not recognized
@@ -176,13 +196,163 @@ Respond ONLY with a valid JSON array where each object represents one detected p
 - teamName: The team name if visible (string, or null) don't invent data.
 - otherText: An array of other relevant short texts found on the vehicle (e.g., main sponsors, max 5 items), don't invent data.
 - confidence: An estimated confidence score (number 0.00-1.00) for the identified raceNumber.
+- boundingBox: A tight bounding box around the vehicle in format {x, y, width, height} where all values are percentages (0-100) relative to the image dimensions. x and y represent the top-left corner.
 
-Respond ONLY with a valid JSON array where each object represents one detected vehicle and contains the fields above. If no vehicles or data are found, return an empty array []. Do not include explanations or markdown formatting in the response. List vehicles generally from foreground to background or left to right if possible. Example object: {"raceNumber": "99", "drivers": ["J. Doe"], "category": "GT3", "teamName": "Racing Team", "otherText": ["Sponsor A", "Sponsor B"], "confidence": 0.9}`;
+Respond ONLY with a valid JSON array where each object represents one detected vehicle and contains the fields above. If no vehicles or data are found, return an empty array []. Do not include explanations or markdown formatting in the response. Example object: {"raceNumber": "99", "drivers": ["J. Doe"], "category": "GT3", "teamName": "Racing Team", "otherText": ["Sponsor A"], "confidence": 0.9, "boundingBox": {"x": 25.5, "y": 30.0, "width": 45.0, "height": 60.0}}`;
       }
     }
 
-    const prompt = getPromptForCategory(category || 'motorsport', participantPreset);
-    // Analysis category set
+    function getCategoryDisplayName(category: string): string {
+      switch (category) {
+        case 'motorsport': return 'Motorsport';
+        case 'running': return 'Running';
+        case 'cycling': return 'Cycling';
+        case 'altro': return 'Other';
+        default: return 'Unknown';
+      }
+    }
+
+    // 8. Add participant preset context to the dynamic prompt
+    function enhancePromptWithPreset(basePrompt: string, preset?: any): string {
+      if (!preset || !preset.participants || preset.participants.length === 0) {
+        return basePrompt;
+      }
+
+      const numbers = preset.participants.map((p: any) => p.numero || p.number).filter(Boolean);
+      const sponsors = preset.participants
+        .map((p: any) => p.sponsor || p.sponsors)
+        .filter(Boolean)
+        .flat()
+        .filter((s: string) => s && s.length > 2);
+      const teams = preset.participants.map((p: any) => p.squadra || p.team).filter(Boolean);
+
+      let enhancedPrompt = basePrompt;
+      enhancedPrompt += `\n\nCONTEXT: This image is from an event. Some known participants include (but are not limited to):`;
+
+      // Note: We intentionally do NOT include the list of race numbers to avoid AI bias
+      // The AI should identify only what it actually sees in the image
+
+      if (sponsors.length > 0) {
+        const uniqueSponsors = [...new Set(sponsors)];
+        enhancedPrompt += `\n- Known sponsors to look for: ${uniqueSponsors.slice(0, 15).join(', ')}${uniqueSponsors.length > 15 ? '...' : ''}`;
+      }
+
+      if (teams.length > 0) {
+        const uniqueTeams = [...new Set(teams)];
+        enhancedPrompt += `\n- Known teams include: ${uniqueTeams.slice(0, 10).join(', ')}${uniqueTeams.length > 10 ? '...' : ''}`;
+      }
+
+      // Add final instruction to ensure inclusivity
+      if (sponsors.length > 0 || teams.length > 0) {
+        enhancedPrompt += `\n\nNote: The above information is provided as helpful context, but you should identify ALL participants, teams, and details visible in the image, not just those mentioned above.`;
+      }
+
+      return enhancedPrompt;
+    }
+
+    // 8.5. Add recognition config enhancement to prompt
+    function enhancePromptWithRecognitionConfig(basePrompt: string, recognitionConfig: any): string {
+      if (!recognitionConfig) return basePrompt;
+
+      let enhancedPrompt = basePrompt;
+      enhancedPrompt += `\n\nRECOGNITION GUIDELINES:`;
+
+      // Note: maxResults is handled in post-processing, not in prompt
+
+      // Add confidence guidance
+      if (recognitionConfig.minConfidence) {
+        const confidencePercent = Math.round(recognitionConfig.minConfidence * 100);
+        enhancedPrompt += `\n- Minimum confidence required: ${confidencePercent}% (only include if you're ${confidencePercent}% certain)`;
+      }
+
+      // Add focus mode guidance
+      if (recognitionConfig.focusMode) {
+        switch (recognitionConfig.focusMode) {
+          case 'foreground':
+            enhancedPrompt += `\n- ANALYZE ONLY subjects in the immediate foreground`;
+            break;
+          case 'closest':
+            enhancedPrompt += `\n- ANALYZE ONLY the closest/most prominent subject`;
+            break;
+          case 'primary':
+            enhancedPrompt += `\n- FOCUS on the primary/main subject, ignore secondary ones`;
+            break;
+        }
+      }
+
+      // Add background ignore guidance
+      if (recognitionConfig.ignoreBackground) {
+        enhancedPrompt += `\n- COMPLETELY IGNORE all background, distant, or blurry subjects`;
+      }
+
+      // Add foreground priority guidance
+      if (recognitionConfig.prioritizeForeground) {
+        enhancedPrompt += `\n- PRIORITIZE subjects with clear, readable details over distant ones`;
+      }
+
+      enhancedPrompt += `\n- If a number/text is not perfectly readable, set confidence < 0.5 or exclude entirely`;
+
+      console.log(`[RECOGNITION CONFIG] Enhanced prompt with config:`, {
+        maxResults: recognitionConfig.maxResults,
+        minConfidence: recognitionConfig.minConfidence,
+        focusMode: recognitionConfig.focusMode
+      });
+
+      return enhancedPrompt;
+    }
+
+    // 8.6. V3: Add bounding box requirement to all prompts automatically
+    function enhancePromptWithBoundingBox(basePrompt: string): string {
+      // Check if prompt already includes boundingBox (e.g., from database or hardcoded)
+      if (basePrompt.includes('boundingBox')) {
+        console.log(`[V3] Prompt already includes boundingBox field, skipping auto-enhancement`);
+        return basePrompt;
+      }
+
+      console.log(`[V3] Auto-enhancing prompt with boundingBox requirement`);
+
+      // Add bounding box requirement to the prompt
+      let enhancedPrompt = basePrompt;
+
+      // Insert before "Respond ONLY with" section if it exists
+      const respondIndex = basePrompt.indexOf('Respond ONLY with');
+      if (respondIndex > -1) {
+        const beforeRespond = basePrompt.substring(0, respondIndex);
+        const respondSection = basePrompt.substring(respondIndex);
+
+        enhancedPrompt = beforeRespond +
+          `- boundingBox: A tight bounding box around the subject in format {x, y, width, height} where all values are percentages (0-100) relative to the image dimensions. x and y represent the top-left corner. This field is REQUIRED for each detection.\n\n` +
+          respondSection;
+      } else {
+        // If "Respond ONLY" not found, append to end
+        enhancedPrompt += `\n\n- boundingBox: A tight bounding box around the subject in format {x, y, width, height} where all values are percentages (0-100) relative to the image dimensions. x and y represent the top-left corner. This field is REQUIRED for each detection.`;
+      }
+
+      // Update example object in prompt if it exists
+      if (enhancedPrompt.includes('Example object:') && !enhancedPrompt.includes('"boundingBox"')) {
+        // Add bbox to example - look for closing } before the last quote
+        enhancedPrompt = enhancedPrompt.replace(
+          /("confidence":\s*[\d.]+)(}+)(\s*"?\s*$)/,
+          '$1, "boundingBox": {"x": 30.0, "y": 25.0, "width": 35.0, "height": 50.0}$2$3'
+        );
+      }
+
+      return enhancedPrompt;
+    }
+
+    // 9. Create final prompt with all enhancements
+    let enhancedPrompt = enhancePromptWithPreset(dynamicPrompt, participantPreset);
+
+    // Add recognition config guidance if available
+    if (categoryData?.recognition_config) {
+      enhancedPrompt = enhancePromptWithRecognitionConfig(enhancedPrompt, categoryData.recognition_config);
+    }
+
+    // V3: Always add bounding box requirement (unless already present)
+    enhancedPrompt = enhancePromptWithBoundingBox(enhancedPrompt);
+
+    const finalPrompt = enhancedPrompt;
+    console.log(`[PROMPT] Using ${usedDatabasePrompt ? 'database' : 'hardcoded'} prompt for category: ${categoryName}`);
 
     // Log preset usage for debugging
     if (participantPreset && participantPreset.participants) {
@@ -199,11 +369,13 @@ Respond ONLY with a valid JSON array where each object represents one detected v
     let analysisText;
     let result;
     let executionTimeMs = 0; // Declare at function level for scope access
+
+    const generationConfig = {
+      responseMimeType: "application/json",
+      temperature: 0.4  // Valore più basso per risultati più consistenti e affidabili
+    }; // Request JSON output
+
     try {
-      const generationConfig = { 
-        responseMimeType: "application/json",
-        temperature: 0.4  // Valore più basso per risultati più consistenti e affidabili
-      }; // Request JSON output
       
       // Add timeout for Gemini API call
       const timeoutPromise = new Promise((_, reject) => {
@@ -212,7 +384,7 @@ Respond ONLY with a valid JSON array where each object represents one detected v
       
       console.log(`[GEMINI API] Sending request to Gemini API...`);
       const geminiPromise = model.generateContent([
-        prompt,
+        finalPrompt,
         {
           inlineData: {
             data: imageBase64,
@@ -232,12 +404,47 @@ Respond ONLY with a valid JSON array where each object represents one detected v
       console.log(`[GEMINI API] Response text length: ${analysisText?.length || 0} characters`);
       
       // AI analysis completed
-    } catch (geminiError) {
-      executionTimeMs = Date.now() - startTime;
-      console.error(`[GEMINI ERROR] API call failed after ${executionTimeMs}ms:`, geminiError);
-      console.error(`[GEMINI ERROR] Error type: ${geminiError.constructor.name}`);
-      console.error(`[GEMINI ERROR] Error message: ${geminiError.message}`);
-      throw new Error(`Failed to analyze image with Gemini API: ${geminiError.message}`);
+    } catch (primaryError: any) {
+      console.warn('[GEMINI API] Primary prompt failed, attempting fallback:', primaryError);
+
+      if (fallbackPrompt && fallbackPrompt.trim() !== '') {
+        try {
+          console.log(`[GEMINI API] Trying fallback prompt...`);
+          const fallbackEnhanced = enhancePromptWithPreset(fallbackPrompt, participantPreset);
+
+          const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('Fallback Gemini API call timed out after 30 seconds')), 30000);
+          });
+
+          const fallbackPromise = model.generateContent([
+            fallbackEnhanced,
+            {
+              inlineData: {
+                data: imageBase64,
+                mimeType: mimeType,
+              },
+            },
+          ], generationConfig);
+
+          result = await Promise.race([fallbackPromise, timeoutPromise]);
+          const response = await result.response;
+          executionTimeMs = Date.now() - startTime;
+          analysisText = response.text();
+
+          console.log(`[GEMINI API] Fallback prompt succeeded after ${executionTimeMs}ms`);
+
+        } catch (fallbackError: any) {
+          executionTimeMs = Date.now() - startTime;
+          console.error(`[GEMINI ERROR] Both primary and fallback prompts failed after ${executionTimeMs}ms`);
+          console.error(`[GEMINI ERROR] Primary error:`, primaryError.message);
+          console.error(`[GEMINI ERROR] Fallback error:`, fallbackError.message);
+          throw new Error(`Failed to analyze image with Gemini API. Primary: ${primaryError.message}, Fallback: ${fallbackError.message}`);
+        }
+      } else {
+        executionTimeMs = Date.now() - startTime;
+        console.error(`[GEMINI ERROR] Primary prompt failed and no fallback available after ${executionTimeMs}ms:`, primaryError);
+        throw new Error(`Failed to analyze image with Gemini API: ${primaryError.message}`);
+      }
     }
 
     // --- BEGIN Cost Calculation ---
@@ -260,12 +467,12 @@ Respond ONLY with a valid JSON array where each object represents one detected v
         case 'gemini-2.5-pro':
             INPUT_PRICE_PER_MILLION_TOKENS = 1.25; // $1.25/million tokens
             OUTPUT_PRICE_PER_MILLION_TOKENS = 10.00; // $10.00/million tokens
-            analysisProviderString = 'gemini_2.5_pro_multi';
+            analysisProviderString = 'gemini_2.5_pro';
             break;
         case 'gemini-2.5-flash':
             INPUT_PRICE_PER_MILLION_TOKENS = 0.30; // $0.30/million tokens
             OUTPUT_PRICE_PER_MILLION_TOKENS = 2.50; // $2.50/million tokens
-            analysisProviderString = 'gemini_2.5_flash_multi';
+            analysisProviderString = 'gemini_2.5_flash';
             break;
         // Add cases for other models (GPT, Claude) here later
         default:

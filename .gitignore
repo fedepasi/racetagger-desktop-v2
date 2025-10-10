@@ -5,6 +5,15 @@ dist
 .DS_Store
 release
 
+# CRITICO: package-lock.json può causare conflitti cross-platform
+# Ogni piattaforma genera binari nativi diversi per better-sqlite3, sharp, ecc.
+package-lock.json
+
+# Cache Electron e npm (platform-specific)
+.electron-gyp/
+.npm/
+.cache/
+
 # Temporary files
 tmp/
 *.tmp
@@ -54,6 +63,10 @@ Desktop.ini
 *.pid
 *.seed
 *.pid.lock
+
+# Test files temporanei (creati durante debugging)
+test-*.js
+test-*.ts
 
 # ImageMagick portable binaries (too large for git)
 vendor/win32/*/imagemagick/
