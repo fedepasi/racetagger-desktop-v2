@@ -76,17 +76,17 @@ serve(async (req) => {
     }
 
     const freeTokensThisMonth = monthlyTokens?.reduce((sum, req) => sum + req.tokens_requested, 0) || 0;
-    const remainingFreeTokens = Math.max(0, 500 - freeTokensThisMonth);
-    
-    console.log(`[Token Request] Monthly free tokens used: ${freeTokensThisMonth}/500, remaining: ${remainingFreeTokens}`);
-    
+    const remainingFreeTokens = Math.max(0, 100 - freeTokensThisMonth);
+
+    console.log(`[Token Request] Monthly free tokens used: ${freeTokensThisMonth}/100, remaining: ${remainingFreeTokens}`);
+
     // Verifica se questa richiesta può essere gratuita
-    const isEarlyAccessFree = tokensRequested <= remainingFreeTokens;
-    
-    console.log(`[Token Request] Processing: ${tokensRequested} tokens, Early Access: ${isEarlyAccessFree}, Monthly remaining: ${remainingFreeTokens}`)
+    const isFreeTier = tokensRequested <= remainingFreeTokens;
+
+    console.log(`[Token Request] Processing: ${tokensRequested} tokens, Free Tier: ${isFreeTier}, Monthly remaining: ${remainingFreeTokens}`)
 
     // Se il limite mensile è raggiunto, gestisci di conseguenza
-    if (!isEarlyAccessFree && remainingFreeTokens === 0) {
+    if (!isFreeTier && remainingFreeTokens === 0) {
       console.log('[Token Request] Monthly limit completely reached, saving request for payment processing');
       
       // Salva comunque la richiesta per elaborazione manuale
@@ -117,7 +117,7 @@ serve(async (req) => {
         const emailResponse = await supabaseAdmin.functions.invoke('send-token-request-email', {
           body: { 
             tokenRequest: requestData, 
-            isEarlyAccessFree: false 
+            isFreeTier: false 
           }
         })
         
@@ -134,14 +134,14 @@ serve(async (req) => {
       return new Response(
         JSON.stringify({
           success: false,
-          message: `🎯 Your request for ${tokensRequested} tokens has been submitted! You've reached the 500 free tokens monthly limit. Our team will contact you within 24-48 hours with a personalized offer.`,
+          message: `🎯 Your request for ${tokensRequested} tokens has been submitted! You've reached the 100 free tokens monthly limit. Our team will contact you within 24-48 hours with a personalized offer.`,
           requestSaved: true,
           requestId: requestData.id,
           paymentRequired: true,
           tokenRequest: requestData, // Add this for main process email sending
           monthlyUsage: {
             used: freeTokensThisMonth,
-            limit: 500,
+            limit: 100,
             remaining: 0
           }
         }),
@@ -155,7 +155,7 @@ serve(async (req) => {
       )
     }
 
-    if (!isEarlyAccessFree && remainingFreeTokens > 0) {
+    if (!isFreeTier && remainingFreeTokens > 0) {
       console.log(`[Token Request] Request exceeds remaining free tokens (${remainingFreeTokens}), saving for payment processing`);
       
       // Salva la richiesta per elaborazione manuale
@@ -186,7 +186,7 @@ serve(async (req) => {
         const emailResponse = await supabaseAdmin.functions.invoke('send-token-request-email', {
           body: { 
             tokenRequest: requestData, 
-            isEarlyAccessFree: false 
+            isFreeTier: false 
           }
         })
         
@@ -210,7 +210,7 @@ serve(async (req) => {
           tokenRequest: requestData, // Add this for main process email sending
           monthlyUsage: {
             used: freeTokensThisMonth,
-            limit: 500,
+            limit: 100,
             remaining: remainingFreeTokens
           },
           suggestion: remainingFreeTokens > 0 ? `💡 Alternative: You can make a new request for ${remainingFreeTokens} free tokens instead.` : null
@@ -248,8 +248,8 @@ serve(async (req) => {
 
     console.log('[Token Request] Successfully created:', requestData.id)
 
-    // Se Early Access free, assegna automaticamente i token
-    if (isEarlyAccessFree) {
+    // Se Free Tier, assegna automaticamente i token
+    if (isFreeTier) {
       try {
         console.log(`[Token Request] Auto-granting ${tokensRequested} tokens...`)
         
@@ -295,9 +295,9 @@ serve(async (req) => {
       console.log('[Token Request] Sending email notification...')
       
       const emailResponse = await supabaseAdmin.functions.invoke('send-token-request-email', {
-        body: { 
-          tokenRequest: requestData, 
-          isEarlyAccessFree 
+        body: {
+          tokenRequest: requestData,
+          isFreeTier
         }
       })
       
@@ -311,23 +311,23 @@ serve(async (req) => {
     }
 
     // Prepara risposta per il client con informazioni sul limite mensile
-    const newRemainingTokens = isEarlyAccessFree ? (remainingFreeTokens - tokensRequested) : remainingFreeTokens;
-    
-    const successMessage = isEarlyAccessFree 
-      ? `🎉 Early Access: ${tokensRequested} tokens granted for free! You have ${newRemainingTokens} free tokens remaining this month.`
-      : `Request submitted for ${tokensRequested} tokens. You have used ${freeTokensThisMonth}/500 free tokens this month${remainingFreeTokens > 0 ? ` (${remainingFreeTokens} remaining)` : ' (limit reached)'}. Payment coordination required - we'll contact you within 24 hours.`
+    const newRemainingTokens = isFreeTier ? (remainingFreeTokens - tokensRequested) : remainingFreeTokens;
+
+    const successMessage = isFreeTier
+      ? `🎉 Free Tier: ${tokensRequested} tokens granted for free! You have ${newRemainingTokens} free tokens remaining this month.`
+      : `Request submitted for ${tokensRequested} tokens. You have used ${freeTokensThisMonth}/100 free tokens this month${remainingFreeTokens > 0 ? ` (${remainingFreeTokens} remaining)` : ' (limit reached)'}. Payment coordination required - we'll contact you within 24 hours.`
 
     const response = {
       success: true,
       message: successMessage,
       requestId: requestData.id,
-      isEarlyAccessFree,
-      tokensGranted: isEarlyAccessFree ? tokensRequested : 0,
-      paymentRequired: !isEarlyAccessFree,
+      isFreeTier,
+      tokensGranted: isFreeTier ? tokensRequested : 0,
+      paymentRequired: !isFreeTier,
       tokenRequest: requestData, // Add this for main process email sending
       monthlyUsage: {
-        used: freeTokensThisMonth + (isEarlyAccessFree ? tokensRequested : 0),
-        limit: 500,
+        used: freeTokensThisMonth + (isFreeTier ? tokensRequested : 0),
+        limit: 100,
         remaining: newRemainingTokens
       }
     }

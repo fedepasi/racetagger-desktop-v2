@@ -134,6 +134,30 @@ class FolderOrganizationManager {
       });
     });
 
+    // Custom destination toggle
+    const customDestToggle = document.getElementById('custom-destination-enabled');
+    if (customDestToggle) {
+      customDestToggle.addEventListener('change', (e) => {
+        this.toggleCustomDestination(e.target.checked);
+      });
+    }
+
+    // Browse destination folder button
+    const selectDestBtn = document.getElementById('select-destination-btn');
+    if (selectDestBtn) {
+      selectDestBtn.addEventListener('click', () => {
+        this.selectDestinationFolder();
+      });
+    }
+
+    // Conflict strategy selection (warn for overwrite)
+    const conflictRadios = document.querySelectorAll('input[name="conflict-strategy"]');
+    conflictRadios.forEach(radio => {
+      radio.addEventListener('change', (e) => {
+        this.handleConflictStrategyChange(e.target.value);
+      });
+    });
+
     console.log('[Folder Organization] Event listeners setup complete');
   }
 
@@ -222,6 +246,75 @@ class FolderOrganizationManager {
   }
 
   /**
+   * Handle conflict strategy changes
+   */
+  handleConflictStrategyChange(strategy) {
+    console.log(`[Folder Organization] Conflict strategy changed to: ${strategy}`);
+
+    // Show warning for overwrite mode
+    if (strategy === 'overwrite') {
+      const confirmed = confirm(
+        '⚠️ WARNING: Overwrite Mode\n\n' +
+        'This mode will REPLACE existing files in the destination folders.\n' +
+        'Original files will be permanently lost.\n\n' +
+        'Are you sure you want to use this mode?\n\n' +
+        '(We recommend using "Rename automatically" for safety)'
+      );
+
+      if (!confirmed) {
+        // Reset to rename mode
+        const renameRadio = document.getElementById('conflict-rename');
+        if (renameRadio) {
+          renameRadio.checked = true;
+        }
+      }
+    }
+  }
+
+  /**
+   * Toggle custom destination folder controls
+   */
+  toggleCustomDestination(enabled) {
+    console.log(`[Folder Organization] Custom destination ${enabled ? 'enabled' : 'disabled'}`);
+
+    const customDestControls = document.getElementById('custom-destination-controls');
+    if (customDestControls) {
+      customDestControls.style.display = enabled ? 'block' : 'none';
+    }
+
+    // Clear path if disabled
+    if (!enabled) {
+      const pathInput = document.getElementById('custom-destination-path');
+      if (pathInput) {
+        pathInput.value = '';
+        pathInput.placeholder = 'No folder selected';
+      }
+    }
+  }
+
+  /**
+   * Select destination folder for organization
+   */
+  async selectDestinationFolder() {
+    try {
+      const selectedPath = await window.api.invoke('select-organization-destination');
+
+      if (selectedPath) {
+        const pathInput = document.getElementById('custom-destination-path');
+        if (pathInput) {
+          pathInput.value = selectedPath;
+          console.log(`[Folder Organization] Destination folder selected: ${selectedPath}`);
+        }
+      } else {
+        console.log('[Folder Organization] Folder selection cancelled');
+      }
+    } catch (error) {
+      console.error('[Folder Organization] Error selecting destination folder:', error);
+      alert('Error selecting folder. Please try again.');
+    }
+  }
+
+  /**
    * Get current folder organization configuration
    */
   getFolderOrganizationConfig() {
@@ -234,6 +327,13 @@ class FolderOrganizationManager {
     const createUnknownFolder = document.getElementById('create-unknown-folder')?.checked || true;
     const includeXmpFiles = document.getElementById('include-xmp-files')?.checked !== false;
 
+    // Custom destination path
+    const customDestEnabled = document.getElementById('custom-destination-enabled')?.checked || false;
+    const customDestPath = document.getElementById('custom-destination-path')?.value || '';
+
+    // Conflict strategy
+    const conflictStrategy = document.querySelector('input[name="conflict-strategy"]:checked')?.value || 'rename';
+
     return {
       enabled,
       mode,
@@ -241,7 +341,9 @@ class FolderOrganizationManager {
       customPattern: pattern === 'custom' ? customPattern : undefined,
       createUnknownFolder,
       unknownFolderName: 'Unknown_Numbers',
-      includeXmpFiles
+      includeXmpFiles,
+      destinationPath: customDestEnabled && customDestPath ? customDestPath : undefined,
+      conflictStrategy
     };
   }
 

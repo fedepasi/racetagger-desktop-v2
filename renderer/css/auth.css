@@ -450,6 +450,180 @@
   text-align: right;
 }
 
+/* Password Strength Indicator */
+.password-strength {
+  margin-top: 8px;
+}
+
+.strength-bar {
+  width: 100%;
+  height: 4px;
+  background-color: #e2e8f0;
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+
+.strength-bar-fill {
+  height: 100%;
+  width: 0%;
+  transition: all 0.3s ease;
+  border-radius: 2px;
+}
+
+.strength-bar-fill.weak {
+  width: 25%;
+  background-color: #ef4444;
+}
+
+.strength-bar-fill.fair {
+  width: 50%;
+  background-color: #f59e0b;
+}
+
+.strength-bar-fill.good {
+  width: 75%;
+  background-color: #3b82f6;
+}
+
+.strength-bar-fill.strong {
+  width: 100%;
+  background-color: #10b981;
+}
+
+.strength-label {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.strength-label span {
+  font-weight: 500;
+}
+
+.strength-label.weak {
+  color: #ef4444;
+}
+
+.strength-label.fair {
+  color: #f59e0b;
+}
+
+.strength-label.good {
+  color: #3b82f6;
+}
+
+.strength-label.strong {
+  color: #10b981;
+}
+
+/* Password Requirements */
+.password-requirements {
+  background-color: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 20px;
+}
+
+.requirements-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #475569;
+  margin: 0 0 12px 0;
+}
+
+.requirements-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.requirement-item {
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  color: #64748b;
+  margin-bottom: 8px;
+}
+
+.requirement-item:last-child {
+  margin-bottom: 0;
+}
+
+.requirement-icon {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  margin-right: 8px;
+  font-size: 14px;
+  color: #cbd5e1;
+  transition: color 0.2s ease;
+}
+
+.requirement-item.met .requirement-icon {
+  color: #10b981;
+}
+
+.requirement-item.met {
+  color: #10b981;
+}
+
+/* Success Message */
+.success-message {
+  background-color: #f0fdf4;
+  border: 1px solid #86efac;
+  color: #15803d;
+  padding: 12px 16px;
+  border-radius: 8px;
+  margin-top: 16px;
+  font-size: 14px;
+  display: flex;
+  align-items: flex-start;
+}
+
+.success-message::before {
+  content: '✓';
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  background-color: #10b981;
+  color: white;
+  border-radius: 50%;
+  text-align: center;
+  line-height: 20px;
+  margin-right: 10px;
+  font-weight: bold;
+  flex-shrink: 0;
+}
+
+/* Error Message Enhanced */
+.error-message {
+  background-color: #fef2f2;
+  border: 1px solid #fca5a5;
+  color: #991b1b;
+  padding: 12px 16px;
+  border-radius: 8px;
+  margin-top: 16px;
+  font-size: 14px;
+  display: flex;
+  align-items: flex-start;
+}
+
+.error-message::before {
+  content: '⚠';
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  background-color: #ef4444;
+  color: white;
+  border-radius: 50%;
+  text-align: center;
+  line-height: 20px;
+  margin-right: 10px;
+  font-weight: bold;
+  flex-shrink: 0;
+}
+
 /* Media query per schermi più piccoli */
 @media (max-width: 768px) {
   .auth-modal {
@@ -457,15 +631,15 @@
     height: auto;
     max-height: 95vh;
   }
-  
+
   .auth-layout {
     grid-template-columns: 1fr;
   }
-  
+
   .auth-sidebar {
     display: none;
   }
-  
+
   .auth-content {
     padding: 20px;
   }

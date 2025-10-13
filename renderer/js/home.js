@@ -36,7 +36,35 @@ function initializeHomePage() {
   // Load app version
   loadAppVersion();
 
+  // Check if we need to navigate to a specific section from results page
+  checkNavigationIntent();
+
   console.log('[Home] Home page initialized');
+}
+
+/**
+ * Check if there's a navigation intent from sessionStorage (e.g., from results page)
+ */
+function checkNavigationIntent() {
+  const targetSection = sessionStorage.getItem('navigateToSection');
+
+  if (targetSection) {
+    console.log(`[Home] Navigation intent detected: ${targetSection}`);
+
+    // Clear the flag
+    sessionStorage.removeItem('navigateToSection');
+
+    // Navigate to the section after a small delay to ensure DOM is ready
+    setTimeout(() => {
+      if (window.navigateToSection) {
+        console.log(`[Home] Navigating to section: ${targetSection}`);
+        window.navigateToSection(targetSection);
+      } else if (window.navigateToAnalysis && targetSection === 'analysis') {
+        console.log(`[Home] Navigating to analysis via navigateToAnalysis`);
+        window.navigateToAnalysis();
+      }
+    }, 100);
+  }
 }
 
 /**

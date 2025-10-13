@@ -377,7 +377,8 @@ class UnifiedImageWorker extends EventEmitter {
       }
 
       // Fase 2.5: Genera thumbnail multi-livello per performance ottimizzata
-      const { thumbnailPath, microThumbPath } = await this.generateThumbnails(compressedPath, imageFile.fileName);
+      // PERFORMANCE OPTIMIZATION: Pass compressed buffer to avoid re-reading from disk
+      const { thumbnailPath, microThumbPath } = await this.generateThumbnails(compressedPath, imageFile.fileName, buffer);
 
       // Track thumbnail files
       if (thumbnailPath) {
@@ -681,30 +682,16 @@ class UnifiedImageWorker extends EventEmitter {
         throw error;
       }
     } else {
-      // CRITICAL FIX: Per JPEG esistenti, crea una copia temporanea per preservare l'originale
-      console.log(`[UnifiedWorker] Creating safe temporary copy of JPEG file ${imageFile.fileName} to preserve original`);
-
-      // Use centralized temp directory instead of original image directory
-      const tempCopyPath = this.cleanupManager.generateTempPath(
-        imageFile.originalPath,
-        'safe_copy',
-        path.extname(imageFile.fileName),
-        'jpeg-processing'
-      );
-      
-      try {
-        await fsPromises.copyFile(imageFile.originalPath, tempCopyPath);
-        console.log(`[UnifiedWorker] Created safe copy for processing: ${tempCopyPath}`);
-        return tempCopyPath;
-      } catch (error) {
-        console.error(`[UnifiedWorker] Failed to create safe copy for ${imageFile.fileName}:`, error);
-        throw new Error(`Failed to create safe copy: ${error}`);
-      }
+      // PERFORMANCE OPTIMIZATION: Use JPEG directly without creating unnecessary temporary copy
+      // Sharp can read the original file safely without modifying it
+      console.log(`[UnifiedWorker] Using JPEG file directly for processing: ${imageFile.fileName}`);
+      return imageFile.originalPath;
     }
   }
 
   /**
    * Fase 2: Comprime l'immagine per garantire <500KB per upload
+   * PERFORMANCE OPTIMIZATION: Uses predictive formula for single-pass compression
    */
   private async compressForUpload(imagePath: string, fileName: string): Promise<{
     compressedPath: string;
@@ -712,63 +699,95 @@ class UnifiedImageWorker extends EventEmitter {
     mimeType: string;
   }> {
     console.log(`[UnifiedWorker] Compressing ${fileName} to ensure <${this.config.maxImageSizeKB}KB`);
-    
+
     if (!sharp) {
       throw new Error('Sharp module not available for compression');
     }
 
     const maxSizeBytes = this.config.maxImageSizeKB * 1024;
-    let quality = this.config.jpegQuality;
+
+    // Read file ONCE and keep in memory for all operations
+    const imageBuffer = await fsPromises.readFile(imagePath);
+
+    // Get image metadata to calculate optimal quality
+    let metadata;
+    try {
+      const processor = await createImageProcessor(imageBuffer);
+      metadata = await processor.metadata();
+    } catch (error) {
+      console.error(`[UnifiedWorker] Failed to read image metadata for ${fileName}:`, error);
+      throw new Error(`Failed to read image metadata: ${error}`);
+    }
+
+    const originalWidth = metadata.width || 1920;
+    const originalHeight = metadata.height || 1080;
+
+    // Calculate resize dimensions
+    const maxDim = this.config.maxDimension;
+    let targetWidth = originalWidth;
+    let targetHeight = originalHeight;
+
+    if (originalWidth > maxDim || originalHeight > maxDim) {
+      const aspectRatio = originalWidth / originalHeight;
+      if (aspectRatio > 1) {
+        targetWidth = maxDim;
+        targetHeight = Math.round(maxDim / aspectRatio);
+      } else {
+        targetHeight = maxDim;
+        targetWidth = Math.round(maxDim * aspectRatio);
+      }
+    }
+
+    // PREDICTIVE FORMULA: Calculate optimal quality based on target size
+    const megapixels = (targetWidth * targetHeight) / 1_000_000;
+    // Empirical formula: fileSize ≈ (megapixels * quality * 12000) bytes
+    // With mozjpeg optimization, this factor can be reduced to ~10000
+    const estimatedQuality = Math.round((maxSizeBytes / (megapixels * 10000)) * 100);
+    const initialQuality = Math.max(30, Math.min(95, estimatedQuality));
+
+    console.log(`[UnifiedWorker] Predictive compression for ${fileName}:`);
+    console.log(`  - Original: ${originalWidth}x${originalHeight}px (${(originalWidth * originalHeight / 1_000_000).toFixed(1)}MP)`);
+    console.log(`  - Target: ${targetWidth}x${targetHeight}px (${megapixels.toFixed(1)}MP)`);
+    console.log(`  - Calculated quality: ${initialQuality} (target: <${this.config.maxImageSizeKB}KB)`);
+
     let compressedBuffer: Buffer;
     let compressionAttempts = 0;
-    const maxCompressionAttempts = 5; // Limite massimo di tentativi
-    
-    // Compressione iterativa limitata per raggiungere la dimensione target
-    do {
-      compressionAttempts++;
-      console.log(`[UnifiedWorker] Compression attempt ${compressionAttempts}/${maxCompressionAttempts} for ${fileName} (quality: ${quality})`);
-      
-      try {
-        const imageBuffer = await fsPromises.readFile(imagePath);
-        const processor = await createImageProcessor(imageBuffer);
-        compressedBuffer = await processor
-          .rotate() // Auto-rotate basato su EXIF per correggere orientamento
-          .resize(this.config.maxDimension, this.config.maxDimension, { 
-            fit: 'inside', 
-            withoutEnlargement: true 
-          })
-          .jpeg({ quality })
-          .toBuffer();
-      } catch (error) {
-        console.error(`[UnifiedWorker] Sharp compression failed for ${fileName}:`, error);
-        throw new Error(`Image compression failed: ${error}`);
-      }
-      
-      if (compressedBuffer.length > maxSizeBytes && quality > 30 && compressionAttempts < maxCompressionAttempts) {
-        quality -= 15; // Riduci più aggressivamente
-        console.log(`[UnifiedWorker] File too large (${compressedBuffer.length} bytes), reducing quality to ${quality}`);
-      } else {
-        break;
-      }
-    } while (compressionAttempts < maxCompressionAttempts);
 
-    // Se ancora troppo grande dopo max tentativi, riduci le dimensioni drasticamente
-    if (compressedBuffer.length > maxSizeBytes) {
-      console.log(`[UnifiedWorker] Final attempt: reducing dimensions for ${fileName}`);
-      let maxDim = this.config.maxDimension * 0.6; // Riduci al 60%
-      
-      try {
-        const imageBuffer = await fsPromises.readFile(imagePath);
-        const processor = await createImageProcessor(imageBuffer);
-        compressedBuffer = await processor
-          .rotate() // Auto-rotate basato su EXIF per correggere orientamento
-          .resize(maxDim, maxDim, { fit: 'inside', withoutEnlargement: true })
-          .jpeg({ quality: Math.max(quality, 50) })
-          .toBuffer();
-      } catch (error) {
-        console.error(`[UnifiedWorker] Final compression attempt failed for ${fileName}:`, error);
-        throw new Error(`Final image compression failed: ${error}`);
+    // First attempt with predicted quality
+    try {
+      const processor = await createImageProcessor(imageBuffer);
+      compressedBuffer = await processor
+        .rotate() // Auto-rotate basato su EXIF per correggere orientamento
+        .resize(this.config.maxDimension, this.config.maxDimension, {
+          fit: 'inside',
+          withoutEnlargement: true
+        })
+        .jpeg({
+          quality: initialQuality,
+          mozjpeg: true // Enable mozjpeg for better compression
+        })
+        .toBuffer();
+
+      compressionAttempts++;
+      console.log(`[UnifiedWorker] Predictive compression result: ${compressedBuffer.length} bytes (${(compressedBuffer.length / 1024).toFixed(1)}KB)`);
+
+      // If predictive compression succeeded within target, we're done!
+      if (compressedBuffer.length <= maxSizeBytes) {
+        console.log(`[UnifiedWorker] ✅ Predictive compression succeeded on first attempt!`);
+      } else {
+        // Fallback to binary search if prediction overshot
+        console.log(`[UnifiedWorker] Predictive compression overshot target, using binary search fallback...`);
+        compressedBuffer = await this.compressWithBinarySearch(
+          imageBuffer,
+          maxSizeBytes,
+          initialQuality,
+          compressionAttempts
+        );
       }
+
+    } catch (error) {
+      console.error(`[UnifiedWorker] Sharp compression failed for ${fileName}:`, error);
+      throw new Error(`Image compression failed: ${error}`);
     }
 
     // Use centralized temp directory for compressed file
@@ -778,16 +797,16 @@ class UnifiedImageWorker extends EventEmitter {
       '.jpg',
       'compressed'
     );
-    
+
     try {
       await fsPromises.writeFile(compressedPath, compressedBuffer);
     } catch (error) {
       console.error(`[UnifiedWorker] Failed to write compressed file for ${fileName}:`, error);
       throw new Error(`Failed to save compressed image: ${error}`);
     }
-    
-    console.log(`[UnifiedWorker] Compressed ${fileName}: ${compressedBuffer.length} bytes (quality: ${quality}, attempts: ${compressionAttempts})`);
-    
+
+    console.log(`[UnifiedWorker] ✅ Compressed ${fileName}: ${compressedBuffer.length} bytes (${(compressedBuffer.length / 1024).toFixed(1)}KB, attempts: ${compressionAttempts})`);
+
     return {
       compressedPath,
       buffer: compressedBuffer,
@@ -796,9 +815,80 @@ class UnifiedImageWorker extends EventEmitter {
   }
 
   /**
-   * Genera thumbnail multi-livello per performance ottimizzata
+   * Binary search compression fallback for when predictive formula overshoots
+   * PERFORMANCE OPTIMIZATION: Uses in-memory buffer (no disk reads)
    */
-  private async generateThumbnails(compressedPath: string, fileName: string): Promise<{
+  private async compressWithBinarySearch(
+    imageBuffer: Buffer,
+    maxSizeBytes: number,
+    initialQuality: number,
+    initialAttempts: number
+  ): Promise<Buffer> {
+    let minQuality = 30;
+    let maxQuality = initialQuality;
+    let bestBuffer: Buffer | null = null;
+    let attempts = initialAttempts;
+    const maxAttempts = 4; // Max 4 binary search iterations
+
+    console.log(`[UnifiedWorker] Starting binary search compression (quality range: ${minQuality}-${maxQuality})`);
+
+    while (maxQuality - minQuality > 5 && attempts < maxAttempts) {
+      const quality = Math.round((minQuality + maxQuality) / 2);
+      attempts++;
+
+      const processor = await createImageProcessor(imageBuffer);
+      const buffer = await processor
+        .rotate()
+        .resize(this.config.maxDimension, this.config.maxDimension, {
+          fit: 'inside',
+          withoutEnlargement: true
+        })
+        .jpeg({
+          quality: quality,
+          mozjpeg: true
+        })
+        .toBuffer();
+
+      console.log(`[UnifiedWorker] Binary search attempt ${attempts}: quality=${quality}, size=${buffer.length} bytes (${(buffer.length / 1024).toFixed(1)}KB)`);
+
+      if (buffer.length <= maxSizeBytes) {
+        bestBuffer = buffer;
+        minQuality = quality; // File small enough, try higher quality
+      } else {
+        maxQuality = quality; // File too large, reduce quality
+      }
+    }
+
+    if (!bestBuffer) {
+      // Last resort: use minimum quality
+      console.log(`[UnifiedWorker] Binary search failed, using minimum quality ${minQuality}`);
+      const processor = await createImageProcessor(imageBuffer);
+      bestBuffer = await processor
+        .rotate()
+        .resize(this.config.maxDimension, this.config.maxDimension, {
+          fit: 'inside',
+          withoutEnlargement: true
+        })
+        .jpeg({
+          quality: minQuality,
+          mozjpeg: true
+        })
+        .toBuffer();
+    }
+
+    console.log(`[UnifiedWorker] Binary search completed: final size=${bestBuffer.length} bytes (${(bestBuffer.length / 1024).toFixed(1)}KB, total attempts: ${attempts})`);
+    return bestBuffer;
+  }
+
+  /**
+   * Genera thumbnail multi-livello per performance ottimizzata
+   * PERFORMANCE OPTIMIZATION: Uses in-memory buffer and parallel generation
+   */
+  private async generateThumbnails(
+    compressedPath: string,
+    fileName: string,
+    compressedBuffer?: Buffer
+  ): Promise<{
     thumbnailPath: string | null;
     microThumbPath: string | null;
   }> {
@@ -808,56 +898,79 @@ class UnifiedImageWorker extends EventEmitter {
     let microThumbPath: string | null = null;
 
     try {
-      const compressedBuffer = await fsPromises.readFile(compressedPath);
+      // Use provided buffer or read from disk as fallback
+      const imageBuffer = compressedBuffer || await fsPromises.readFile(compressedPath);
 
-      // Genera thumbnail 280x280px per card view
-      try {
-        const processor = await createImageProcessor(compressedBuffer);
-        const thumbnailBuffer = await processor
-          .resize(280, 280, {
-            fit: 'inside',
-            withoutEnlargement: true
-          })
-          .jpeg({ quality: 85 })
-          .toBuffer();
-
-        thumbnailPath = this.cleanupManager.generateTempPath(
-          compressedPath,
-          'thumb_280',
-          '.jpg',
-          'thumbnails'
-        );
-
-        await fsPromises.writeFile(thumbnailPath, thumbnailBuffer);
-        console.log(`[UnifiedWorker] Thumbnail created: ${thumbnailPath} (${thumbnailBuffer.length} bytes)`);
-      } catch (thumbError) {
-        console.error(`[UnifiedWorker] Failed to create thumbnail for ${fileName}:`, thumbError);
+      if (compressedBuffer) {
+        console.log(`[UnifiedWorker] ✅ Using in-memory buffer for thumbnail generation (${(compressedBuffer.length / 1024).toFixed(1)}KB)`);
+      } else {
+        console.log(`[UnifiedWorker] ⚠️ Reading compressed file from disk for thumbnail generation`);
       }
 
-      // Genera micro-thumbnail 32x32px per lista veloce
-      try {
-        const processor = await createImageProcessor(compressedBuffer);
-        const microBuffer = await processor
-          .resize(32, 32, {
-            fit: 'cover',
-            position: 'center',
-            withoutEnlargement: true
-          })
-          .jpeg({ quality: 70 })
-          .toBuffer();
+      // PERFORMANCE OPTIMIZATION: Generate both thumbnails in parallel using Promise.all
+      const [thumbnailResult, microResult] = await Promise.all([
+        // Thumbnail 280x280px per card view
+        (async () => {
+          try {
+            const processor = await createImageProcessor(imageBuffer);
+            const thumbnailBuffer = await processor
+              .resize(280, 280, {
+                fit: 'inside',
+                withoutEnlargement: true
+              })
+              .jpeg({ quality: 85 })
+              .toBuffer();
 
-        microThumbPath = this.cleanupManager.generateTempPath(
-          compressedPath,
-          'micro_32',
-          '.jpg',
-          'micro-thumbs'
-        );
+            const thumbPath = this.cleanupManager.generateTempPath(
+              compressedPath,
+              'thumb_280',
+              '.jpg',
+              'thumbnails'
+            );
 
-        await fsPromises.writeFile(microThumbPath, microBuffer);
-        console.log(`[UnifiedWorker] Micro-thumbnail created: ${microThumbPath} (${microBuffer.length} bytes)`);
-      } catch (microError) {
-        console.error(`[UnifiedWorker] Failed to create micro-thumbnail for ${fileName}:`, microError);
-      }
+            await fsPromises.writeFile(thumbPath, thumbnailBuffer);
+            console.log(`[UnifiedWorker] ✅ Thumbnail created: ${(thumbnailBuffer.length / 1024).toFixed(1)}KB`);
+            return thumbPath;
+          } catch (thumbError) {
+            console.error(`[UnifiedWorker] Failed to create thumbnail for ${fileName}:`, thumbError);
+            return null;
+          }
+        })(),
+
+        // Micro-thumbnail 32x32px per lista veloce
+        (async () => {
+          try {
+            const processor = await createImageProcessor(imageBuffer);
+            const microBuffer = await processor
+              .resize(32, 32, {
+                fit: 'cover',
+                position: 'center',
+                withoutEnlargement: true
+              })
+              .jpeg({ quality: 70 })
+              .toBuffer();
+
+            const microPath = this.cleanupManager.generateTempPath(
+              compressedPath,
+              'micro_32',
+              '.jpg',
+              'micro-thumbs'
+            );
+
+            await fsPromises.writeFile(microPath, microBuffer);
+            console.log(`[UnifiedWorker] ✅ Micro-thumbnail created: ${(microBuffer.length / 1024).toFixed(1)}KB`);
+            return microPath;
+          } catch (microError) {
+            console.error(`[UnifiedWorker] Failed to create micro-thumbnail for ${fileName}:`, microError);
+            return null;
+          }
+        })()
+      ]);
+
+      thumbnailPath = thumbnailResult;
+      microThumbPath = microResult;
+
+      console.log(`[UnifiedWorker] Thumbnail generation completed for ${fileName}`);
 
     } catch (error) {
       console.error(`[UnifiedWorker] Failed to generate thumbnails for ${fileName}:`, error);
@@ -2582,6 +2695,55 @@ export class UnifiedImageProcessor extends EventEmitter {
       );
 
       console.log(`[UnifiedProcessor] Analysis logging enabled for execution ${this.config.executionId}`);
+
+      // CREATE EXECUTION RECORD IN DATABASE
+      // This ensures the execution is tracked in Supabase for later correlation with analysis logs
+      try {
+        const { getSupabaseClient } = await import('./database-service');
+        const { authService: auth } = await import('./auth-service');
+        const supabase = getSupabaseClient();
+        const authState = auth.getAuthState();
+        const currentUserId = authState.isAuthenticated ? authState.user?.id : null;
+
+        if (!currentUserId) {
+          console.warn(`[UnifiedProcessor] ⚠️ User not authenticated, skipping execution record creation`);
+        } else {
+          const executionData = {
+            id: this.config.executionId, // Use existing execution ID
+            user_id: currentUserId,
+            project_id: 'default', // TODO: Use actual project ID when available
+            category: this.config.category || 'motorsport',
+            total_images: imageFiles.length,
+            processed_images: 0, // Will be updated at the end
+            status: 'processing',
+            execution_settings: {
+              maxDimension: this.config.maxDimension,
+              jpegQuality: this.config.jpegQuality,
+              maxImageSizeKB: this.config.maxImageSizeKB,
+              category: this.config.category,
+              hasParticipantPreset: !!(this.config.participantPresetData && this.config.participantPresetData.length > 0),
+              participantCount: this.config.participantPresetData?.length || 0,
+              folderOrganizationEnabled: !!this.config.folderOrganization?.enabled,
+              enableAdvancedAnnotations: this.config.enableAdvancedAnnotations
+            }
+          };
+
+          const { data, error } = await supabase
+            .from('executions')
+            .insert(executionData)
+            .select()
+            .single();
+
+          if (error) {
+            console.error(`[UnifiedProcessor] ❌ Failed to create execution record:`, error);
+          } else {
+            console.log(`[UnifiedProcessor] ✅ Execution record created in database: ${data.id}`);
+          }
+        }
+      } catch (executionError) {
+        console.error(`[UnifiedProcessor] ❌ Exception creating execution record:`, executionError);
+        // Don't fail the entire processing - continue anyway
+      }
     } else {
       console.log(`[UnifiedProcessor] Analysis logging DISABLED - no execution ID provided`);
     }
@@ -2827,9 +2989,41 @@ export class UnifiedImageProcessor extends EventEmitter {
 
       try {
         const logUrl = await this.analysisLogger.finalize();
-        console.log(`[UnifiedProcessor] Analysis log available at: ${logUrl}`);
+        console.log(`[ADMIN] Analysis log available at: ${logUrl || 'upload failed - local only'}`);
       } catch (error) {
-        console.error('[UnifiedProcessor] Failed to finalize analysis log:', error);
+        console.error('[ADMIN] Failed to finalize analysis log:', error);
+      }
+
+      // UPDATE EXECUTION RECORD IN DATABASE WITH FINAL RESULTS
+      try {
+        const { getSupabaseClient } = await import('./database-service');
+        const { authService: auth } = await import('./auth-service');
+        const supabase = getSupabaseClient();
+        const authState = auth.getAuthState();
+        const currentUserId = authState.isAuthenticated ? authState.user?.id : null;
+
+        if (currentUserId && this.config.executionId) {
+          const executionUpdate = {
+            processed_images: successful,
+            status: successful === results.length ? 'completed' : 'completed_with_errors',
+            updated_at: new Date().toISOString()
+          };
+
+          const { error } = await supabase
+            .from('executions')
+            .update(executionUpdate)
+            .eq('id', this.config.executionId)
+            .eq('user_id', currentUserId);
+
+          if (error) {
+            console.error(`[UnifiedProcessor] ❌ Failed to update execution record:`, error);
+          } else {
+            console.log(`[UnifiedProcessor] ✅ Execution record updated: ${successful}/${results.length} successful`);
+          }
+        }
+      } catch (updateError) {
+        console.error(`[UnifiedProcessor] ❌ Exception updating execution record:`, updateError);
+        // Don't fail - this is just metadata
       }
     }
 

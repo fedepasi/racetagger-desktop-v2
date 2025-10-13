@@ -415,8 +415,9 @@ export class AnalysisLogger {
 
   /**
    * Upload current log to Supabase Storage with retry logic
+   * Returns true if upload succeeded, false otherwise
    */
-  private async uploadToSupabase(final: boolean = false): Promise<void> {
+  private async uploadToSupabase(final: boolean = false): Promise<boolean> {
     const maxRetries = 3;
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -434,8 +435,8 @@ export class AnalysisLogger {
         }
 
         if (!fs.existsSync(this.localFilePath)) {
-          console.warn('[AnalysisLogger] Local file does not exist for upload');
-          return;
+          console.warn('[ADMIN] ⚠️ Local JSONL file does not exist for upload:', this.localFilePath);
+          return false;
         }
 
         const fileContent = fs.readFileSync(this.localFilePath);
@@ -449,51 +450,56 @@ export class AnalysisLogger {
           });
 
         if (error) {
-          console.error(`[AnalysisLogger] Upload attempt ${attempt}/${maxRetries} failed:`, {
+          console.error(`[ADMIN] ❌ JSONL upload attempt ${attempt}/${maxRetries} failed:`, {
             message: error.message,
             path: this.supabaseUploadPath,
             fileSize: fileContent.length,
-            errorType: typeof error,
-            fullError: error
+            localPath: this.localFilePath
           });
 
           if (attempt === maxRetries) {
-            console.error('[AnalysisLogger] All upload attempts failed');
-            return;
+            console.error(`[ADMIN] ❌ All JSONL upload attempts failed. File available locally at: ${this.localFilePath}`);
+            return false;
           }
 
           // Wait before retry (exponential backoff)
           await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
           continue;
         } else {
-          console.log(`[AnalysisLogger] Upload successful (attempt ${attempt}): ${this.supabaseUploadPath}`);
+          console.log(`[ADMIN] ✅ JSONL upload successful (attempt ${attempt}): ${this.supabaseUploadPath}`);
 
           // If final upload, create metadata record
           if (final) {
-            await this.createLogMetadata();
+            const metadataSuccess = await this.createLogMetadata();
+            if (!metadataSuccess) {
+              console.warn(`[ADMIN] ⚠️ JSONL uploaded but metadata creation failed`);
+            }
           }
 
-          return; // Success, exit retry loop
+          return true; // Success
         }
 
       } catch (error) {
-        console.error(`[AnalysisLogger] Upload attempt ${attempt}/${maxRetries} exception:`, error);
+        console.error(`[ADMIN] ❌ JSONL upload attempt ${attempt}/${maxRetries} exception:`, error);
 
         if (attempt === maxRetries) {
-          console.error('[AnalysisLogger] All upload attempts failed due to exceptions');
-          return;
+          console.error(`[ADMIN] ❌ All JSONL upload attempts failed due to exceptions. File available locally at: ${this.localFilePath}`);
+          return false;
         }
 
         // Wait before retry
         await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
       }
     }
+
+    return false; // Should never reach here, but TypeScript requires it
   }
 
   /**
    * Create metadata record for easy log discovery with retry logic
+   * Returns true if metadata was created successfully, false otherwise
    */
-  private async createLogMetadata(): Promise<void> {
+  private async createLogMetadata(): Promise<boolean> {
     const maxRetries = 3;
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -514,33 +520,35 @@ export class AnalysisLogger {
           });
 
         if (error) {
-          console.error(`[AnalysisLogger] Metadata creation attempt ${attempt}/${maxRetries} failed:`, error);
+          console.error(`[ADMIN] ❌ Metadata creation attempt ${attempt}/${maxRetries} failed:`, error);
 
           if (attempt === maxRetries) {
-            console.error('[AnalysisLogger] All metadata creation attempts failed');
-            return;
+            console.error('[ADMIN] ❌ All metadata creation attempts failed');
+            return false;
           }
 
           // Wait before retry (exponential backoff)
           await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
           continue;
         } else {
-          console.log(`[AnalysisLogger] Metadata record created successfully (attempt ${attempt})`);
-          return; // Success, exit retry loop
+          console.log(`[ADMIN] ✅ Metadata record created successfully (attempt ${attempt})`);
+          return true; // Success
         }
 
       } catch (error) {
-        console.error(`[AnalysisLogger] Metadata creation attempt ${attempt}/${maxRetries} exception:`, error);
+        console.error(`[ADMIN] ❌ Metadata creation attempt ${attempt}/${maxRetries} exception:`, error);
 
         if (attempt === maxRetries) {
-          console.error('[AnalysisLogger] All metadata creation attempts failed due to exceptions');
-          return;
+          console.error('[ADMIN] ❌ All metadata creation attempts failed due to exceptions');
+          return false;
         }
 
         // Wait before retry
         await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
       }
     }
+
+    return false; // Should never reach here
   }
 
   /**
@@ -555,8 +563,9 @@ export class AnalysisLogger {
 
   /**
    * Finalize logging and perform final upload
+   * Returns public URL if upload succeeded, null if failed (file only available locally)
    */
-  async finalize(): Promise<string> {
+  async finalize(): Promise<string | null> {
     try {
       // Stop periodic uploads
       if (this.uploadInterval) {
@@ -572,17 +581,30 @@ export class AnalysisLogger {
       }
 
       // Final upload
-      await this.uploadToSupabase(true);
+      const uploadSuccess = await this.uploadToSupabase(true);
+
+      if (!uploadSuccess) {
+        console.warn(`[ADMIN] ⚠️ JSONL upload failed - log only available locally at: ${this.localFilePath}`);
+        return null;
+      }
 
       const publicUrl = this.getPublicUrl();
-      console.log(`[AnalysisLogger] Analysis log finalized and available at: ${publicUrl}`);
+      console.log(`[ADMIN] ✅ Analysis log finalized and available at: ${publicUrl}`);
 
       return publicUrl;
 
     } catch (error) {
-      console.error('[AnalysisLogger] Error finalizing:', error);
-      return this.getPublicUrl(); // Return URL anyway
+      console.error('[ADMIN] ❌ Error finalizing JSONL:', error);
+      console.warn(`[ADMIN] ⚠️ Log file available locally at: ${this.localFilePath}`);
+      return null;
     }
+  }
+
+  /**
+   * Get local file path (for admin access when upload fails)
+   */
+  getLocalPath(): string {
+    return this.localFilePath;
   }
 
   /**

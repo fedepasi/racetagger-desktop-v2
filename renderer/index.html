@@ -70,7 +70,7 @@
           <div class="auth-sidebar-content">
             <h1>Racetagger Desktop</h1>
             <p class="auth-tagline">Automatic race image analysis</p>
-            
+
             <div class="auth-features">
               <div class="auth-feature-item">
                 <span class="auth-feature-icon">🔍</span>
@@ -87,90 +87,85 @@
             </div>
           </div>
         </div>
-        
-        <!-- Right column with login form -->
+
+        <!-- Right column with login/register forms -->
         <div class="auth-content">
           <div class="auth-tabs">
             <button id="login-tab" class="auth-tab active">Login</button>
-            <!-- Registration tab temporarily hidden -->
-            <!-- <button id="register-tab" class="auth-tab">Sign Up</button> -->
+            <button id="register-tab" class="auth-tab">Sign Up</button>
           </div>
-        
+
           <div id="login-panel" class="auth-panel">
             <form id="login-form">
               <div class="form-group">
                 <label for="login-email">Email</label>
-                <input type="email" id="login-email" required>
+                <input type="email" id="login-email" required autocomplete="email">
               </div>
               <div class="form-group">
                 <label for="login-password">Password</label>
-                <input type="password" id="login-password" required>
+                <input type="password" id="login-password" required autocomplete="current-password">
               </div>
               <div class="form-actions">
                 <button type="submit" class="btn primary">Sign In</button>
               </div>
               <div id="login-error" class="error-message" style="display: none;"></div>
-              <div class="early-access-info">
-                <p>Don't have an account yet? <a href="#" id="get-early-access-link">Sign up for early access on racetagger.cloud</a></p>
-              </div>
             </form>
           </div>
-          
+
           <div id="register-panel" class="auth-panel" style="display: none;">
             <form id="register-form">
               <div class="form-group">
-                <label for="register-email">Email</label>
-                <input type="email" id="register-email" required>
+                <label for="register-email">Email address</label>
+                <input type="email" id="register-email" required autocomplete="email" placeholder="you@example.com">
               </div>
               <div class="form-group">
                 <label for="register-password">Password</label>
-                <input type="password" id="register-password" required minlength="6">
+                <input type="password" id="register-password" required minlength="8" autocomplete="new-password" placeholder="Create a strong password">
+                <div id="password-strength" class="password-strength" style="display: none;">
+                  <div class="strength-bar">
+                    <div id="strength-bar-fill" class="strength-bar-fill"></div>
+                  </div>
+                  <div class="strength-label">
+                    <span id="strength-text">Password strength: </span>
+                  </div>
+                </div>
               </div>
               <div class="form-group">
-                <label for="register-name">Full Name</label>
-                <input type="text" id="register-name">
+                <label for="register-confirm-password">Confirm password</label>
+                <input type="password" id="register-confirm-password" required minlength="8" autocomplete="new-password" placeholder="Confirm your password">
               </div>
+
+              <!-- Password Requirements -->
+              <div class="password-requirements">
+                <p class="requirements-title">Password requirements:</p>
+                <ul class="requirements-list">
+                  <li id="req-length" class="requirement-item">
+                    <span class="requirement-icon">○</span>
+                    <span>At least 8 characters</span>
+                  </li>
+                  <li id="req-uppercase" class="requirement-item">
+                    <span class="requirement-icon">○</span>
+                    <span>One uppercase letter</span>
+                  </li>
+                  <li id="req-lowercase" class="requirement-item">
+                    <span class="requirement-icon">○</span>
+                    <span>One lowercase letter</span>
+                  </li>
+                  <li id="req-number" class="requirement-item">
+                    <span class="requirement-icon">○</span>
+                    <span>One number</span>
+                  </li>
+                </ul>
+              </div>
+
               <div class="form-actions">
-                <button type="submit" class="btn primary">Sign Up</button>
+                <button type="submit" class="btn primary">Create Account</button>
                 <button type="button" id="back-to-login" class="btn secondary">Back to Login</button>
               </div>
-              <div id="register-error" class="error-message"></div>
+              <div id="register-error" class="error-message" style="display: none;"></div>
+              <div id="register-success" class="success-message" style="display: none;"></div>
             </form>
           </div>
-        </div>
-      </div>
-    </div>
-  </div>
-  
-  <!-- Access Code Container -->
-  <div id="access-code-container" class="access-code-container">
-    <div class="access-code-box">
-      <div class="logo-container">
-        <h1>Racetagger Desktop</h1>
-        <p>Early Access</p>
-      </div>
-      
-      <div class="access-code-content">
-        <h2>Enter Your Access Code</h2>
-        <p>Please enter the access code you received via email to continue.</p>
-        
-        <form id="access-code-form" class="access-code-form">
-          <div class="input-group">
-            <input 
-              type="text" 
-              id="access-code-input" 
-              placeholder="Your access code" 
-              required
-              autocomplete="off"
-            />
-            <p id="access-code-error" class="error-text"></p>
-          </div>
-          
-          <button type="submit" class="access-button">Continue</button>
-        </form>
-        
-        <div class="access-info">
-          <p>Don't have an access code? <a href="#" id="get-access-link">Get early access</a></p>
         </div>
       </div>
     </div>
@@ -464,6 +459,30 @@
             </div>
             
             <div id="folder-organization-options" class="folder-org-options mt-md" style="display: none;">
+              <div class="destination-selection-section mb-md">
+                <h5>Destination Folder:</h5>
+                <div class="toggle-option">
+                  <label class="toggle-container" for="custom-destination-enabled">
+                    <input type="checkbox" id="custom-destination-enabled" class="toggle-input">
+                    <div class="toggle-slider"></div>
+                    <div class="toggle-content">
+                      <div class="toggle-title">Choose custom destination folder</div>
+                      <div class="form-text">By default, creates "Organized_Photos" in source folder</div>
+                    </div>
+                  </label>
+                </div>
+
+                <div id="custom-destination-controls" class="custom-input-container mt-sm" style="display: none;">
+                  <div style="display: flex; align-items: center; gap: 1rem;">
+                    <input type="text" id="custom-destination-path" class="form-control" placeholder="No folder selected" readonly style="flex: 1; background: var(--surface-color-light); cursor: pointer;">
+                    <button type="button" id="select-destination-btn" class="btn btn-secondary">
+                      📁 Browse
+                    </button>
+                  </div>
+                  <div class="form-text">Click Browse to select where to organize your photos</div>
+                </div>
+              </div>
+
               <div class="org-mode-section mb-md">
                 <h5>Operation Mode:</h5>
                 <div class="radio-group space-y-2">
@@ -474,7 +493,7 @@
                       <div class="form-text">Safe option - creates copies in organized folders (preserves originals)</div>
                     </div>
                   </label>
-                  
+
                   <label class="radio-option warning-option" for="org-mode-move">
                     <input type="radio" id="org-mode-move" name="org-mode" value="move">
                     <div class="radio-content">
@@ -484,7 +503,7 @@
                   </label>
                 </div>
               </div>
-              
+
               <div class="folder-naming-section mb-md">
                 <h5>Folder Naming Pattern:</h5>
                 <div class="radio-group space-y-2">
@@ -518,7 +537,36 @@
                   <div class="form-text">Available placeholders: {number}, {name}, {categoria}, {squadra}</div>
                 </div>
               </div>
-              
+
+              <div class="conflict-handling-section mb-md">
+                <h5>File Conflicts:</h5>
+                <div class="radio-group space-y-2">
+                  <label class="radio-option" for="conflict-rename">
+                    <input type="radio" id="conflict-rename" name="conflict-strategy" value="rename" checked>
+                    <div class="radio-content">
+                      <div class="radio-title">🔄 Rename automatically</div>
+                      <div class="form-text">If file exists, rename to IMG_0001_2.jpg, IMG_0001_3.jpg, etc.</div>
+                    </div>
+                  </label>
+
+                  <label class="radio-option" for="conflict-skip">
+                    <input type="radio" id="conflict-skip" name="conflict-strategy" value="skip">
+                    <div class="radio-content">
+                      <div class="radio-title">⏭️ Skip duplicates</div>
+                      <div class="form-text">Don't copy/move files that already exist in destination</div>
+                    </div>
+                  </label>
+
+                  <label class="radio-option warning-option" for="conflict-overwrite">
+                    <input type="radio" id="conflict-overwrite" name="conflict-strategy" value="overwrite">
+                    <div class="radio-content">
+                      <div class="radio-title">⚠️ Overwrite existing</div>
+                      <div class="form-text warning-text">Replace existing files (use with caution)</div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
               <div class="special-options-section">
                 <h5>Special Cases:</h5>
                 <div class="toggle-option">
@@ -531,7 +579,7 @@
                     </div>
                   </label>
                 </div>
-                
+
                 <div class="toggle-option">
                   <label class="toggle-container" for="include-xmp-files">
                     <input type="checkbox" id="include-xmp-files" class="toggle-input" checked>
@@ -543,7 +591,7 @@
                   </label>
                 </div>
               </div>
-              
+
               <div class="organization-warning info-box mt-md">
                 <span class="info-icon">💡</span>
                 <div class="info-text">
@@ -941,7 +989,7 @@
             <div class="modal-body" style="padding: 2rem;">
               <!-- Preset Name Section -->
               <div class="form-group" style="margin-bottom: 2rem;">
-                <label for="csv-preset-name" style="display: block; margin-bottom: 0.75rem; font-weight: 600; color: var(--text-primary);">
+                <label class="csv-preset-name" for="csv-preset-name" style="display: block; margin-bottom: 0.75rem; font-weight: 600; color: var(--text-primary);">
                   📋 Preset Name *
                 </label>
                 <input
@@ -958,7 +1006,7 @@
 
               <!-- CSV File Upload Section -->
               <div class="form-group" style="margin-bottom: 2rem;">
-                <label for="csv-file-input" style="display: block; margin-bottom: 0.75rem; font-weight: 600; color: var(--text-primary);">
+                <label class for="csv-file-input" style="display: block; margin-bottom: 0.75rem; font-weight: 600; color: var(--text-dark);">
                   📂 CSV File *
                 </label>
                 <div style="border: 2px dashed var(--border-color); border-radius: 8px; padding: 2rem; text-align: center; transition: all 0.2s ease; background: var(--surface-color-light);">
@@ -1015,7 +1063,6 @@
   <script src="js/streaming-view.js"></script>
   <script src="js/log-visualizer.js"></script>
   <script src="js/renderer.js"></script>
-  <script src="js/access-code.js"></script>
   <script src="js/auth.js"></script>
   <script src="js/desktop-ui.js"></script>
   
@@ -1124,9 +1171,9 @@
         <div class="early-access-notice">
           <div class="notice-icon">🎯</div>
           <div class="notice-content">
-            <h3>Early Access Phase</h3>
-            <p>During this phase, we're providing tokens for testing and will work with you personally for any additional needs.</p>
-            <p><strong>🎁 FREE: Up to 500 tokens/month</strong> | <strong>💰 Payment required: Over 500 tokens/month</strong></p>
+            <h3>Free Tier</h3>
+            <p>Get started with our Free Tier and upgrade as you grow. We'll work with you personally for any additional needs.</p>
+            <p><strong>🎁 FREE: Up to 100 tokens/month</strong> | <strong>💰 Payment required: Over 100 tokens/month</strong></p>
           </div>
         </div>
 
@@ -1140,8 +1187,8 @@
           <div class="form-group">
             <label for="request-tokens">Number of Tokens Requested</label>
             <div class="token-suggestions">
+              <button type="button" class="token-suggestion-btn" data-tokens="50">50 tokens</button>
               <button type="button" class="token-suggestion-btn" data-tokens="100">100 tokens</button>
-              <button type="button" class="token-suggestion-btn" data-tokens="500">500 tokens</button>
               <button type="button" class="token-suggestion-btn" data-tokens="1000">1,000 tokens</button>
               <button type="button" class="token-suggestion-btn" data-tokens="custom">Custom</button>
             </div>

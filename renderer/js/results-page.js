@@ -6,6 +6,7 @@
 class ResultsPageManager {
   constructor() {
     this.executionId = null;
+    this.execution = null; // Store full execution object
     this.results = [];
     this.cacheManager = null;
     this.logVisualizer = null;
@@ -65,10 +66,10 @@ class ResultsPageManager {
         return;
       }
 
-      const execution = response.data;
+      this.execution = response.data;
 
       // Aggiorna header con info execution
-      this.updateHeader(execution);
+      this.updateHeader(this.execution);
 
       // Carica i risultati (dai log o dal database)
       await this.loadResults();
@@ -99,14 +100,16 @@ class ResultsPageManager {
       `;
     }
 
-    if (title) {
-      title.textContent = execution.project_name || execution.folder_name || 'Analysis Results';
-    }
+    // Keep the title as "Analysis Complete!" - don't override it
+    // Title is set in HTML and should remain static
 
     if (subtitle) {
-      const date = execution.created_at ? new Date(execution.created_at).toLocaleString() : 'Unknown date';
-      const status = execution.status || 'completed';
-      subtitle.textContent = `${status.charAt(0).toUpperCase() + status.slice(1)} • ${date}`;
+      // Show project name, total images, and date
+      const projectName = execution.project_name || execution.folder_name || 'Unnamed Project';
+      const totalImages = execution.total_images || 0;
+      const photosText = totalImages === 1 ? 'photo' : 'photos';
+
+      subtitle.textContent = `${projectName} • ${totalImages} ${photosText} analyzed`;
     }
   }
 
@@ -330,8 +333,8 @@ class ResultsPageManager {
       return this.cacheManager.getImageUrl(result);
     };
 
-    // Inizializza con i risultati
-    await this.logVisualizer.init(this.executionId, this.results);
+    // Inizializza con i risultati (pass execution object for folder organization check)
+    await this.logVisualizer.init(this.executionId, this.results, this.execution);
 
     // Render the dashboard
     this.logVisualizer.render('#log-visualizer-container');

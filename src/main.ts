@@ -290,6 +290,8 @@ type BatchProcessConfig = {
     createUnknownFolder: boolean;
     unknownFolderName: string;
     includeXmpFiles?: boolean;
+    destinationPath?: string;
+    conflictStrategy?: 'rename' | 'skip' | 'overwrite';
   };
 
   // Participant preset configuration
@@ -472,9 +474,9 @@ console.log('[Main Process] main.ts: setupAuthHandlers() called.');
     }
   });
 
-  ipcMain.on('register', async (event: IpcMainEvent, data: { email: string; password: string; name?: string }) => {
+  ipcMain.on('register', async (event: IpcMainEvent, data: { email: string; password: string }) => {
     try {
-      const result = await authService.register(data.email, data.password, data.name);
+      const result = await authService.register(data.email, data.password);
       event.sender.send('register-result', result);
     } catch (error: any) {
       event.sender.send('register-result', { success: false, error: error.message || 'Registration error' });
@@ -2067,11 +2069,11 @@ function handleCsvTemplateDownload(event: IpcMainEvent) {
     }
     
     // Create CSV template content
-    const csvTemplate = 
-      "numero,nome,categoria,squadra,metatag\n" +
-      "123,Mario Rossi,Elite,Team Veloce,\"Gara XYZ, 10/06/2025\"\n" +
-      "456,Luigi Verdi,Junior,Team Giovani,\"Gara XYZ, 10/06/2025\"\n" +
-      "789,Anna Bianchi,Women,Team Rosa,\"Gara XYZ, 10/06/2025\"";
+    const csvTemplate =
+      "Number,Driver,Navigator,Team,Sponsors,Metatag\n" +
+      "1,John Doe,Jane Smith,Racing Team A,Sponsor Corp,tag1\n" +
+      "2,Mike Johnson,Sarah Wilson,Speed Team,Brand X,tag2\n" +
+      "3,\"Balthasar, Ponzo, Roe\",,Imperiale Racing,\"elea costruzioni, topcon\",CIGT - 3";
     
     // Show save dialog
     dialog.showSaveDialog(mainWindow, {
@@ -2715,11 +2717,17 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
       unknownFolderName: string;
       includeXmpFiles?: boolean;
       destinationPath?: string;
+      conflictStrategy?: 'rename' | 'skip' | 'overwrite';
     } | undefined = undefined;
     
     if (authService.hasFolderOrganizationAccess() && config.folderOrganization) {
       try {
         // Use folder organization config from frontend
+        // Use custom destination path if provided, otherwise default to source folder
+        const destinationPath = config.folderOrganization.destinationPath
+          ? config.folderOrganization.destinationPath
+          : path.join(folderPath, 'Organized_Photos');
+
         folderOrgConfig = {
           enabled: APP_CONFIG.features.ENABLE_FOLDER_ORGANIZATION && config.folderOrganization.enabled,
           mode: config.folderOrganization.mode || 'copy',
@@ -2728,7 +2736,8 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
           createUnknownFolder: config.folderOrganization.createUnknownFolder !== false,
           unknownFolderName: config.folderOrganization.unknownFolderName || 'Unknown_Numbers',
           includeXmpFiles: config.folderOrganization.includeXmpFiles !== false,
-          destinationPath: path.join(folderPath, 'Organized_Photos')
+          destinationPath: destinationPath,
+          conflictStrategy: config.folderOrganization.conflictStrategy || 'rename'
         };
         console.log('[Main Process] Using folder organization config from frontend:', folderOrgConfig);
       } catch (error) {
@@ -3980,6 +3989,203 @@ app.whenReady().then(async () => { // Added async here
       return createDefaultConfig();
     });
 
+    // Select destination folder for organization
+    ipcMain.handle('select-organization-destination', async () => {
+      if (!authService.hasFolderOrganizationAccess()) {
+        throw new Error('Feature non disponibile');
+      }
+
+      const result = await dialog.showOpenDialog({
+        properties: ['openDirectory', 'createDirectory'],
+        title: 'Select Destination Folder for Organized Photos',
+        buttonLabel: 'Select Folder'
+      });
+
+      if (result.canceled || result.filePaths.length === 0) {
+        return null;
+      }
+
+      return result.filePaths[0];
+    });
+
+    // Post-analysis folder organization
+    ipcMain.handle('organize-results-post-analysis', async (_, data: {
+      executionId: string;
+      folderOrganizationConfig: any;
+    }) => {
+      try {
+        const { executionId, folderOrganizationConfig } = data;
+
+        console.log(`[Main Process] Post-analysis organization requested for execution ${executionId}`);
+
+        // Verify feature access
+        if (!authService.hasFolderOrganizationAccess()) {
+          throw new Error('Folder organization feature not available');
+        }
+
+        // Read JSONL log file
+        const logsDir = path.join(app.getPath('userData'), '.analysis-logs');
+        const logFilePath = path.join(logsDir, `exec_${executionId}.jsonl`);
+
+        if (!fs.existsSync(logFilePath)) {
+          throw new Error(`Log file not found for execution ${executionId}`);
+        }
+
+        // Parse JSONL file
+        const logContent = fs.readFileSync(logFilePath, 'utf-8');
+        const logLines = logContent.trim().split('\n').filter(line => line.trim());
+        const logEvents = logLines.map(line => {
+          try {
+            return JSON.parse(line);
+          } catch (error) {
+            console.warn('[Main Process] Invalid JSON line in log:', line);
+            return null;
+          }
+        }).filter(Boolean);
+
+        console.log(`[Main Process] Parsed ${logEvents.length} log events`);
+
+        // Extract image analysis events
+        const imageAnalysisEvents = logEvents.filter(event => event.type === 'IMAGE_ANALYSIS');
+
+        // Build correction map from MANUAL_CORRECTION events
+        const correctionMap = new Map();
+        logEvents
+          .filter(event => event.type === 'MANUAL_CORRECTION')
+          .forEach(event => {
+            const key = `${event.fileName}_${event.vehicleIndex}`;
+            correctionMap.set(key, event.changes);
+          });
+
+        console.log(`[Main Process] Found ${imageAnalysisEvents.length} images to organize`);
+        console.log(`[Main Process] Found ${correctionMap.size} manual corrections to apply`);
+
+        // Import FolderOrganizer
+        const { FolderOrganizer } = await import('./utils/folder-organizer');
+
+        // Create organizer instance
+        const organizer = new FolderOrganizer({
+          enabled: true,
+          mode: folderOrganizationConfig.mode || 'copy',
+          pattern: folderOrganizationConfig.pattern || 'number',
+          customPattern: folderOrganizationConfig.customPattern,
+          createUnknownFolder: folderOrganizationConfig.createUnknownFolder !== false,
+          unknownFolderName: folderOrganizationConfig.unknownFolderName || 'Unknown_Numbers',
+          includeXmpFiles: folderOrganizationConfig.includeXmpFiles !== false,
+          destinationPath: folderOrganizationConfig.destinationPath,
+          conflictStrategy: folderOrganizationConfig.conflictStrategy || 'rename'
+        });
+
+        // Process each image
+        const results = [];
+        const errors = [];
+
+        for (const event of imageAnalysisEvents) {
+          try {
+            const fileName = event.fileName;
+            const originalPath = event.originalPath;
+
+            if (!originalPath) {
+              console.warn(`[Main Process] No original path for ${fileName}, skipping`);
+              errors.push(`No original path found for ${fileName}`);
+              continue;
+            }
+
+            // Check if file still exists
+            if (!fs.existsSync(originalPath)) {
+              console.warn(`[Main Process] File no longer exists: ${originalPath}`);
+              errors.push(`File not found: ${fileName} (may have been moved)`);
+              continue;
+            }
+
+            // Get final race numbers (apply corrections if any)
+            let raceNumbers: string[] = [];
+            if (event.aiResponse?.vehicles) {
+              // Apply manual corrections if they exist
+              event.aiResponse.vehicles.forEach((vehicle: any, index: number) => {
+                const key = `${fileName}_${index}`;
+                const correction = correctionMap.get(key);
+
+                if (correction && correction.number) {
+                  // Use manually corrected number
+                  raceNumbers.push(correction.number);
+                  console.log(`  - Vehicle ${index}: Using manual correction: ${correction.number}`);
+                } else if (vehicle.finalResult?.raceNumber) {
+                  // Use finalResult.raceNumber (after automatic corrections)
+                  raceNumbers.push(vehicle.finalResult.raceNumber);
+                  console.log(`  - Vehicle ${index}: Using final result: ${vehicle.finalResult.raceNumber}`);
+                } else if (vehicle.raceNumber) {
+                  // Fallback: use initial raceNumber
+                  raceNumbers.push(vehicle.raceNumber);
+                  console.log(`  - Vehicle ${index}: Using initial number: ${vehicle.raceNumber}`);
+                }
+              });
+            }
+
+            console.log(`[Main Process] ${fileName}: Found ${event.aiResponse?.vehicles?.length || 0} vehicles, extracted numbers: [${raceNumbers.join(', ')}]`);
+
+            // If no race numbers found, use "unknown"
+            if (raceNumbers.length === 0) {
+              raceNumbers = ['unknown'];
+              console.log(`[Main Process] ${fileName}: No race numbers found, using 'unknown'`);
+            }
+
+            // Get CSV match data if available
+            let csvData = undefined;
+            if (event.aiResponse?.vehicles && event.aiResponse.vehicles[0]?.participantMatch) {
+              const match = event.aiResponse.vehicles[0].participantMatch;
+              csvData = {
+                numero: match.numero,
+                nome: match.nome_pilota || match.nome,
+                categoria: match.categoria,
+                squadra: match.squadra,
+                metatag: match.metatag
+              };
+              console.log(`  - CSV match found: ${match.nome_pilota || match.nome} (${match.numero})`);
+            }
+
+            // Organize the image
+            const result = await organizer.organizeImage(
+              originalPath,
+              raceNumbers,
+              csvData
+            );
+
+            results.push(result);
+            console.log(`[Main Process] Organized ${fileName}: ${result.success ? '✓' : '✗'}`);
+
+          } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            console.error(`[Main Process] Error organizing image:`, errorMsg);
+            errors.push(`${event.fileName}: ${errorMsg}`);
+          }
+        }
+
+        // Get summary
+        const summary = organizer.getSummary();
+
+        console.log(`[Main Process] Organization complete:`, {
+          totalFiles: summary.totalFiles,
+          organizedFiles: summary.organizedFiles,
+          skippedFiles: summary.skippedFiles,
+          errors: errors.length
+        });
+
+        return {
+          success: true,
+          summary,
+          errors: errors.length > 0 ? errors : undefined
+        };
+
+      } catch (error) {
+        console.error('[Main Process] Error in post-analysis organization:', error);
+        return {
+          success: false,
+          error: (error as Error).message
+        };
+      }
+    });
+
 
     console.log('[Main Process] Folder organization handlers registered successfully');
   } else {
@@ -4439,9 +4645,6 @@ app.whenReady().then(async () => { // Added async here
   
   ipcMain.on('extract-raw-preview', handleRawPreviewExtraction);
   ipcMain.on('submit-feedback', handleFeedbackSubmission);
-  ipcMain.on('check-access-code', (event: IpcMainEvent) => { console.log("[Main Process] IPC 'check-access-code' received."); event.sender.send('access-code-status', true); });
-  ipcMain.on('verify-access-code', (event: IpcMainEvent) => { console.log("[Main Process] IPC 'verify-access-code' received."); event.sender.send('access-code-verified', true); });
-  ipcMain.on('open-early-access', () => { console.log("[Main Process] IPC 'open-early-access' received."); authService.openEarlyAccessPage(); });
   
   // Handler per contare le immagini in una cartella
   ipcMain.handle('count-folder-images', async (_, { path: folderPath }) => {

@@ -19,14 +19,17 @@
           <span>📊 Results</span>
           <span id="execution-badge"></span>
         </div>
-        <h1 id="results-title">Analysis Results</h1>
+        <h1 id="results-title">Analysis Complete!</h1>
         <p class="results-subtitle" id="results-subtitle">Loading execution data...</p>
       </div>
 
       <div class="results-actions">
-        <a href="index.html" class="btn-new-analysis">
-          <span>← New Analysis</span>
-        </a>
+        <button id="btn-done" class="btn-done">
+          ✅ DONE!
+        </button>
+        <button id="btn-new-analysis" class="btn-new-analysis">
+          ✨ Start New Analysis
+        </button>
       </div>
     </div>
 
@@ -64,5 +67,65 @@
 
   <script src="js/log-visualizer.js"></script>
   <script src="js/results-page.js"></script>
+
+  <script>
+    // Wait for DOM to be ready before attaching event listeners
+    document.addEventListener('DOMContentLoaded', () => {
+      console.log('[Results] Attaching navigation button listeners');
+
+      const btnDone = document.getElementById('btn-done');
+      const btnNewAnalysis = document.getElementById('btn-new-analysis');
+
+      if (btnDone) {
+        btnDone.addEventListener('click', async () => {
+          console.log('[Results] DONE button clicked');
+
+          // Check for unsaved changes before leaving
+          if (window.logVisualizer && window.logVisualizer.hasUnsavedChanges) {
+            const confirmed = confirm('You have unsaved changes. Save before leaving?');
+            if (confirmed) {
+              try {
+                await window.logVisualizer.saveAllChanges();
+              } catch (error) {
+                console.error('[Results] Error saving changes:', error);
+                const proceed = confirm('Error saving changes. Leave anyway?');
+                if (!proceed) return;
+              }
+            }
+          }
+
+          console.log('[Results] Navigating to home...');
+          window.location.href = 'index.html';
+        });
+      }
+
+      if (btnNewAnalysis) {
+        btnNewAnalysis.addEventListener('click', async () => {
+          console.log('[Results] Start New Analysis button clicked');
+
+          // Check for unsaved changes
+          if (window.logVisualizer && window.logVisualizer.hasUnsavedChanges) {
+            const confirmed = confirm('You have unsaved changes. Save before starting new analysis?');
+            if (confirmed) {
+              try {
+                await window.logVisualizer.saveAllChanges();
+              } catch (error) {
+                console.error('[Results] Error saving changes:', error);
+                const proceed = confirm('Error saving changes. Continue anyway?');
+                if (!proceed) return;
+              }
+            }
+          }
+
+          console.log('[Results] Navigating to analysis section...');
+          // Use sessionStorage to tell index.html to open analysis tab
+          sessionStorage.setItem('navigateToSection', 'analysis');
+          window.location.href = 'index.html';
+        });
+      }
+
+      console.log('[Results] Navigation buttons setup complete');
+    });
+  </script>
 </body>
 </html>

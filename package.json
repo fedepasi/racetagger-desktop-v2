@@ -53,7 +53,8 @@
       "node_modules/**/*",
       "package.json",
       "vendor/**/*",
-      "renderer/**/*"
+      "renderer/**/*",
+      "racetagger-logo.png"
     ],
     "directories": {
       "buildResources": "resources",

@@ -1463,19 +1463,19 @@ html {
 
 .radio-option:hover .radio-title,
 .radio-option:hover label {
-  color: white !important;
+  color: #000 !important;
 }
 
 .radio-option:hover .form-text {
-  color: rgba(255, 255, 255, 0.8) !important;
+  color: #000 !important;
 }
 
 .radio-option input[type="radio"] {
   appearance: none;
-  width: 20px;
-  height: 20px;
+  width: 15px;
+  height: 15px;
   border: 2px solid var(--border-color);
-  border-radius: 50%;
+  border-radius: 5px;
   margin-right: var(--spacing-md);
   margin-top: 2px;
   flex-shrink: 0;
@@ -1492,8 +1492,8 @@ html {
 .radio-option input[type="radio"]:checked::before {
   content: '';
   position: absolute;
-  top: 4px;
-  left: 4px;
+  top: 6px;
+  left: 6px;
   width: 8px;
   height: 8px;
   background-color: white;
@@ -2958,7 +2958,7 @@ body.modal-open {
 }
 
 #logo.app-logo .logo-icon {
-  height: 32px;
+  height: 60px;
   width: auto;
   object-fit: contain;
   filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.2));
@@ -2970,7 +2970,7 @@ body.modal-open {
 }
 
 #logo.app-logo .logo-text {
-  font-size: 20px;
+  font-size: 23px;
   font-weight: 700;
   background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
   -webkit-background-clip: text;
@@ -2997,7 +2997,7 @@ body.modal-open {
   display: flex;
   align-items: center;
   gap: var(--spacing-md);
-  padding: 10px 16px;
+  padding: 5px 5px;
   background: linear-gradient(135deg, 
     rgba(59, 130, 246, 0.12) 0%, 
     rgba(99, 102, 241, 0.08) 50%,
@@ -3958,4 +3958,16 @@ body.modal-open {
   .recent-results-list {
     max-height: 150px;
   }
+}
+
+.results-page .radio-option:has(input:checked) .radio-title{
+    color: #000;
+}
+.results-page .radio-option input[type="radio"] {
+    appearance: none;
+    width: 25px;
+    height: 25px;
+}
+.user-actions{
+  margin-left:20px;
 }

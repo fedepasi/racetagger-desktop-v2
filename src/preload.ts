@@ -106,6 +106,8 @@ const validInvokeChannels: string[] = [
   // Folder Organization (Admin Feature)
   'check-folder-organization-enabled',
   'get-folder-organization-config',
+  'select-organization-destination',
+  'organize-results-post-analysis',
 
   // Supabase Operations
   'supabase-get-sport-categories',

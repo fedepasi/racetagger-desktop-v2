@@ -88,7 +88,7 @@ The application uses an invitation-based early access system:
 
 The application uses a token-based system for image analysis:
 
-1. **Early Access Free Tokens**: Each user receives 500 free tokens per month during the early access period
+1. **Free Tier**: Each user receives 100 free tokens per month with the Free Tier
 2. **Token Requests**: Users can request additional tokens through a dedicated button in the application
 3. **Progressive Pricing for Additional Tokens**:
    - First 5,000 tokens: $0.020 each

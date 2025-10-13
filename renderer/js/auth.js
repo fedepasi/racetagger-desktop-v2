@@ -64,14 +64,15 @@ function initializeAuth() {
   
   // Set up event listeners
   if (loginForm) loginForm.addEventListener('submit', handleLogin);
-  // Registrazione disabilitata temporaneamente
-  // if (registerForm) registerForm.addEventListener('submit', handleRegister);
+  if (registerForm) registerForm.addEventListener('submit', handleRegister);
   if (logoutButton) logoutButton.addEventListener('click', handleLogout);
   if (loginTab) loginTab.addEventListener('click', () => switchAuthTab('login'));
-  // Registrazione disabilitata temporaneamente
-  // if (registerTab) registerTab.addEventListener('click', () => switchAuthTab('register'));
+  if (registerTab) registerTab.addEventListener('click', () => switchAuthTab('register'));
   if (continueDemo) continueDemo.addEventListener('click', handleContinueWithoutLogin);
   if (backToLogin) backToLogin.addEventListener('click', () => switchAuthTab('login'));
+
+  // Set up password validation for registration form
+  setupPasswordValidation();
   
   // Listen for auth messages from main process
   if (window.api) {
@@ -121,38 +122,157 @@ function handleLogin(event) {
   }, 10000);
 }
 
+// Validate password strength
+function validatePassword(password) {
+  const errors = [];
+
+  if (password.length < 8) {
+    errors.push('Password must be at least 8 characters long');
+  }
+  if (!/[A-Z]/.test(password)) {
+    errors.push('Password must contain at least one uppercase letter');
+  }
+  if (!/[a-z]/.test(password)) {
+    errors.push('Password must contain at least one lowercase letter');
+  }
+  if (!/[0-9]/.test(password)) {
+    errors.push('Password must contain at least one number');
+  }
+
+  return errors;
+}
+
+// Calculate password strength
+function getPasswordStrength(password) {
+  if (!password || password.length === 0) {
+    return { strength: 0, label: '', className: '' };
+  }
+
+  let score = 0;
+  if (password.length >= 8) score++;
+  if (/[A-Z]/.test(password)) score++;
+  if (/[a-z]/.test(password)) score++;
+  if (/[0-9]/.test(password)) score++;
+  if (/[^A-Za-z0-9]/.test(password)) score++;
+
+  if (score <= 2) return { strength: 25, label: 'Weak', className: 'weak' };
+  if (score === 3) return { strength: 50, label: 'Fair', className: 'fair' };
+  if (score === 4) return { strength: 75, label: 'Good', className: 'good' };
+  return { strength: 100, label: 'Strong', className: 'strong' };
+}
+
+// Setup password validation UI
+function setupPasswordValidation() {
+  const passwordInput = document.getElementById('register-password');
+  const confirmPasswordInput = document.getElementById('register-confirm-password');
+
+  if (!passwordInput) return;
+
+  // Password strength indicator
+  passwordInput.addEventListener('input', function() {
+    const password = this.value;
+    const strengthContainer = document.getElementById('password-strength');
+    const strengthFill = document.getElementById('strength-bar-fill');
+    const strengthText = document.getElementById('strength-text');
+
+    if (password.length > 0) {
+      strengthContainer.style.display = 'block';
+      const { strength, label, className } = getPasswordStrength(password);
+
+      // Update bar
+      strengthFill.className = 'strength-bar-fill ' + className;
+      strengthFill.style.width = strength + '%';
+
+      // Update label
+      strengthText.textContent = 'Password strength: ' + label;
+      strengthText.className = 'strength-label ' + className;
+
+      // Update requirement items
+      updatePasswordRequirements(password);
+    } else {
+      strengthContainer.style.display = 'none';
+    }
+  });
+
+  // Confirm password validation
+  if (confirmPasswordInput) {
+    confirmPasswordInput.addEventListener('input', function() {
+      const password = passwordInput.value;
+      const confirmPassword = this.value;
+
+      if (confirmPassword.length > 0 && password !== confirmPassword) {
+        this.setCustomValidity('Passwords do not match');
+      } else {
+        this.setCustomValidity('');
+      }
+    });
+  }
+}
+
+// Update password requirement indicators
+function updatePasswordRequirements(password) {
+  const requirements = {
+    'req-length': password.length >= 8,
+    'req-uppercase': /[A-Z]/.test(password),
+    'req-lowercase': /[a-z]/.test(password),
+    'req-number': /[0-9]/.test(password)
+  };
+
+  for (const [id, met] of Object.entries(requirements)) {
+    const element = document.getElementById(id);
+    if (element) {
+      if (met) {
+        element.classList.add('met');
+        element.querySelector('.requirement-icon').textContent = '✓';
+      } else {
+        element.classList.remove('met');
+        element.querySelector('.requirement-icon').textContent = '○';
+      }
+    }
+  }
+}
+
 // Handle register form submission
 function handleRegister(event) {
   event.preventDefault();
-  
+
   const email = document.getElementById('register-email').value;
   const password = document.getElementById('register-password').value;
-  const name = document.getElementById('register-name').value;
-  
-  if (!email || !password) {
-    showAuthError('register', 'Email e password sono obbligatorie');
-    return;
-  }
-  
-  if (password.length < 6) {
-    showAuthError('register', 'La password deve essere di almeno 6 caratteri');
-    return;
-  }
-  
-  // Clear error
+  const confirmPassword = document.getElementById('register-confirm-password').value;
+
+  // Clear previous messages
   showAuthError('register', '');
-  
+  hideAuthSuccess('register');
+
+  if (!email || !password || !confirmPassword) {
+    showAuthError('register', 'All fields are required');
+    return;
+  }
+
+  // Check if passwords match
+  if (password !== confirmPassword) {
+    showAuthError('register', 'Passwords do not match');
+    return;
+  }
+
+  // Validate password strength
+  const passwordErrors = validatePassword(password);
+  if (passwordErrors.length > 0) {
+    showAuthError('register', passwordErrors.join('. '));
+    return;
+  }
+
   // Show loading indicator
   const submitBtn = registerForm.querySelector('button[type="submit"]');
   const originalText = submitBtn.textContent;
-  submitBtn.textContent = 'Registrazione in corso...';
+  submitBtn.textContent = 'Creating account...';
   submitBtn.disabled = true;
-  
+
   // Send register request to main process
   if (window.api) {
-    window.api.send('register', { email, password, name });
+    window.api.send('register', { email, password });
   }
-  
+
   // Reset form state after timeout (in case of no response)
   setTimeout(() => {
     submitBtn.textContent = originalText;
@@ -230,22 +350,37 @@ function handleLoginResult(result) {
 // Handle register result
 function handleRegisterResult(result) {
   const submitBtn = registerForm.querySelector('button[type="submit"]');
-  submitBtn.textContent = 'Registrati';
+  submitBtn.textContent = 'Create Account';
   submitBtn.disabled = false;
-  
+
   if (result.success) {
     // Show success message
-    showAuthMessage('register', 'Registrazione completata! Effettua il login.');
-    
+    showAuthSuccess('register', 'Account created successfully! Please check your email to verify your account before signing in.');
+
     // Reset form
     registerForm.reset();
-    
-    // Switch to login tab
+
+    // Reset password strength indicator
+    const strengthContainer = document.getElementById('password-strength');
+    if (strengthContainer) {
+      strengthContainer.style.display = 'none';
+    }
+
+    // Reset requirement indicators
+    const requirementItems = document.querySelectorAll('.requirement-item');
+    requirementItems.forEach(item => {
+      item.classList.remove('met');
+      const icon = item.querySelector('.requirement-icon');
+      if (icon) icon.textContent = '○';
+    });
+
+    // Switch to login tab after 5 seconds
     setTimeout(() => {
+      hideAuthSuccess('register');
       switchAuthTab('login');
-    }, 2000);
+    }, 5000);
   } else {
-    showAuthError('register', result.error || 'Error during registration');
+    showAuthError('register', result.error || 'An error occurred during registration');
   }
 }
 
@@ -460,17 +595,26 @@ function showAuthError(form, message) {
   const errorElement = document.getElementById(`${form}-error`);
   if (errorElement) {
     errorElement.textContent = message;
-    errorElement.style.display = message ? 'block' : 'none';
+    errorElement.style.display = message ? 'flex' : 'none';
+    errorElement.className = 'error-message';
   }
 }
 
-// Show auth message
-function showAuthMessage(form, message) {
-  const errorElement = document.getElementById(`${form}-error`);
-  if (errorElement) {
-    errorElement.textContent = message;
-    errorElement.style.display = message ? 'block' : 'none';
-    errorElement.className = 'success-message';
+// Show auth success message
+function showAuthSuccess(form, message) {
+  const successElement = document.getElementById(`${form}-success`);
+  if (successElement) {
+    successElement.textContent = message;
+    successElement.style.display = message ? 'flex' : 'none';
+    successElement.className = 'success-message';
+  }
+}
+
+// Hide auth success message
+function hideAuthSuccess(form) {
+  const successElement = document.getElementById(`${form}-success`);
+  if (successElement) {
+    successElement.style.display = 'none';
   }
 }
 

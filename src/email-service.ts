@@ -24,7 +24,7 @@ export interface EmailResult {
  */
 export async function sendTokenRequestEmail(
   tokenRequest: TokenRequestData,
-  isEarlyAccessFree: boolean
+  isFreeTier: boolean
 ): Promise<EmailResult> {
   try {
     const brevoApiKey = config.getBREVO_API_KEY();
@@ -39,23 +39,23 @@ export async function sendTokenRequestEmail(
 
     console.log('[Email Service] Preparing token request email...');
 
-    const earlyAccessNote = isEarlyAccessFree 
-      ? '🎁 EARLY ACCESS FREE GRANT' 
+    const freeTierNote = isFreeTier
+      ? '🎁 FREE TIER GRANT'
       : '💰 PAYMENT REQUIRED';
     
     const emailSubject = `Token Request - ${tokenRequest.user_email} (${tokenRequest.tokens_requested} tokens)`;
     
     const emailHtml = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <h2 style="color: #333; border-bottom: 3px solid ${isEarlyAccessFree ? '#10b981' : '#f59e0b'};">
-          Token Request - ${earlyAccessNote}
+        <h2 style="color: #333; border-bottom: 3px solid ${isFreeTier ? '#10b981' : '#f59e0b'};">
+          Token Request - ${freeTierNote}
         </h2>
         
         <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
           <p><strong>User Email:</strong> ${tokenRequest.user_email}</p>
           <p><strong>Tokens Requested:</strong> ${tokenRequest.tokens_requested}</p>
           <p><strong>Status:</strong> 
-            <span style="color: ${isEarlyAccessFree ? '#10b981' : '#f59e0b'}; font-weight: bold;">
+            <span style="color: ${isFreeTier ? '#10b981' : '#f59e0b'}; font-weight: bold;">
               ${tokenRequest.status}
             </span>
           </p>
@@ -70,10 +70,10 @@ export async function sendTokenRequestEmail(
         </div>
         ` : ''}
 
-        <div style="padding: 15px; border-radius: 8px; margin: 20px 0; ${isEarlyAccessFree ? 'background: #dcfce7; border: 1px solid #10b981;' : 'background: #fef3c7; border: 1px solid #f59e0b;'}">
-          ${isEarlyAccessFree ? 
-            '<p style="color: #059669; margin: 0;"><strong>✅ This request was automatically approved</strong> (under 500 tokens/month Early Access policy). Tokens have been added to the user\'s account.</p>' :
-            '<p style="color: #d97706; margin: 0;"><strong>⚠️ This request requires manual processing</strong> (exceeds 500 tokens/month Early Access limit). Payment coordination needed.</p>'}
+        <div style="padding: 15px; border-radius: 8px; margin: 20px 0; ${isFreeTier ? 'background: #dcfce7; border: 1px solid #10b981;' : 'background: #fef3c7; border: 1px solid #f59e0b;'}">
+          ${isFreeTier ?
+            '<p style="color: #059669; margin: 0;"><strong>✅ This request was automatically approved</strong> (under 100 tokens/month Free Tier). Tokens have been added to the user\'s account.</p>' :
+            '<p style="color: #d97706; margin: 0;"><strong>⚠️ This request requires manual processing</strong> (exceeds 100 tokens/month Free Tier limit). Payment coordination needed.</p>'}
         </div>
 
         <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 30px 0;">
@@ -102,7 +102,7 @@ export async function sendTokenRequestEmail(
         email: tokenRequest.user_email,
         name: tokenRequest.user_email
       },
-      tags: ['token-request', isEarlyAccessFree ? 'early-access-free' : 'payment-required']
+      tags: ['token-request', isFreeTier ? 'free-tier' : 'payment-required']
     };
 
     console.log('[Email Service] Sending email to Brevo API...');

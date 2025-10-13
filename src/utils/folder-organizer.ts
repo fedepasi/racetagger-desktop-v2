@@ -20,6 +20,7 @@ export interface FolderOrganizerConfig {
   unknownFolderName: string;
   includeXmpFiles?: boolean; // Include XMP sidecar files for RAW images
   destinationPath?: string; // If not provided, uses source directory
+  conflictStrategy?: 'rename' | 'skip' | 'overwrite'; // How to handle file conflicts
 }
 
 // Operation result for tracking
@@ -185,25 +186,37 @@ export class FolderOrganizer {
       // Generate target file path
       const targetPath = path.join(targetFolder, fileName);
 
-      // Handle file name conflicts
-      const finalTargetPath = await this.resolveFileNameConflict(targetPath);
-
-      // Perform the operation
+      // Handle file name conflicts based on strategy
+      const conflictStrategy = this.config.conflictStrategy || 'rename';
+      let finalTargetPath = targetPath;
       let operation: 'copy' | 'move' | 'skip' = this.config.mode;
       let xmpHandled = false;
-      
-      if (fs.existsSync(finalTargetPath)) {
-        console.log(`File already exists in organized folder: ${finalTargetPath}`);
-        operation = 'skip';
-      } else {
+
+      // Check if file exists and handle according to strategy
+      if (fs.existsSync(targetPath)) {
+        if (conflictStrategy === 'skip') {
+          console.log(`⏭️ Skipping ${fileName} - file already exists in ${folderName}/`);
+          operation = 'skip';
+        } else if (conflictStrategy === 'rename') {
+          finalTargetPath = await this.resolveFileNameConflict(targetPath);
+          const renamedFileName = path.basename(finalTargetPath);
+          console.log(`🔄 Renaming ${fileName} → ${renamedFileName} (conflict resolved)`);
+        } else if (conflictStrategy === 'overwrite') {
+          console.log(`⚠️ Overwriting existing file: ${fileName} in ${folderName}/`);
+          finalTargetPath = targetPath;
+        }
+      }
+
+      // Perform the operation if not skipped
+      if (operation !== 'skip') {
         if (this.config.mode === 'copy') {
           await fsPromises.copyFile(imagePath, finalTargetPath);
-          console.log(`Copied: ${fileName} → ${folderName}/`);
+          console.log(`✓ Copied: ${fileName} → ${folderName}/`);
         } else {
           await fsPromises.rename(imagePath, finalTargetPath);
-          console.log(`Moved: ${fileName} → ${folderName}/`);
+          console.log(`✓ Moved: ${fileName} → ${folderName}/`);
         }
-        
+
         // Handle XMP sidecar file if present
         xmpHandled = await this.handleXmpSidecar(imagePath, finalTargetPath, operation);
       }
@@ -282,18 +295,36 @@ export class FolderOrganizer {
 
       await this.ensureFolderExists(targetDir);
 
-      let targetPath = path.join(targetDir, fileName);
-      targetPath = await this.resolveFileNameConflict(targetPath);
+      const targetPath = path.join(targetDir, fileName);
+      const conflictStrategy = this.config.conflictStrategy || 'rename';
+      let finalTargetPath = targetPath;
+      let operation: 'copy' | 'move' | 'skip' = this.config.mode;
 
-      // Copy or move the file
-      if (this.config.mode === 'copy') {
-        await fsPromises.copyFile(imagePath, targetPath);
-      } else {
-        await fsPromises.rename(imagePath, targetPath);
+      // Handle conflicts based on strategy
+      if (fs.existsSync(targetPath)) {
+        if (conflictStrategy === 'skip') {
+          console.log(`⏭️ Skipping ${fileName} - already exists in Unknown_Numbers/`);
+          operation = 'skip';
+        } else if (conflictStrategy === 'rename') {
+          finalTargetPath = await this.resolveFileNameConflict(targetPath);
+          console.log(`🔄 Renaming ${fileName} → ${path.basename(finalTargetPath)}`);
+        } else if (conflictStrategy === 'overwrite') {
+          console.log(`⚠️ Overwriting ${fileName} in Unknown_Numbers/`);
+          finalTargetPath = targetPath;
+        }
+      }
+
+      // Perform operation if not skipped
+      if (operation !== 'skip') {
+        if (this.config.mode === 'copy') {
+          await fsPromises.copyFile(imagePath, finalTargetPath);
+        } else {
+          await fsPromises.rename(imagePath, finalTargetPath);
+        }
       }
 
       // Handle XMP sidecar file if it exists and should be included
-      if (this.config.includeXmpFiles) {
+      if (operation !== 'skip' && this.config.includeXmpFiles) {
         const xmpPath = this.getXmpSidecarPath(imagePath);
         if (xmpPath) {
           const xmpFileName = path.basename(xmpPath);
@@ -311,9 +342,9 @@ export class FolderOrganizer {
       const result: FolderOrganizationResult = {
         success: true,
         originalPath: imagePath,
-        organizedPath: targetPath,
+        organizedPath: operation !== 'skip' ? finalTargetPath : undefined,
         folderName,
-        operation: this.config.mode,
+        operation,
         timeMs: Date.now() - startTime
       };
 
@@ -484,6 +515,33 @@ export class FolderOrganizer {
       config: this.config,
       operations: this.operationLog.filter(op => op.success && op.operation !== 'skip'),
       createdFolders: Array.from(this.createdFolders)
+    };
+  }
+
+  /**
+   * Get organization summary statistics
+   */
+  getSummary(): OrganizationSummary {
+    const totalFiles = this.operationLog.length;
+    const organizedFiles = this.operationLog.filter(r => r.success && r.operation !== 'skip').length;
+    const skippedFiles = this.operationLog.filter(r => r.operation === 'skip').length;
+    const foldersCreated = this.createdFolders.size;
+    const multiNumberImages = this.operationLog.filter(r => r.success && r.folderName.includes(','))?.length || 0;
+    const unknownFiles = this.operationLog.filter(r =>
+      r.success && (r.folderName.includes('Unknown') || r.folderName.includes('Non_Riconosciuti'))
+    ).length;
+    const errors = this.operationLog.filter(r => !r.success).map(r => r.error || 'Unknown error');
+    const totalTimeMs = this.operationLog.reduce((sum, r) => sum + r.timeMs, 0);
+
+    return {
+      totalFiles,
+      organizedFiles,
+      skippedFiles,
+      foldersCreated,
+      multiNumberImages,
+      unknownFiles,
+      errors,
+      totalTimeMs
     };
   }
 

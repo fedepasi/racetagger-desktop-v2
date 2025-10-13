@@ -258,13 +258,28 @@
 }
 
 #csv-import-modal .modal-body {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
+  display: block;
+  max-height: 70vh;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+  position: relative;
+}
+
+/* Add spacing between form groups in CSV import modal */
+#csv-import-modal .form-group {
+  margin-bottom: 2rem;
+}
+
+#csv-import-modal .csv-preview-container {
+  margin-top: 2rem;
 }
 
 #csv-import-modal label {
-  color: #000 !important;
+  color: #000;
+}
+
+#csv-import-modal label.csv-preset-name {
+  color: #fff;
 }
 
 .preset-info-section {
@@ -405,6 +420,16 @@
 
 .csv-preview-table tr:nth-child(even) {
   background: var(--surface-color-light);
+}
+
+/* CSV Preview Table Container - Scrollable */
+#csv-preview-table {
+  max-height: 300px;
+  overflow-y: auto;
+  overflow-x: auto;
+  display: block;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
 }
 
 /* Card Header Actions */

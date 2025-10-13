@@ -832,32 +832,8 @@ function showConfirmDialog(title, message) {
  * Download CSV template with correct column headers
  */
 function downloadCsvTemplate() {
-  const headers = ['Number', 'Driver', 'Navigator', 'Team', 'Sponsors', 'Metatag'];
-  const sampleData = [
-    ['1', 'John Doe', 'Jane Smith', 'Racing Team A', 'Sponsor Corp', 'tag1'],
-    ['2', 'Mike Johnson', 'Sarah Wilson', 'Speed Team', 'Brand X', 'tag2'],
-    ['3', '"Balthasar, Ponzo, Roe"', '', 'Imperiale Racing', '"elea costruzioni, topcon"', 'CIGT - 3']
-  ];
-
-  // Create CSV content
-  const csvContent = [
-    headers.join(','),
-    ...sampleData.map(row => row.join(','))
-  ].join('\n');
-
-  // Create download
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-  const link = document.createElement('a');
-  const url = URL.createObjectURL(blob);
-  link.setAttribute('href', url);
-  link.setAttribute('download', 'participants-template.csv');
-  link.style.visibility = 'hidden';
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
-
-  showNotification('CSV template downloaded successfully', 'success');
+  // Use IPC to show native save dialog and save the CSV template
+  window.api.send('download-csv-template');
 }
 
 // Export functions for HTML onclick handlers immediately
@@ -929,4 +905,10 @@ document.addEventListener('DOMContentLoaded', function() {
       attributeFilter: ['class']
     });
   }
+
+  // Listen for CSV template saved event
+  window.api.receive('csv-template-saved', (filePath) => {
+    console.log('[Participants] CSV template saved to:', filePath);
+    showNotification('CSV template saved successfully', 'success');
+  });
 });

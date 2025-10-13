@@ -6,6 +6,7 @@
 class LogVisualizer {
   constructor() {
     this.executionId = null;
+    this.execution = null; // Store full execution object
     this.logData = [];
     this.imageResults = [];
     this.filteredResults = [];
@@ -42,18 +43,28 @@ class LogVisualizer {
     this.hasUnsavedChanges = false;
     this.lastSaveTimestamp = null;
 
+    // Folder organization status
+    this.wasAlreadyOrganized = false; // Will be set during init
+
     console.log('[LogVisualizer] Initialized');
   }
 
   /**
    * Initialize the visualizer with execution data
    */
-  async init(executionId, results) {
+  async init(executionId, results, execution = null) {
     this.executionId = executionId;
+    this.execution = execution;
     this.imageResults = results || [];
     this.filteredResults = [...this.imageResults];
 
     console.log(`[LogVisualizer] Initializing with execution ${executionId} and ${results.length} results`);
+
+    // Check if folder organization was already enabled during analysis
+    if (execution) {
+      this.wasAlreadyOrganized = execution.folder_organization_enabled === true;
+      console.log(`[LogVisualizer] Folder organization was ${this.wasAlreadyOrganized ? 'ENABLED' : 'NOT enabled'} during analysis`);
+    }
 
     // Load detailed log data if available
     if (executionId) {
@@ -236,27 +247,32 @@ class LogVisualizer {
           </div>
         </div>
 
+        <!-- Post-Analysis Folder Organization (conditional) -->
+        ${this.shouldShowFolderOrganizationUI() ? `
+        <div class="lv-folder-organization-section" id="lv-folder-org-section">
+          <div class="lv-folder-org-header">
+            <h4>📁 Organize Photos into Folders</h4>
+            <p>You can still organize your photos based on the analysis results</p>
+          </div>
+          <div class="lv-folder-org-content" id="lv-folder-org-content" style="display: none;">
+            <!-- Folder organization configuration will be injected here -->
+          </div>
+          <div class="lv-folder-org-actions">
+            <button id="lv-toggle-folder-org" class="lv-action-btn lv-btn-secondary">
+              ⚙️ Configure Organization
+            </button>
+            <button id="lv-start-organization" class="lv-action-btn lv-btn-primary" style="display: none;">
+              🚀 Start Organization
+            </button>
+          </div>
+        </div>
+        ` : ''}
+
         <!-- Quick actions -->
         <div class="lv-footer">
           <button id="lv-export-csv" class="lv-action-btn lv-btn-secondary">
             📊 Export Results
           </button>
-          <div class="lv-dropdown" style="position: relative; display: inline-block;">
-            <button id="lv-export-labels-btn" class="lv-action-btn lv-btn-secondary">
-              🏷️ Download Training Labels ▼
-            </button>
-            <div id="lv-export-labels-menu" class="lv-dropdown-menu" style="display: none; position: absolute; bottom: 100%; left: 0; background: white; border: 1px solid #ccc; border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); min-width: 200px; z-index: 1000;">
-              <button class="lv-dropdown-item" data-format="coco" style="display: block; width: 100%; padding: 8px 12px; text-align: left; border: none; background: transparent; cursor: pointer;">
-                📦 COCO JSON
-              </button>
-              <button class="lv-dropdown-item" data-format="yolo" style="display: block; width: 100%; padding: 8px 12px; text-align: left; border: none; background: transparent; cursor: pointer;">
-                📝 YOLO TXT
-              </button>
-              <button class="lv-dropdown-item" data-format="csv" style="display: block; width: 100%; padding: 8px 12px; text-align: left; border: none; background: transparent; cursor: pointer;">
-                📊 CSV
-              </button>
-            </div>
-          </div>
           <button id="lv-view-log" class="lv-action-btn lv-btn-secondary">
             📋 View Full Log
           </button>
@@ -424,6 +440,12 @@ class LogVisualizer {
     const viewLogBtn = document.getElementById('lv-view-log');
     const saveAllBtn = document.getElementById('lv-save-all');
 
+    // Hide Save All button by default (show only when there are unsaved changes)
+    if (saveAllBtn) {
+      saveAllBtn.style.display = 'none';
+      saveAllBtn.addEventListener('click', () => this.saveAllChanges());
+    }
+
     if (exportBtn) {
       exportBtn.addEventListener('click', () => this.exportResults());
     }
@@ -432,46 +454,180 @@ class LogVisualizer {
       viewLogBtn.addEventListener('click', () => this.viewFullLog());
     }
 
-    if (saveAllBtn) {
-      saveAllBtn.addEventListener('click', () => this.saveAllChanges());
-    }
+    // Post-analysis folder organization buttons
+    const toggleFolderOrgBtn = document.getElementById('lv-toggle-folder-org');
+    const startOrganizationBtn = document.getElementById('lv-start-organization');
+    const folderOrgContent = document.getElementById('lv-folder-org-content');
 
-    // Export Training Labels dropdown
-    const exportLabelsBtn = document.getElementById('lv-export-labels-btn');
-    const exportLabelsMenu = document.getElementById('lv-export-labels-menu');
-    const exportLabelsItems = document.querySelectorAll('.lv-dropdown-item');
+    if (toggleFolderOrgBtn && folderOrgContent) {
+      toggleFolderOrgBtn.addEventListener('click', () => {
+        const isVisible = folderOrgContent.style.display !== 'none';
 
-    if (exportLabelsBtn && exportLabelsMenu) {
-      // Toggle dropdown
-      exportLabelsBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const isVisible = exportLabelsMenu.style.display === 'block';
-        exportLabelsMenu.style.display = isVisible ? 'none' : 'block';
-      });
-
-      // Close dropdown when clicking outside
-      document.addEventListener('click', () => {
-        exportLabelsMenu.style.display = 'none';
-      });
-
-      // Handle format selection
-      exportLabelsItems.forEach(item => {
-        item.addEventListener('click', async (e) => {
-          e.stopPropagation();
-          const format = item.dataset.format;
-          exportLabelsMenu.style.display = 'none';
-          await this.exportTrainingLabels(format);
-        });
-
-        // Hover effects
-        item.addEventListener('mouseenter', () => {
-          item.style.background = '#f0f0f0';
-        });
-        item.addEventListener('mouseleave', () => {
-          item.style.background = 'transparent';
-        });
+        if (isVisible) {
+          // Hide configuration
+          folderOrgContent.style.display = 'none';
+          startOrganizationBtn.style.display = 'none';
+          toggleFolderOrgBtn.textContent = '⚙️ Configure Organization';
+        } else {
+          // Show configuration - inject folder organization UI
+          this.injectFolderOrganizationUI();
+          folderOrgContent.style.display = 'block';
+          startOrganizationBtn.style.display = 'inline-flex';
+          toggleFolderOrgBtn.textContent = '🔽 Hide Configuration';
+        }
       });
     }
+
+    if (startOrganizationBtn) {
+      startOrganizationBtn.addEventListener('click', () => {
+        this.triggerPostAnalysisOrganization();
+      });
+    }
+  }
+
+  /**
+   * Inject folder organization UI from admin-features
+   */
+  injectFolderOrganizationUI() {
+    const contentDiv = document.getElementById('lv-folder-org-content');
+    if (!contentDiv) return;
+
+    // Clone the folder organization configuration from index.html
+    const folderOrgHTML = `
+      <div class="folder-org-config">
+        <div class="config-section">
+          <h5>Operation Mode:</h5>
+          <div class="radio-group">
+            <label class="radio-option">
+              <input type="radio" name="post-org-mode" value="copy" checked>
+              <div class="radio-content">
+                <div class="radio-title">📋 Copy files</div>
+                <div class="form-text">Create organized copies, keep originals</div>
+              </div>
+            </label>
+            <label class="radio-option">
+              <input type="radio" name="post-org-mode" value="move">
+              <div class="radio-content">
+                <div class="radio-title">📦 Move files</div>
+                <div class="form-text">Move files to organized folders</div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <div class="config-section">
+          <h5>Folder Naming Pattern:</h5>
+          <div class="radio-group">
+            <label class="radio-option">
+              <input type="radio" name="post-folder-pattern" value="number" checked>
+              <div class="radio-content">
+                <div class="radio-title">🔢 Number only</div>
+                <div class="form-text">Example: "42"</div>
+              </div>
+            </label>
+            <label class="radio-option">
+              <input type="radio" name="post-folder-pattern" value="number_name">
+              <div class="radio-content">
+                <div class="radio-title">👤 Number + Name</div>
+                <div class="form-text">Example: "42_John_Doe"</div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <div class="config-section">
+          <h5>Destination:</h5>
+          <div class="toggle-option">
+            <label class="toggle-container">
+              <input type="checkbox" id="post-custom-destination" class="toggle-input">
+              <div class="toggle-slider"></div>
+              <div class="toggle-content">
+                <div class="toggle-title">Choose custom destination</div>
+                <div class="form-text">Default: Creates "Organized_Photos" in source folder</div>
+              </div>
+            </label>
+          </div>
+          <div id="post-custom-dest-controls" style="display: none; margin-top: 10px;">
+            <input type="text" id="post-dest-path" class="form-control" placeholder="No folder selected" readonly>
+            <button type="button" id="post-select-dest-btn" class="btn btn-secondary" style="margin-top: 8px;">📁 Browse</button>
+          </div>
+        </div>
+
+        <div class="config-section">
+          <h5>File Conflicts:</h5>
+          <div class="radio-group">
+            <label class="radio-option">
+              <input type="radio" name="post-conflict-strategy" value="rename" checked>
+              <div class="radio-content">
+                <div class="radio-title">🔄 Rename automatically</div>
+              </div>
+            </label>
+            <label class="radio-option">
+              <input type="radio" name="post-conflict-strategy" value="skip">
+              <div class="radio-content">
+                <div class="radio-title">⏭️ Skip duplicates</div>
+              </div>
+            </label>
+          </div>
+        </div>
+      </div>
+    `;
+
+    contentDiv.innerHTML = folderOrgHTML;
+
+    // Setup event listeners for the injected UI
+    this.setupPostOrganizationListeners();
+  }
+
+  /**
+   * Setup event listeners for post-organization UI
+   */
+  setupPostOrganizationListeners() {
+    // Custom destination toggle
+    const customDestToggle = document.getElementById('post-custom-destination');
+    const customDestControls = document.getElementById('post-custom-dest-controls');
+
+    if (customDestToggle && customDestControls) {
+      customDestToggle.addEventListener('change', (e) => {
+        customDestControls.style.display = e.target.checked ? 'block' : 'none';
+      });
+    }
+
+    // Browse destination button
+    const selectDestBtn = document.getElementById('post-select-dest-btn');
+    if (selectDestBtn) {
+      selectDestBtn.addEventListener('click', async () => {
+        try {
+          const selectedPath = await window.api.invoke('select-organization-destination');
+          if (selectedPath) {
+            const pathInput = document.getElementById('post-dest-path');
+            if (pathInput) {
+              pathInput.value = selectedPath;
+            }
+          }
+        } catch (error) {
+          console.error('[LogVisualizer] Error selecting destination:', error);
+          this.showNotification('❌ Error selecting folder', 'error');
+        }
+      });
+    }
+  }
+
+  /**
+   * Get post-organization configuration
+   */
+  getPostOrganizationConfig() {
+    return {
+      enabled: true,
+      mode: document.querySelector('input[name="post-org-mode"]:checked')?.value || 'copy',
+      pattern: document.querySelector('input[name="post-folder-pattern"]:checked')?.value || 'number',
+      createUnknownFolder: true,
+      unknownFolderName: 'Unknown_Numbers',
+      includeXmpFiles: true,
+      destinationPath: document.getElementById('post-custom-destination')?.checked ?
+        document.getElementById('post-dest-path')?.value : undefined,
+      conflictStrategy: document.querySelector('input[name="post-conflict-strategy"]:checked')?.value || 'rename'
+    };
   }
 
   /**
@@ -1836,6 +1992,14 @@ class LogVisualizer {
     // Set flag for unsaved changes
     this.hasUnsavedChanges = true;
 
+    // Show Save All button when there are unsaved changes
+    const saveAllBtn = document.getElementById('lv-save-all');
+    if (saveAllBtn && this.manualCorrections.size > 0) {
+      saveAllBtn.style.display = 'inline-flex';
+      saveAllBtn.classList.add('btn-pulse');
+      console.log('[LogVisualizer] Save All button shown - unsaved changes detected');
+    }
+
     // Schedule auto-save after 3 seconds of inactivity
     this.autoSaveTimer = setTimeout(async () => {
       if (this.hasUnsavedChanges && this.manualCorrections.size > 0) {
@@ -1916,6 +2080,14 @@ class LogVisualizer {
         if (result.success) {
           this.lastSaveTimestamp = new Date().toISOString();
           this.hasUnsavedChanges = false;
+
+          // Hide Save All button after auto-save
+          const saveAllBtn = document.getElementById('lv-save-all');
+          if (saveAllBtn) {
+            saveAllBtn.style.display = 'none';
+            saveAllBtn.classList.remove('btn-pulse');
+          }
+
           console.log(`[LogVisualizer] Auto-saved ${corrections.length} corrections immediately`);
         } else {
           console.error('[LogVisualizer] Failed to auto-save:', result.error);
@@ -2268,6 +2440,14 @@ class LogVisualizer {
         this.hasUnsavedChanges = false;
         this.updateStatistics();
 
+        // Hide Save All button after successful save
+        const saveAllBtn = document.getElementById('lv-save-all');
+        if (saveAllBtn) {
+          saveAllBtn.style.display = 'none';
+          saveAllBtn.classList.remove('btn-pulse');
+          console.log('[LogVisualizer] Save All button hidden - all changes saved');
+        }
+
         // IMPORTANT: Refresh data to show updated results immediately
         await this.refreshDataFromLogs();
         console.log('[LogVisualizer] Data refreshed after successful save');
@@ -2450,82 +2630,6 @@ class LogVisualizer {
   }
 
   /**
-   * Export training labels in specified format
-   */
-  async exportTrainingLabels(format) {
-    try {
-      if (!this.executionId) {
-        this.showNotification('ℹ️ No execution available for export', 'info');
-        return;
-      }
-
-      const formatLabels = {
-        coco: 'COCO JSON',
-        yolo: 'YOLO TXT',
-        csv: 'CSV'
-      };
-
-      this.showNotification(`🏷️ Exporting training labels (${formatLabels[format]})...`, 'info');
-      console.log(`[LogVisualizer] Exporting training labels for execution ${this.executionId} in ${format} format`);
-
-      // Get Supabase client from window
-      const supabase = window.supabaseClient;
-      if (!supabase) {
-        throw new Error('Supabase client not available');
-      }
-
-      // Call export edge function
-      const { data, error } = await supabase.functions.invoke('export-training-labels', {
-        body: {
-          executionId: this.executionId,
-          format: format,
-          minConfidence: 0.0
-        }
-      });
-
-      if (error) {
-        console.error('[LogVisualizer] Export error:', error);
-        throw error;
-      }
-
-      // Handle the response based on format
-      let blob;
-      let filename;
-
-      if (format === 'coco') {
-        blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-        filename = `training_labels_${this.executionId}_coco.json`;
-      } else if (format === 'yolo') {
-        // YOLO format returns JSON with file contents
-        blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-        filename = `training_labels_${this.executionId}_yolo.json`;
-      } else if (format === 'csv') {
-        blob = new Blob([data], { type: 'text/csv' });
-        filename = `training_labels_${this.executionId}.csv`;
-      }
-
-      // Trigger download
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
-
-      this.showNotification(`✅ Training labels exported (${formatLabels[format]})`, 'success');
-
-    } catch (error) {
-      console.error('[LogVisualizer] Export training labels error:', error);
-
-      if (error.message?.includes('No annotations with bounding boxes found')) {
-        this.showNotification('ℹ️ No bounding box data found. Enable Advanced Annotations in settings.', 'info');
-      } else {
-        this.showNotification('❌ Error exporting training labels', 'error');
-      }
-    }
-  }
-
-  /**
    * View full log data
    */
   async viewFullLog() {
@@ -2546,12 +2650,68 @@ class LogVisualizer {
   }
 
   /**
+   * Post-Analysis Folder Organization
+   * Trigger folder organization after analysis is complete
+   */
+  async triggerPostAnalysisOrganization() {
+    try {
+      console.log('[LogVisualizer] Starting post-analysis folder organization...');
+
+      // Get folder organization config from the post-organization form
+      const folderOrgConfig = this.getPostOrganizationConfig();
+
+      if (!folderOrgConfig.enabled) {
+        this.showNotification('ℹ️ Please configure folder organization first', 'info');
+        return;
+      }
+
+      // Show progress indicator
+      this.showNotification('🔄 Organizing photos into folders...', 'info');
+
+      // Call IPC handler
+      const response = await window.api.invoke('organize-results-post-analysis', {
+        executionId: this.executionId,
+        folderOrganizationConfig: folderOrgConfig
+      });
+
+      if (response.success) {
+        const summary = response.summary;
+        const successMsg = `✅ Organization complete!
+${summary.organizedFiles} photos organized into ${summary.foldersCreated} folders
+${summary.skippedFiles} skipped, ${summary.unknownFiles} unknown`;
+
+        this.showNotification(successMsg, 'success');
+
+        if (response.errors && response.errors.length > 0) {
+          console.warn('[LogVisualizer] Organization completed with errors:', response.errors);
+          this.showNotification(`⚠️ ${response.errors.length} files had errors (check console)`, 'warning');
+        }
+      } else {
+        throw new Error(response.error || 'Organization failed');
+      }
+
+    } catch (error) {
+      console.error('[LogVisualizer] Error in post-analysis organization:', error);
+      this.showNotification(`❌ Organization failed: ${error.message}`, 'error');
+    }
+  }
+
+  /**
+   * Check if folder organization UI should be shown
+   */
+  shouldShowFolderOrganizationUI() {
+    // Show only if folder organization was NOT used during analysis
+    return !this.wasAlreadyOrganized;
+  }
+
+  /**
    * Show notification to user
    */
   showNotification(message, type = 'info') {
     // Create notification element
     const notification = document.createElement('div');
     notification.className = `lv-notification lv-notification-${type}`;
+    notification.style.whiteSpace = 'pre-line'; // Allow line breaks
     notification.textContent = message;
 
     // Add to page
@@ -2564,7 +2724,7 @@ class LogVisualizer {
     setTimeout(() => {
       notification.classList.remove('show');
       setTimeout(() => notification.remove(), 300);
-    }, 3000);
+    }, 5000); // Increased to 5s for longer messages
   }
 }
 
