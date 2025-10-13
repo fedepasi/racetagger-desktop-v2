@@ -642,52 +642,40 @@ export class AuthService {
   }
 
   // Gestisci la registrazione
-  async register(email: string, password: string, name?: string): Promise<{ success: boolean; error?: string }> {
+  async register(email: string, password: string): Promise<{ success: boolean; error?: string }> {
     try {
+      // Validate password strength
+      if (password.length < 8) {
+        return { success: false, error: 'Password must be at least 8 characters long' };
+      }
+      if (!/[A-Z]/.test(password)) {
+        return { success: false, error: 'Password must contain at least one uppercase letter' };
+      }
+      if (!/[a-z]/.test(password)) {
+        return { success: false, error: 'Password must contain at least one lowercase letter' };
+      }
+      if (!/[0-9]/.test(password)) {
+        return { success: false, error: 'Password must contain at least one number' };
+      }
+
       const { data, error } = await this.supabase.auth.signUp({
         email,
         password,
         options: {
-          data: { name }
+          emailRedirectTo: undefined // Email confirmation will be handled by Supabase
         }
       });
-      
+
       if (error) {
         console.error('Registration error:', error);
         return { success: false, error: error.message };
       }
-      
-      // Inizializza i dati utente dopo la registrazione
-      if (data.user) {
-        try {
-          // Crea un record di bilancio token con token gratuiti iniziali
-          const { error: tokenError } = await this.supabase
-            .from('user_tokens')
-            .insert({
-              user_id: data.user.id,
-              tokens_purchased: 10, // Offri 10 token gratuiti all'iscrizione
-              tokens_used: 0
-            });
-          
-          if (tokenError) {
-            console.error('Error creating token balance:', tokenError);
-          }
-          
-          // Registra la transazione di token gratuiti
-          await this.supabase
-            .from('token_transactions')
-            .insert({
-              user_id: data.user.id,
-              amount: 10,
-              transaction_type: 'welcome_bonus',
-              description: 'Welcome bonus tokens'
-            });
-          
-        } catch (initError) {
-          console.error('Error initializing user data:', initError);
-        }
+
+      // Check if email already exists (Supabase returns empty identities array)
+      if (data.user && data.user.identities && data.user.identities.length === 0) {
+        return { success: false, error: 'An account with this email already exists. Please sign in instead.' };
       }
-      
+
       return { success: true };
     } catch (error: any) {
       console.error('Registration exception:', error);
@@ -1007,22 +995,24 @@ export class AuthService {
       console.log('[AuthService] token_requests query result:', { data: tokenRequestsData, error: tokenRequestsError });
       
       // Calculate total tokens from all sources
-      // NOTE: user_tokens.tokens_purchased and subscribers.base_tokens are the SAME value
-      // To avoid duplication, we use ONLY subscribers table for total calculation
-      const userTokensPurchased = userTokensData?.tokens_purchased || 0; // Keep for logging only
+      // SINGLE SOURCE OF TRUTH: user_tokens.tokens_purchased contains ALL purchased/granted tokens
+      // (includes base, bonus, Stripe purchases, access code grants)
+      const userTokensPurchased = userTokensData?.tokens_purchased || 0;
       const userTokensUsed = userTokensData?.tokens_used || 0;
-      
-      const baseTokens = subscriberData?.base_tokens || 0;
-      const bonusTokens = subscriberData?.bonus_tokens || 0;
-      const earnedTokens = subscriberData?.earned_tokens || 0;
-      const adminBonusTokens = subscriberData?.admin_bonus_tokens || 0;
-      
+
+      // NOTE: subscribers.base_tokens and subscribers.bonus_tokens are DEPRECATED
+      // All purchased/granted tokens are now in user_tokens.tokens_purchased
+
+      // Additional separate sources:
+      const earnedTokens = subscriberData?.earned_tokens || 0;        // Referral rewards
+      const adminBonusTokens = subscriberData?.admin_bonus_tokens || 0; // Extra admin grants
+
       // Sum up approved tokens from token_requests
-      const approvedTokensFromRequests = tokenRequestsData?.reduce((sum, request) => 
+      const approvedTokensFromRequests = tokenRequestsData?.reduce((sum, request) =>
         sum + (request.tokens_requested || 0), 0) || 0;
-      
-      // Total available tokens = subscribers + approved token requests
-      const totalTokens = baseTokens + bonusTokens + earnedTokens + adminBonusTokens + approvedTokensFromRequests;
+
+      // FIXED: Use userTokensPurchased as base, not baseTokens + bonusTokens
+      const totalTokens = userTokensPurchased + earnedTokens + adminBonusTokens + approvedTokensFromRequests;
       
       const tokenBalance = {
         total: totalTokens,
@@ -1030,14 +1020,12 @@ export class AuthService {
         remaining: totalTokens - userTokensUsed
       };
       
-      console.log('[AuthService] Calculated token balance (including token requests):', {
-        userTokensPurchased, // For reference only - NOT included in total
-        baseTokens,
-        bonusTokens,
-        earnedTokens,
-        adminBonusTokens,
-        approvedTokensFromRequests, // NEW: From token_requests table
-        totalTokens, // = baseTokens + bonusTokens + earnedTokens + adminBonusTokens + approvedTokensFromRequests
+      console.log('[AuthService] Calculated token balance (UNIFIED CALCULATION):', {
+        userTokensPurchased, // SINGLE SOURCE OF TRUTH (includes base + bonus + purchases + grants)
+        earnedTokens, // Referral rewards
+        adminBonusTokens, // Extra admin grants
+        approvedTokensFromRequests, // Approved token requests
+        totalTokens, // = userTokensPurchased + earnedTokens + adminBonusTokens + approvedTokensFromRequests
         used: userTokensUsed,
         remaining: tokenBalance.remaining
       });
@@ -1237,67 +1225,9 @@ export class AuthService {
   openSubscriptionPage(): void {
     // URL della pagina web per acquistare abbonamenti
     const subscriptionUrl = `${SUPABASE_CONFIG.url.replace('.supabase.co', '.app')}/subscription`;
-    
+
     // Apri nel browser predefinito
     shell.openExternal(subscriptionUrl);
-  }
-
-  // Verifica il codice di accesso
-  async verifyAccessCode(code: string): Promise<boolean> {
-    try {
-      const supabase = createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.key);
-      
-      const { data, error } = await supabase
-        .from('subscribers')
-        .select('id')
-        .eq('access_code', code)
-        .eq('has_access', true)
-        .single();
-      
-      if (error) {
-        console.error('Access code verification error:', error);
-        return false;
-      }
-      
-      // Se abbiamo trovato un record, il codice è valido
-      if (data) {
-        // Salva il codice di accesso localmente
-        this.saveAccessCode(code);
-        return true;
-      }
-      
-      return false;
-    } catch (error) {
-      console.error('Access code verification error:', error);
-      return false;
-    }
-  }
-
-  // Salva il codice di accesso localmente
-  saveAccessCode(code: string): void {
-    // localStorage.setItem('access_code', code); // localStorage is not available in main process
-    console.warn('AuthService.saveAccessCode: localStorage not available in main process. Access code not saved.');
-  }
-
-  // Verifica se l'utente ha già un codice di accesso salvato
-  hasAccessCode(): boolean {
-    // return !!localStorage.getItem('access_code'); // localStorage is not available in main process
-    console.warn('AuthService.hasAccessCode: localStorage not available in main process. Assuming no access code.');
-    return false;
-  }
-
-  // Ottieni il codice di accesso salvato
-  getAccessCode(): string | null {
-    // return localStorage.getItem('access_code'); // localStorage is not available in main process
-    console.warn('AuthService.getAccessCode: localStorage not available in main process. Returning null.');
-    return null;
-  }
-  
-  // Apri la pagina per ottenere l'accesso anticipato
-  openEarlyAccessPage(): void {
-    // Usa l'URL specifico di racetagger.cloud come richiesto
-    const earlyAccessUrl = `https://racetagger.cloud`;
-    shell.openExternal(earlyAccessUrl);
   }
   
   // Determina il ruolo dell'utente basandosi sull'email (metodo semplice per ora)
