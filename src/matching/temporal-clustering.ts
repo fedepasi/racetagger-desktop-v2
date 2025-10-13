@@ -10,6 +10,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs/promises';
+import os from 'os';
 
 const execAsync = promisify(exec);
 
@@ -118,10 +119,13 @@ export class TemporalClusterManager {
   }
 
   /**
-   * Get the correct path for exiftool based on development/production environment
+   * Get the correct path for exiftool based on development/production environment and OS
    */
   private getExiftoolPath(): string {
     const path = require('path');
+
+    // Detect operating system
+    const platform = process.platform; // 'win32', 'darwin', 'linux'
 
     try {
       // Safely determine if we're in development mode
@@ -133,16 +137,33 @@ export class TemporalClusterManager {
         isDev = true;
       }
 
+      let vendorDir: string;
       if (isDev) {
         // In development: from dist/matching/ to project root, then to vendor/
-        return path.join(__dirname, '../../../vendor/darwin/exiftool');
+        vendorDir = path.join(__dirname, '../../../vendor', platform);
+      } else {
+        // In production: vendor files are unpacked from asar
+        vendorDir = path.join(process.resourcesPath, 'app.asar.unpacked', 'vendor', platform);
       }
 
-      // In production: vendor files are unpacked from asar
-      return path.join(process.resourcesPath, 'app.asar.unpacked', 'vendor', 'darwin', 'exiftool');
+      // Windows uses perl.exe + exiftool.pl, other platforms use exiftool directly
+      if (platform === 'win32') {
+        const perlExe = path.join(vendorDir, 'perl.exe');
+        const exiftoolPl = path.join(vendorDir, 'exiftool.pl');
+        return `"${perlExe}" "${exiftoolPl}"`;
+      } else {
+        return path.join(vendorDir, 'exiftool');
+      }
     } catch {
       // Fallback for standalone testing
-      return path.join(__dirname, '../../vendor/darwin/exiftool');
+      const vendorDir = path.join(__dirname, '../../vendor', platform);
+      if (platform === 'win32') {
+        const perlExe = path.join(vendorDir, 'perl.exe');
+        const exiftoolPl = path.join(vendorDir, 'exiftool.pl');
+        return `"${perlExe}" "${exiftoolPl}"`;
+      } else {
+        return path.join(vendorDir, 'exiftool');
+      }
     }
   }
 
@@ -409,12 +430,18 @@ export class TemporalClusterManager {
     // Acquisisci il semaforo per limitare processi concorrenti
     await this.exiftoolSemaphore.acquire();
 
-    try {
-      // Costruisci comando con tutti i file
-      const quotedPaths = filePaths.map(path => `"${path}"`).join(' ');
-      const command = `"${this.exiftoolPath}" -DateTimeOriginal -CreateDate -ModifyDate -SubSecTimeOriginal -json ${quotedPaths}`;
+    // Crea file temporaneo per evitare command line length limits su Windows
+    const tmpFile = path.join(os.tmpdir(), `exiftool-batch-${Date.now()}-${Math.random().toString(36).substr(2, 9)}.txt`);
 
-      console.log(`[TemporalClustering] Executing batch command for ${filePaths.length} files`);
+    try {
+      // Scrivi i percorsi dei file nel file temporaneo (uno per riga)
+      await fs.writeFile(tmpFile, filePaths.join('\n'), 'utf-8');
+
+      // Usa il flag -@ di ExifTool per leggere i percorsi dal file
+      // Non quotare exiftoolPath perché potrebbe già contenere spazi gestiti internamente
+      const command = `${this.exiftoolPath} -DateTimeOriginal -CreateDate -ModifyDate -SubSecTimeOriginal -json -@ "${tmpFile}"`;
+
+      console.log(`[TemporalClustering] Executing batch command for ${filePaths.length} files using temp file`);
 
       const { stdout, stderr } = await execAsync(command, {
         maxBuffer: 50 * 1024 * 1024, // 50MB buffer per batch grandi
@@ -507,6 +534,13 @@ export class TemporalClusterManager {
       filePaths.forEach(path => results.set(path, null));
       return results;
     } finally {
+      // Cleanup file temporaneo
+      try {
+        await fs.unlink(tmpFile);
+      } catch (unlinkError) {
+        console.warn(`[TemporalClustering] Failed to cleanup temp file ${tmpFile}:`, unlinkError);
+      }
+
       // Rilascia sempre il semaforo, anche in caso di errore
       this.exiftoolSemaphore.release();
     }
@@ -525,7 +559,7 @@ export class TemporalClusterManager {
     await this.exiftoolSemaphore.acquire();
 
     try {
-      const command = `"${this.exiftoolPath}" -DateTimeOriginal -CreateDate -ModifyDate -SubSecTimeOriginal -json "${filePath}"`;
+      const command = `${this.exiftoolPath} -DateTimeOriginal -CreateDate -ModifyDate -SubSecTimeOriginal -json "${filePath}"`;
       console.log(`[TemporalClustering] Executing: ${command}`);
 
       const { stdout, stderr } = await execAsync(command);

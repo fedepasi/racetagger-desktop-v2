@@ -226,9 +226,9 @@ class ResultsPageManager {
           confidence: vehicles[0]?.confidence || 0,
           csvMatch: (vehicles[0]?.participantMatch && vehicles[0].participantMatch.entry) ? vehicles[0].participantMatch : null,
           imagePath: localPaths.thumbnailPath || entry.supabaseUrl, // Usa path locale o Supabase come fallback
-          compressedPath: localPaths.compressedPath || entry.supabaseUrl,
-          thumbnailPath: localPaths.thumbnailPath || entry.supabaseUrl,
-          microThumbPath: localPaths.microThumbPath || entry.supabaseUrl,
+          compressedPath: (localPaths.compressedPath && localPaths.compressedPath !== 'null') ? localPaths.compressedPath : entry.supabaseUrl,
+          thumbnailPath: (localPaths.thumbnailPath && localPaths.thumbnailPath !== 'null') ? localPaths.thumbnailPath : entry.supabaseUrl,
+          microThumbPath: (localPaths.microThumbPath && localPaths.microThumbPath !== 'null') ? localPaths.microThumbPath : entry.supabaseUrl,
           timestamp: entry.timestamp
         });
       }

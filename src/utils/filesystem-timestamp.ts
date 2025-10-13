@@ -2,6 +2,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 
 const execAsync = promisify(exec);
 
@@ -108,13 +109,20 @@ export class FilesystemTimestampExtractor {
   private async extractCreationTimesWindows(filePaths: string[]): Promise<FileTimestamp[]> {
     const results: FileTimestamp[] = [];
 
-    // Create PowerShell script to get creation times
-    const psScript = filePaths.map(filePath =>
-      `Get-ItemProperty -Path "${filePath}" | Select-Object FullName, CreationTime, LastWriteTime`
-    ).join('; ');
+    // Crea file PowerShell temporaneo per evitare command line length limits
+    const tmpScript = path.join(os.tmpdir(), `ps-timestamps-${Date.now()}-${Math.random().toString(36).substr(2, 9)}.ps1`);
 
     try {
-      const { stdout } = await execAsync(`powershell -Command "${psScript}"`, {
+      // Crea script PowerShell con comando per ogni file
+      const psScriptContent = filePaths.map(filePath =>
+        `Get-ItemProperty -Path "${filePath}" | Select-Object FullName, CreationTime, LastWriteTime`
+      ).join('\n');
+
+      // Scrivi script nel file temporaneo
+      await fs.promises.writeFile(tmpScript, psScriptContent, 'utf-8');
+
+      // Esegui script PowerShell dal file
+      const { stdout } = await execAsync(`powershell -ExecutionPolicy Bypass -File "${tmpScript}"`, {
         maxBuffer: 10 * 1024 * 1024
       });
 
@@ -158,6 +166,13 @@ export class FilesystemTimestampExtractor {
     } catch (error) {
       console.error(`[FilesystemTimestamp] Windows PowerShell error:`, error);
       return await this.extractCreationTimesFallback(filePaths);
+    } finally {
+      // Cleanup file temporaneo
+      try {
+        await fs.promises.unlink(tmpScript);
+      } catch (unlinkError) {
+        console.warn(`[FilesystemTimestamp] Failed to cleanup temp script ${tmpScript}:`, unlinkError);
+      }
     }
 
     console.log(`[FilesystemTimestamp] Windows: Processed ${results.length} files`);

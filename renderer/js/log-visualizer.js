@@ -1211,6 +1211,33 @@ class LogVisualizer {
   /**
    * Get large image URL for gallery display
    */
+  /**
+   * Helper to validate if a path is valid and usable
+   * Supports Windows (C:\...), Unix (/...), and URLs (http://...)
+   */
+  isValidPath(path) {
+    if (!path || path === 'null' || path === 'undefined') {
+      return false;
+    }
+
+    // Check for valid URL
+    if (path.startsWith('http://') || path.startsWith('https://')) {
+      return true;
+    }
+
+    // Check for valid local path (Unix-style or Windows)
+    if (path.startsWith('/')) {
+      return true; // Unix absolute path
+    }
+
+    // Windows absolute path (C:\, D:\, etc.)
+    if (/^[A-Z]:\\/i.test(path)) {
+      return true;
+    }
+
+    return false;
+  }
+
   getGalleryImageUrl(result) {
     console.log(`[LogVisualizer] getGalleryImageUrl for ${result.fileName}:`, {
       thumbnailPath: !!result.thumbnailPath,
@@ -1220,42 +1247,27 @@ class LogVisualizer {
     });
 
     // 1. Prima: immagine compressa di alta qualità (1080-1920px) - locale o Supabase
-    if (result.compressedPath) {
-      if (result.compressedPath.startsWith('/')) {
-        console.log(`[LogVisualizer] Using local compressedPath for gallery: ${result.fileName}`);
-        return result.compressedPath;
-      } else if (result.compressedPath.startsWith('http')) {
-        console.log(`[LogVisualizer] Using Supabase compressedPath for gallery: ${result.fileName}`);
-        return result.compressedPath;
-      }
+    if (this.isValidPath(result.compressedPath)) {
+      console.log(`[LogVisualizer] Using compressedPath for gallery: ${result.fileName}`);
+      return result.compressedPath;
     }
 
-    // 2. Seconda: Supabase URL originale
-    if (result.supabaseUrl) {
+    // 2. Seconda: Supabase URL originale (sempre valida se presente)
+    if (this.isValidPath(result.supabaseUrl)) {
       console.log(`[LogVisualizer] Using supabaseUrl for gallery: ${result.fileName}`);
       return result.supabaseUrl;
     }
 
     // 3. Terza: imagePath generico
-    if (result.imagePath) {
-      if (result.imagePath.startsWith('http')) {
-        console.log(`[LogVisualizer] Using remote imagePath for gallery: ${result.fileName}`);
-        return result.imagePath;
-      } else if (result.imagePath.startsWith('/')) {
-        console.log(`[LogVisualizer] Using local imagePath for gallery: ${result.fileName}`);
-        return result.imagePath;
-      }
+    if (this.isValidPath(result.imagePath)) {
+      console.log(`[LogVisualizer] Using imagePath for gallery: ${result.fileName}`);
+      return result.imagePath;
     }
 
     // 4. Ultima risorsa: thumbnail (280x280) - solo se nient'altro è disponibile
-    if (result.thumbnailPath) {
-      if (result.thumbnailPath.startsWith('/')) {
-        console.log(`[LogVisualizer] Using local thumbnailPath as fallback for gallery: ${result.fileName}`);
-        return result.thumbnailPath;
-      } else if (result.thumbnailPath.startsWith('http')) {
-        console.log(`[LogVisualizer] Using Supabase thumbnailPath as fallback for gallery: ${result.fileName}`);
-        return result.thumbnailPath;
-      }
+    if (this.isValidPath(result.thumbnailPath)) {
+      console.log(`[LogVisualizer] Using thumbnailPath as fallback for gallery: ${result.fileName}`);
+      return result.thumbnailPath;
     }
 
     console.warn(`[LogVisualizer] No suitable image URL found for gallery: ${result.fileName}`);
