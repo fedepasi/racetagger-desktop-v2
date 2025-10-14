@@ -2120,7 +2120,6 @@ html {
   background: linear-gradient(135deg, 
     rgba(59, 130, 246, 0.18) 0%, 
     rgba(99, 102, 241, 0.12) 100%);
-  margin: 0px 30px;
   border-color: rgba(59, 130, 246, 0.3);
   transform: translateY(-1px);
   box-shadow: 
@@ -2883,6 +2882,217 @@ body.modal-open {
 .token-messages.info::before {
   background: linear-gradient(180deg, var(--accent-warning), #d97706);
   box-shadow: 0 0 8px rgba(245, 158, 11, 0.3);
+}
+
+/* ===== TOKEN INFO MODAL (PRICING) STYLES ===== */
+
+#token-info-modal .token-info-modal {
+  max-width: 1000px;
+  width: 95%;
+}
+
+#token-info-modal .modal-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  padding: 2rem;
+}
+
+#token-info-modal .pricing-notice {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 24px 32px;
+  border-radius: 12px;
+  margin-bottom: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  box-shadow: 0 8px 24px rgba(102, 126, 234, 0.3);
+  width: 100%;
+  text-align: center;
+}
+
+#token-info-modal .pricing-notice .notice-icon {
+  font-size: 48px;
+  flex-shrink: 0;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.2));
+}
+
+#token-info-modal .pricing-notice .notice-content h3 {
+  margin: 0 0 8px 0;
+  font-size: 20px;
+  font-weight: 700;
+  color: white;
+}
+
+#token-info-modal .pricing-notice .notice-content p {
+  margin: 4px 0;
+  color: rgba(255, 255, 255, 0.95);
+  font-weight: 500;
+}
+
+#token-info-modal .pricing-packages {
+  width: 100%;
+  margin-bottom: 40px;
+}
+
+#token-info-modal .pricing-packages h3 {
+  text-align: center;
+  margin-bottom: 24px;
+  color: #333;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+#token-info-modal .package-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+  margin-top: 20px;
+}
+
+#token-info-modal .package-card {
+  border: 2px solid #e0e0e0;
+  border-radius: 12px;
+  padding: 24px;
+  text-align: center;
+  transition: all 0.3s ease;
+  background: white;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+#token-info-modal .package-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+  border-color: #667eea;
+}
+
+#token-info-modal .package-card.recommended {
+  border-color: #667eea;
+  background: linear-gradient(135deg, #f5f7ff 0%, #ffffff 100%);
+  position: relative;
+  box-shadow: 0 4px 16px rgba(102, 126, 234, 0.2);
+}
+
+#token-info-modal .package-card.recommended::before {
+  content: '';
+  position: absolute;
+  top: -2px;
+  left: -2px;
+  right: -2px;
+  bottom: -2px;
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  border-radius: 12px;
+  z-index: -1;
+  opacity: 0.5;
+}
+
+#token-info-modal .package-badge {
+  font-size: 12px;
+  font-weight: bold;
+  color: #666;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+#token-info-modal .package-card.recommended .package-badge {
+  color: #667eea;
+  font-size: 13px;
+}
+
+#token-info-modal .package-price {
+  font-size: 32px;
+  font-weight: bold;
+  color: #333;
+  margin: 8px 0;
+}
+
+#token-info-modal .package-tokens {
+  font-size: 16px;
+  color: #666;
+  margin-bottom: 16px;
+  font-weight: 600;
+}
+
+#token-info-modal .package-features {
+  border-top: 1px solid #e0e0e0;
+  padding-top: 16px;
+  margin-top: 16px;
+}
+
+#token-info-modal .package-features p {
+  margin: 8px 0;
+  color: #666;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+#token-info-modal .modal-actions {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  padding-top: 8px;
+  border-top: 1px solid #e0e0e0;
+  margin-top: 8px;
+}
+
+#token-info-modal .btn-cta {
+  font-size: 16px;
+  padding: 12px 32px;
+  font-weight: 600;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+  transition: all 0.3s ease;
+}
+
+#token-info-modal .btn-cta:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+}
+
+/* Responsive adjustments for pricing modal */
+@media (max-width: 768px) {
+  #token-info-modal .token-info-modal {
+    width: 98%;
+    max-width: 100%;
+  }
+
+  #token-info-modal .modal-body {
+    padding: 1.5rem;
+  }
+
+  #token-info-modal .pricing-notice {
+    flex-direction: column;
+    padding: 20px;
+  }
+
+  #token-info-modal .pricing-notice .notice-icon {
+    font-size: 40px;
+  }
+
+  #token-info-modal .package-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  #token-info-modal .package-card {
+    padding: 20px;
+  }
+
+  #token-info-modal .modal-actions {
+    flex-direction: column;
+  }
+
+  #token-info-modal .modal-actions button {
+    width: 100%;
+  }
 }
 
 /* Enhanced Animations */
@@ -3970,4 +4180,130 @@ body.modal-open {
 }
 .user-actions{
   margin-left:20px;
+}
+
+/* ===== PARTICIPANT PRESETS INFO BOX ===== */
+.info-box {
+  background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+  border: 2px solid #3b82f6;
+  border-radius: 12px;
+  padding: 20px 24px;
+  margin-bottom: 24px;
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.info-box::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: linear-gradient(90deg, #3b82f6, #8b5cf6, #3b82f6);
+  background-size: 200% 100%;
+  animation: shimmer 3s linear infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.info-box:hover {
+  box-shadow: 0 8px 24px rgba(59, 130, 246, 0.25);
+  transform: translateY(-2px);
+}
+
+.info-box .info-icon {
+  font-size: 32px;
+  flex-shrink: 0;
+  filter: drop-shadow(0 2px 4px rgba(59, 130, 246, 0.3));
+  animation: pulse-icon 2s ease-in-out infinite;
+}
+
+@keyframes pulse-icon {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+}
+
+.info-box .info-text {
+  flex: 1;
+  color: #1e40af;
+  line-height: 1.6;
+}
+
+.info-box .info-text strong {
+  display: block;
+  font-size: 16px;
+  font-weight: 700;
+  color: #1e3a8a;
+  margin-bottom: 8px;
+  letter-spacing: -0.01em;
+}
+
+.info-box .info-text a {
+  color: #3b82f6;
+  text-decoration: none;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.2s ease;
+  border-bottom: 2px solid transparent;
+}
+
+.info-box .info-text a:hover {
+  color: #2563eb;
+  border-bottom-color: #3b82f6;
+  transform: translateX(2px);
+}
+
+.info-box .info-text a::after {
+  content: '→';
+  transition: transform 0.2s ease;
+}
+
+.info-box .info-text a:hover::after {
+  transform: translateX(3px);
+}
+
+/* Alternative green theme for success/positive messages */
+.info-box.success {
+  background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+  border-color: #22c55e;
+}
+
+.info-box.success::before {
+  background: linear-gradient(90deg, #22c55e, #10b981, #22c55e);
+}
+
+.info-box.success .info-text {
+  color: #166534;
+}
+
+.info-box.success .info-text strong {
+  color: #14532d;
+}
+
+.info-box.success .info-text a {
+  color: #22c55e;
+}
+
+.info-box.success .info-text a:hover {
+  color: #16a34a;
+  border-bottom-color: #22c55e;
 }

@@ -18,34 +18,28 @@ class EnhancedProcessor {
   }
 
   setupEventListeners() {
-    // Token request modal handlers
-    const requestTokensBtn = document.getElementById('request-tokens-btn');
-    const tokenRequestModal = document.getElementById('token-request-modal');
-    const closeTokenModal = document.getElementById('close-token-modal');
-    const cancelTokenRequest = document.getElementById('cancel-token-request');
-    const tokenRequestForm = document.getElementById('token-request-form');
-    const tokenSuggestions = document.querySelectorAll('.token-suggestion-btn');
+    // Token info modal handlers
+    const buyTokensBtn = document.getElementById('buy-tokens-btn');
+    const tokenInfoModal = document.getElementById('token-info-modal');
+    const closeTokenInfoModal = document.getElementById('close-token-info-modal');
+    const cancelTokenInfo = document.getElementById('cancel-token-info');
+    const openPricingPageBtn = document.getElementById('open-pricing-page');
 
-    if (requestTokensBtn) {
-      requestTokensBtn.addEventListener('click', () => this.openTokenRequestModal());
+    if (buyTokensBtn) {
+      buyTokensBtn.addEventListener('click', () => this.openTokenInfoModal());
     }
 
-    if (closeTokenModal) {
-      closeTokenModal.addEventListener('click', () => this.closeTokenRequestModal());
+    if (closeTokenInfoModal) {
+      closeTokenInfoModal.addEventListener('click', () => this.closeTokenInfoModal());
     }
 
-    if (cancelTokenRequest) {
-      cancelTokenRequest.addEventListener('click', () => this.closeTokenRequestModal());
+    if (cancelTokenInfo) {
+      cancelTokenInfo.addEventListener('click', () => this.closeTokenInfoModal());
     }
 
-    if (tokenRequestForm) {
-      tokenRequestForm.addEventListener('submit', (e) => this.handleTokenRequestSubmit(e));
+    if (openPricingPageBtn) {
+      openPricingPageBtn.addEventListener('click', () => this.openPricingPage());
     }
-
-    // Token suggestion buttons
-    tokenSuggestions.forEach(btn => {
-      btn.addEventListener('click', (e) => this.handleTokenSuggestion(e));
-    });
 
     // Progress elements
     this.progressElements = {
@@ -72,9 +66,9 @@ class EnhancedProcessor {
     // ESC key handler for modal
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
-        const modal = document.getElementById('token-request-modal');
+        const modal = document.getElementById('token-info-modal');
         if (modal && modal.style.display === 'flex') {
-          this.closeTokenRequestModal();
+          this.closeTokenInfoModal();
         }
       }
     });
@@ -88,199 +82,58 @@ class EnhancedProcessor {
     }
   }
 
-  openTokenRequestModal() {
-    const modal = document.getElementById('token-request-modal');
-    const emailInput = document.getElementById('request-email');
+  openTokenInfoModal() {
+    const modal = document.getElementById('token-info-modal');
     const tokenWidget = document.getElementById('token-balance-widget');
-    const messagesDiv = document.getElementById('token-request-messages');
-    
-    // Pre-fill email if user is logged in
-    if (window.authUtils && window.authUtils.getCurrentUser) {
-      const user = window.authUtils.getCurrentUser();
-      if (user && user.email && emailInput) {
-        emailInput.value = user.email;
-      }
-    }
-    
-    // Clear any existing messages
-    if (messagesDiv) {
-      messagesDiv.style.display = 'none';
-      messagesDiv.textContent = '';
-      messagesDiv.className = 'token-messages';
-    }
-    
+
     // Add fuel gauge animation to token widget
     if (tokenWidget) {
       tokenWidget.classList.add('fuel-gauge-animation');
       setTimeout(() => tokenWidget.classList.remove('fuel-gauge-animation'), 800);
     }
-    
+
     // Add modal-open class to body to prevent background scrolling
     document.body.classList.add('modal-open');
-    
+
     if (modal) {
       modal.style.display = 'flex';
-      console.log('[Enhanced Processor] Token request modal opened with racing animations');
+      console.log('[Enhanced Processor] Token info modal opened');
     }
   }
 
-  closeTokenRequestModal() {
-    const modal = document.getElementById('token-request-modal');
-    const form = document.getElementById('token-request-form');
-    const messagesDiv = document.getElementById('token-request-messages');
-    
+  closeTokenInfoModal() {
+    const modal = document.getElementById('token-info-modal');
+
     // Remove modal-open class to restore background scrolling
     document.body.classList.remove('modal-open');
-    
+
     if (modal) {
       modal.style.display = 'none';
     }
-    
-    if (form) {
-      form.reset();
-    }
-    
-    // Clear messages when closing
-    if (messagesDiv) {
-      messagesDiv.style.display = 'none';
-      messagesDiv.textContent = '';
-      messagesDiv.className = 'token-messages';
-    }
-    
-    // Remove active state from suggestion buttons
-    document.querySelectorAll('.token-suggestion-btn').forEach(btn => {
-      btn.classList.remove('active');
-    });
   }
 
-  handleTokenSuggestion(e) {
-    e.preventDefault();
-    const tokensValue = e.target.dataset.tokens;
-    const tokensInput = document.getElementById('request-tokens');
-    
-    // Remove active state from all buttons
-    document.querySelectorAll('.token-suggestion-btn').forEach(btn => {
-      btn.classList.remove('active');
-    });
-    
-    // Add active state to clicked button
-    e.target.classList.add('active');
-    
-    if (tokensValue === 'custom') {
-      if (tokensInput) {
-        tokensInput.value = '';
-        tokensInput.focus();
-      }
+  openPricingPage() {
+    // Open pricing page in default browser
+    if (window.api && window.api.invoke) {
+      window.api.invoke('open-external-url', 'https://www.racetagger.cloud/pricing')
+        .then(result => {
+          if (result.success) {
+            console.log('[Enhanced Processor] Pricing page opened successfully');
+          } else {
+            console.error('[Enhanced Processor] Failed to open pricing page:', result.error);
+          }
+        })
+        .catch(error => {
+          console.error('[Enhanced Processor] Error opening pricing page:', error);
+        });
     } else {
-      if (tokensInput) {
-        tokensInput.value = tokensValue;
-      }
+      // Fallback for development
+      console.warn('[Enhanced Processor] API not available, using window.open fallback');
+      window.open('https://www.racetagger.cloud/pricing', '_blank');
     }
-  }
 
-  async handleTokenRequestSubmit(e) {
-    e.preventDefault();
-    
-    const submitBtn = document.getElementById('submit-token-request');
-    const originalText = submitBtn.textContent;
-    
-    try {
-      submitBtn.textContent = 'Sending...';
-      submitBtn.disabled = true;
-      
-      const formData = new FormData(e.target);
-      const requestData = {
-        email: document.getElementById('request-email').value,
-        tokensRequested: document.getElementById('request-tokens').value,
-        message: document.getElementById('request-message').value
-      };
-      
-      console.log('[Enhanced Processor] Submitting token request:', requestData);
-      
-      const response = await window.api.invoke('submit-token-request', requestData);
-      
-      if (response.success) {
-        // Show enhanced success message for Early Access
-        const enhancedMessage = response.isEarlyAccessFree 
-          ? `${response.message}\n🚀 Tokens will be added to your account automatically!`
-          : response.message;
-        
-        this.showTokenRequestSuccess(enhancedMessage, response.isEarlyAccessFree);
-        
-        // If tokens were granted, refresh token balance after a short delay
-        if (response.isEarlyAccessFree && response.tokensGranted > 0) {
-          setTimeout(() => {
-            if (window.authUtils && window.authUtils.updateTokenBalance) {
-              window.authUtils.updateTokenBalance(); // Direct refresh
-            }
-          }, 1000);
-        }
-        
-        // Close modal after delay to allow user to read the message
-        setTimeout(() => {
-          this.closeTokenRequestModal();
-        }, 4000);
-      } else {
-        // Check if this is a payment required case (request saved but payment needed)
-        if (response.requestSaved && response.paymentRequired) {
-          // Show as info/warning instead of error
-          this.showTokenRequestInfo(response.message, response.suggestion);
-          // Close modal after delay to allow user to read the message
-          setTimeout(() => {
-            this.closeTokenRequestModal();
-          }, 5000);
-        } else {
-          // Show as error for real errors
-          this.showTokenRequestError(response.message);
-          // Don't close modal for errors, let user close manually
-        }
-      }
-      
-    } catch (error) {
-      console.error('[Enhanced Processor] Error submitting token request:', error);
-      this.showTokenRequestError('Network error. Please check your connection and try again.');
-    } finally {
-      submitBtn.textContent = originalText;
-      submitBtn.disabled = false;
-    }
-  }
-
-  showTokenRequestSuccess(message) {
-    const messagesDiv = document.getElementById('token-request-messages');
-    if (messagesDiv) {
-      messagesDiv.className = 'token-messages success';
-      messagesDiv.innerHTML = `<div class="message-icon">✅</div><div class="message-text">${message}</div>`;
-      messagesDiv.style.display = 'block';
-    }
-    
-    // Add racing sound effect (visual)
-    const tokenWidget = document.getElementById('token-balance-widget');
-    if (tokenWidget) {
-      tokenWidget.classList.add('pit-stop-animation');
-      setTimeout(() => tokenWidget.classList.remove('pit-stop-animation'), 400);
-    }
-  }
-
-  showTokenRequestInfo(message, suggestion = null) {
-    const messagesDiv = document.getElementById('token-request-messages');
-    if (messagesDiv) {
-      messagesDiv.className = 'token-messages info';
-      messagesDiv.innerHTML = `
-        <div class="message-icon">⚠️</div>
-        <div class="message-text">${message}</div>
-        ${suggestion ? `<div class="message-suggestion">${suggestion}</div>` : ''}
-      `;
-      messagesDiv.style.display = 'block';
-    }
-  }
-
-  showTokenRequestError(message) {
-    const messagesDiv = document.getElementById('token-request-messages');
-    if (messagesDiv) {
-      messagesDiv.className = 'token-messages error';
-      messagesDiv.innerHTML = `<div class="message-icon">❌</div><div class="message-text">${message}</div>`;
-      messagesDiv.style.display = 'block';
-    }
+    // Close modal after opening pricing page
+    this.closeTokenInfoModal();
   }
 
   startProcessing(totalImages) {
