@@ -1,6 +1,6 @@
 {
   "name": "racetagger-desktop",
-  "version": "1.0.9",
+  "version": "1.0.9-internal.2",
   "description": "Professional race photography analysis tool with AI-powered race number recognition",
   "author": {
     "name": "RaceTagger Team",
@@ -67,10 +67,10 @@
       "node_modules/better-sqlite3/**/*",
       "node_modules/raw-preview-extractor/**/*"
     ],
-    "icon": "racetagger-logo.png",
+    "icon": "racetagger-logo.icns",
     "mac": {
       "category": "public.app-category.photography",
-      "icon": "racetagger-logo.png",
+      "icon": "racetagger-logo.icns",
       "target": [
         {
           "target": "dmg",
@@ -92,6 +92,7 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "identity": "FEDERICO PASINETTI (MNP388VJLQ)",
+      "notarize": false,
       "signIgnore": [
         "vendor/darwin/lib/Image/ExifTool/Geolocation.dat",
         "vendor/darwin/lib/Image/ExifTool/*.dat"
@@ -153,10 +154,10 @@
         "deb"
       ],
       "category": "Graphics",
-      "icon": "racetagger-logo.png",
+      "icon": "racetagger-logo.icns",
       "maintainer": "RaceTagger Team <info@racetagger.cloud>"
     },
-    "npmRebuild": false,
+    "npmRebuild": true,
     "buildDependenciesFromSource": false,
     "nodeGypRebuild": false
   },
