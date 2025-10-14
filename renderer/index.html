@@ -43,7 +43,7 @@
   <!-- User Menu -->
   <div id="user-bar" class="user-bar" style="display: none;">
     <div id="logo" class="app-logo">
-      <img src="../racetagger-logo.png" alt="RaceTagger" class="logo-icon">
+      <img src="racetagger-logo.png" alt="RaceTagger" class="logo-icon">
       <span class="logo-text">RaceTagger</span>
     </div>
     <div id="token-balance-widget" class="token-balance-widget">
@@ -53,7 +53,7 @@
         <span class="token-label">images remaining</span>
         <button id="refresh-tokens-btn" class="refresh-btn" title="Refresh token balance">⟳</button>
       </div>
-      <button id="request-tokens-btn" class="btn btn-outline btn-sm">Request more analyses</button>
+      <button id="buy-tokens-btn" class="btn btn-outline btn-sm">Buy more analyses</button>
     </div>
     <div class="user-actions">
       <div id="user-info" class="user-info"></div>
@@ -900,6 +900,13 @@
             </div>
           </div>
           <div class="card-body">
+            <div class="info-box mb-md">
+              <span class="info-icon">ℹ️</span>
+              <div class="info-text">
+                <strong>What are Participant Presets?</strong> Presets help improve AI recognition accuracy by providing expected race numbers, driver names, and sponsor information.
+                <a href="https://www.racetagger.cloud/blog/3-CSV-Starting-Lists-for-Race-Photography" target="_blank" style="color: var(--primary-color); text-decoration: underline;">Learn more →</a>
+              </div>
+            </div>
             <div id="presets-list-container">
               <div class="empty-state" id="empty-presets-state">
                 <div class="empty-icon">👥</div>
@@ -1156,67 +1163,68 @@
   <!-- Mobile Sidebar Overlay -->
   <div class="sidebar-overlay" id="sidebar-overlay"></div>
 
-  <!-- Token Request Modal -->
-  <div id="token-request-modal" class="modal-overlay" style="display: none;">
-    <div class="modal-content token-request-modal">
+  <!-- Token Info Modal -->
+  <div id="token-info-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-content token-info-modal">
       <div class="modal-header">
-        <h2>Request/Buy More Tokens</h2>
-        <button type="button" id="close-token-modal" class="btn btn-secondary btn-sm">×</button>
+        <h2>Get More Analyses</h2>
+        <button type="button" id="close-token-info-modal" class="btn btn-secondary btn-sm">×</button>
       </div>
-      
+
       <div class="modal-body">
-        <!-- Area per messaggi di successo/errore -->
-        <div id="token-request-messages" class="token-messages" style="display: none;"></div>
-        
-        <div class="early-access-notice">
-          <div class="notice-icon">🎯</div>
+        <div class="pricing-notice">
+          <div class="notice-icon">🎁</div>
           <div class="notice-content">
-            <h3>Free Tier</h3>
-            <p>Get started with our Free Tier and upgrade as you grow. We'll work with you personally for any additional needs.</p>
-            <p><strong>🎁 FREE: Up to 100 tokens/month</strong> | <strong>💰 Payment required: Over 100 tokens/month</strong></p>
+            <h3>Free Monthly Allowance</h3>
+            <p><strong>Every user gets 100 free analyses per month!</strong></p>
+            <p>This allowance resets automatically on the 1st of each month.</p>
           </div>
         </div>
 
-        <form id="token-request-form">
-          <div class="form-group">
-            <label for="request-email">Email Address</label>
-            <input type="email" id="request-email" class="form-control" required placeholder="your@email.com">
-          </div>
+        <div class="pricing-packages">
+          <h3>Need more? Choose a package:</h3>
 
-
-          <div class="form-group">
-            <label for="request-tokens">Number of Tokens Requested</label>
-            <div class="token-suggestions">
-              <button type="button" class="token-suggestion-btn" data-tokens="50">50 tokens</button>
-              <button type="button" class="token-suggestion-btn" data-tokens="100">100 tokens</button>
-              <button type="button" class="token-suggestion-btn" data-tokens="1000">1,000 tokens</button>
-              <button type="button" class="token-suggestion-btn" data-tokens="custom">Custom</button>
+          <div class="package-grid">
+            <div class="package-card">
+              <div class="package-badge">STARTER</div>
+              <div class="package-price">€29</div>
+              <div class="package-tokens">3,000 analyses</div>
+              <div class="package-features">
+                <p>Perfect for testing</p>
+                <p>Never expire</p>
+              </div>
             </div>
-            <input type="number" id="request-tokens" class="form-control" min="1" placeholder="Enter number of tokens" required>
-          </div>
 
-          <div class="form-group">
-            <label for="request-message">Additional Notes (Optional)</label>
-            <textarea id="request-message" class="form-control" rows="3" placeholder="Tell us about your use case, timeline, or any specific requirements..."></textarea>
-          </div>
+            <div class="package-card recommended">
+              <div class="package-badge">⭐ RECOMMENDED</div>
+              <div class="package-price">€49</div>
+              <div class="package-tokens">10,000 analyses</div>
+              <div class="package-features">
+                <p>1-2 full racing events</p>
+                <p>Best value</p>
+                <p>Never expire</p>
+              </div>
+            </div>
 
-          <div class="pricing-info">
-            <div class="info-box">
-              <strong>💡 What happens next?</strong>
-              <ul>
-                <li>We'll review your request within 24 hours</li>
-                <li>You'll receive a personalized quote via email</li>
-                <li>We'll work with you on the best pricing and payment options</li>
-                <li>Tokens will be added to your account once payment is processed</li>
-              </ul>
+            <div class="package-card">
+              <div class="package-badge">STUDIO</div>
+              <div class="package-price">€99</div>
+              <div class="package-tokens">25,000 analyses</div>
+              <div class="package-features">
+                <p>Ideal for major events</p>
+                <p>Best price per analysis</p>
+                <p>Never expire</p>
+              </div>
             </div>
           </div>
+        </div>
 
-          <div class="modal-actions">
-            <button type="button" id="cancel-token-request" class="btn btn-secondary">Cancel</button>
-            <button type="submit" id="submit-token-request" class="btn btn-primary">Send Request</button>
-          </div>
-        </form>
+        <div class="modal-actions">
+          <button type="button" id="cancel-token-info" class="btn btn-secondary">Close</button>
+          <button type="button" id="open-pricing-page" class="btn btn-primary btn-cta">
+            View Full Pricing & Buy →
+          </button>
+        </div>
       </div>
     </div>
   </div>
