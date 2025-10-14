@@ -7,7 +7,19 @@
       "Bash(./perl.exe exiftool.pl -ver)",
       "Bash(Select-String -Pattern \"RawPreviewExtractor|ExifTool extraction|preview extraction|Native extraction|extraction successful|extraction failed\")",
       "Bash(powershell:*)",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "Bash(export APPLE_APP_SPECIFIC_PASSWORD=ewng-ijfy-xvne-cytg)",
+      "Bash(npm run rebuild:sharp:*)",
+      "Bash(cat:*)",
+      "Bash(icns2png:*)",
+      "Bash(sips:*)",
+      "Bash(npx asar list:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git tag:*)",
+      "Bash(ls:*)",
+      "Read(//Users/federicopasinetti/Documents/WebProjects/Racetagger_V3/**)"
     ],
     "deny": [],
     "ask": []

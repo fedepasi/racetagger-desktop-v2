@@ -35,6 +35,9 @@ const validSendReceiveChannels: string[] = [
   'cancel-batch-processing', 'batch-cancelled',
   // Window control events are typically send-only from renderer or receive-only
   // but for simplicity, we can list them here if they are used in `receive`
+  // Category and auth refresh channels
+  'categories-updated',
+  'auth-refresh-completed',
 ];
 
 const validInvokeChannels: string[] = [
@@ -51,6 +54,7 @@ const validInvokeChannels: string[] = [
   'get-subscription-info',
   'get-is-packaged',
   'open-subscription-page',
+  'open-external-url',
   'submit-token-request',
   // Version Control
   'check-app-version',

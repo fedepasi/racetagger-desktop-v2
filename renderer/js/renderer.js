@@ -78,12 +78,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Initialize metadata overwrite options visibility
   initMetadataOverwriteOptions();
-  
+
   // Initialize enhanced UX components integration
   initializeEnhancedUXIntegration();
 
   // Load dynamic categories from database
-  loadDynamicCategories();
+  // NOTE: Categories will be loaded after authentication in handleLoginResult()
+  // or handleAuthStatus() to avoid race conditions with backend cache
+  // loadDynamicCategories(); // Moved to post-auth
   
   // Gestione diretta del link alla pagina di test
   const testDashboardLink = document.querySelector('.nav-item[href="test-dashboard.html"]');

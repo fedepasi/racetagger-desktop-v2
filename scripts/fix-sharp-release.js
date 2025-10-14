@@ -69,14 +69,25 @@ function fixSharpDependencies(context) {
 
     // Verifica Sharp binary
     const sharpBinaryPath = path.join(imgPath, 'sharp-darwin-arm64', 'lib', 'sharp-darwin-arm64.node');
-    const libvipsPath = path.join(imgPath, 'sharp-libvips-darwin-arm64', 'lib', 'libvips-cpp.8.17.1.dylib');
-    
+
+    // Trova dinamicamente la versione di libvips
+    const libvipsDir = path.join(imgPath, 'sharp-libvips-darwin-arm64', 'lib');
+    let libvipsPath = null;
+
+    if (fs.existsSync(libvipsDir)) {
+      const files = fs.readdirSync(libvipsDir);
+      const libvipsFile = files.find(f => f.startsWith('libvips-cpp.') && f.endsWith('.dylib'));
+      if (libvipsFile) {
+        libvipsPath = path.join(libvipsDir, libvipsFile);
+      }
+    }
+
     if (!fs.existsSync(sharpBinaryPath)) {
       throw new Error(`Sharp binary missing: ${sharpBinaryPath}`);
     }
-    
-    if (!fs.existsSync(libvipsPath)) {
-      throw new Error(`libvips missing: ${libvipsPath}`);
+
+    if (!libvipsPath || !fs.existsSync(libvipsPath)) {
+      throw new Error(`libvips missing in: ${libvipsDir}`);
     }
 
     console.log('✅ [Sharp Fix] Sharp binary and libvips found');

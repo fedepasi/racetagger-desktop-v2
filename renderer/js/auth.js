@@ -308,6 +308,11 @@ function handleAuthStatus(status) {
       // Load complete token info (balance + pending)
       loadCompleteTokenInfo();
       window.api.send('get-subscription-info');
+
+      // IMPORTANT: Load categories with authenticated user's data
+      if (typeof loadDynamicCategories === 'function') {
+        loadDynamicCategories(true); // Force refresh with auth
+      }
     }
   }
 }
@@ -340,6 +345,11 @@ function handleLoginResult(result) {
       // IMPORTANT: Reload home page data to clear previous user's data
       if (typeof loadHomePageData === 'function') {
         loadHomePageData();
+      }
+
+      // IMPORTANT: Reload categories with authenticated user's data
+      if (typeof loadDynamicCategories === 'function') {
+        loadDynamicCategories(true); // Force refresh with auth
       }
     }
   } else {

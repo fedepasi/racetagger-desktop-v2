@@ -667,6 +667,17 @@ console.log('[Main Process] main.ts: setupAuthHandlers() called.');
 
   ipcMain.on('open-subscription-page', () => authService.openSubscriptionPage());
 
+  // Handle opening external URLs (for pricing page, etc.)
+  ipcMain.handle('open-external-url', async (_, url: string) => {
+    try {
+      await shell.openExternal(url);
+      return { success: true };
+    } catch (error: any) {
+      console.error('[Main Process] Error opening external URL:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
   // Listen for auth refresh completion to reload data
   ipcMain.on('auth-refresh-completed-from-renderer', async () => {
     console.log('[Main Process] Auth refresh completed - reloading data...');

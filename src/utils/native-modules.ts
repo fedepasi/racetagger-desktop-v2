@@ -474,17 +474,29 @@ export async function createImageProcessor(input: string | Buffer): Promise<Imag
       // Verifica che i binari nativi esistano
       const darwinArm64Path = path.join(unpackedPath, '@img', 'sharp-darwin-arm64');
       const binaryPath = path.join(darwinArm64Path, 'lib', 'sharp-darwin-arm64.node');
-      const libvipsPath = path.join(unpackedPath, '@img', 'sharp-libvips-darwin-arm64', 'lib', 'libvips-cpp.8.17.1.dylib');
-      
+
+      // Trova dinamicamente la versione di libvips
+      const libvipsDir = path.join(unpackedPath, '@img', 'sharp-libvips-darwin-arm64', 'lib');
+      let libvipsPath: string | null = null;
+
+      if (fs.existsSync(libvipsDir)) {
+        const files = fs.readdirSync(libvipsDir);
+        const libvipsFile = files.find((f: string) => f.startsWith('libvips-cpp.') && f.endsWith('.dylib'));
+        if (libvipsFile) {
+          libvipsPath = path.join(libvipsDir, libvipsFile);
+          safeLog('info', `[ImageProcessor] Found libvips: ${libvipsFile}`);
+        }
+      }
+
       safeLog('info', `[ImageProcessor] Checking for native binary at: ${binaryPath}`);
-      safeLog('info', `[ImageProcessor] Checking for libvips at: ${libvipsPath}`);
-      
+      safeLog('info', `[ImageProcessor] Checking for libvips at: ${libvipsPath || 'NOT FOUND'}`);
+
       if (!fs.existsSync(binaryPath)) {
         throw new Error(`Sharp native binary not found at ${binaryPath}`);
       }
-      
-      if (!fs.existsSync(libvipsPath)) {
-        throw new Error(`Sharp libvips not found at ${libvipsPath}`);
+
+      if (!libvipsPath || !fs.existsSync(libvipsPath)) {
+        throw new Error(`Sharp libvips not found in: ${libvipsDir}`);
       }
       
       // Crea il symlink mancante per sharp.node se non esiste
