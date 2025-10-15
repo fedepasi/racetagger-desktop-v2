@@ -1,6 +1,6 @@
 {
   "name": "racetagger-desktop",
-  "version": "1.0.9-internal.2",
+  "version": "1.0.9-internal.3",
   "description": "Professional race photography analysis tool with AI-powered race number recognition",
   "author": {
     "name": "RaceTagger Team",
@@ -87,15 +87,16 @@
           ]
         }
       ],
-      "hardenedRuntime": true,
+      "hardenedRuntime": false,
       "gatekeeperAssess": false,
-      "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.plist",
-      "identity": "FEDERICO PASINETTI (MNP388VJLQ)",
-      "notarize": false,
+      "identity": null,
       "signIgnore": [
         "vendor/darwin/lib/Image/ExifTool/Geolocation.dat",
-        "vendor/darwin/lib/Image/ExifTool/*.dat"
+        "vendor/darwin/lib/Image/ExifTool/*.dat",
+        "vendor/win32"
+      ],
+      "files": [
+        "!vendor/win32/**/*"
       ]
     },
     "afterPack": "scripts/post-pack-fixes.js",
