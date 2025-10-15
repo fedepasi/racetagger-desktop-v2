@@ -1128,7 +1128,16 @@ html {
   color: #1a73e8;
   font-size: 1.2rem;
 }
-
+#section-analysis .folder-organization-section .form-text {
+  color: #000;
+  font-size: 0.875rem;
+  margin-bottom: 0px;
+}
+#section-analysis .folder-organization-section .toggle-container .form-text , #section-analysis .folder-organization-section .section-header .form-text {
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    margin-bottom: 0rem;
+}
 .token-details {
   font-size: 0.75rem;
   color: #666;

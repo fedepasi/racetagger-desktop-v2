@@ -72,6 +72,8 @@ const validInvokeChannels: string[] = [
   'extract-raw-preview',
   // Enhanced File Browser Operations
   'dialog-show-open',
+  'show-save-dialog',  // Export preset - file save dialog
+  'write-file',        // Export preset - write JSON file
   'get-folder-files',
   'get-file-stats',
   'generate-thumbnail',

@@ -565,6 +565,11 @@ function initializeLocalCacheSchema(): void {
         squadra TEXT,
         sponsors TEXT, -- JSON array di sponsor
         metatag TEXT,
+        categoria TEXT,
+        plate_number TEXT,
+        folder_1 TEXT,
+        folder_2 TEXT,
+        folder_3 TEXT,
         created_at TEXT NOT NULL,
         FOREIGN KEY (preset_id) REFERENCES ParticipantPresets(id) ON DELETE CASCADE,
         UNIQUE(preset_id, numero)
@@ -576,6 +581,23 @@ function initializeLocalCacheSchema(): void {
     localDB.exec(createExecutionsCacheTable);
     localDB.exec(createParticipantPresetsTable);
     localDB.exec(createPresetParticipantsTable);
+
+    // Migration: Add new columns if they don't exist (for existing databases)
+    try {
+      localDB.exec('ALTER TABLE PresetParticipants ADD COLUMN categoria TEXT');
+    } catch (e) { /* Column already exists */ }
+    try {
+      localDB.exec('ALTER TABLE PresetParticipants ADD COLUMN plate_number TEXT');
+    } catch (e) { /* Column already exists */ }
+    try {
+      localDB.exec('ALTER TABLE PresetParticipants ADD COLUMN folder_1 TEXT');
+    } catch (e) { /* Column already exists */ }
+    try {
+      localDB.exec('ALTER TABLE PresetParticipants ADD COLUMN folder_2 TEXT');
+    } catch (e) { /* Column already exists */ }
+    try {
+      localDB.exec('ALTER TABLE PresetParticipants ADD COLUMN folder_3 TEXT');
+    } catch (e) { /* Column already exists */ }
 
     // Configure primary connection for optimal performance
     localDB.pragma('journal_mode = WAL');
@@ -629,6 +651,11 @@ export interface Execution {
   results_reference?: string | null;
   created_at?: string; // ISO 8601 String
   updated_at?: string; // ISO 8601 String
+  // Tracking fields for execution progress
+  processed_images?: number; // Number of images successfully processed
+  total_images?: number; // Total number of images to process
+  category?: string; // Sport category (motorsport, running, altro)
+  execution_settings?: Record<string, any>; // Execution configuration (JSONB)
 }
 
 // Interfacce per sistema preset partecipanti
@@ -655,6 +682,11 @@ export interface PresetParticipant {
   squadra?: string;
   sponsors?: string[]; // Array di sponsor
   metatag?: string;
+  categoria?: string;        // Category (GT3, F1, MotoGP, etc.)
+  plate_number?: string;     // License plate for future car recognition
+  folder_1?: string;         // Custom folder 1
+  folder_2?: string;         // Custom folder 2
+  folder_3?: string;         // Custom folder 3
   created_at?: string;
 }
 
@@ -2280,8 +2312,8 @@ export async function savePresetParticipants(presetId: string, participants: Omi
     // Inserisci i nuovi partecipanti
     const insertStmt = localDB.prepare(`
       INSERT INTO PresetParticipants
-      (id, preset_id, numero, nome_pilota, nome_navigatore, nome_terzo, nome_quarto, squadra, sponsors, metatag, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, preset_id, numero, nome_pilota, nome_navigatore, nome_terzo, nome_quarto, squadra, sponsors, metatag, categoria, plate_number, folder_1, folder_2, folder_3, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const now = new Date().toISOString();
@@ -2293,7 +2325,10 @@ export async function savePresetParticipants(presetId: string, participants: Omi
       insertStmt.run(
         id, presetId, participant.numero, participant.nome_pilota,
         participant.nome_navigatore, participant.nome_terzo, participant.nome_quarto,
-        participant.squadra, sponsorsJson, participant.metatag, now
+        participant.squadra, sponsorsJson, participant.metatag,
+        participant.categoria || null, participant.plate_number || null,
+        participant.folder_1 || null, participant.folder_2 || null, participant.folder_3 || null,
+        now
       );
     }
 
@@ -2371,14 +2406,19 @@ export async function importParticipantsFromCSV(csvData: any[], presetName: stri
 
   const participants: Omit<PresetParticipant, 'id' | 'created_at'>[] = csvData.map(row => ({
     preset_id: preset.id!,
-    numero: row.numero || '',
-    nome_pilota: row.nome || '',
-    nome_navigatore: row.nome_navigatore || '',
+    numero: row.numero || row.Number || '',
+    nome_pilota: row.nome || row.Driver || '',
+    nome_navigatore: '', // Removed from UI, kept for database compatibility
     nome_terzo: row.nome_terzo || '',
     nome_quarto: row.nome_quarto || '',
-    squadra: row.squadra || row.team || '',
-    sponsors: row.sponsors ? (Array.isArray(row.sponsors) ? row.sponsors : [row.sponsors]) : [],
-    metatag: row.metatag || ''
+    squadra: row.squadra || row.team || row.Team || '',
+    sponsors: row.sponsors || row.Sponsors ? (Array.isArray(row.sponsors || row.Sponsors) ? (row.sponsors || row.Sponsors) : [row.sponsors || row.Sponsors]) : [],
+    metatag: row.metatag || row.Metatag || '',
+    categoria: row.categoria || row.Category || '',
+    plate_number: row.plate_number || row.Plate_Number || '',
+    folder_1: row.folder_1 || row.Folder_1 || '',
+    folder_2: row.folder_2 || row.Folder_2 || '',
+    folder_3: row.folder_3 || row.Folder_3 || ''
   }));
 
   await savePresetParticipants(preset.id!, participants);
@@ -2434,6 +2474,7 @@ export interface ParticipantPresetSupabase {
   description?: string;
   is_template?: boolean;
   is_public?: boolean;
+  custom_folders?: string[]; // Array di nomi folder personalizzate create dall'utente
   created_at?: string;
   updated_at?: string;
   last_used_at?: string;
@@ -2452,6 +2493,10 @@ export interface PresetParticipantSupabase {
   navigatore?: string;
   sponsor?: string;
   metatag?: string;
+  plate_number?: string;     // License plate for car recognition
+  folder_1?: string;
+  folder_2?: string;
+  folder_3?: string;
   custom_fields?: any;
   sort_order?: number;
   created_at?: string;
@@ -2691,11 +2736,7 @@ export async function getUserParticipantPresetsSupabase(): Promise<ParticipantPr
 
     // Map preset_participants to participants for UI compatibility
     const mappedData = (data || []).map(preset => {
-      console.log(`[DB] Processing preset "${preset.name}":`, {
-        id: preset.id,
-        preset_participants_count: preset.preset_participants?.length || 0,
-        preset_participants_sample: preset.preset_participants?.slice(0, 2) || []
-      });
+      console.log('[DB] Processing preset "${preset.name}"');
 
       return {
         ...preset,
@@ -2938,18 +2979,22 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
   const participants: Omit<PresetParticipantSupabase, 'id' | 'created_at'>[] = csvData.map((row, index) => {
     const participant = {
       preset_id: preset.id!,
-      numero: row.numero || '',
-      nome: row.nome || '',
-      categoria: row.categoria || '',
-      squadra: row.squadra || row.team || '',
-      navigatore: row.navigatore || row.nome_navigatore || '', // Default empty if missing
-      sponsor: row.sponsor || '',
-      metatag: row.metatag || '', // Default empty if missing
+      numero: row.numero || row.Number || '',
+      nome: row.nome || row.Driver || '',
+      categoria: row.categoria || row.Category || '',
+      squadra: row.squadra || row.team || row.Team || '',
+      sponsor: row.sponsor || row.Sponsors || '',
+      metatag: row.metatag || row.Metatag || '',
+      plate_number: row.plate_number || row.Plate_Number || '',
+      folder_1: row.folder_1 || row.Folder_1 || '',
+      folder_2: row.folder_2 || row.Folder_2 || '',
+      folder_3: row.folder_3 || row.Folder_3 || '',
       sort_order: index,
       custom_fields: {
         // Store any additional CSV fields
         ...Object.keys(row).reduce((acc, key) => {
-          if (!['numero', 'nome', 'categoria', 'squadra', 'navigatore', 'sponsor', 'metatag'].includes(key)) {
+          const knownFields = ['numero', 'Number', 'nome', 'Driver', 'categoria', 'Category', 'squadra', 'team', 'Team', 'sponsor', 'Sponsors', 'metatag', 'Metatag', 'plate_number', 'Plate_Number', 'folder_1', 'Folder_1', 'folder_2', 'Folder_2', 'folder_3', 'Folder_3'];
+          if (!knownFields.includes(key)) {
             acc[key] = row[key];
           }
           return acc;

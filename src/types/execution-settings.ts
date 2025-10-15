@@ -148,11 +148,14 @@ export interface BatchProcessConfig {
   // Folder organization
   folderOrganization?: {
     enabled: boolean;
-    mode?: string;
-    pattern?: string;
+    mode?: 'copy' | 'move';
+    pattern?: 'number' | 'number_name' | 'custom';
     customPattern?: string;
     createUnknownFolder?: boolean;
     unknownFolderName?: string;
+    includeXmpFiles?: boolean;
+    destinationPath?: string;
+    conflictStrategy?: 'rename' | 'skip' | 'overwrite';
   };
 }
 

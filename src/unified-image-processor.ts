@@ -15,6 +15,10 @@ import { CacheManager } from './matching/cache-manager';
 import { AnalysisLogger, CorrectionData } from './utils/analysis-logger';
 import { TemporalClusterManager, ImageTimestamp } from './matching/temporal-clustering';
 import { FilesystemTimestampExtractor, FileTimestamp } from './utils/filesystem-timestamp';
+import { HardwareDetector } from './utils/hardware-detector';
+import { NetworkMonitor } from './utils/network-monitor';
+import { PerformanceTimer } from './utils/performance-timer';
+import { ErrorTracker } from './utils/error-tracker';
 
 const sharp = getSharp();
 
@@ -1084,10 +1088,29 @@ class UnifiedImageWorker extends EventEmitter {
       console.log(`[UnifiedWorker] Sending participant preset with ${this.participantsData.length} participants to edge function`);
     }
 
-    // Determine which Edge Function to use based on settings
-    const functionName = this.config.enableAdvancedAnnotations
-      ? 'analyzeImageDesktopV3'
-      : 'analyzeImageDesktopV2';
+    // Determine which Edge Function to use based on sport category edge_function_version or fallback to settings
+    let functionName: string;
+
+    if (this.currentSportCategory?.edge_function_version) {
+      // Use sport category's edge_function_version if available
+      const version = this.currentSportCategory.edge_function_version;
+      if (version === 3) {
+        functionName = 'analyzeImageDesktopV3';
+      } else if (version === 2) {
+        functionName = 'analyzeImageDesktopV2';
+      } else {
+        // Version 1 or unknown - fallback to V2
+        functionName = 'analyzeImageDesktopV2';
+        console.warn(`[UnifiedProcessor] Unknown edge_function_version ${version} for category ${this.category}, using V2`);
+      }
+      console.log(`[UnifiedProcessor] Using Edge Function ${functionName} based on sport category version ${version}`);
+    } else {
+      // Fallback to config setting if no version specified in category
+      functionName = this.config.enableAdvancedAnnotations
+        ? 'analyzeImageDesktopV3'
+        : 'analyzeImageDesktopV2';
+      console.log(`[UnifiedProcessor] Using Edge Function ${functionName} based on enableAdvancedAnnotations setting`);
+    }
 
     console.log(`🔥 [UnifiedProcessor] About to call ${functionName} for ${fileName} with userId: ${userId}, executionId: ${this.config.executionId || 'none'}`);
 
@@ -2159,11 +2182,36 @@ class UnifiedImageWorker extends EventEmitter {
           console.log(`[UnifiedWorker] Found race numbers [${numbersToOrganize.join(', ')}] for ${imageFile.fileName}`);
         }
 
+        // ====== COLLECT ALL csvData entries for matched numbers ======
+        const csvDataList: any[] = [];
+
+        if (processedAnalysis.csvMatch && Array.isArray(processedAnalysis.csvMatch)) {
+          // For each number to organize, find its corresponding csvData
+          numbersToOrganize.forEach(number => {
+            const match = processedAnalysis.csvMatch.find((m: any) => m.entry?.numero === number);
+            if (match?.entry) {
+              csvDataList.push(match.entry);
+            }
+          });
+        }
+
+        // ====== DEBUG LOGGING: Trace csvDataList before passing to organizer ======
+        console.log('[Processor] 🔍 DEBUG - csvDataList length:', csvDataList.length);
+        console.log('[Processor] 🔍 DEBUG - csvDataList:', csvDataList.length > 0 ? JSON.stringify(csvDataList, null, 2) : 'empty array');
+        csvDataList.forEach((data, index) => {
+          console.log(`[Processor] 🔍 DEBUG - Vehicle ${index + 1} (#${data.numero}):`, {
+            folder_1: data.folder_1 || '(empty)',
+            folder_2: data.folder_2 || '(empty)',
+            folder_3: data.folder_3 || '(empty)'
+          });
+        });
+        // ===========================================================================
+
         // Organizza l'immagine solo con i numeri che hanno match
         const result = await organizer.organizeImage(
           imageFile.originalPath,
           numbersToOrganize, // Only numbers with matches in preset
-          processedAnalysis.csvMatch?.entry,
+          csvDataList, // ← ARRAY of csvData instead of single object
           path.dirname(imageFile.originalPath)
         );
 
@@ -2352,10 +2400,16 @@ export class UnifiedImageProcessor extends EventEmitter {
   private processingQueue: UnifiedImageFile[] = [];
   private totalImages: number = 0;
   private processedImages: number = 0;
+  private ghostVehicleCount: number = 0; // Track images with potential ghost vehicle warnings
   private analysisLogger?: AnalysisLogger;
   private temporalManager: TemporalClusterManager;
   private filesystemTimestampExtractor: FilesystemTimestampExtractor;
   private imageTimestamps: Map<string, ImageTimestamp> = new Map(); // Store timestamps by file path
+  // Optional telemetry trackers (initialized only if execution_id exists)
+  private hardwareDetector?: HardwareDetector;
+  private networkMonitor?: NetworkMonitor;
+  private performanceTimer?: PerformanceTimer;
+  private errorTracker?: ErrorTracker;
 
   constructor(config: Partial<UnifiedProcessorConfig> = {}) {
     super();
@@ -2600,6 +2654,7 @@ export class UnifiedImageProcessor extends EventEmitter {
       this.emit('imageProcessed', {
         processed: this.processedImages,
         total: this.totalImages,
+        ghostVehicleCount: this.ghostVehicleCount,
         phase: 'recognition',
         step: 2,
         totalSteps: 2,
@@ -2664,6 +2719,7 @@ export class UnifiedImageProcessor extends EventEmitter {
     if (!isChunkProcessing) {
       this.totalImages = imageFiles.length;
       this.processedImages = 0;
+      this.ghostVehicleCount = 0; // Reset ghost vehicle counter for new batch
     }
     this.processingQueue = [...imageFiles];
 
@@ -2688,10 +2744,54 @@ export class UnifiedImageProcessor extends EventEmitter {
         userId
       );
 
-      // Log execution start
+      // TIER 1 TELEMETRY: Collect enhanced system environment (optional, safe)
+      let systemEnvironment: any = undefined;
+
+      try {
+        // Initialize telemetry trackers (optional)
+        this.hardwareDetector = new HardwareDetector();
+        this.networkMonitor = new NetworkMonitor();
+        this.performanceTimer = new PerformanceTimer();
+        this.errorTracker = new ErrorTracker();
+
+        // Collect hardware info (with 5s timeout)
+        const hardwareInfo = await Promise.race([
+          this.hardwareDetector.getHardwareInfo(),
+          new Promise((resolve) => setTimeout(() => resolve(undefined), 5000))
+        ]);
+
+        // Collect network metrics (with 5s timeout)
+        const networkMetrics = await Promise.race([
+          this.networkMonitor.measureInitialMetrics(5000),
+          new Promise((resolve) => setTimeout(() => resolve({}), 5000))
+        ]);
+
+        // Collect environment info
+        const { app } = await import('electron');
+        systemEnvironment = {
+          hardware: hardwareInfo,
+          network: networkMetrics,
+          environment: {
+            node_version: process.version,
+            electron_version: process.versions.electron || 'N/A',
+            dcraw_version: undefined, // TODO: Add dcraw version detection
+            sharp_version: 'N/A', // TODO: Get Sharp version safely
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            locale: app.getLocale()
+          }
+        };
+
+        console.log('[UnifiedProcessor] ✅ Enhanced telemetry collected');
+      } catch (telemetryError) {
+        console.warn('[UnifiedProcessor] ⚠️ Failed to collect telemetry (non-critical):', telemetryError);
+        // Continue processing even if telemetry fails
+      }
+
+      // Log execution start with optional telemetry
       this.analysisLogger.logExecutionStart(
         imageFiles.length,
-        undefined // participantPresetId not needed anymore with direct data passing
+        undefined, // participantPresetId not needed anymore with direct data passing
+        systemEnvironment // Optional enhanced telemetry
       );
 
       console.log(`[UnifiedProcessor] Analysis logging enabled for execution ${this.config.executionId}`);
@@ -2725,7 +2825,9 @@ export class UnifiedImageProcessor extends EventEmitter {
               participantCount: this.config.participantPresetData?.length || 0,
               folderOrganizationEnabled: !!this.config.folderOrganization?.enabled,
               enableAdvancedAnnotations: this.config.enableAdvancedAnnotations
-            }
+            },
+            // TIER 1 TELEMETRY: Add system environment telemetry
+            system_environment: systemEnvironment
           };
 
           const { data, error } = await supabase
@@ -2895,14 +2997,21 @@ export class UnifiedImageProcessor extends EventEmitter {
         activeWorkers.delete(workerId);
         results.push(result);
         this.processedImages++;
-        
+
+        // Check for ghost vehicle warning and increment counter
+        if (result.csvMatch?.ghostVehicleWarning) {
+          this.ghostVehicleCount++;
+          console.warn(`[UnifiedProcessor] 🚨 Ghost vehicle detected in ${fileName} (${this.ghostVehicleCount} total ghost vehicles so far)`);
+        }
+
         console.log(`[UnifiedProcessor] Worker ${workerId} completed for ${fileName} (${activeWorkers.size} remaining, ${this.processedImages}/${this.totalImages} total)`);
-        
+
         // Emetti progress
         this.emit('imageProcessed', {
           ...result,
           processed: this.processedImages,
           total: this.totalImages,
+          ghostVehicleCount: this.ghostVehicleCount,
           phase: 'recognition',
           step: 2,
           totalSteps: 2,
@@ -2985,7 +3094,50 @@ export class UnifiedImageProcessor extends EventEmitter {
     // Finalize analysis logging
     if (this.analysisLogger) {
       const successful = results.filter(r => r.success).length;
-      this.analysisLogger.logExecutionComplete(results.length, successful);
+
+      // TIER 1 TELEMETRY: Collect final telemetry stats (optional)
+      let performanceBreakdown: any = undefined;
+      let memoryStats: any = undefined;
+      let networkStats: any = undefined;
+      let errorSummary: any = undefined;
+
+      try {
+        if (this.performanceTimer) {
+          performanceBreakdown = this.performanceTimer.getTimings();
+        }
+
+        if (this.networkMonitor) {
+          networkStats = this.networkMonitor.getMetrics();
+        }
+
+        if (this.errorTracker) {
+          errorSummary = this.errorTracker.getErrorSummary();
+        }
+
+        // Memory stats
+        const currentMemoryMB = process.memoryUsage().heapUsed / 1024 / 1024;
+        memoryStats = {
+          peak_mb: currentMemoryMB, // TODO: Track actual peak during execution
+          average_mb: currentMemoryMB,
+          baseline_mb: currentMemoryMB
+        };
+
+        console.log('[UnifiedProcessor] ✅ Final telemetry collected');
+      } catch (telemetryError) {
+        console.warn('[UnifiedProcessor] ⚠️ Failed to collect final telemetry:', telemetryError);
+      }
+
+      // Log execution complete with enhanced telemetry
+      this.analysisLogger.logExecutionComplete(
+        results.length,
+        successful,
+        {
+          performanceBreakdown,
+          memoryStats,
+          networkStats,
+          errorSummary
+        }
+      );
 
       try {
         const logUrl = await this.analysisLogger.finalize();
@@ -3006,7 +3158,10 @@ export class UnifiedImageProcessor extends EventEmitter {
           const executionUpdate = {
             processed_images: successful,
             status: successful === results.length ? 'completed' : 'completed_with_errors',
-            updated_at: new Date().toISOString()
+            updated_at: new Date().toISOString(),
+            // TIER 1 TELEMETRY: Add telemetry fields
+            performance_breakdown: performanceBreakdown,
+            error_summary: errorSummary
           };
 
           const { error } = await supabase

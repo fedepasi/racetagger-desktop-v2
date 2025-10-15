@@ -1,9 +1,18 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { GoogleGenerativeAI } from 'https://esm.sh/@google/generative-ai@0.15.0' // Updated SDK version
+import { GoogleGenerativeAI } from 'https://esm.sh/@google/generative-ai@0.15.0' // AI Studio SDK
+import { VertexAI } from 'npm:@google-cloud/vertexai@1.1.0' // Vertex AI SDK
 import { encode } from "https://deno.land/std@0.177.0/encoding/base64.ts"; // Import Deno's base64 encoder
 
 // TODO: Implement CORS handling for local development/specific origins
+
+// Vertex AI Configuration
+const VERTEX_PROJECT_ID = Deno.env.get('VERTEX_PROJECT_ID');
+const VERTEX_LOCATION = Deno.env.get('VERTEX_LOCATION') || 'europe-west1';
+const VERTEX_SERVICE_ACCOUNT_KEY = Deno.env.get('VERTEX_SERVICE_ACCOUNT_KEY');
+const USE_VERTEX = !!(VERTEX_PROJECT_ID && VERTEX_LOCATION && VERTEX_SERVICE_ACCOUNT_KEY);
+
+console.log(`[VERTEX CONFIG] Vertex AI ${USE_VERTEX ? 'ENABLED' : 'DISABLED'} (Project: ${VERTEX_PROJECT_ID || 'none'}, Location: ${VERTEX_LOCATION})`);
 
 // Function initialized
 
@@ -16,9 +25,19 @@ serve(async (req) => {
     } })
   }
 
+  // Declare variables outside try block to ensure they're available in catch
+  let userEmail: string | undefined;
+  let imagePath: string | undefined;
+  let originalFilename: string | undefined;
+  let modelToUse: string | undefined;
+  let category: string | undefined;
+  let sizeBytes: number | undefined;
+  let mimeType: string | undefined;
+  let executionTimeMs: number | undefined;
+
   try {
     // Processing request
-    
+
     // 1. Extract image details AND modelName from request body
     let requestBody;
     try {
@@ -28,8 +47,16 @@ serve(async (req) => {
       console.error('Failed to parse request body as JSON:', jsonError);
       throw new Error(`Failed to parse request body: ${jsonError.message}`);
     }
-    
-    const { imagePath, originalFilename, mimeType, sizeBytes, modelName: requestedModelName, userId, category, userEmail, executionId, participantPreset } = requestBody;
+
+    const { imagePath: reqImagePath, originalFilename: reqOriginalFilename, mimeType: reqMimeType, sizeBytes: reqSizeBytes, modelName: requestedModelName, userId, category: reqCategory, userEmail: reqUserEmail, executionId, participantPreset } = requestBody;
+
+    // Assign to outer scope variables
+    imagePath = reqImagePath;
+    originalFilename = reqOriginalFilename;
+    mimeType = reqMimeType;
+    sizeBytes = reqSizeBytes;
+    category = reqCategory;
+    userEmail = reqUserEmail;
     
     // Validate required fields
     if (!imagePath) {
@@ -49,7 +76,7 @@ serve(async (req) => {
     }
     
     // Use requested model or default if not provided
-    const modelToUse = requestedModelName || 'gemini-2.5-flash-lite';
+    modelToUse = requestedModelName || 'gemini-2.5-flash-lite';
     // Processing image request
     
     // Initialize token variables at function level to ensure they're available in catch blocks
@@ -147,9 +174,9 @@ serve(async (req) => {
 - teamName: The team name if visible (string, or null) don't invent data.
 - otherText: An array of other relevant short texts found on the vehicle (e.g., main sponsors, max 5 items), don't invent data.
 - confidence: An estimated confidence score (number 0.00-1.00) for the identified raceNumber.
-- boundingBox: A tight bounding box around the vehicle in format {x, y, width, height} where all values are percentages (0-100) relative to the image dimensions. x and y represent the top-left corner.
+- box_2d: A tight bounding box around the vehicle in format [y1, x1, y2, x2] with coordinates normalized from 0 to 1000. Coordinates represent [top, left, bottom, right]. Provide tight boxes around visible parts only, excluding background.
 
-Respond ONLY with a valid JSON array where each object represents one detected vehicle and contains the fields above. If no vehicles or data are found, return an empty array []. Do not include explanations or markdown formatting in the response. List vehicles generally from foreground to background or left to right if possible. Example object: {"raceNumber": "99", "drivers": ["J. Doe"], "category": "GT3", "teamName": "Racing Team", "otherText": ["Sponsor A", "Sponsor B"], "confidence": 0.9, "boundingBox": {"x": 25.5, "y": 30.0, "width": 45.0, "height": 60.0}}`;
+Respond ONLY with a valid JSON array where each object represents one detected vehicle and contains the fields above. If no vehicles or data are found, return an empty array []. Do not include explanations or markdown formatting in the response. List vehicles generally from foreground to background or left to right if possible. Example object: {"raceNumber": "99", "drivers": ["J. Doe"], "category": "GT3", "teamName": "Racing Team", "otherText": ["Sponsor A", "Sponsor B"], "confidence": 0.9, "box_2d": [250, 180, 720, 580]}`;
 
         case 'running':
           return `Analyze the provided image for all identifiable runners or cyclists. For each athlete detected, extract the following information if clearly visible:
@@ -159,9 +186,9 @@ Respond ONLY with a valid JSON array where each object represents one detected v
 - teamName: The team name, club, or organization if visible (string, or null) don't invent data.
 - otherText: An array of other relevant short texts found on the athlete (e.g., sponsors, event name, max 5 items), don't invent data.
 - confidence: An estimated confidence score (number 0.00-1.00) for the identified raceNumber.
-- boundingBox: A tight bounding box around the athlete in format {x, y, width, height} where all values are percentages (0-100) relative to the image dimensions. x and y represent the top-left corner.
+- box_2d: A tight bounding box around the athlete in format [y1, x1, y2, x2] with coordinates normalized from 0 to 1000. Coordinates represent [top, left, bottom, right]. Provide tight boxes around visible parts only, excluding background.
 
-Respond ONLY with a valid JSON array where each object represents one detected athlete and contains the fields above. If no athletes or data are found, return an empty array []. Do not include explanations or markdown formatting in the response. List athletes generally from foreground to background or left to right if possible. Example object: {"raceNumber": "1234", "drivers": ["M. Runner"], "category": "Marathon", "teamName": "Running Club", "otherText": ["Nike", "Boston Marathon"], "confidence": 0.9, "boundingBox": {"x": 40.0, "y": 20.0, "width": 15.0, "height": 50.0}}`;
+Respond ONLY with a valid JSON array where each object represents one detected athlete and contains the fields above. If no athletes or data are found, return an empty array []. Do not include explanations or markdown formatting in the response. List athletes generally from foreground to background or left to right if possible. Example object: {"raceNumber": "1234", "drivers": ["M. Runner"], "category": "Marathon", "teamName": "Running Club", "otherText": ["Nike", "Boston Marathon"], "confidence": 0.9, "box_2d": [200, 400, 700, 550]}`;
 
         case 'cycling':
           return `Analyze the provided image for cyclists. For each cyclist detected, extract the following information if clearly visible:
@@ -171,9 +198,9 @@ Respond ONLY with a valid JSON array where each object represents one detected a
 - teamName: The team name if visible (string, or null) don't invent data.
 - otherText: An array of other relevant short texts found (e.g., sponsors, max 5 items), don't invent data.
 - confidence: An estimated confidence score (number 0.00-1.00) for the identified raceNumber.
-- boundingBox: A tight bounding box around the cyclist in format {x, y, width, height} where all values are percentages (0-100) relative to the image dimensions. x and y represent the top-left corner.
+- box_2d: A tight bounding box around the cyclist in format [y1, x1, y2, x2] with coordinates normalized from 0 to 1000. Coordinates represent [top, left, bottom, right]. Provide tight boxes around visible parts only, excluding background.
 
-Respond ONLY with a valid JSON array where each object represents one detected cyclist and contains the fields above. If no cyclists or data are found, return an empty array []. Do not include explanations or markdown formatting in the response. Example object: {"raceNumber": "42", "drivers": ["Cyclist Name"], "category": "Pro", "teamName": "Team Sky", "otherText": ["Sponsor"], "confidence": 0.85, "boundingBox": {"x": 35.0, "y": 25.0, "width": 20.0, "height": 45.0}}`;
+Respond ONLY with a valid JSON array where each object represents one detected cyclist and contains the fields above. If no cyclists or data are found, return an empty array []. Do not include explanations or markdown formatting in the response. Example object: {"raceNumber": "42", "drivers": ["Cyclist Name"], "category": "Pro", "teamName": "Team Sky", "otherText": ["Sponsor"], "confidence": 0.85, "box_2d": [250, 350, 700, 550]}`;
 
         case 'altro':
           return `Analyze the provided image for all identifiable participants or competitors. For each participant detected, extract the following information if clearly visible:
@@ -183,9 +210,9 @@ Respond ONLY with a valid JSON array where each object represents one detected c
 - teamName: The team name or organization if visible (string, or null) don't invent data.
 - otherText: An array of other relevant short texts found on the participant (e.g., sponsors, event details, max 5 items), don't invent data.
 - confidence: An estimated confidence score (number 0.00-1.00) for the identified raceNumber.
-- boundingBox: A tight bounding box around the participant in format {x, y, width, height} where all values are percentages (0-100) relative to the image dimensions. x and y represent the top-left corner.
+- box_2d: A tight bounding box around the participant in format [y1, x1, y2, x2] with coordinates normalized from 0 to 1000. Coordinates represent [top, left, bottom, right]. Provide tight boxes around visible parts only, excluding background.
 
-Respond ONLY with a valid JSON array where each object represents one detected participant and contains the fields above. If no participants or data are found, return an empty array []. Do not include explanations or markdown formatting in the response. List participants generally from foreground to background or left to right if possible. Example object: {"raceNumber": "42", "drivers": ["A. Competitor"], "category": "Open", "teamName": "Local Team", "otherText": ["Sponsor X", "Event 2024"], "confidence": 0.9, "boundingBox": {"x": 30.0, "y": 15.0, "width": 25.0, "height": 55.0}}`;
+Respond ONLY with a valid JSON array where each object represents one detected participant and contains the fields above. If no participants or data are found, return an empty array []. Do not include explanations or markdown formatting in the response. List participants generally from foreground to background or left to right if possible. Example object: {"raceNumber": "42", "drivers": ["A. Competitor"], "category": "Open", "teamName": "Local Team", "otherText": ["Sponsor X", "Event 2024"], "confidence": 0.9, "box_2d": [150, 300, 700, 550]}`;
 
         default:
           // Default to motorsport if category is not recognized
@@ -196,9 +223,9 @@ Respond ONLY with a valid JSON array where each object represents one detected p
 - teamName: The team name if visible (string, or null) don't invent data.
 - otherText: An array of other relevant short texts found on the vehicle (e.g., main sponsors, max 5 items), don't invent data.
 - confidence: An estimated confidence score (number 0.00-1.00) for the identified raceNumber.
-- boundingBox: A tight bounding box around the vehicle in format {x, y, width, height} where all values are percentages (0-100) relative to the image dimensions. x and y represent the top-left corner.
+- box_2d: A tight bounding box around the vehicle in format [y1, x1, y2, x2] with coordinates normalized from 0 to 1000. Coordinates represent [top, left, bottom, right]. Provide tight boxes around visible parts only, excluding background.
 
-Respond ONLY with a valid JSON array where each object represents one detected vehicle and contains the fields above. If no vehicles or data are found, return an empty array []. Do not include explanations or markdown formatting in the response. Example object: {"raceNumber": "99", "drivers": ["J. Doe"], "category": "GT3", "teamName": "Racing Team", "otherText": ["Sponsor A"], "confidence": 0.9, "boundingBox": {"x": 25.5, "y": 30.0, "width": 45.0, "height": 60.0}}`;
+Respond ONLY with a valid JSON array where each object represents one detected vehicle and contains the fields above. If no vehicles or data are found, return an empty array []. Do not include explanations or markdown formatting in the response. Example object: {"raceNumber": "99", "drivers": ["J. Doe"], "category": "GT3", "teamName": "Racing Team", "otherText": ["Sponsor A"], "confidence": 0.9, "box_2d": [250, 180, 720, 580]}`;
       }
     }
 
@@ -290,12 +317,28 @@ Respond ONLY with a valid JSON array where each object represents one detected v
         enhancedPrompt += `\n- PRIORITIZE subjects with clear, readable details over distant ones`;
       }
 
+      // Add plate number detection if enabled
+      if (recognitionConfig.detectPlateNumber) {
+        enhancedPrompt += `\n- If license plate is visible, extract the plate number with confidence score`;
+        enhancedPrompt += `\n  Add fields: "plateNumber": "AB123CD" (string or null), "plateConfidence": 0.85 (0.0-1.0 or null)`;
+        enhancedPrompt += `\n  Extract ONLY alphanumeric characters without separators or symbols`;
+      }
+
+      // Add bounding box format guidance
+      if (recognitionConfig.boundingBoxFormat === 'gemini_native') {
+        enhancedPrompt += `\n- Provide tight bounding boxes around visible parts only, excluding background`;
+        enhancedPrompt += `\n  Use box_2d format: [y1, x1, y2, x2] with coordinates normalized from 0 to 1000`;
+        enhancedPrompt += `\n  Coordinates represent [top, left, bottom, right] edges of the bounding box`;
+      }
+
       enhancedPrompt += `\n- If a number/text is not perfectly readable, set confidence < 0.5 or exclude entirely`;
 
       console.log(`[RECOGNITION CONFIG] Enhanced prompt with config:`, {
         maxResults: recognitionConfig.maxResults,
         minConfidence: recognitionConfig.minConfidence,
-        focusMode: recognitionConfig.focusMode
+        focusMode: recognitionConfig.focusMode,
+        detectPlateNumber: recognitionConfig.detectPlateNumber,
+        boundingBoxFormat: recognitionConfig.boundingBoxFormat
       });
 
       return enhancedPrompt;
@@ -303,13 +346,13 @@ Respond ONLY with a valid JSON array where each object represents one detected v
 
     // 8.6. V3: Add bounding box requirement to all prompts automatically
     function enhancePromptWithBoundingBox(basePrompt: string): string {
-      // Check if prompt already includes boundingBox (e.g., from database or hardcoded)
-      if (basePrompt.includes('boundingBox')) {
-        console.log(`[V3] Prompt already includes boundingBox field, skipping auto-enhancement`);
+      // Check if prompt already includes box_2d or boundingBox (e.g., from database or hardcoded)
+      if (basePrompt.includes('box_2d') || basePrompt.includes('boundingBox')) {
+        console.log(`[V3] Prompt already includes bounding box field, skipping auto-enhancement`);
         return basePrompt;
       }
 
-      console.log(`[V3] Auto-enhancing prompt with boundingBox requirement`);
+      console.log(`[V3] Auto-enhancing prompt with box_2d requirement`);
 
       // Add bounding box requirement to the prompt
       let enhancedPrompt = basePrompt;
@@ -321,19 +364,19 @@ Respond ONLY with a valid JSON array where each object represents one detected v
         const respondSection = basePrompt.substring(respondIndex);
 
         enhancedPrompt = beforeRespond +
-          `- boundingBox: A tight bounding box around the subject in format {x, y, width, height} where all values are percentages (0-100) relative to the image dimensions. x and y represent the top-left corner. This field is REQUIRED for each detection.\n\n` +
+          `- box_2d: A tight bounding box around the subject in format [y1, x1, y2, x2] with coordinates normalized from 0 to 1000. Coordinates represent [top, left, bottom, right]. Provide tight boxes around visible parts only, excluding background. This field is REQUIRED for each detection.\n\n` +
           respondSection;
       } else {
         // If "Respond ONLY" not found, append to end
-        enhancedPrompt += `\n\n- boundingBox: A tight bounding box around the subject in format {x, y, width, height} where all values are percentages (0-100) relative to the image dimensions. x and y represent the top-left corner. This field is REQUIRED for each detection.`;
+        enhancedPrompt += `\n\n- box_2d: A tight bounding box around the subject in format [y1, x1, y2, x2] with coordinates normalized from 0 to 1000. Coordinates represent [top, left, bottom, right]. Provide tight boxes around visible parts only, excluding background. This field is REQUIRED for each detection.`;
       }
 
       // Update example object in prompt if it exists
-      if (enhancedPrompt.includes('Example object:') && !enhancedPrompt.includes('"boundingBox"')) {
+      if (enhancedPrompt.includes('Example object:') && !enhancedPrompt.includes('"box_2d"')) {
         // Add bbox to example - look for closing } before the last quote
         enhancedPrompt = enhancedPrompt.replace(
           /("confidence":\s*[\d.]+)(}+)(\s*"?\s*$)/,
-          '$1, "boundingBox": {"x": 30.0, "y": 25.0, "width": 35.0, "height": 50.0}$2$3'
+          '$1, "box_2d": [250, 180, 720, 580]$2$3'
         );
       }
 
@@ -359,16 +402,203 @@ Respond ONLY with a valid JSON array where each object represents one detected v
       console.log(`[GEMINI API] Using participant preset: ${participantPreset.name} with ${participantPreset.participants.length} participants`);
     }
 
-    // 7. Call Gemini API
+    // ========== DUAL-PROVIDER AI FUNCTIONS WITH FALLBACK ==========
+
+    // Helper: Retry with exponential backoff
+    async function retryWithBackoff(fn: () => Promise<any>, maxRetries = 3, providerName = 'API'): Promise<any> {
+      const INITIAL_DELAY = 1000; // 1 second
+
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          return await fn();
+        } catch (error: any) {
+          const isRetryable =
+            error.message?.includes('503') ||
+            error.message?.includes('429') ||
+            error.message?.includes('overloaded') ||
+            error.message?.includes('quota') ||
+            error.message?.includes('rate limit');
+
+          const isLastAttempt = attempt === maxRetries - 1;
+
+          if (!isRetryable || isLastAttempt) {
+            if (isLastAttempt) {
+              console.error(`[${providerName}] All ${maxRetries} retry attempts failed`);
+            }
+            throw error; // Don't retry or last attempt
+          }
+
+          const delay = INITIAL_DELAY * Math.pow(2, attempt); // Exponential backoff: 1s, 2s, 4s
+          console.warn(`[${providerName}] Attempt ${attempt + 1}/${maxRetries} failed (${error.message}), retrying in ${delay}ms...`);
+          await new Promise(r => setTimeout(r, delay));
+        }
+      }
+    }
+
+    // Provider 1: Vertex AI (Primary - EU)
+    async function tryVertexAI(imageBase64: string, mimeType: string, finalPrompt: string, modelName: string, genConfig: any) {
+      if (!USE_VERTEX) {
+        throw new Error('Vertex AI not configured');
+      }
+
+      console.log(`[VERTEX AI] Attempting analysis with ${modelName} in ${VERTEX_LOCATION}...`);
+
+      return await retryWithBackoff(async () => {
+        // Parse service account credentials
+        const credentials = JSON.parse(VERTEX_SERVICE_ACCOUNT_KEY!);
+
+        // Initialize Vertex AI client
+        const vertexAI = new VertexAI({
+          project: VERTEX_PROJECT_ID!,
+          location: VERTEX_LOCATION,
+          googleAuthOptions: {
+            credentials: credentials
+          }
+        });
+
+        // Get generative model
+        const model = vertexAI.getGenerativeModel({
+          model: modelName,
+        });
+
+        // Prepare request
+        const request = {
+          contents: [{
+            role: 'user',
+            parts: [
+              { text: finalPrompt },
+              {
+                inlineData: {
+                  data: imageBase64,
+                  mimeType: mimeType,
+                }
+              }
+            ]
+          }],
+          generationConfig: {
+            responseMimeType: genConfig.responseMimeType,
+            temperature: genConfig.temperature,
+          }
+        };
+
+        // Call Vertex AI with timeout
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('Vertex AI call timed out after 30 seconds')), 30000);
+        });
+
+        const vertexPromise = model.generateContent(request);
+        const result = await Promise.race([vertexPromise, timeoutPromise]);
+
+        console.log(`[VERTEX AI] ✅ Analysis successful`);
+
+        // Normalize Vertex AI response to match AI Studio's structure
+        // Vertex AI returns: result.response.candidates[0].content.parts[0].text
+        // We need to wrap it so it has a .text() method like AI Studio
+        const normalizedResult = {
+          response: {
+            text: () => {
+              const candidate = result.response?.candidates?.[0];
+              if (!candidate) {
+                throw new Error('No candidates in Vertex AI response');
+              }
+              const textPart = candidate.content?.parts?.find((p: any) => p.text);
+              if (!textPart) {
+                throw new Error('No text part in Vertex AI response');
+              }
+              return textPart.text;
+            }
+          }
+        };
+
+        return normalizedResult;
+      }, 3, 'VERTEX AI');
+    }
+
+    // Provider 2: AI Studio (Fallback - US)
+    async function tryAIStudio(imageBase64: string, mimeType: string, finalPrompt: string, modelName: string, genConfig: any) {
+      const geminiApiKey = Deno.env.get('GEMINI_API_KEY');
+      if (!geminiApiKey) {
+        throw new Error('GEMINI_API_KEY environment variable not set');
+      }
+
+      console.log(`[AI STUDIO] Attempting analysis with ${modelName}...`);
+
+      return await retryWithBackoff(async () => {
+        const genAI = new GoogleGenerativeAI(geminiApiKey);
+        const model = genAI.getGenerativeModel({ model: modelName });
+
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('AI Studio call timed out after 30 seconds')), 30000);
+        });
+
+        const aiStudioPromise = model.generateContent([
+          finalPrompt,
+          {
+            inlineData: {
+              data: imageBase64,
+              mimeType: mimeType,
+            },
+          },
+        ], genConfig);
+
+        const result = await Promise.race([aiStudioPromise, timeoutPromise]);
+        console.log(`[AI STUDIO] ✅ Analysis successful`);
+        return result;
+      }, 3, 'AI STUDIO');
+    }
+
+    // Main wrapper: Try Vertex AI first, fallback to AI Studio
+    async function analyzeWithFallback(imageBase64: string, mimeType: string, finalPrompt: string, modelName: string, genConfig: any) {
+      let provider = 'unknown';
+      let location = 'unknown';
+      let vertexError: any = null;
+
+      // Try Vertex AI first (if configured)
+      if (USE_VERTEX) {
+        try {
+          const result = await tryVertexAI(imageBase64, mimeType, finalPrompt, modelName, genConfig);
+          provider = 'vertex-ai';
+          location = VERTEX_LOCATION;
+          console.log(`[AI PROVIDER] ✅ Used Vertex AI (${location})`);
+          return { result, provider, location };
+        } catch (error: any) {
+          vertexError = error;
+          console.warn(`[AI PROVIDER] ⚠️ Vertex AI failed: ${error.message}`);
+          console.warn(`[AI PROVIDER] Falling back to AI Studio...`);
+        }
+      } else {
+        console.log(`[AI PROVIDER] Vertex AI not configured, using AI Studio directly`);
+      }
+
+      // Fallback to AI Studio
+      try {
+        const result = await tryAIStudio(imageBase64, mimeType, finalPrompt, modelName, genConfig);
+        provider = 'ai-studio';
+        location = 'us-central1';
+        console.log(`[AI PROVIDER] ✅ Used AI Studio (${location}) ${vertexError ? '(fallback)' : '(primary)'}`);
+        return { result, provider, location };
+      } catch (aiStudioError: any) {
+        console.error(`[AI PROVIDER] ❌ Both providers failed!`);
+        console.error(`[AI PROVIDER] Vertex AI error: ${vertexError?.message || 'Not attempted'}`);
+        console.error(`[AI PROVIDER] AI Studio error: ${aiStudioError.message}`);
+        throw new Error(`All AI providers failed. Vertex: ${vertexError?.message || 'N/A'}, AI Studio: ${aiStudioError.message}`);
+      }
+    }
+
+    // ========== END DUAL-PROVIDER AI FUNCTIONS ==========
+
+    // 7. Call AI API with Dual-Provider Fallback System
     // Processing with AI service
-    console.log(`[GEMINI API] Starting analysis with model: ${modelToUse}`);
-    console.log(`[GEMINI API] Image size: ${sizeBytes} bytes, MIME type: ${mimeType}`);
-    console.log(`[GEMINI API] Category: ${category}, User: ${userEmail}`);
-    
+    console.log(`[AI API] Starting analysis with model: ${modelToUse}`);
+    console.log(`[AI API] Image size: ${sizeBytes} bytes, MIME type: ${mimeType}`);
+    console.log(`[AI API] Category: ${category}, User: ${userEmail}`);
+
     const startTime = Date.now(); // Start timing
     let analysisText;
     let result;
-    let executionTimeMs = 0; // Declare at function level for scope access
+    let aiProvider = 'unknown'; // Track which provider was used
+    let aiLocation = 'unknown'; // Track which region was used
+    executionTimeMs = 0; // Initialize at function level for scope access
 
     const generationConfig = {
       responseMimeType: "application/json",
@@ -376,74 +606,65 @@ Respond ONLY with a valid JSON array where each object represents one detected v
     }; // Request JSON output
 
     try {
-      
-      // Add timeout for Gemini API call
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Gemini API call timed out after 30 seconds')), 30000);
-      });
-      
-      console.log(`[GEMINI API] Sending request to Gemini API...`);
-      const geminiPromise = model.generateContent([
+      // Call AI with intelligent fallback (Vertex AI → AI Studio)
+      const { result: aiResult, provider, location } = await analyzeWithFallback(
+        imageBase64,
+        mimeType,
         finalPrompt,
-        {
-          inlineData: {
-            data: imageBase64,
-            mimeType: mimeType,
-          },
-        },
-      ], generationConfig);
-      
-      // Race between the API call and the timeout
-      result = await Promise.race([geminiPromise, timeoutPromise]);
-      
+        modelToUse,
+        generationConfig
+      );
+
+      result = aiResult;
+      aiProvider = provider;
+      aiLocation = location;
+
       const response = await result.response;
       executionTimeMs = Date.now() - startTime; // Calculate execution time
-      console.log(`[GEMINI API] Received response after ${executionTimeMs}ms`);
-      
-      analysisText = response.text(); // Gemini should return JSON string directly
-      console.log(`[GEMINI API] Response text length: ${analysisText?.length || 0} characters`);
-      
+      console.log(`[AI API] Received response after ${executionTimeMs}ms from ${aiProvider} (${aiLocation})`);
+
+      analysisText = response.text(); // Should return JSON string directly
+      console.log(`[AI API] Response text length: ${analysisText?.length || 0} characters`);
+
       // AI analysis completed
     } catch (primaryError: any) {
-      console.warn('[GEMINI API] Primary prompt failed, attempting fallback:', primaryError);
+      console.warn('[AI API] Primary prompt failed, attempting fallback prompt:', primaryError);
 
+      // Fallback prompt logic (database-configured fallback prompt)
       if (fallbackPrompt && fallbackPrompt.trim() !== '') {
         try {
-          console.log(`[GEMINI API] Trying fallback prompt...`);
+          console.log(`[AI API] Trying fallback prompt with dual-provider system...`);
           const fallbackEnhanced = enhancePromptWithPreset(fallbackPrompt, participantPreset);
 
-          const timeoutPromise = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('Fallback Gemini API call timed out after 30 seconds')), 30000);
-          });
-
-          const fallbackPromise = model.generateContent([
+          const { result: aiResult, provider, location } = await analyzeWithFallback(
+            imageBase64,
+            mimeType,
             fallbackEnhanced,
-            {
-              inlineData: {
-                data: imageBase64,
-                mimeType: mimeType,
-              },
-            },
-          ], generationConfig);
+            modelToUse,
+            generationConfig
+          );
 
-          result = await Promise.race([fallbackPromise, timeoutPromise]);
+          result = aiResult;
+          aiProvider = provider;
+          aiLocation = location;
+
           const response = await result.response;
           executionTimeMs = Date.now() - startTime;
           analysisText = response.text();
 
-          console.log(`[GEMINI API] Fallback prompt succeeded after ${executionTimeMs}ms`);
+          console.log(`[AI API] Fallback prompt succeeded after ${executionTimeMs}ms from ${aiProvider} (${aiLocation})`);
 
         } catch (fallbackError: any) {
           executionTimeMs = Date.now() - startTime;
-          console.error(`[GEMINI ERROR] Both primary and fallback prompts failed after ${executionTimeMs}ms`);
-          console.error(`[GEMINI ERROR] Primary error:`, primaryError.message);
-          console.error(`[GEMINI ERROR] Fallback error:`, fallbackError.message);
-          throw new Error(`Failed to analyze image with Gemini API. Primary: ${primaryError.message}, Fallback: ${fallbackError.message}`);
+          console.error(`[AI ERROR] Both primary and fallback prompts failed after ${executionTimeMs}ms`);
+          console.error(`[AI ERROR] Primary error:`, primaryError.message);
+          console.error(`[AI ERROR] Fallback error:`, fallbackError.message);
+          throw new Error(`Failed to analyze image with AI. Primary: ${primaryError.message}, Fallback: ${fallbackError.message}`);
         }
       } else {
         executionTimeMs = Date.now() - startTime;
-        console.error(`[GEMINI ERROR] Primary prompt failed and no fallback available after ${executionTimeMs}ms:`, primaryError);
-        throw new Error(`Failed to analyze image with Gemini API: ${primaryError.message}`);
+        console.error(`[AI ERROR] Primary prompt failed and no fallback available after ${executionTimeMs}ms:`, primaryError);
+        throw new Error(`Failed to analyze image with AI: ${primaryError.message}`);
       }
     }
 
@@ -456,23 +677,23 @@ Respond ONLY with a valid JSON array where each object represents one detected v
     // IMPORTANT: Verify these prices! These are examples/placeholders.
     let INPUT_PRICE_PER_MILLION_TOKENS = 0;
     let OUTPUT_PRICE_PER_MILLION_TOKENS = 0;
-    let analysisProviderString = modelToUse; // Default provider string
+    let modelNameForProvider = modelToUse;
 
     switch (modelToUse) {
         case 'gemini-2.5-flash-lite':
             INPUT_PRICE_PER_MILLION_TOKENS = 0.10; // $0.10/million tokens
             OUTPUT_PRICE_PER_MILLION_TOKENS = 0.40; // $0.40/million tokens
-            analysisProviderString = 'gemini_2.5_flash_lite';
+            modelNameForProvider = 'gemini_2.5_flash_lite';
             break;
         case 'gemini-2.5-pro':
             INPUT_PRICE_PER_MILLION_TOKENS = 1.25; // $1.25/million tokens
             OUTPUT_PRICE_PER_MILLION_TOKENS = 10.00; // $10.00/million tokens
-            analysisProviderString = 'gemini_2.5_pro';
+            modelNameForProvider = 'gemini_2.5_pro';
             break;
         case 'gemini-2.5-flash':
             INPUT_PRICE_PER_MILLION_TOKENS = 0.30; // $0.30/million tokens
             OUTPUT_PRICE_PER_MILLION_TOKENS = 2.50; // $2.50/million tokens
-            analysisProviderString = 'gemini_2.5_flash';
+            modelNameForProvider = 'gemini_2.5_flash';
             break;
         // Add cases for other models (GPT, Claude) here later
         default:
@@ -480,8 +701,14 @@ Respond ONLY with a valid JSON array where each object represents one detected v
             // Use default Pro pricing as a fallback or set to 0
             INPUT_PRICE_PER_MILLION_TOKENS = 7.00;
             OUTPUT_PRICE_PER_MILLION_TOKENS = 21.00;
-            analysisProviderString = `${modelToUse}_multi`; // Generic provider string
+            modelNameForProvider = `${modelToUse}_multi`; // Generic model name
     }
+
+    // Build provider string with format: "provider_location_model"
+    // Examples: "vertex-ai_europe-west1_gemini_2.5_flash_lite" or "ai-studio_us-central1_gemini_2.5_flash_lite"
+    const analysisProviderString = `${aiProvider}_${aiLocation}_${modelNameForProvider}`;
+    console.log(`[PROVIDER INFO] Logging as: ${analysisProviderString}`);
+
     // --- End Pricing Logic ---
 
     // Extract token usage from metadata (check SDK docs for exact structure)

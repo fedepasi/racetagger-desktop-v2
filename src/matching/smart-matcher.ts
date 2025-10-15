@@ -41,6 +41,7 @@ export interface Participant {
   sponsors?: string[];
   categoria?: string;
   category?: string;
+  plate_number?: string; // License plate for car recognition
   metatag?: string;
 }
 
@@ -54,6 +55,10 @@ export interface MatchCandidate {
   temporalBonus?: number;
   temporalClusterSize?: number;
   isBurstModeCandidate?: boolean;
+  // Uniqueness tracking - indicates if any unique evidence was matched
+  hasUniqueEvidence?: boolean;
+  // Ghost vehicle detection - indicates possible LED display or wrong vehicle detection
+  ghostVehicleWarning?: boolean;
 }
 
 export interface MatchResult {
@@ -106,6 +111,19 @@ export class SmartMatcher {
 
   // Flag to track if we are in active processing session
   private static isActiveSession: boolean = false;
+
+  // UNIQUENESS ANALYSIS CACHE - stores uniqueness data for performance
+  // This is computed once per preset and reused across all images
+  private uniquenessCache: {
+    participantsHash: string;
+    uniqueNumbers: Set<string>;
+    uniqueDrivers: Set<string>;
+    uniqueSponsors: Set<string>;
+    uniqueTeams: Set<string>;
+    sponsorOccurrences: Map<string, number>;
+    driverOccurrences: Map<string, number>;
+    teamOccurrences: Map<string, number>;
+  } | null = null;
 
   constructor(sport: string = 'motorsport') {
     this.sport = sport;
@@ -279,6 +297,238 @@ export class SmartMatcher {
   }
 
   /**
+   * Analyze participant preset for uniqueness of values
+   * This is cached and computed only once per preset for performance
+   *
+   * PERFORMANCE: O(n*m) where n=participants, m=avg sponsors per participant
+   * Cached result is reused across all images in the session
+   */
+  private analyzePresetUniqueness(participants: Participant[]): void {
+    // Generate hash of participants to detect preset changes
+    const participantsHash = participants
+      .map(p => `${p.numero || p.number}_${p.nome_pilota}`)
+      .join('|');
+
+    // Check if we already have cached analysis for this exact preset
+    if (this.uniquenessCache && this.uniquenessCache.participantsHash === participantsHash) {
+      console.log('[SmartMatcher] Using cached uniqueness analysis');
+      return; // Cache hit - reuse existing analysis
+    }
+
+    console.log('[SmartMatcher] Computing uniqueness analysis for preset...');
+    const startTime = Date.now();
+
+    // Initialize occurrence counters
+    const numberOccurrences = new Map<string, number>();
+    const driverOccurrences = new Map<string, number>();
+    const sponsorOccurrences = new Map<string, number>();
+    const teamOccurrences = new Map<string, number>();
+
+    // Count occurrences of each value
+    for (const participant of participants) {
+      // Count race numbers
+      const number = String(participant.numero || participant.number || '').trim();
+      if (number) {
+        numberOccurrences.set(number, (numberOccurrences.get(number) || 0) + 1);
+      }
+
+      // Count driver names (all variants)
+      const drivers = [
+        participant.nome_pilota,
+        participant.nome_navigatore,
+        participant.nome_terzo,
+        participant.nome_quarto,
+        participant.nome
+      ].filter(Boolean).map(name => String(name).toLowerCase().trim());
+
+      for (const driver of drivers) {
+        if (driver) {
+          driverOccurrences.set(driver, (driverOccurrences.get(driver) || 0) + 1);
+        }
+      }
+
+      // Count sponsors (with proper splitting)
+      const sponsors = this.extractSponsorsFromParticipant(participant);
+      for (const sponsor of sponsors) {
+        if (sponsor) {
+          sponsorOccurrences.set(sponsor, (sponsorOccurrences.get(sponsor) || 0) + 1);
+        }
+      }
+
+      // Count teams
+      const team = String(participant.squadra || participant.team || '').toLowerCase().trim();
+      if (team) {
+        teamOccurrences.set(team, (teamOccurrences.get(team) || 0) + 1);
+      }
+    }
+
+    // Identify unique values (appear exactly once)
+    const uniqueNumbers = new Set<string>();
+    const uniqueDrivers = new Set<string>();
+    const uniqueSponsors = new Set<string>();
+    const uniqueTeams = new Set<string>();
+
+    numberOccurrences.forEach((count, value) => {
+      if (count === 1) uniqueNumbers.add(value);
+    });
+
+    driverOccurrences.forEach((count, value) => {
+      if (count === 1) uniqueDrivers.add(value);
+    });
+
+    sponsorOccurrences.forEach((count, value) => {
+      if (count === 1) uniqueSponsors.add(value);
+    });
+
+    teamOccurrences.forEach((count, value) => {
+      if (count === 1) uniqueTeams.add(value);
+    });
+
+    // Cache the analysis
+    this.uniquenessCache = {
+      participantsHash,
+      uniqueNumbers,
+      uniqueDrivers,
+      uniqueSponsors,
+      uniqueTeams,
+      sponsorOccurrences,
+      driverOccurrences,
+      teamOccurrences
+    };
+
+    const duration = Date.now() - startTime;
+    console.log(`[SmartMatcher] Uniqueness analysis completed in ${duration}ms:`);
+    console.log(`  - Unique numbers: ${uniqueNumbers.size}/${numberOccurrences.size}`);
+    console.log(`  - Unique drivers: ${uniqueDrivers.size}/${driverOccurrences.size}`);
+    console.log(`  - Unique sponsors: ${uniqueSponsors.size}/${sponsorOccurrences.size}`);
+    console.log(`  - Unique teams: ${uniqueTeams.size}/${teamOccurrences.size}`);
+  }
+
+  /**
+   * Extract and split sponsors from participant data
+   * Handles both string and array formats, with proper splitting
+   */
+  private extractSponsorsFromParticipant(participant: Participant): string[] {
+    const sponsors: string[] = [];
+
+    // Handle sponsor field (string or array)
+    if (participant.sponsor) {
+      if (Array.isArray(participant.sponsor)) {
+        sponsors.push(...participant.sponsor);
+      } else {
+        // Split by comma and clean up
+        const splitSponsors = String(participant.sponsor)
+          .split(',')
+          .map(s => s.trim().toLowerCase())
+          .filter(s => s.length > 0);
+        sponsors.push(...splitSponsors);
+      }
+    }
+
+    // Handle sponsors field (array)
+    if (participant.sponsors && Array.isArray(participant.sponsors)) {
+      const cleanSponsors = participant.sponsors
+        .map(s => String(s).trim().toLowerCase())
+        .filter(s => s.length > 0);
+      sponsors.push(...cleanSponsors);
+    }
+
+    return sponsors;
+  }
+
+  /**
+   * Check if an evidence value is unique in the preset
+   */
+  private isUniqueInPreset(evidenceType: EvidenceType, evidenceValue: string): boolean {
+    if (!this.uniquenessCache) return false;
+
+    const cleanValue = evidenceValue.toLowerCase().trim();
+
+    switch (evidenceType) {
+      case EvidenceType.RACE_NUMBER:
+        return this.uniquenessCache.uniqueNumbers.has(evidenceValue.trim());
+      case EvidenceType.DRIVER_NAME:
+        return this.uniquenessCache.uniqueDrivers.has(cleanValue);
+      case EvidenceType.SPONSOR:
+        return this.uniquenessCache.uniqueSponsors.has(cleanValue);
+      case EvidenceType.TEAM:
+        return this.uniquenessCache.uniqueTeams.has(cleanValue);
+      default:
+        return false;
+    }
+  }
+
+  /**
+   * Get occurrence count for a value in the preset
+   */
+  private getOccurrenceCount(evidenceType: EvidenceType, evidenceValue: string): number {
+    if (!this.uniquenessCache) return 0;
+
+    const cleanValue = evidenceValue.toLowerCase().trim();
+
+    switch (evidenceType) {
+      case EvidenceType.DRIVER_NAME:
+        return this.uniquenessCache.driverOccurrences.get(cleanValue) || 0;
+      case EvidenceType.SPONSOR:
+        return this.uniquenessCache.sponsorOccurrences.get(cleanValue) || 0;
+      case EvidenceType.TEAM:
+        return this.uniquenessCache.teamOccurrences.get(cleanValue) || 0;
+      default:
+        return 0;
+    }
+  }
+
+  /**
+   * Check if a participant has a specific sponsor in their sponsor list
+   * Used for coherence validation when applying uniqueness boost
+   */
+  private participantHasSponsor(participant: Participant, sponsorValue: string): boolean {
+    const participantSponsors = this.extractSponsorsFromParticipant(participant);
+    const cleanSponsorValue = sponsorValue.toLowerCase().trim();
+
+    return participantSponsors.some(ps => ps === cleanSponsorValue);
+  }
+
+  /**
+   * Check if a participant has a specific driver name in their driver list
+   * Used for coherence validation when applying uniqueness boost
+   */
+  private participantHasDriver(participant: Participant, driverValue: string): boolean {
+    const participantDrivers = [
+      participant.nome_pilota,
+      participant.nome_navigatore,
+      participant.nome_terzo,
+      participant.nome_quarto,
+      participant.nome
+    ].filter(Boolean).map(name => String(name).toLowerCase().trim());
+
+    const cleanDriverValue = driverValue.toLowerCase().trim();
+
+    // Check exact match or partial match (driver name could be partial)
+    return participantDrivers.some(pd =>
+      pd === cleanDriverValue ||
+      pd.includes(cleanDriverValue) ||
+      cleanDriverValue.includes(pd)
+    );
+  }
+
+  /**
+   * Check if a participant has a specific team in their team field
+   * Used for coherence validation when applying uniqueness boost
+   */
+  private participantHasTeam(participant: Participant, teamValue: string): boolean {
+    const participantTeam = String(participant.squadra || participant.team || '').toLowerCase().trim();
+    const cleanTeamValue = teamValue.toLowerCase().trim();
+
+    if (!participantTeam) return false;
+
+    // Check exact match or partial match
+    return participantTeam === cleanTeamValue ||
+           participantTeam.includes(cleanTeamValue) ||
+           cleanTeamValue.includes(participantTeam);
+  }
+
+  /**
    * Create detailed score breakdown for a match candidate
    */
   getScoreBreakdown(candidate: MatchCandidate) {
@@ -372,6 +622,9 @@ export class SmartMatcher {
     vehicleIndex?: number
   ): Promise<MatchResult> {
     const startTime = Date.now();
+
+    // Step -1: Analyze preset for uniqueness (cached for performance)
+    this.analyzePresetUniqueness(participants);
 
     // Step 0: Try fast-track matching based on high-confidence driver name matches
     const fastTrackMatch = this.tryFastTrackNameMatch(analysisResult, participants);
@@ -508,6 +761,9 @@ export class SmartMatcher {
   /**
    * Evaluates a single participant against collected evidence
    *
+   * NEW: Tracks unique evidence matches for improved candidate selection
+   * NEW: Intelligent sponsor processing - prioritizes unique sponsors and detects contradictions
+   *
    * TODO_ML_INTEGRATION: This method can be enhanced with:
    * - Neural similarity scoring
    * - Embedding-based name matching
@@ -521,11 +777,18 @@ export class SmartMatcher {
     let totalScore = 0;
     const matchedEvidence: Evidence[] = [];
     const reasoning: string[] = [];
+    let hasUniqueEvidence = false; // Track if any unique evidence was matched
+    let ghostVehicleWarning = false; // Track if ghost vehicle detected
 
     // Set current evidence context for advanced matching
     this.currentAllEvidence = evidence;
 
-    for (const evidenceItem of evidence) {
+    // Separate sponsor evidence from other evidence for intelligent processing
+    const sponsorEvidence = evidence.filter(e => e.type === EvidenceType.SPONSOR);
+    const nonSponsorEvidence = evidence.filter(e => e.type !== EvidenceType.SPONSOR);
+
+    // Process non-sponsor evidence normally (race number, drivers, team)
+    for (const evidenceItem of nonSponsorEvidence) {
       const match = this.evaluateEvidence(participant, evidenceItem, allowFuzzyMatching);
       if (match.score > 0) {
         totalScore += match.score;
@@ -534,6 +797,25 @@ export class SmartMatcher {
           score: match.score
         });
         reasoning.push(match.reason);
+
+        // Check if this evidence is unique in the preset
+        if (this.isUniqueInPreset(evidenceItem.type, evidenceItem.value)) {
+          hasUniqueEvidence = true;
+        }
+      }
+    }
+
+    // Process ALL sponsor evidence intelligently (prioritized by uniqueness)
+    if (sponsorEvidence.length > 0) {
+      const sponsorResults = this.evaluateAllSponsors(participant, sponsorEvidence);
+      totalScore += sponsorResults.totalScore;
+      matchedEvidence.push(...sponsorResults.matchedEvidence);
+      reasoning.push(...sponsorResults.reasoning);
+      if (sponsorResults.hasUniqueEvidence) {
+        hasUniqueEvidence = true;
+      }
+      if (sponsorResults.ghostVehicleWarning) {
+        ghostVehicleWarning = true;
       }
     }
 
@@ -552,8 +834,12 @@ export class SmartMatcher {
       score: totalScore,
       evidence: matchedEvidence,
       confidence,
-      reasoning
-    };
+      reasoning,
+      // Add flag to indicate unique evidence presence (used for candidate selection)
+      hasUniqueEvidence,
+      // Add flag to indicate possible ghost vehicle detection
+      ghostVehicleWarning
+    } as MatchCandidate;
   }
 
   /**
@@ -576,6 +862,12 @@ export class SmartMatcher {
 
       case EvidenceType.TEAM:
         return this.evaluateTeam(participant, evidence);
+
+      case EvidenceType.CATEGORY:
+        return this.evaluateCategory(participant, evidence);
+
+      case EvidenceType.PLATE_NUMBER:
+        return this.evaluatePlateNumber(participant, evidence);
 
       default:
         return { score: 0, reason: 'Unknown evidence type' };
@@ -648,7 +940,9 @@ export class SmartMatcher {
   }
 
   /**
-   * Driver name matching with fuzzy algorithms
+   * Driver name matching with fuzzy algorithms and uniqueness detection
+   *
+   * NEW: Applies uniqueness bonus for drivers that appear only once in preset
    *
    * TODO_ML_INTEGRATION: Enhanced with:
    * - Transformer-based name embeddings
@@ -670,16 +964,16 @@ export class SmartMatcher {
 
     let bestScore = 0;
     let bestReason = 'No name match found';
+    let bestMatchType: 'exact' | 'partial' | 'fuzzy' | null = null;
 
     for (const participantName of participantNames) {
       // Exact match - apply multiplier for high confidence
       if (participantName === evidenceName) {
         const exactMatchMultiplier = this.getNameMatchMultiplier();
-        const enhancedScore = this.config.weights.driverName * exactMatchMultiplier;
-        return {
-          score: enhancedScore,
-          reason: `Exact name match (${exactMatchMultiplier}x): "${evidenceName}"`
-        };
+        bestScore = this.config.weights.driverName * exactMatchMultiplier;
+        bestReason = `Exact name match (${exactMatchMultiplier}x): "${evidenceName}"`;
+        bestMatchType = 'exact';
+        break; // Exact match found, no need to continue
       }
 
       // Partial match (either direction)
@@ -688,6 +982,7 @@ export class SmartMatcher {
         if (score > bestScore) {
           bestScore = score;
           bestReason = `Partial name match: "${evidenceName}" ↔ "${participantName}"`;
+          bestMatchType = 'partial';
         }
         continue;
       }
@@ -699,6 +994,7 @@ export class SmartMatcher {
         if (score > bestScore) {
           bestScore = score;
           bestReason = `Fuzzy name match: "${evidenceName}" ↔ "${participantName}" (similarity: ${(similarity * 100).toFixed(1)}%)`;
+          bestMatchType = 'fuzzy';
 
           // Track fuzzy correction for analysis logging
           this.addCorrection({
@@ -719,11 +1015,49 @@ export class SmartMatcher {
       }
     }
 
+    // Apply uniqueness bonus if driver name is unique in preset
+    if (bestScore > 0 && this.isUniqueInPreset(EvidenceType.DRIVER_NAME, evidenceName)) {
+      const occurrenceCount = this.getOccurrenceCount(EvidenceType.DRIVER_NAME, evidenceName);
+
+      // COHERENCE VALIDATION: Verify driver name belongs to this participant
+      if (!this.participantHasDriver(participant, evidenceName)) {
+        const participantDrivers = [
+          participant.nome_pilota,
+          participant.nome_navigatore,
+          participant.nome_terzo,
+          participant.nome_quarto,
+          participant.nome
+        ].filter(Boolean).map(name => String(name));
+
+        console.warn(`⚠️  [COHERENCE] REJECTED unique driver boost:`);
+        console.warn(`    Evidence driver: "${evidenceName}" (unique in preset - appears ${occurrenceCount}x)`);
+        console.warn(`    Participant #${participant.numero || participant.number} has: [${participantDrivers.join(', ')}]`);
+        console.warn(`    → Driver name doesn't belong to this participant!`);
+        console.warn(`    → This is likely a ghost vehicle or cross-contamination issue`);
+
+        // INVALIDATE the match completely
+        return {
+          score: 0,
+          reason: `⚠️ COHERENCE CHECK FAILED: Unique driver "${evidenceName}" doesn't belong to participant #${participant.numero || participant.number} (has: ${participantDrivers.join(', ')})`
+        };
+      }
+
+      // Driver belongs to participant - proceed with boost
+      const originalScore = bestScore;
+      bestScore = this.config.weights.raceNumber * 0.95 * (bestMatchType === 'exact' ? 1.0 : 0.85);
+
+      bestReason = `🎯 UNIQUE driver match: "${evidenceName}" (appears only ${occurrenceCount}x in preset) - ${bestMatchType} match - COHERENCE VERIFIED - BOOSTED from ${originalScore.toFixed(1)} to ${bestScore.toFixed(1)} points`;
+
+      console.log(`[SmartMatcher] ${bestReason}`);
+    }
+
     return { score: bestScore, reason: bestReason };
   }
 
   /**
-   * Sponsor matching with enhanced fuzzy logic
+   * Sponsor matching with enhanced fuzzy logic and uniqueness detection
+   *
+   * NEW: Properly splits comma-separated sponsors and applies uniqueness bonus
    */
   private evaluateSponsor(
     participant: Participant,
@@ -731,20 +1065,8 @@ export class SmartMatcher {
   ): { score: number; reason: string } {
     const evidenceSponsor = String(evidence.value).toLowerCase().trim();
 
-    // Get participant sponsors
-    let participantSponsors: string[] = [];
-    if (participant.sponsor) {
-      participantSponsors = Array.isArray(participant.sponsor)
-        ? participant.sponsor
-        : [participant.sponsor];
-    }
-    if (participant.sponsors && Array.isArray(participant.sponsors)) {
-      participantSponsors = [...participantSponsors, ...participant.sponsors];
-    }
-
-    participantSponsors = participantSponsors
-      .filter(Boolean)
-      .map(s => String(s).toLowerCase().trim());
+    // Get participant sponsors using the new extraction method (handles splitting)
+    const participantSponsors = this.extractSponsorsFromParticipant(participant);
 
     if (participantSponsors.length === 0) {
       return { score: 0, reason: 'No sponsor data available' };
@@ -752,14 +1074,15 @@ export class SmartMatcher {
 
     let bestScore = 0;
     let bestReason = 'No sponsor match found';
+    let bestMatchType: 'exact' | 'partial' | 'fuzzy' | null = null;
 
     for (const participantSponsor of participantSponsors) {
       // Exact match
       if (participantSponsor === evidenceSponsor) {
-        return {
-          score: this.config.weights.sponsor,
-          reason: `Exact sponsor match: "${evidenceSponsor}"`
-        };
+        bestScore = this.config.weights.sponsor;
+        bestReason = `Exact sponsor match: "${evidenceSponsor}"`;
+        bestMatchType = 'exact';
+        break; // Exact match found, no need to continue
       }
 
       // Partial match (either direction)
@@ -768,6 +1091,7 @@ export class SmartMatcher {
         if (score > bestScore) {
           bestScore = score;
           bestReason = `Partial sponsor match: "${evidenceSponsor}" ↔ "${participantSponsor}"`;
+          bestMatchType = 'partial';
         }
         continue;
       }
@@ -778,15 +1102,234 @@ export class SmartMatcher {
         if (score > bestScore) {
           bestScore = score;
           bestReason = `Fuzzy sponsor match: "${evidenceSponsor}" ↔ "${participantSponsor}"`;
+          bestMatchType = 'fuzzy';
         }
       }
+    }
+
+    // Apply uniqueness bonus if sponsor is unique in preset
+    if (bestScore > 0 && this.isUniqueInPreset(EvidenceType.SPONSOR, evidenceSponsor)) {
+      const occurrenceCount = this.getOccurrenceCount(EvidenceType.SPONSOR, evidenceSponsor);
+
+      // COHERENCE VALIDATION: Verify sponsor belongs to this participant
+      if (!this.participantHasSponsor(participant, evidenceSponsor)) {
+        const participantSponsors = this.extractSponsorsFromParticipant(participant);
+
+        console.warn(`⚠️  [COHERENCE] REJECTED unique sponsor boost:`);
+        console.warn(`    Evidence sponsor: "${evidenceSponsor}" (unique in preset - appears ${occurrenceCount}x)`);
+        console.warn(`    Participant #${participant.numero || participant.number} has: [${participantSponsors.join(', ')}]`);
+        console.warn(`    → Sponsor doesn't belong to this participant!`);
+        console.warn(`    → This is likely a ghost vehicle or cross-contamination issue`);
+
+        // INVALIDATE the match completely
+        return {
+          score: 0,
+          reason: `⚠️ COHERENCE CHECK FAILED: Unique sponsor "${evidenceSponsor}" doesn't belong to participant #${participant.numero || participant.number} (has: ${participantSponsors.join(', ')})`
+        };
+      }
+
+      // Sponsor belongs to participant - proceed with boost
+      const originalScore = bestScore;
+      bestScore = this.config.weights.raceNumber * 0.9 * (bestMatchType === 'exact' ? 1.0 : 0.8);
+
+      bestReason = `🎯 UNIQUE sponsor match: "${evidenceSponsor}" (appears only ${occurrenceCount}x in preset) - ${bestMatchType} match - COHERENCE VERIFIED - BOOSTED from ${originalScore.toFixed(1)} to ${bestScore.toFixed(1)} points`;
+
+      console.log(`[SmartMatcher] ${bestReason}`);
     }
 
     return { score: bestScore, reason: bestReason };
   }
 
   /**
-   * Team name matching
+   * Intelligent sponsor evaluation - processes ALL sponsors with prioritization
+   *
+   * This method:
+   * 1. Analyzes ALL sponsor evidence from AI (not just first matches)
+   * 2. Prioritizes unique sponsors (process them first for higher weight)
+   * 3. Detects contradictory sponsors (AI sees sponsor that participant doesn't have)
+   * 4. Applies penalty for contradictions
+   *
+   * @param participant - Participant to evaluate against
+   * @param sponsorEvidence - Array of ALL sponsor evidence from AI
+   * @returns Aggregated sponsor evaluation results
+   */
+  private evaluateAllSponsors(
+    participant: Participant,
+    sponsorEvidence: Evidence[]
+  ): {
+    totalScore: number;
+    matchedEvidence: Evidence[];
+    reasoning: string[];
+    hasUniqueEvidence: boolean;
+    ghostVehicleWarning: boolean;
+  } {
+    const participantSponsors = this.extractSponsorsFromParticipant(participant);
+
+    if (participantSponsors.length === 0) {
+      return {
+        totalScore: 0,
+        matchedEvidence: [],
+        reasoning: ['No sponsor data available for participant'],
+        hasUniqueEvidence: false,
+        ghostVehicleWarning: false
+      };
+    }
+
+    // Step 1: Categorize sponsors by uniqueness
+    const uniqueSponsors: Evidence[] = [];
+    const commonSponsors: Evidence[] = [];
+
+    for (const evidence of sponsorEvidence) {
+      if (this.isUniqueInPreset(EvidenceType.SPONSOR, evidence.value)) {
+        uniqueSponsors.push(evidence);
+      } else {
+        commonSponsors.push(evidence);
+      }
+    }
+
+    console.log(`\n[SmartMatcher] 🔍 ========================================`);
+    console.log(`[SmartMatcher] 🔍 Analyzing ${sponsorEvidence.length} sponsors for participant #${participant.numero || participant.number} (${participant.nome || 'Unknown'}):`);
+    console.log(`[SmartMatcher]   → AI detected: [${sponsorEvidence.map(s => s.value).join(', ')}]`);
+    console.log(`[SmartMatcher]   → Participant has: [${participantSponsors.join(', ')}]`);
+    console.log(`[SmartMatcher]   → ${uniqueSponsors.length} UNIQUE sponsors in AI: [${uniqueSponsors.map(s => s.value).join(', ')}]`);
+    console.log(`[SmartMatcher]   → ${commonSponsors.length} common sponsors in AI: [${commonSponsors.map(s => s.value).join(', ')}]`);
+
+    // Step 2: Process sponsors in priority order (unique first)
+    const prioritizedSponsors = [...uniqueSponsors, ...commonSponsors];
+
+    let totalScore = 0;
+    const matchedEvidence: Evidence[] = [];
+    const reasoning: string[] = [];
+    let hasUniqueEvidence = false;
+    const processedSponsorValues = new Set<string>(); // Track processed to avoid duplicates
+
+    for (const evidence of prioritizedSponsors) {
+      const sponsorValue = String(evidence.value).toLowerCase().trim();
+
+      // Skip if already processed (avoid double-counting similar sponsors)
+      if (processedSponsorValues.has(sponsorValue)) {
+        continue;
+      }
+      processedSponsorValues.add(sponsorValue);
+
+      const match = this.evaluateSponsor(participant, evidence);
+
+      if (match.score > 0) {
+        totalScore += match.score;
+        matchedEvidence.push({
+          ...evidence,
+          score: match.score
+        });
+        reasoning.push(match.reason);
+
+        if (this.isUniqueInPreset(EvidenceType.SPONSOR, evidence.value)) {
+          hasUniqueEvidence = true;
+        }
+      }
+    }
+
+    // Step 3: Detect contradictory sponsors (AI sees sponsor that participant DOESN'T have)
+    // This helps identify mismatches (e.g., ghost vehicles with wrong sponsors)
+    // NEW: Apply penalties for ALL contradictory sponsors, not just unique ones
+    const uniqueContradictions: string[] = [];
+    const commonContradictions: string[] = [];
+    let totalPenalty = 0;
+
+    for (const evidence of sponsorEvidence) {
+      const aiSponsor = String(evidence.value).toLowerCase().trim();
+
+      // Check if this sponsor belongs to the participant
+      const belongsToParticipant = participantSponsors.some(ps => {
+        // Exact match
+        if (ps === aiSponsor) return true;
+        // Partial match (either direction)
+        if (ps.includes(aiSponsor) || aiSponsor.includes(ps)) return true;
+        // Fuzzy match
+        if (this.isFuzzySponsorMatch(aiSponsor, ps)) return true;
+        return false;
+      });
+
+      // If sponsor doesn't belong to participant, it's a contradiction
+      if (!belongsToParticipant) {
+        const isUnique = this.isUniqueInPreset(EvidenceType.SPONSOR, aiSponsor);
+
+        if (isUnique) {
+          uniqueContradictions.push(aiSponsor);
+          totalPenalty += 30; // 30 points penalty for unique sponsor contradiction
+        } else {
+          commonContradictions.push(aiSponsor);
+          totalPenalty += 15; // 15 points penalty for common sponsor contradiction
+        }
+      }
+    }
+
+    // Apply penalty for contradictions
+    if (uniqueContradictions.length > 0 || commonContradictions.length > 0) {
+      totalScore -= totalPenalty;
+
+      // Build detailed contradiction message
+      const contradictionParts: string[] = [];
+
+      if (uniqueContradictions.length > 0) {
+        contradictionParts.push(`${uniqueContradictions.length} UNIQUE sponsor(s): [${uniqueContradictions.join(', ')}] (-${uniqueContradictions.length * 30}pts)`);
+      }
+
+      if (commonContradictions.length > 0) {
+        contradictionParts.push(`${commonContradictions.length} common sponsor(s): [${commonContradictions.join(', ')}] (-${commonContradictions.length * 15}pts)`);
+      }
+
+      const contradictionWarning = `⚠️ CONTRADICTION: AI detected sponsor(s) NOT belonging to this participant: ${contradictionParts.join(', ')} - TOTAL PENALTY: -${totalPenalty} points`;
+      reasoning.push(contradictionWarning);
+
+      console.warn(`[SmartMatcher] ${contradictionWarning}`);
+      console.warn(`  → This suggests the AI may have detected the wrong vehicle or there's sponsor cross-contamination`);
+    }
+
+    // Final summary logging
+    const totalContradictions = uniqueContradictions.length + commonContradictions.length;
+    const finalScore = Math.max(0, totalScore);
+
+    // Ghost vehicle detection warning
+    const contradictionRatio = sponsorEvidence.length > 0
+      ? totalContradictions / sponsorEvidence.length
+      : 0;
+
+    let ghostVehicleWarning = '';
+    if (totalContradictions >= 2 && contradictionRatio >= 0.5) {
+      ghostVehicleWarning = `🚨 GHOST VEHICLE ALERT: High contradiction rate (${(contradictionRatio * 100).toFixed(0)}% of sponsors don't belong). This may indicate AI detected wrong vehicle or LED display as separate vehicle.`;
+      console.warn(`\n[SmartMatcher] ${ghostVehicleWarning}`);
+      console.warn(`[SmartMatcher]    💡 Suggestion: Check if image contains LED position display, multiple vehicles, or overlapping race numbers`);
+      reasoning.push(ghostVehicleWarning);
+    }
+
+    console.log(`[SmartMatcher] 📊 ----------------------------------------`);
+    console.log(`[SmartMatcher] 📊 Sponsor evaluation summary for #${participant.numero || participant.number}:`);
+    console.log(`[SmartMatcher]   ✅ Matched: ${matchedEvidence.length} sponsors`);
+    console.log(`[SmartMatcher]   ⚠️  Contradictions: ${totalContradictions} total (${uniqueContradictions.length} unique, ${commonContradictions.length} common)`);
+    console.log(`[SmartMatcher]   📈 Contradiction ratio: ${(contradictionRatio * 100).toFixed(0)}%`);
+    console.log(`[SmartMatcher]   💯 Score breakdown:`);
+    console.log(`[SmartMatcher]      - Positive matches: ${totalScore + totalPenalty} points`);
+    console.log(`[SmartMatcher]      - Penalty applied: -${totalPenalty} points`);
+    console.log(`[SmartMatcher]      - FINAL SCORE: ${finalScore.toFixed(1)} points`);
+    console.log(`[SmartMatcher]   🎯 Has unique evidence: ${hasUniqueEvidence}`);
+    if (ghostVehicleWarning) {
+      console.log(`[SmartMatcher]   ${ghostVehicleWarning}`);
+    }
+    console.log(`[SmartMatcher] ========================================\n`);
+
+    return {
+      totalScore: finalScore,
+      matchedEvidence,
+      reasoning,
+      hasUniqueEvidence,
+      ghostVehicleWarning: totalContradictions >= 2 && contradictionRatio >= 0.5
+    };
+  }
+
+  /**
+   * Team name matching with uniqueness detection
+   *
+   * NEW: Applies uniqueness bonus for teams that appear only once in preset
    */
   private evaluateTeam(
     participant: Participant,
@@ -799,23 +1342,218 @@ export class SmartMatcher {
       return { score: 0, reason: 'No team data available' };
     }
 
+    let bestScore = 0;
+    let bestReason = 'No team match found';
+    let bestMatchType: 'exact' | 'partial' | null = null;
+
     // Exact match
     if (participantTeam === evidenceTeam) {
-      return {
-        score: this.config.weights.team,
-        reason: `Exact team match: "${evidenceTeam}"`
-      };
+      bestScore = this.config.weights.team;
+      bestReason = `Exact team match: "${evidenceTeam}"`;
+      bestMatchType = 'exact';
     }
-
     // Partial match
-    if (participantTeam.includes(evidenceTeam) || evidenceTeam.includes(participantTeam)) {
+    else if (participantTeam.includes(evidenceTeam) || evidenceTeam.includes(participantTeam)) {
+      bestScore = this.config.weights.team * 0.8;
+      bestReason = `Partial team match: "${evidenceTeam}" ↔ "${participantTeam}"`;
+      bestMatchType = 'partial';
+    }
+
+    // Apply uniqueness bonus if team is unique in preset
+    if (bestScore > 0 && this.isUniqueInPreset(EvidenceType.TEAM, evidenceTeam)) {
+      const occurrenceCount = this.getOccurrenceCount(EvidenceType.TEAM, evidenceTeam);
+
+      // COHERENCE VALIDATION: Verify team belongs to this participant
+      if (!this.participantHasTeam(participant, evidenceTeam)) {
+        console.warn(`⚠️  [COHERENCE] REJECTED unique team boost:`);
+        console.warn(`    Evidence team: "${evidenceTeam}" (unique in preset - appears ${occurrenceCount}x)`);
+        console.warn(`    Participant #${participant.numero || participant.number} has: "${participantTeam}"`);
+        console.warn(`    → Team doesn't belong to this participant!`);
+        console.warn(`    → This is likely a ghost vehicle or cross-contamination issue`);
+
+        // INVALIDATE the match completely
+        return {
+          score: 0,
+          reason: `⚠️ COHERENCE CHECK FAILED: Unique team "${evidenceTeam}" doesn't belong to participant #${participant.numero || participant.number} (has: ${participantTeam})`
+        };
+      }
+
+      // Team belongs to participant - proceed with boost
+      const originalScore = bestScore;
+      bestScore = this.config.weights.raceNumber * 0.75 * (bestMatchType === 'exact' ? 1.0 : 0.8);
+
+      bestReason = `🎯 UNIQUE team match: "${evidenceTeam}" (appears only ${occurrenceCount}x in preset) - ${bestMatchType} match - COHERENCE VERIFIED - BOOSTED from ${originalScore.toFixed(1)} to ${bestScore.toFixed(1)} points`;
+
+      console.log(`[SmartMatcher] ${bestReason}`);
+    }
+
+    if (bestScore === 0) {
+      return { score: 0, reason: `No team match: "${evidenceTeam}" ≠ "${participantTeam}"` };
+    }
+
+    return { score: bestScore, reason: bestReason };
+  }
+
+  /**
+   * Get weight for a specific evidence type from current config
+   */
+  private getWeightForEvidenceType(type: EvidenceType): number {
+    const weights = this.config.weights as any;
+    switch (type) {
+      case EvidenceType.RACE_NUMBER: return weights.raceNumber || 0;
+      case EvidenceType.DRIVER_NAME: return weights.driverName || 0;
+      case EvidenceType.SPONSOR: return weights.sponsor || 0;
+      case EvidenceType.TEAM: return weights.team || 0;
+      case EvidenceType.CATEGORY: return weights.category || 0;
+      case EvidenceType.PLATE_NUMBER: return weights.plateNumber || 0;
+      default: return 0;
+    }
+  }
+
+  /**
+   * Helper to evaluate evidence fields with proper empty value handling
+   *
+   * Rules:
+   * - weight = 0 → evidence disabled, return 0 points
+   * - both empty → skip (no information available)
+   * - only preset empty → skip (preset incomplete, no penalty)
+   * - only AI empty → skip (AI didn't detect, no penalty)
+   * - both present → evaluate using callback function
+   */
+  private evaluateFieldWithEmptyHandling(
+    participantValue: string | undefined,
+    evidenceValue: string | undefined,
+    evidenceType: EvidenceType,
+    evaluationFn: (p: string, e: string) => { score: number; reason: string }
+  ): { score: number; reason: string } {
+
+    const weight = this.getWeightForEvidenceType(evidenceType);
+
+    // Evidence disabled for this sport
+    if (weight === 0) {
       return {
-        score: this.config.weights.team * 0.8,
-        reason: `Partial team match: "${evidenceTeam}" ↔ "${participantTeam}"`
+        score: 0,
+        reason: `${evidenceType} disabled for ${this.sport} (weight=0)`
       };
     }
 
-    return { score: 0, reason: `No team match: "${evidenceTeam}" ≠ "${participantTeam}"` };
+    const cleanParticipant = (participantValue || '').trim();
+    const cleanEvidence = (evidenceValue || '').trim();
+
+    // Both empty → skip
+    if (!cleanParticipant && !cleanEvidence) {
+      return {
+        score: 0,
+        reason: `${evidenceType} not available (both preset & AI empty)`
+      };
+    }
+
+    // Only preset empty → skip (preset incomplete, not an error)
+    if (!cleanParticipant && cleanEvidence) {
+      return {
+        score: 0,
+        reason: `${evidenceType} not in preset (AI detected: ${cleanEvidence}, but preset empty - skipped)`
+      };
+    }
+
+    // Only AI empty → skip (AI didn't detect field)
+    if (cleanParticipant && !cleanEvidence) {
+      return {
+        score: 0,
+        reason: `${evidenceType} not detected by AI (preset has: ${cleanParticipant}, but AI empty - skipped)`
+      };
+    }
+
+    // Both present → evaluate match/mismatch
+    return evaluationFn(cleanParticipant, cleanEvidence);
+  }
+
+  /**
+   * Evaluate category evidence (GT3, F1, MotoGP, etc.)
+   * Uses empty-aware evaluation to handle missing data gracefully
+   */
+  private evaluateCategory(
+    participant: Participant,
+    evidence: Evidence
+  ): { score: number; reason: string } {
+    return this.evaluateFieldWithEmptyHandling(
+      participant.categoria || participant.category,
+      String(evidence.value),
+      EvidenceType.CATEGORY,
+      (participantCategory, evidenceCategory) => {
+        const pCat = participantCategory.toLowerCase();
+        const eCat = evidenceCategory.toLowerCase();
+
+        // Exact match
+        if (pCat === eCat) {
+          const score = this.config.weights.category || 0;
+          return {
+            score,
+            reason: `Category EXACT match: ${evidenceCategory} (+${score} pts)`
+          };
+        }
+
+        // Partial match (GT3 vs GT3-PRO, MOTO2 vs MOTO, etc.)
+        if (pCat.includes(eCat) || eCat.includes(pCat)) {
+          const score = (this.config.weights.category || 0) * 0.7;
+          return {
+            score,
+            reason: `Category PARTIAL: ${evidenceCategory} ≈ ${participantCategory} (+${score.toFixed(1)} pts)`
+          };
+        }
+
+        // Mismatch → penalty (category contradiction)
+        return {
+          score: -10,
+          reason: `Category MISMATCH: ${evidenceCategory} ≠ ${participantCategory} (-10 pts)`
+        };
+      }
+    );
+  }
+
+  /**
+   * Evaluate plate number evidence (license plate recognition)
+   * Uses empty-aware evaluation and fuzzy matching for OCR errors
+   */
+  private evaluatePlateNumber(
+    participant: Participant,
+    evidence: Evidence
+  ): { score: number; reason: string } {
+    return this.evaluateFieldWithEmptyHandling(
+      participant.plate_number,
+      String(evidence.value),
+      EvidenceType.PLATE_NUMBER,
+      (participantPlate, evidencePlate) => {
+        // Normalize: uppercase, remove spaces and dashes
+        const pPlate = participantPlate.toUpperCase().replace(/[\s-]/g, '');
+        const ePlate = evidencePlate.toUpperCase().replace(/[\s-]/g, '');
+
+        // Exact match → very strong evidence (plate more reliable than race number!)
+        if (pPlate === ePlate) {
+          const score = this.config.weights.plateNumber || 0;
+          return {
+            score,
+            reason: `Plate EXACT: ${ePlate} (+${score} pts)`
+          };
+        }
+
+        // Fuzzy match for OCR errors (O→0, I→1, B→8, S→5, etc.)
+        const similarity = this.calculateOCRSimilarity(pPlate, ePlate);
+        if (similarity > 0.85) {
+          const score = (this.config.weights.plateNumber || 0) * similarity;
+          return {
+            score,
+            reason: `Plate FUZZY: ${ePlate} ≈ ${pPlate} (${(similarity * 100).toFixed(0)}% similarity, +${score.toFixed(1)} pts)`
+          };
+        }
+
+        // Mismatch → STRONG penalty (wrong plate = wrong vehicle!)
+        return {
+          score: -30,
+          reason: `Plate WRONG: ${ePlate} ≠ ${pPlate} (-30 pts - possible wrong vehicle!)`
+        };
+      }
+    );
   }
 
   /**

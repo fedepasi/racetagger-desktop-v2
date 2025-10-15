@@ -15,7 +15,7 @@ export interface FolderOrganizerConfig {
   enabled: boolean;
   mode: 'copy' | 'move';
   pattern: 'number' | 'number_name' | 'custom';
-  customPattern?: string; // e.g., "{number}_{name}" or "Racer_{number}"
+  customPattern?: string;
   createUnknownFolder: boolean;
   unknownFolderName: string;
   includeXmpFiles?: boolean; // Include XMP sidecar files for RAW images
@@ -53,6 +53,9 @@ export interface CsvParticipantData {
   categoria?: string;
   squadra?: string;
   metatag?: string;
+  folder_1?: string; // Custom folder 1
+  folder_2?: string; // Custom folder 2
+  folder_3?: string; // Custom folder 3
 }
 
 /**
@@ -64,12 +67,8 @@ export class FolderOrganizer {
   private operationLog: FolderOrganizationResult[] = [];
 
   constructor(config: FolderOrganizerConfig) {
-    this.config = {
-      // Defaults
-      customPattern: '{number}',
-      ...config
-    };
-    
+    this.config = config;
+
     // Set default unknown folder name if not provided
     if (!this.config.unknownFolderName) {
       this.config.unknownFolderName = 'Non_Riconosciuti';
@@ -151,91 +150,166 @@ export class FolderOrganizer {
   }
 
   /**
-   * Organize a single image into the appropriate folder
+   * Organize a single image into the appropriate folder(s)
+   * NEW LOGIC: If folder_1, folder_2, or folder_3 are specified, photos are copied to ALL assigned folders
+   * If NO folders assigned, uses default behavior (race number)
+   * MULTI-VEHICLE SUPPORT: Accepts array of csvData for photos with multiple vehicles
    */
   async organizeImage(
     imagePath: string,
     raceNumbers: string | string[],
-    csvData?: CsvParticipantData,
+    csvDataList?: CsvParticipantData | CsvParticipantData[], // Can be single object or array
     sourceDir?: string
   ): Promise<FolderOrganizationResult> {
     const startTime = Date.now();
     const fileName = path.basename(imagePath);
 
-    try {
-      // Handle multiple race numbers
-      const numbers = Array.isArray(raceNumbers) ? raceNumbers : [raceNumbers];
-      const primaryNumber = numbers[0]; // Use first number for primary folder
+    // Normalize csvDataList to always be an array
+    const csvDataArray: CsvParticipantData[] = csvDataList
+      ? (Array.isArray(csvDataList) ? csvDataList : [csvDataList])
+      : [];
 
-      // Determine folder name based on pattern
-      const folderName = this.generateFolderName(primaryNumber, csvData);
-      
-      // Determine destination directory
+    // ====== DEBUG LOGGING: Trace folder data ======
+    console.log('\n[FolderOrg] 🔍 DEBUG - organizeImage() called for:', fileName);
+    console.log('[FolderOrg] 🔍 DEBUG - csvDataArray received:', csvDataArray.length > 0 ? JSON.stringify(csvDataArray, null, 2) : 'empty array');
+    csvDataArray.forEach((csvData, index) => {
+      console.log(`[FolderOrg] 🔍 DEBUG - Vehicle ${index + 1} (#${csvData.numero}):`, {
+        folder_1: csvData.folder_1 || '(empty)',
+        folder_2: csvData.folder_2 || '(empty)',
+        folder_3: csvData.folder_3 || '(empty)'
+      });
+    });
+    // =============================================
+
+    try {
+      const numbers = Array.isArray(raceNumbers) ? raceNumbers : [raceNumbers];
+
+      // NEW LOGIC: Collect custom folders from ALL csvData entries
+      const customFolders: string[] = [];
+
+      if (csvDataArray.length > 0) {
+        // Iterate through ALL participant matches
+        csvDataArray.forEach(csvData => {
+          if (csvData?.folder_1?.trim()) {
+            // Parse folder name with placeholders (e.g., "{number}-{name}" → "51-Calado")
+            const parsedFolder1 = this.parseFolderName(csvData.folder_1.trim(), csvData);
+            customFolders.push(parsedFolder1);
+          }
+          if (csvData?.folder_2?.trim()) {
+            const parsedFolder2 = this.parseFolderName(csvData.folder_2.trim(), csvData);
+            customFolders.push(parsedFolder2);
+          }
+          if (csvData?.folder_3?.trim()) {
+            const parsedFolder3 = this.parseFolderName(csvData.folder_3.trim(), csvData);
+            customFolders.push(parsedFolder3);
+          }
+        });
+      }
+
+      // Remove duplicates (e.g., if 2 vehicles share the same folder)
+      const uniqueCustomFolders = [...new Set(customFolders)];
+
+      // ====== DEBUG LOGGING: Folder collection result ======
+      console.log('[FolderOrg] 🔍 DEBUG - customFolders collected:', customFolders);
+      console.log('[FolderOrg] 🔍 DEBUG - uniqueCustomFolders (duplicates removed):', uniqueCustomFolders);
+      // =====================================================
+
+      // DECISION TREE:
+      // - If NO custom folders → use race numbers (default behavior for ALL numbers)
+      // - If AT LEAST ONE custom folder → use ONLY custom folders (copy to all)
+      const foldersToCreate = uniqueCustomFolders.length > 0
+        ? uniqueCustomFolders
+        : numbers.map(num => this.generateFolderName(num));
+
+      // ====== DEBUG LOGGING: Final decision ======
+      console.log('[FolderOrg] 🔍 DEBUG - foldersToCreate:', foldersToCreate);
+      console.log('[FolderOrg] 🔍 DEBUG - Decision: Using', uniqueCustomFolders.length > 0 ? 'CUSTOM folders' : 'DEFAULT (race number)', '\n');
+      // ==========================================
+
       const baseDir = this.config.destinationPath || sourceDir || path.dirname(imagePath);
-      
-      // Ensure the parent "Organized_Photos" folder exists if using destinationPath
+
+      // Ensure parent directory exists if using destinationPath
       if (this.config.destinationPath) {
         await this.ensureFolderExists(this.config.destinationPath);
       }
-      
-      const targetFolder = path.join(baseDir, folderName);
 
-      // Create folder if it doesn't exist
-      await this.ensureFolderExists(targetFolder);
-
-      // Generate target file path
-      const targetPath = path.join(targetFolder, fileName);
-
-      // Handle file name conflicts based on strategy
+      const copiedPaths: string[] = [];
       const conflictStrategy = this.config.conflictStrategy || 'rename';
-      let finalTargetPath = targetPath;
-      let operation: 'copy' | 'move' | 'skip' = this.config.mode;
-      let xmpHandled = false;
+      let firstOperation: 'copy' | 'move' | 'skip' = this.config.mode;
 
-      // Check if file exists and handle according to strategy
-      if (fs.existsSync(targetPath)) {
-        if (conflictStrategy === 'skip') {
-          console.log(`⏭️ Skipping ${fileName} - file already exists in ${folderName}/`);
-          operation = 'skip';
-        } else if (conflictStrategy === 'rename') {
-          finalTargetPath = await this.resolveFileNameConflict(targetPath);
-          const renamedFileName = path.basename(finalTargetPath);
-          console.log(`🔄 Renaming ${fileName} → ${renamedFileName} (conflict resolved)`);
-        } else if (conflictStrategy === 'overwrite') {
-          console.log(`⚠️ Overwriting existing file: ${fileName} in ${folderName}/`);
-          finalTargetPath = targetPath;
-        }
-      }
+      // COPY FILE TO ALL FOLDERS
+      for (let i = 0; i < foldersToCreate.length; i++) {
+        const folderName = foldersToCreate[i];
+        const targetFolder = path.join(baseDir, folderName);
 
-      // Perform the operation if not skipped
-      if (operation !== 'skip') {
-        if (this.config.mode === 'copy') {
-          await fsPromises.copyFile(imagePath, finalTargetPath);
-          console.log(`✓ Copied: ${fileName} → ${folderName}/`);
-        } else {
-          await fsPromises.rename(imagePath, finalTargetPath);
-          console.log(`✓ Moved: ${fileName} → ${folderName}/`);
+        await this.ensureFolderExists(targetFolder);
+
+        const targetPath = path.join(targetFolder, fileName);
+        let finalTargetPath = targetPath;
+        let operation: 'copy' | 'move' | 'skip' = this.config.mode;
+
+        // For multiple folders: MOVE to first, COPY to rest (if mode = 'move')
+        if (this.config.mode === 'move' && i > 0) {
+          operation = 'copy'; // Force copy for additional folders
         }
 
-        // Handle XMP sidecar file if present
-        xmpHandled = await this.handleXmpSidecar(imagePath, finalTargetPath, operation);
-      }
+        // Handle file name conflicts
+        if (fs.existsSync(targetPath)) {
+          if (conflictStrategy === 'skip') {
+            console.log(`⏭️ Skipping ${fileName} in ${folderName}/ (already exists)`);
+            operation = 'skip';
+          } else if (conflictStrategy === 'rename') {
+            finalTargetPath = await this.resolveFileNameConflict(targetPath);
+            const renamedFileName = path.basename(finalTargetPath);
+            console.log(`🔄 Renaming ${fileName} → ${renamedFileName} in ${folderName}/`);
+          } else if (conflictStrategy === 'overwrite') {
+            console.log(`⚠️ Overwriting ${fileName} in ${folderName}/`);
+            finalTargetPath = targetPath;
+          }
+        }
 
-      // Handle multiple race numbers (copy to additional folders)
-      if (numbers.length > 1) {
-        await this.handleMultipleNumbers(imagePath, numbers.slice(1), csvData, baseDir, fileName);
+        // Perform operation if not skipped
+        if (operation !== 'skip') {
+          if (operation === 'copy') {
+            await fsPromises.copyFile(imagePath, finalTargetPath);
+            console.log(`✓ Copied: ${fileName} → ${folderName}/`);
+          } else {
+            // Move (only for first folder when mode = 'move')
+            await fsPromises.rename(imagePath, finalTargetPath);
+            console.log(`✓ Moved: ${fileName} → ${folderName}/`);
+            imagePath = finalTargetPath; // Update source path for subsequent copies
+          }
+
+          // Handle XMP sidecar file
+          await this.handleXmpSidecar(
+            i === 0 ? imagePath : copiedPaths[0], // Use original or first copy as source
+            finalTargetPath,
+            operation
+          );
+
+          copiedPaths.push(finalTargetPath);
+        }
+
+        if (i === 0) {
+          firstOperation = operation;
+        }
       }
 
       const result: FolderOrganizationResult = {
         success: true,
         originalPath: imagePath,
-        organizedPath: finalTargetPath,
-        folderName,
-        operation,
+        organizedPath: copiedPaths[0],
+        folderName: foldersToCreate.join(', '),
+        operation: firstOperation,
         timeMs: Date.now() - startTime
       };
 
       this.operationLog.push(result);
+
+      if (copiedPaths.length > 1) {
+        console.log(`📁 Photo copied to ${copiedPaths.length} folders: ${foldersToCreate.join(', ')}`);
+      }
+
       return result;
 
     } catch (error) {
@@ -371,37 +445,47 @@ export class FolderOrganizer {
   }
 
   /**
-   * Generate folder name based on pattern and CSV data
+   * Parse folder name with dynamic placeholders
+   * Supports both English (recommended) and Italian (legacy) keywords:
+   * - {number} = Race number
+   * - {name} = Driver/participant name
+   * - {team} or {squadra} (legacy) = Team name
+   * - {category} or {categoria} (legacy) = Category
+   * - {tag} or {metatag} (legacy) = Custom tag/metatag
    */
-  private generateFolderName(raceNumber: string, csvData?: CsvParticipantData): string {
+  private parseFolderName(folderTemplate: string, csvData: CsvParticipantData): string {
+    if (!folderTemplate || !csvData) return folderTemplate;
+
+    let parsedName = folderTemplate;
+
+    // Replace placeholders with actual values
+    parsedName = parsedName.replace(/\{number\}/g, csvData.numero || '');
+    parsedName = parsedName.replace(/\{name\}/g, csvData.nome || '');
+
+    // Team: Support both new English and legacy Italian keywords
+    parsedName = parsedName.replace(/\{team\}/g, csvData.squadra || '');
+    parsedName = parsedName.replace(/\{squadra\}/g, csvData.squadra || ''); // Legacy support
+
+    // Category: Support both new English and legacy Italian keywords
+    parsedName = parsedName.replace(/\{category\}/g, csvData.categoria || '');
+    parsedName = parsedName.replace(/\{categoria\}/g, csvData.categoria || ''); // Legacy support
+
+    // Tag: Support both new English and legacy Italian keywords
+    parsedName = parsedName.replace(/\{tag\}/g, csvData.metatag || '');
+    parsedName = parsedName.replace(/\{metatag\}/g, csvData.metatag || ''); // Legacy support
+
+    // Sanitize the resulting folder name
+    return this.sanitizeFileName(parsedName);
+  }
+
+  /**
+   * Generate default folder name (just race number)
+   */
+  private generateFolderName(raceNumber: string): string {
     if (raceNumber === 'unknown') {
       return this.config.unknownFolderName;
     }
-
-    switch (this.config.pattern) {
-      case 'number':
-        return raceNumber;
-
-      case 'number_name':
-        if (csvData?.nome) {
-          return `${raceNumber}_${this.sanitizeFileName(csvData.nome)}`;
-        }
-        return raceNumber; // Fallback to number only
-
-      case 'custom':
-        if (this.config.customPattern) {
-          let pattern = this.config.customPattern;
-          pattern = pattern.replace('{number}', raceNumber);
-          pattern = pattern.replace('{name}', csvData?.nome || '');
-          pattern = pattern.replace('{categoria}', csvData?.categoria || '');
-          pattern = pattern.replace('{squadra}', csvData?.squadra || '');
-          return this.sanitizeFileName(pattern);
-        }
-        return raceNumber; // Fallback
-
-      default:
-        return raceNumber;
-    }
+    return raceNumber;
   }
 
   /**
@@ -451,7 +535,8 @@ export class FolderOrganizer {
   }
 
   /**
-   * Handle images with multiple race numbers detected
+   * DEPRECATED: Handle images with multiple race numbers detected
+   * This method is no longer used - multiple folder logic is now integrated into organizeImage()
    */
   private async handleMultipleNumbers(
     imagePath: string,
@@ -460,31 +545,8 @@ export class FolderOrganizer {
     baseDir: string,
     fileName: string
   ): Promise<void> {
-    if (this.config.mode !== 'copy') {
-      console.log(`Multiple numbers detected but mode is '${this.config.mode}' - skipping additional copies`);
-      return;
-    }
-
-    for (const number of additionalNumbers) {
-      try {
-        const folderName = this.generateFolderName(number, csvData);
-        const targetFolder = path.join(baseDir, folderName);
-        
-        await this.ensureFolderExists(targetFolder);
-        
-        const targetPath = path.join(targetFolder, fileName);
-        const finalTargetPath = await this.resolveFileNameConflict(targetPath);
-        
-        await fsPromises.copyFile(imagePath, finalTargetPath);
-        console.log(`Additional copy: ${fileName} → ${folderName}/`);
-        
-        // Handle XMP sidecar file for additional copies
-        await this.handleXmpSidecar(imagePath, finalTargetPath, 'copy');
-        
-      } catch (error) {
-        console.error(`Error copying to additional folder ${number}:`, error);
-      }
-    }
+    // DEPRECATED - Logic moved to organizeImage() with folder_1, folder_2, folder_3 support
+    console.warn('[DEPRECATED] handleMultipleNumbers() called - this method is obsolete');
   }
 
   /**

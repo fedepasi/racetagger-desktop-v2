@@ -15,7 +15,9 @@ export enum EvidenceType {
   RACE_NUMBER = 'race_number',
   DRIVER_NAME = 'driver_name',
   SPONSOR = 'sponsor',
-  TEAM = 'team'
+  TEAM = 'team',
+  CATEGORY = 'category',
+  PLATE_NUMBER = 'plate_number'
 }
 
 export interface Evidence {
@@ -118,6 +120,28 @@ export class EvidenceCollector {
         confidence: 0.8,
         source: 'ocr_analysis',
         quality: this.assessTeamQuality(analysisResult.teamName)
+      });
+    }
+
+    // Extract category evidence (AI classification)
+    if (analysisResult.category && typeof analysisResult.category === 'string') {
+      evidence.push({
+        type: EvidenceType.CATEGORY,
+        value: String(analysisResult.category).trim(),
+        confidence: 0.9, // Category usually has high confidence
+        source: 'ai_classification',
+        quality: 1.0 // Category classification is typically reliable
+      });
+    }
+
+    // Extract plate number evidence (if detectPlateNumber is enabled in sport category)
+    if (analysisResult.plateNumber && typeof analysisResult.plateNumber === 'string') {
+      evidence.push({
+        type: EvidenceType.PLATE_NUMBER,
+        value: String(analysisResult.plateNumber).trim(),
+        confidence: analysisResult.plateConfidence || 0.85,
+        source: 'ocr_plate_recognition',
+        quality: this.assessPlateNumberQuality(analysisResult.plateNumber)
       });
     }
 
@@ -300,6 +324,42 @@ export class EvidenceCollector {
     const numberRatio = (cleanTeam.match(/[0-9]/g) || []).length / cleanTeam.length;
     if (numberRatio > 0.2) {
       quality *= 0.7;
+    }
+
+    return Math.max(0.1, Math.min(1.0, quality));
+  }
+
+  /**
+   * Assess the quality of plate number evidence
+   *
+   * Typical license plates have 5-8 characters with mix of letters and numbers
+   */
+  private assessPlateNumberQuality(plateNumber: string): number {
+    let quality = 1.0;
+
+    const clean = plateNumber.replace(/[\s-]/g, '');
+
+    // Penalize very short or very long plates
+    if (clean.length < 4 || clean.length > 10) {
+      quality *= 0.5;
+    }
+
+    // High quality if mix of letters and numbers (typical plate pattern)
+    const hasLetters = /[A-Z]/i.test(clean);
+    const hasNumbers = /[0-9]/.test(clean);
+
+    if (hasLetters && hasNumbers) {
+      quality *= 1.0; // Ideal pattern
+    } else if (hasLetters || hasNumbers) {
+      quality *= 0.7; // Only letters or only numbers (less typical)
+    } else {
+      quality *= 0.3; // No alphanumeric (very suspicious)
+    }
+
+    // Penalize plates with too many special characters (OCR errors)
+    const specialChars = clean.replace(/[A-Z0-9]/gi, '').length;
+    if (specialChars > 0) {
+      quality *= 0.6;
     }
 
     return Math.max(0.1, Math.min(1.0, quality));

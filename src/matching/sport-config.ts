@@ -17,6 +17,8 @@ export interface MatchingConfig {
     driverName: number;
     sponsor: number;
     team: number;
+    category: number;       // weight for category matches (GT3, F1, etc.)
+    plateNumber: number;    // weight for license plate matches
   };
   thresholds: {
     minimumScore: number;        // Minimum score to accept a match
@@ -78,7 +80,9 @@ export class SportConfig {
             raceNumber: category.matching_config.weights?.raceNumber || 100,
             driverName: category.matching_config.weights?.driverName || 80,
             sponsor: category.matching_config.weights?.sponsor || 40,
-            team: category.matching_config.weights?.team || 60
+            team: category.matching_config.weights?.team || 60,
+            category: category.matching_config.weights?.category || 0,
+            plateNumber: category.matching_config.weights?.plateNumber || 0
           },
           thresholds: {
             minimumScore: category.matching_config.thresholds?.minimumScore || 50,
@@ -109,6 +113,8 @@ export class SportConfig {
       driverName?: number;
       sponsor?: number;
       team?: number;
+      category?: number;
+      plateNumber?: number;
     };
     thresholds?: {
       minimumScore?: number;
@@ -126,7 +132,9 @@ export class SportConfig {
         raceNumber: matchingConfig.weights?.raceNumber ?? existingConfig.weights.raceNumber,
         driverName: matchingConfig.weights?.driverName ?? existingConfig.weights.driverName,
         sponsor: matchingConfig.weights?.sponsor ?? existingConfig.weights.sponsor,
-        team: matchingConfig.weights?.team ?? existingConfig.weights.team
+        team: matchingConfig.weights?.team ?? existingConfig.weights.team,
+        category: matchingConfig.weights?.category ?? existingConfig.weights.category,
+        plateNumber: matchingConfig.weights?.plateNumber ?? existingConfig.weights.plateNumber
       },
       thresholds: {
         minimumScore: matchingConfig.thresholds?.minimumScore ?? existingConfig.thresholds.minimumScore,
@@ -194,7 +202,9 @@ export class SportConfig {
         raceNumber: 100,  // Very high importance - numbers are primary
         driverName: 80,   // High importance - drivers are well-known
         sponsor: 40,      // Medium importance - many sponsors visible
-        team: 60          // Medium-high importance - team names visible
+        team: 60,         // Medium-high importance - team names visible
+        category: 0,      // Disabled by default (configured in Supabase)
+        plateNumber: 0    // Disabled by default (configured in Supabase)
       },
       thresholds: {
         minimumScore: 50,           // Require substantial evidence
@@ -214,7 +224,9 @@ export class SportConfig {
         raceNumber: 120,  // Even higher importance - bib numbers critical
         driverName: 60,   // Lower importance - names less visible
         sponsor: 20,      // Low importance - fewer visible sponsors
-        team: 30          // Low importance - team less important
+        team: 30,         // Low importance - team less important
+        category: 0,      // Disabled by default (configured in Supabase)
+        plateNumber: 0    // Disabled (not applicable for running)
       },
       thresholds: {
         minimumScore: 60,           // Higher threshold - numbers more reliable
@@ -234,7 +246,9 @@ export class SportConfig {
         raceNumber: 110,  // High importance
         driverName: 50,   // Medium importance
         sponsor: 60,      // Higher importance - cycling has many sponsors
-        team: 70          // High importance - team jerseys prominent
+        team: 70,         // High importance - team jerseys prominent
+        category: 0,      // Disabled by default (configured in Supabase)
+        plateNumber: 0    // Disabled (not applicable for cycling)
       },
       thresholds: {
         minimumScore: 55,
@@ -254,7 +268,9 @@ export class SportConfig {
         raceNumber: 110,  // Very high - numbers often 3-digit
         driverName: 70,   // Medium-high
         sponsor: 50,      // Medium - gear sponsors visible
-        team: 40          // Lower - teams less prominent
+        team: 40,         // Lower - teams less prominent
+        category: 0,      // Disabled by default (configured in Supabase)
+        plateNumber: 0    // Disabled by default (configured in Supabase)
       },
       thresholds: {
         minimumScore: 50,
@@ -274,7 +290,9 @@ export class SportConfig {
         raceNumber: 100,  // Very high importance - numbers are critical and stable
         driverName: 90,   // Higher than motorsport - driver+navigator names are key
         sponsor: 40,      // Medium importance - sponsors visible but secondary
-        team: 70          // Higher importance - team identification crucial
+        team: 70,         // Higher importance - team identification crucial
+        category: 0,      // Disabled by default (configured in Supabase)
+        plateNumber: 0    // Disabled by default (configured in Supabase)
       },
       thresholds: {
         minimumScore: 55,           // Higher threshold - more conservative matching
@@ -294,7 +312,9 @@ export class SportConfig {
         raceNumber: 90,
         driverName: 70,
         sponsor: 35,
-        team: 50
+        team: 50,
+        category: 0,      // Disabled by default (configured in Supabase)
+        plateNumber: 0    // Disabled by default (configured in Supabase)
       },
       thresholds: {
         minimumScore: 45,

@@ -10,9 +10,13 @@ import path from 'path';
 import { app } from 'electron';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabaseClient } from '../database-service';
+import type { HardwareInfo } from './hardware-detector';
+import type { NetworkMetrics } from './network-monitor';
+import type { PhaseTimings } from './performance-timer';
+import type { ErrorEvent as TrackedError, ErrorSummary } from './error-tracker';
 
 export interface LogEvent {
-  type: 'EXECUTION_START' | 'IMAGE_ANALYSIS' | 'CORRECTION' | 'TEMPORAL_CLUSTER' | 'PARTICIPANT_MATCH' | 'UNKNOWN_NUMBER' | 'EXECUTION_COMPLETE';
+  type: 'EXECUTION_START' | 'IMAGE_ANALYSIS' | 'CORRECTION' | 'TEMPORAL_CLUSTER' | 'PARTICIPANT_MATCH' | 'UNKNOWN_NUMBER' | 'EXECUTION_COMPLETE' | 'ERROR';
   timestamp: string;
   executionId: string;
 }
@@ -24,6 +28,19 @@ export interface ExecutionStartEvent extends LogEvent {
   participantPresetId?: string;
   userId: string;
   appVersion: string;
+  // Optional enhanced telemetry (backward compatible)
+  systemEnvironment?: {
+    hardware?: HardwareInfo;
+    network?: Partial<NetworkMetrics>;
+    environment?: {
+      node_version: string;
+      electron_version: string;
+      dcraw_version?: string;
+      sharp_version?: string;
+      timezone?: string;
+      locale?: string;
+    };
+  };
 }
 
 export interface VehicleAnalysisData {
@@ -156,6 +173,19 @@ export interface ExecutionCompleteEvent extends LogEvent {
   participantMatches: number;
   averageConfidence: number;
   processingTimeMs: number;
+  // Optional enhanced telemetry (backward compatible)
+  performanceBreakdown?: PhaseTimings;
+  memoryStats?: {
+    peak_mb: number;
+    average_mb: number;
+    baseline_mb: number;
+  };
+  cpuStats?: {
+    average_percent?: number;
+    peak_percent?: number;
+  };
+  networkStats?: NetworkMetrics;
+  errorSummary?: ErrorSummary;
 }
 
 export class AnalysisLogger {
@@ -224,9 +254,13 @@ export class AnalysisLogger {
   }
 
   /**
-   * Log execution start
+   * Log execution start (with optional enhanced telemetry)
    */
-  logExecutionStart(totalImages: number, participantPresetId?: string): void {
+  logExecutionStart(
+    totalImages: number,
+    participantPresetId?: string,
+    systemEnvironment?: ExecutionStartEvent['systemEnvironment']
+  ): void {
     const event: ExecutionStartEvent = {
       type: 'EXECUTION_START',
       timestamp: new Date().toISOString(),
@@ -235,7 +269,8 @@ export class AnalysisLogger {
       category: this.category,
       participantPresetId,
       userId: this.userId,
-      appVersion: app.getVersion()
+      appVersion: app.getVersion(),
+      systemEnvironment // Optional enhanced telemetry
     };
 
     this.stats.totalImages = totalImages;
@@ -342,9 +377,44 @@ export class AnalysisLogger {
   }
 
   /**
-   * Log execution completion
+   * Log error (new in enhanced telemetry)
    */
-  logExecutionComplete(totalProcessed: number, successful: number): void {
+  logError(errorData: TrackedError): void {
+    try {
+      const event: TrackedError & LogEvent = {
+        ...errorData,
+        type: 'ERROR',
+        executionId: this.executionId
+      };
+
+      this.writeLine(event);
+
+      // Log to console based on severity
+      if (errorData.severity === 'fatal') {
+        console.error(`[AnalysisLogger] FATAL ERROR:`, errorData.message);
+      } else if (errorData.severity === 'recoverable') {
+        console.warn(`[AnalysisLogger] Recoverable error:`, errorData.message);
+      }
+    } catch (error) {
+      // Error logging should never throw
+      console.error('[AnalysisLogger] Failed to log error:', error);
+    }
+  }
+
+  /**
+   * Log execution completion (with optional enhanced telemetry)
+   */
+  logExecutionComplete(
+    totalProcessed: number,
+    successful: number,
+    enhancedStats?: {
+      performanceBreakdown?: PhaseTimings;
+      memoryStats?: ExecutionCompleteEvent['memoryStats'];
+      cpuStats?: ExecutionCompleteEvent['cpuStats'];
+      networkStats?: NetworkMetrics;
+      errorSummary?: ErrorSummary;
+    }
+  ): void {
     const processingTimeMs = Date.now() - this.stats.startTime;
     const averageConfidence = this.stats.totalImages > 0 ? this.stats.totalConfidence / this.stats.totalImages : 0;
 
@@ -358,7 +428,9 @@ export class AnalysisLogger {
       temporalClusters: this.stats.temporalClusters,
       participantMatches: this.stats.participantMatches,
       averageConfidence,
-      processingTimeMs
+      processingTimeMs,
+      // Optional enhanced telemetry
+      ...enhancedStats
     };
 
     this.writeLine(event);

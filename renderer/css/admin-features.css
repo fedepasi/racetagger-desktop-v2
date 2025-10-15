@@ -204,7 +204,7 @@
 
 /* Section headers in admin features */
 .folder-org-options .section-header h4,
-.folder-organization-section .section-header h4 {
+.participants-modal .folder-organization-section .section-header h4 {
   display: flex;
   align-items: center;
   gap: 8px;

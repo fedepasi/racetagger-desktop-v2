@@ -121,6 +121,7 @@ import { createXmpSidecar, xmpSidecarExists } from './utils/xmp-manager';
 import { writeKeywordsToImage } from './utils/metadata-writer';
 import { rawConverter } from './utils/raw-converter'; // Import the singleton instance
 import { unifiedImageProcessor, UnifiedImageFile, UnifiedProcessingResult, UnifiedProcessorConfig } from './unified-image-processor';
+import { FolderOrganizerConfig } from './utils/folder-organizer';
 
 // Definisci le estensioni supportate a livello globale per riutilizzo
 const RAW_EXTENSIONS = ['.nef', '.arw', '.cr2', '.cr3', '.orf', '.raw', '.rw2', '.dng'];
@@ -285,7 +286,7 @@ type BatchProcessConfig = {
   folderOrganization?: {
     enabled: boolean;
     mode: 'copy' | 'move';
-    pattern: 'number' | 'number_name' | 'custom';
+    pattern?: 'number' | 'number_name' | 'custom';
     customPattern?: string;
     createUnknownFolder: boolean;
     unknownFolderName: string;
@@ -700,19 +701,14 @@ async function getExecutionsFromLogs(): Promise<any[]> {
     const files = fs.readdirSync(analysisLogsPath);
     const executionFiles = files.filter(file => file.startsWith('exec_') && file.endsWith('.jsonl'));
 
-    console.log(`[Executions] Found ${executionFiles.length} execution log files:`, executionFiles);
-
     const executions: any[] = [];
 
     for (const file of executionFiles) {
       let content = '';
       try {
-        console.log(`[Executions] Processing file: ${file}`);
         const filePath = path.join(analysisLogsPath, file);
         content = fs.readFileSync(filePath, 'utf-8');
         const lines = content.trim().split('\n').filter(line => line.trim());
-
-        console.log(`[Executions] File ${file} has ${lines.length} lines`);
 
         if (lines.length === 0) {
           console.log(`[Executions] SKIPPING ${file}: Empty file`);
@@ -734,9 +730,6 @@ async function getExecutionsFromLogs(): Promise<any[]> {
           console.warn(`[Executions] First line content:`, lines[0].substring(0, 200));
           continue;
         }
-
-        console.log(`[Executions] ✓ File ${file} has valid EXECUTION_START as first line`);
-
         // Parse last line to get completion status
         let status = 'processing';
         let totalProcessed = 0;
@@ -863,9 +856,6 @@ function createWindow() {
       return { action: 'deny' };
     }
   });
-  
-  // DevTools abilitati temporaneamente per debug
-  mainWindow.webContents.openDevTools();
 }
 
 function setupDatabaseIpcHandlers() {
@@ -1601,7 +1591,7 @@ async function handleFolderSelection(event: IpcMainEvent) {
     
     if (result.canceled) {
       console.log('Folder selection canceled by user');
-      event.sender.send('folder-selected', { success: false, message: 'Selezione annullata' });
+      // Don't send any message - user simply closed the dialog
       return;
     }
     
@@ -2078,12 +2068,13 @@ function handleCsvTemplateDownload(event: IpcMainEvent) {
       return;
     }
     
-    // Create CSV template content
+    // Create CSV template content with all supported columns
     const csvTemplate =
-      "Number,Driver,Navigator,Team,Sponsors,Metatag\n" +
-      "1,John Doe,Jane Smith,Racing Team A,Sponsor Corp,tag1\n" +
-      "2,Mike Johnson,Sarah Wilson,Speed Team,Brand X,tag2\n" +
-      "3,\"Balthasar, Ponzo, Roe\",,Imperiale Racing,\"elea costruzioni, topcon\",CIGT - 3";
+      "Number,Driver,Team,Category,Plate_Number,Sponsors,Metatag,Folder_1,Folder_2,Folder_3\n" +
+      "1,John Doe,Racing Team A,GT3,AB123CD,Sponsor Corp,Pro Driver,Team-A,GT3-Drivers,\n" +
+      "2,Mike Johnson,Speed Team,GT4,XY987ZW,Brand X,Semi-Pro,Speed-Team,GT4-Rookies,\n" +
+      "3,\"Balthasar, Ponzo, Roe\",Imperiale Racing,GT3,FE456GH,\"elea costruzioni, topcon\",VIP,Imperiale,,\n" +
+      "51,\"Alessandro Pier Guidi / James Calado\",Ferrari,GT3,FE488GT,\"Shell, Santander\",Pro,Ferrari-Team,GT3-Pro,";
     
     // Show save dialog
     dialog.showSaveDialog(mainWindow, {
@@ -2718,17 +2709,7 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
     });
     
     // Get folder organization config from renderer
-    let folderOrgConfig: {
-      enabled: boolean;
-      mode: 'copy' | 'move';
-      pattern: 'number' | 'number_name' | 'custom';
-      customPattern?: string;
-      createUnknownFolder: boolean;
-      unknownFolderName: string;
-      includeXmpFiles?: boolean;
-      destinationPath?: string;
-      conflictStrategy?: 'rename' | 'skip' | 'overwrite';
-    } | undefined = undefined;
+    let folderOrgConfig: FolderOrganizerConfig | undefined = undefined;
     
     if (authService.hasFolderOrganizationAccess() && config.folderOrganization) {
       try {
@@ -4233,13 +4214,42 @@ app.whenReady().then(async () => { // Added async here
     if (!mainWindow) {
       throw new Error('Main window not available');
     }
-    
+
     try {
       const result = await dialog.showOpenDialog(mainWindow, options);
       return result;
     } catch (error) {
       console.error('Error in dialog-show-open:', error);
       throw error;
+    }
+  });
+
+  // Show save dialog
+  ipcMain.handle('show-save-dialog', async (_, options) => {
+    if (!mainWindow) {
+      throw new Error('Main window not available');
+    }
+
+    try {
+      const result = await dialog.showSaveDialog(mainWindow, options);
+      return result;
+    } catch (error) {
+      console.error('Error in show-save-dialog:', error);
+      throw error;
+    }
+  });
+
+  // Write file to filesystem
+  ipcMain.handle('write-file', async (_, { path: filePath, content }) => {
+    try {
+      await fsPromises.writeFile(filePath, content, 'utf8');
+      return { success: true };
+    } catch (error) {
+      console.error('Error writing file:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
     }
   });
 
