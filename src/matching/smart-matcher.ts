@@ -22,6 +22,8 @@ export interface AnalysisResult {
   teamName?: string;
   otherText?: string[];
   confidence?: number;
+  plateNumber?: string;        // License plate number detected by AI
+  plateConfidence?: number;    // Confidence score for plate number (0.0-1.0)
   // Temporal context for proximity matching
   imageTimestamp?: ImageTimestamp;
   temporalNeighbors?: ImageTimestamp[];
@@ -191,7 +193,9 @@ export class SmartMatcher {
       raceNumber: this.config.weights.raceNumber,
       driverName: this.config.weights.driverName,
       sponsor: this.config.weights.sponsor,
-      team: this.config.weights.team
+      team: this.config.weights.team,
+      category: this.config.weights.category,
+      plateNumber: this.config.weights.plateNumber
     };
   }
 
@@ -556,6 +560,14 @@ export class SmartMatcher {
         case EvidenceType.TEAM:
           weightUsed = weights.team;
           evidenceType = 'Team';
+          break;
+        case EvidenceType.CATEGORY:
+          weightUsed = weights.category;
+          evidenceType = 'Category';
+          break;
+        case EvidenceType.PLATE_NUMBER:
+          weightUsed = weights.plateNumber;
+          evidenceType = 'Plate Number';
           break;
       }
 

@@ -474,6 +474,8 @@ class UnifiedImageWorker extends EventEmitter {
             team: vehicle.teamName || vehicle.team,
             sponsors: vehicle.otherText || [],
             confidence: vehicle.confidence || 0,
+            plateNumber: vehicle.plateNumber,
+            plateConfidence: vehicle.plateConfidence,
             boundingBox: vehicle.boundingBox ? {
               x: vehicle.boundingBox.x,
               y: vehicle.boundingBox.y,
@@ -1503,7 +1505,9 @@ class UnifiedImageWorker extends EventEmitter {
           category: vehicle.category,
           teamName: vehicle.teamName || vehicle.team,
           otherText: vehicle.otherText || [],
-          confidence: vehicle.confidence
+          confidence: vehicle.confidence,
+          plateNumber: vehicle.plateNumber,
+          plateConfidence: vehicle.plateConfidence
         };
 
         // Generate cache keys for caching
@@ -1612,7 +1616,7 @@ class UnifiedImageWorker extends EventEmitter {
    * Helper method to generate a hash for analysis data (for caching)
    */
   private generateAnalysisHash(analysis: SmartMatcherAnalysisResult): string {
-    const key = `${analysis.raceNumber || 'none'}_${(analysis.drivers || []).join('_')}_${analysis.category || 'none'}_${analysis.teamName || 'none'}_${(analysis.otherText || []).slice(0, 3).join('_')}`;
+    const key = `${analysis.raceNumber || 'none'}_${(analysis.drivers || []).join('_')}_${analysis.category || 'none'}_${analysis.teamName || 'none'}_${(analysis.otherText || []).slice(0, 3).join('_')}_${analysis.plateNumber || 'none'}`;
     return Buffer.from(key).toString('base64').substring(0, 32);
   }
 

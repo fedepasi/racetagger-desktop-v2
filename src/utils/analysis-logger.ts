@@ -50,6 +50,8 @@ export interface VehicleAnalysisData {
   team?: string;
   sponsors?: string[];
   confidence: number;
+  plateNumber?: string;       // License plate number detected by AI
+  plateConfidence?: number;   // Confidence score for plate number (0.0-1.0)
   boundingBox?: {
     x: number;      // Percentage 0-100 from left edge
     y: number;      // Percentage 0-100 from top edge

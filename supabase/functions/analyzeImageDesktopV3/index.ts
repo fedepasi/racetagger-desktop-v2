@@ -397,6 +397,10 @@ Respond ONLY with a valid JSON array where each object represents one detected v
     const finalPrompt = enhancedPrompt;
     console.log(`[PROMPT] Using ${usedDatabasePrompt ? 'database' : 'hardcoded'} prompt for category: ${categoryName}`);
 
+    // Log the full prompt sent to Gemini (truncated for readability)
+    const promptPreview = finalPrompt.length > 2000 ? finalPrompt.substring(0, 2000) + '...[truncated]' : finalPrompt;
+    console.log(`[FINAL PROMPT]\n${promptPreview}`);
+
     // Log preset usage for debugging
     if (participantPreset && participantPreset.participants) {
       console.log(`[GEMINI API] Using participant preset: ${participantPreset.name} with ${participantPreset.participants.length} participants`);

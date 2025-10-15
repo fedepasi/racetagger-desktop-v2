@@ -25,7 +25,9 @@
       "Bash(npm run compile:*)",
       "Bash(npx tsc:*)",
       "Read(///**)",
-      "Bash(npx supabase functions logs:*)"
+      "Bash(npx supabase functions logs:*)",
+      "Read(//Users/federicopasinetti/.racetagger-temp/**)",
+      "Read(//Users/federicopasinetti/**)"
     ],
     "deny": [],
     "ask": []
