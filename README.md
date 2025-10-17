@@ -106,3 +106,42 @@ Major dependencies include:
 - Supabase: Backend-as-a-Service for storage and serverless functions
 - Sharp.js: High-performance image processing
 - piexifjs: EXIF metadata manipulation (fallback for Sharp)
+
+## Documentation
+
+Comprehensive documentation is available in the [docs](./docs/) directory:
+
+### Development
+- [Native Modules Setup](./docs/development/native-modules.md) - Electron native module rebuilding
+- [Windows Setup Guide](./docs/development/windows-setup.md) - Windows-specific configuration
+- [Session Persistence](./docs/development/session-persistence.md) - User session management
+- [Supabase Setup](./docs/development/supabase-setup.md) - Backend configuration
+- [Login & Token Management](./docs/development/login-token.md) - Authentication system
+
+### Architecture
+- [Token System](./docs/architecture/token-system.md) - Complete token management documentation
+- [Smart Matching](./docs/architecture/smart-matching.md) - Intelligent race number matching
+- [V3 Implementation](./docs/architecture/v3-implementation.md) - Architecture evolution
+- [Execution Tracking](./docs/architecture/execution-tracking.md) - Processing session management
+
+### Features
+- [Folder Organization](./docs/features/folder-organization.md) - Automated photo organization
+- [Bounding Boxes](./docs/features/bounding-boxes.md) - Detection visualization
+- [Sponsor Field](./docs/features/sponsor-field.md) - Sponsor metadata management
+- [Features Overview](./docs/features/features-overview.md) - Complete feature list
+
+### Deployment
+- [Notarization Guide](./docs/deployment/notarization.md) - macOS app notarization
+- [Edge Functions](./docs/deployment/edge-functions.md) - Supabase function deployment
+- [Installers](./docs/deployment/installers.md) - Distribution package creation
+
+### Reports
+- [Performance Tests](./docs/reports/performance-tests.md) - Benchmarking results
+- [Version 1.0.9 Report](./docs/reports/v1.0.9-report.md) - Release notes
+- [Changelogs](./docs/reports/changelogs/) - Historical version changes
+
+### Core Documentation
+- [CLAUDE.md](./CLAUDE.md) - Instructions for Claude Code AI assistant
+- [BUILD_GUIDE.md](./BUILD_GUIDE.md) - Comprehensive build instructions
+- [DESIGN_SYSTEM.md](./DESIGN_SYSTEM.md) - UI/UX design guidelines
+- [CHANGELOG.md](./CHANGELOG.md) - Version history

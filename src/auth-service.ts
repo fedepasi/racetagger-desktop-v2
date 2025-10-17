@@ -641,8 +641,8 @@ export class AuthService {
     }
   }
 
-  // Gestisci la registrazione
-  async register(email: string, password: string): Promise<{ success: boolean; error?: string }> {
+  // Gestisci la registrazione usando edge function unificata
+  async register(email: string, password: string, name?: string): Promise<{ success: boolean; error?: string; tokensGranted?: number }> {
     try {
       // Validate password strength
       if (password.length < 8) {
@@ -658,11 +658,13 @@ export class AuthService {
         return { success: false, error: 'Password must contain at least one number' };
       }
 
-      const { data, error } = await this.supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          emailRedirectTo: undefined // Email confirmation will be handled by Supabase
+      // Use unified registration edge function
+      const { data, error } = await this.supabase.functions.invoke('register-user-unified', {
+        body: {
+          email,
+          password,
+          name: name || email.split('@')[0], // Extract name from email if not provided
+          source: 'desktop'
         }
       });
 
@@ -671,12 +673,16 @@ export class AuthService {
         return { success: false, error: error.message };
       }
 
-      // Check if email already exists (Supabase returns empty identities array)
-      if (data.user && data.user.identities && data.user.identities.length === 0) {
-        return { success: false, error: 'An account with this email already exists. Please sign in instead.' };
+      if (!data.success) {
+        return { success: false, error: data.error || 'Registration failed' };
       }
 
-      return { success: true };
+      console.log(`Registration successful. User granted ${data.tokensGranted} tokens.`);
+
+      return {
+        success: true,
+        tokensGranted: data.tokensGranted
+      };
     } catch (error: any) {
       console.error('Registration exception:', error);
       return { success: false, error: error.message || 'An unexpected error occurred' };

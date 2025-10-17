@@ -2902,6 +2902,7 @@ body.modal-open {
 
 #token-info-modal .modal-body {
   padding: 2rem;
+  display: block
 }
 
 /* Hero Section */

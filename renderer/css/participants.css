@@ -474,13 +474,58 @@
   z-index: 10;
 }
 
-.participants-table th .sort-indicator {
-  display: inline-block;
-  margin-left: 0.25rem;
+/* Sortable table headers - controlled by sortable.js library */
+.sortable th {
+  cursor: pointer;
+  position: relative;
+  user-select: none;
+  transition: background-color 0.15s ease;
+}
+
+.sortable th:hover:not(.no-sort) {
+  background-color: var(--surface-color-light);
+}
+
+.sortable th.no-sort {
+  cursor: default;
+}
+
+/* Sort indicators automatically added by sortable.js */
+.sortable th::after {
+  content: '⇅';
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  opacity: 0.3;
+  font-size: 12px;
+  transition: opacity 0.2s ease;
+}
+
+.sortable th:hover::after:not(.no-sort) {
+  opacity: 0.6;
+}
+
+.sortable th.dir-u::after {
+  content: '↑';
+  opacity: 1;
   color: var(--accent-color);
-  font-size: 0.875rem;
-  font-weight: bold;
-  opacity: 0.7;
+}
+
+.sortable th.dir-d::after {
+  content: '↓';
+  opacity: 1;
+  color: var(--accent-color);
+}
+
+.sortable th.no-sort::after {
+  content: '';
+  display: none;
+}
+
+/* Legacy sort indicator (kept for backwards compatibility) */
+.participants-table th .sort-indicator {
+  display: none; /* Hidden, sortable.js handles indicators now */
 }
 
 .participants-table td {

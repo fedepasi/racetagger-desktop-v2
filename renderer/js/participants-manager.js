@@ -1096,6 +1096,8 @@ function sortParticipantsByNumber(participants) {
 
 /**
  * Load participants data into the table
+ * Note: Sorting is now handled by sortable.js library (client-side table sorting)
+ * This keeps participantsData in original order for stable indexing
  */
 function loadParticipantsIntoTable(participants) {
   clearParticipantsTable();
@@ -1104,17 +1106,15 @@ function loadParticipantsIntoTable(participants) {
     return; // Empty table
   }
 
-  // Sort participants by number (ascending)
-  const sortedParticipants = sortParticipantsByNumber(participants);
-
-  // IMPORTANT: Update participantsData with sorted array
-  // This ensures that rowIndex in UI matches the index in participantsData
-  // Fixes bug where editing participant with non-sequential numbers opens wrong participant
-  participantsData = sortedParticipants;
+  // Keep original order - sorting will be handled by sortable.js in the UI
+  participantsData = participants;
 
   participantsData.forEach((participant, index) => {
     addParticipantRow(participant, index);
   });
+
+  // Note: Initial sort is handled by sortable.js with the 'asc' class on the table
+  // The table will automatically sort by the first column (Num) in ascending order
 }
 
 /**
@@ -1163,23 +1163,47 @@ function addParticipantRow(participant, rowIndex) {
     `<span class="plate-badge">${escapeHtml(plateNumber)}</span>` :
     '<span class="text-muted">-</span>';
 
+  // Store original index as data attribute for stable indexing during sorting
+  row.setAttribute('data-original-index', rowIndex);
+
+  // Add data-sort attributes for proper sorting by sortable.js
   row.innerHTML = `
-    <td><strong>${numero}</strong></td>
-    <td>${nome}</td>
-    <td>${categoryDisplay}</td>
-    <td>${squadra || '<span class="text-muted">-</span>'}</td>
-    <td>${plateDisplay}</td>
-    <td>
-      <button class="btn btn-sm btn-secondary" onclick="openParticipantEditModal(${rowIndex})" title="Edit participant">
+    <td data-sort="${numero}"><strong>${numero}</strong></td>
+    <td data-sort="${nome}">${nome}</td>
+    <td data-sort="${categoria}">${categoryDisplay}</td>
+    <td data-sort="${squadra}">${squadra || '<span class="text-muted">-</span>'}</td>
+    <td data-sort="${plateNumber}">${plateDisplay}</td>
+    <td class="no-sort">
+      <button class="btn btn-sm btn-secondary" onclick="openParticipantEditModalFromRow(this)" title="Edit participant">
         <span class="btn-icon">✏️</span>
       </button>
-      <button class="btn btn-sm btn-danger" onclick="removeParticipant(${rowIndex})" title="Delete participant">
+      <button class="btn btn-sm btn-danger" onclick="removeParticipantFromRow(this)" title="Delete participant">
         <span class="btn-icon">🗑️</span>
       </button>
     </td>
   `;
 
   tbody.appendChild(row);
+}
+
+/**
+ * Open edit modal from row button (gets index from data attribute)
+ * @param {HTMLElement} button - The button element that was clicked
+ */
+function openParticipantEditModalFromRow(button) {
+  const row = button.closest('tr');
+  const rowIndex = parseInt(row.getAttribute('data-original-index'), 10);
+  openParticipantEditModal(rowIndex);
+}
+
+/**
+ * Remove participant from row button (gets index from data attribute)
+ * @param {HTMLElement} button - The button element that was clicked
+ */
+function removeParticipantFromRow(button) {
+  const row = button.closest('tr');
+  const rowIndex = parseInt(row.getAttribute('data-original-index'), 10);
+  removeParticipant(rowIndex);
 }
 
 /**
