@@ -92,12 +92,47 @@ class EnhancedProcessor {
       setTimeout(() => tokenWidget.classList.remove('fuel-gauge-animation'), 800);
     }
 
+    // Check if Early Bird period has ended (December 31, 2025)
+    this.checkEarlyBirdStatus();
+
     // Add modal-open class to body to prevent background scrolling
     document.body.classList.add('modal-open');
 
     if (modal) {
       modal.style.display = 'flex';
       console.log('[Enhanced Processor] Token info modal opened');
+    }
+  }
+
+  checkEarlyBirdStatus() {
+    const earlyBirdDeadline = new Date('2025-12-31T23:59:59Z');
+    const now = new Date();
+    const urgencyBanner = document.querySelector('#token-info-modal .urgency-banner');
+    const heroTitle = document.querySelector('#token-info-modal .pricing-hero h3');
+    const heroSubtitle = document.querySelector('#token-info-modal .hero-subtitle');
+
+    if (now > earlyBirdDeadline) {
+      // Early Bird period has ended - hide urgency banner and update messaging
+      if (urgencyBanner) {
+        urgencyBanner.style.display = 'none';
+        console.log('[Enhanced Processor] Early Bird period ended - urgency banner hidden');
+      }
+
+      // Update hero title and subtitle to remove Early Bird messaging
+      if (heroTitle) {
+        heroTitle.textContent = 'Get More Analyses';
+      }
+
+      if (heroSubtitle) {
+        heroSubtitle.innerHTML = '<strong>Flexible Token Packs</strong> - Choose what fits your needs';
+      }
+
+      console.log('[Enhanced Processor] Early Bird period ended - hero messaging updated to standard pricing');
+    } else {
+      // Early Bird is still active - ensure banner is visible
+      if (urgencyBanner) {
+        urgencyBanner.style.display = 'flex';
+      }
     }
   }
 
