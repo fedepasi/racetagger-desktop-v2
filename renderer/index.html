@@ -959,15 +959,15 @@
                 </div>
 
                 <div class="participants-table-container">
-                  <table id="participants-table" class="participants-table">
+                  <table id="participants-table" class="participants-table sortable asc">
                     <thead>
                       <tr>
-                        <th>Number <span class="sort-indicator" title="Sorted ascending">↑</span></th>
+                        <th>Num</th>
                         <th>Driver</th>
                         <th>Category</th>
                         <th>Team</th>
                         <th>Plate</th>
-                        <th>Actions</th>
+                        <th class="no-sort">Actions</th>
                       </tr>
                     </thead>
                     <tbody id="participants-tbody">
@@ -1312,12 +1312,15 @@
     </main>
   </div>
 
+  <!-- Sortable Table Library - lightweight table sorting with no dependencies (local copy for offline support) -->
+  <script src="js/vendor/sortable.min.js"></script>
+
   <script src="js/streaming-view.js"></script>
   <script src="js/log-visualizer.js"></script>
   <script src="js/renderer.js"></script>
   <script src="js/auth.js"></script>
   <script src="js/desktop-ui.js"></script>
-  
+
   <!-- Enhanced UI Components -->
   <script src="js/smart-presets.js"></script>
   <script src="js/enhanced-progress.js"></script>
@@ -1417,59 +1420,57 @@
       </div>
 
       <div class="modal-body">
-        <div class="pricing-notice">
-          <div class="notice-icon">🎁</div>
-          <div class="notice-content">
-            <h3>Free Monthly Allowance</h3>
-            <p><strong>Every user gets 100 free analyses per month!</strong></p>
-            <p>This allowance resets automatically on the 1st of each month.</p>
+        <!-- Hero Message -->
+        <div class="pricing-hero">
+          <div class="hero-icon">🎁</div>
+          <h3>Special Launch Offer</h3>
+          <p class="hero-subtitle">
+            <strong>Up to 42% OFF</strong> for the first 81 founders
+          </p>
+        </div>
+
+        <!-- Benefits Grid -->
+        <div class="benefits-grid">
+          <div class="benefit-item">
+            <span class="benefit-icon">✓</span>
+            <span>Tokens Never Expire</span>
+          </div>
+          <div class="benefit-item">
+            <span class="benefit-icon">✓</span>
+            <span>No Monthly Fees</span>
+          </div>
+          <div class="benefit-item">
+            <span class="benefit-icon">✓</span>
+            <span>Founder's Price Lock</span>
+          </div>
+          <div class="benefit-item">
+            <span class="benefit-icon">✓</span>
+            <span>Instant Delivery</span>
           </div>
         </div>
 
-        <div class="pricing-packages">
-          <h3>Need more? Choose a package:</h3>
-
-          <div class="package-grid">
-            <div class="package-card">
-              <div class="package-badge">STARTER</div>
-              <div class="package-price">€29</div>
-              <div class="package-tokens">3,000 analyses</div>
-              <div class="package-features">
-                <p>Perfect for testing</p>
-                <p>Never expire</p>
-              </div>
-            </div>
-
-            <div class="package-card recommended">
-              <div class="package-badge">⭐ RECOMMENDED</div>
-              <div class="package-price">€49</div>
-              <div class="package-tokens">10,000 analyses</div>
-              <div class="package-features">
-                <p>1-2 full racing events</p>
-                <p>Best value</p>
-                <p>Never expire</p>
-              </div>
-            </div>
-
-            <div class="package-card">
-              <div class="package-badge">STUDIO</div>
-              <div class="package-price">€99</div>
-              <div class="package-tokens">25,000 analyses</div>
-              <div class="package-features">
-                <p>Ideal for major events</p>
-                <p>Best price per analysis</p>
-                <p>Never expire</p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="modal-actions">
-          <button type="button" id="cancel-token-info" class="btn btn-secondary">Close</button>
-          <button type="button" id="open-pricing-page" class="btn btn-primary btn-cta">
-            View Full Pricing & Buy →
+        <!-- CTA Section -->
+        <div class="pricing-cta">
+          <p class="cta-text">
+            View our flexible token packs and choose the one that fits your needs.
+          </p>
+          <button type="button" id="open-pricing-page" class="btn btn-primary btn-cta btn-large">
+            View Pricing & Buy Tokens →
           </button>
+          <p class="cta-note">
+            Opens in your browser • Secure Stripe checkout • Instant activation
+          </p>
         </div>
+
+        <!-- Early Bird Urgency -->
+        <div class="urgency-banner">
+          <span class="urgency-icon">⏰</span>
+          <span>Limited to first 81 founders • Until December 31, 2025</span>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button type="button" id="cancel-token-info" class="btn btn-secondary">Close</button>
       </div>
     </div>
   </div>
