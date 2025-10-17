@@ -1,6 +1,7 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.42.0';
 import { corsHeaders } from '../shared/cors.ts'; // Assicurati che il percorso sia corretto
+import { getSignupBonusTokens } from '../_shared/get-signup-bonus.ts';
 
 // --- Funzione Helper per generare codice casuale ---
 // Semplice implementazione, considera librerie più robuste se necessario
@@ -242,9 +243,9 @@ serve(async (req: Request) => {
         let accessCode = generateAccessCode();
         // TODO: Aggiungere un controllo opzionale per verificare se il codice esiste già nel DB e rigenerare se necessario.
 
-        // NEW TOKEN LOGIC: Access approval only grants 1500 base tokens
+        // NEW TOKEN LOGIC: Access approval grants signup bonus tokens from system_config
         // Earned tokens (referrals/feedback) are handled separately
-        const GIFT_TOKENS = 1500; // Base gift for early access
+        const GIFT_TOKENS = await getSignupBonusTokens(supabaseAdmin);
         
         // Recupera il nome dell'utente (no token calculation needed here)
         const { data: registrantData } = await supabaseAdmin

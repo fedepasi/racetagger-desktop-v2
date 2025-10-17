@@ -4,6 +4,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
+import { getSignupBonusTokens } from '../_shared/get-signup-bonus.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -37,12 +38,15 @@ serve(async (req) => {
     if (!newSubscriberId || !email || !name) {
       return new Response(
         JSON.stringify({ error: 'Missing required fields: newSubscriberId, email, name' }),
-        { 
-          status: 400, 
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+        {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         }
       )
     }
+
+    // Get dynamic signup bonus from system_config
+    const signupBonus = await getSignupBonusTokens(supabaseClient);
 
     let referralProcessed = false
     let referralDetails = null
@@ -146,7 +150,7 @@ serve(async (req) => {
       rewards: {
         pendingFeedbackTokens: pendingTokens,
         totalBonusTokens: (updatedSubscriber?.base_tokens || 1000) + (updatedSubscriber?.bonus_tokens || 500) + (updatedSubscriber?.earned_tokens || 0) + (updatedSubscriber?.admin_bonus_tokens || 0),
-        earlyAccessTokens: 1500
+        earlyAccessTokens: signupBonus
       },
       message: referralProcessed 
         ? `Welcome! You've been referred by ${referralDetails?.referrerName}. You start with ${(updatedSubscriber?.base_tokens || 1000) + (updatedSubscriber?.bonus_tokens || 500) + (updatedSubscriber?.earned_tokens || 0) + (updatedSubscriber?.admin_bonus_tokens || 0)} bonus tokens!`

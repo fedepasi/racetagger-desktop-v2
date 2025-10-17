@@ -24,7 +24,7 @@ serve(async (req) => {
     
     // Prepara il contenuto dell'email
     const isEarlyAccess = position <= 50;
-    const totalTokens = bonusTokens || 1500;
+    const totalTokens = bonusTokens || 500; // Default changed to 500
     const tokenValue = Math.round(totalTokens * 0.02); // $0.02 per token
     const baseUrl = Deno.env.get("FRONTEND_URL") || "https://racetagger.cloud";
     const referralLink = `${baseUrl}/?ref=${referralCode}`;

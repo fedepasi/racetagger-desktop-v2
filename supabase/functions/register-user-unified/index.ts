@@ -137,7 +137,7 @@ serve(async (req) => {
     }
 
     // Get signup bonus from system_config
-    let signupBonusTokens = 1500;
+    let signupBonusTokens = 500; // Default fallback changed to 500
     try {
       const { data: configData } = await supabaseAdmin
         .from('system_config')
@@ -149,7 +149,7 @@ serve(async (req) => {
         signupBonusTokens = parseInt(configData.value as string);
       }
     } catch (e) {
-      console.warn('Using default signup bonus:', e);
+      console.warn('Using default signup bonus (500):', e);
     }
 
     // Assign tokens

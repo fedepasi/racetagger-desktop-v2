@@ -5,6 +5,7 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { corsHeaders } from '../shared/cors.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.38.4';
+import { getSignupBonusTokens } from '../_shared/get-signup-bonus.ts';
 
 const supabaseAdmin = createClient(
   Deno.env.get('SUPABASE_URL') || '',
@@ -37,16 +38,19 @@ serve(async (req) => {
   
   try {
     const { email, trigger = 'manual', adminRequested = false }: RequestBody = await req.json();
-    
+
     if (!email) {
       return new Response(
-        JSON.stringify({ 
-          success: false, 
-          error: 'Email is required' 
+        JSON.stringify({
+          success: false,
+          error: 'Email is required'
         }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
       );
     }
+
+    // Get dynamic signup bonus from system_config
+    const signupBonus = await getSignupBonusTokens(supabaseAdmin);
     
     const normalizedEmail = email.toLowerCase().trim();
     
@@ -113,7 +117,7 @@ serve(async (req) => {
       approvedFeedback: approvedFeedback.length,
       pendingFeedback: pendingFeedback.length,
       lastFeedbackDate: feedback.length > 0 ? feedback[0]?.submitted_at : null,
-      earlyAccessBonus: subscriber.has_access ? 1500 : 0,
+      earlyAccessBonus: subscriber.has_access ? signupBonus : 0,
       referralBonus: (subscriber.total_referrals || 0) * 100
     };
     

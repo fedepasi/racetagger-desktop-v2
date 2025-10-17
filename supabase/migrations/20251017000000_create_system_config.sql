@@ -36,7 +36,7 @@ CREATE POLICY "Authenticated users can read system_config"
 INSERT INTO system_config (key, value, description) VALUES
   (
     'signup_bonus_tokens',
-    '1500'::jsonb,
+    '500'::jsonb,
     'Number of free tokens granted upon user registration'
   ),
   (

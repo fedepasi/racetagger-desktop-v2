@@ -34,7 +34,10 @@
       "Bash(mv:*)",
       "Bash(tree:*)",
       "Bash(npx supabase functions deploy:*)",
-      "Bash(tee:*)"
+      "Bash(tee:*)",
+      "Bash(for:*)",
+      "Bash(do echo \"=== $file ===\")",
+      "Bash(done)"
     ],
     "deny": [],
     "ask": []
