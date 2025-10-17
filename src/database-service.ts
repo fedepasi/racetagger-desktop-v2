@@ -2703,8 +2703,9 @@ export async function createParticipantPresetSupabase(presetData: Omit<Participa
 
 /**
  * Get user participant presets from Supabase
+ * @param includeAllForAdmin - If true and user is admin, returns all presets (not just user's own)
  */
-export async function getUserParticipantPresetsSupabase(): Promise<ParticipantPresetSupabase[]> {
+export async function getUserParticipantPresetsSupabase(includeAllForAdmin: boolean = false): Promise<ParticipantPresetSupabase[]> {
   try {
     const userId = getCurrentUserId();
     if (!userId) return [];
@@ -2716,16 +2717,26 @@ export async function getUserParticipantPresetsSupabase(): Promise<ParticipantPr
     //   return presetsCache.filter(p => p.user_id === userId || p.is_public);
     // }
     console.log('[DB] Cache disabled - forcing fresh query to Supabase');
+    console.log('[DB] includeAllForAdmin:', includeAllForAdmin);
 
-    const { data, error } = await supabase
+    // Build query based on admin mode
+    let query = supabase
       .from('participant_presets')
       .select(`
         *,
         sport_categories(code, name, ai_prompt),
         preset_participants(*)
-      `)
-      .or(`user_id.eq.${userId},is_public.eq.true`)
-      .order('updated_at', { ascending: false });
+      `);
+
+    // If not admin mode, filter by user_id or public presets
+    if (!includeAllForAdmin) {
+      query = query.or(`user_id.eq.${userId},is_public.eq.true`);
+    }
+    // If admin mode, get all presets (no filter)
+
+    query = query.order('updated_at', { ascending: false });
+
+    const { data, error } = await query;
 
     if (error) {
       console.error('[DB] Error getting user participant presets from Supabase:', error);

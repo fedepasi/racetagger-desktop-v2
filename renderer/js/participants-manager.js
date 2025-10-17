@@ -258,8 +258,20 @@ async function loadParticipantPresets() {
   try {
     console.log('[Participants] Loading participant presets...');
 
-    const response = await window.api.invoke('supabase-get-participant-presets');
+    // Check if user is admin
+    const isAdmin = await window.api.invoke('auth-is-admin');
+    console.log('[Participants] User is admin:', isAdmin);
+
+    // Use appropriate endpoint based on admin status
+    const channelName = isAdmin
+      ? 'supabase-get-all-participant-presets-admin'
+      : 'supabase-get-participant-presets';
+
+    console.log('[Participants] Using channel:', channelName);
+
+    const response = await window.api.invoke(channelName);
     if (response.success && response.data) {
+      console.log('[Participants] Loaded', response.data.length, 'presets');
       displayParticipantPresets(response.data);
     } else {
       console.error('[Participants] Error loading presets:', response.error);
@@ -1095,7 +1107,12 @@ function loadParticipantsIntoTable(participants) {
   // Sort participants by number (ascending)
   const sortedParticipants = sortParticipantsByNumber(participants);
 
-  sortedParticipants.forEach((participant, index) => {
+  // IMPORTANT: Update participantsData with sorted array
+  // This ensures that rowIndex in UI matches the index in participantsData
+  // Fixes bug where editing participant with non-sequential numbers opens wrong participant
+  participantsData = sortedParticipants;
+
+  participantsData.forEach((participant, index) => {
     addParticipantRow(participant, index);
   });
 }

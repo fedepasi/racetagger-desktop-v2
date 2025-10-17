@@ -1108,7 +1108,16 @@ class EnhancedFileBrowser {
    */
   async loadAvailablePresets() {
     try {
-      const response = await window.api.invoke('supabase-get-participant-presets');
+      // Check if user is admin
+      const isAdmin = await window.api.invoke('auth-is-admin');
+      console.log('[Enhanced File Browser] User is admin:', isAdmin);
+
+      // Use appropriate endpoint based on admin status
+      const channelName = isAdmin
+        ? 'supabase-get-all-participant-presets-admin'
+        : 'supabase-get-participant-presets';
+
+      const response = await window.api.invoke(channelName);
       if (response.success && Array.isArray(response.data)) {
         this.availablePresets = response.data.map(preset => ({
           id: preset.id,

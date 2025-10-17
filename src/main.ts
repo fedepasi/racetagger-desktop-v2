@@ -445,6 +445,13 @@ console.log('[Main Process] main.ts: setupAuthHandlers() called.');
     return app.isPackaged;
   });
 
+  // Handler to check if current user is admin
+  ipcMain.handle('auth-is-admin', () => {
+    const isAdmin = authService.isAdmin();
+    console.log('[IPC] auth-is-admin check:', isAdmin);
+    return isAdmin;
+  });
+
   ipcMain.on('check-auth-status', async (event: IpcMainEvent) => {
     const authState = authService.getAuthState();
     console.log(`[Main Process] Sending auth-status to renderer:`, {
@@ -1142,6 +1149,23 @@ function setupDatabaseIpcHandlers() {
       const presets = getCachedParticipantPresets();
       return { success: true, data: presets };
     } catch (e: any) { return { success: false, error: e.message }; }
+  });
+
+  // Admin-only: Get all participant presets (not just user's own)
+  ipcMain.handle('supabase-get-all-participant-presets-admin', async () => {
+    try {
+      // Verify admin role
+      if (!authService.isAdmin()) {
+        return { success: false, error: 'Unauthorized: Admin access required' };
+      }
+
+      console.log('[IPC] Admin requesting all participant presets');
+      const presets = await getUserParticipantPresetsSupabase(true);
+      return { success: true, data: presets };
+    } catch (e: any) {
+      console.error('[IPC] Error getting all presets for admin:', e);
+      return { success: false, error: e.message };
+    }
   });
 
   // Cache Management Handlers

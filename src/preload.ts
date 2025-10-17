@@ -129,8 +129,10 @@ const validInvokeChannels: string[] = [
   'supabase-delete-participant-preset',
   'supabase-import-participants-from-csv',
   'supabase-get-cached-participant-presets',
+  'supabase-get-all-participant-presets-admin',
   'supabase-cache-data',
   'supabase-is-feature-enabled',
+  'auth-is-admin',
 
   // Database Operations - Participant Presets
   'db-create-participant-preset',

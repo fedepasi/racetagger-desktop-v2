@@ -27,7 +27,8 @@
       "Read(///**)",
       "Bash(npx supabase functions logs:*)",
       "Read(//Users/federicopasinetti/.racetagger-temp/**)",
-      "Read(//Users/federicopasinetti/**)"
+      "Read(//Users/federicopasinetti/**)",
+      "Bash(xargs ls:*)"
     ],
     "deny": [],
     "ask": []
