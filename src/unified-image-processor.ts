@@ -2571,18 +2571,20 @@ export class UnifiedImageProcessor extends EventEmitter {
   private calculateOptimalWorkerCount(): number {
     const cpuCount = require('os').cpus().length;
     const totalMemoryGB = require('os').totalmem() / (1024 * 1024 * 1024);
-    
-    // Base calculation: use 75% of CPU cores, minimum 4, maximum 12
-    let workers = Math.max(4, Math.min(12, Math.floor(cpuCount * 0.75)));
-    
-    // Adjust based on available memory (each worker needs ~200MB)
-    const maxWorkersByMemory = Math.floor(totalMemoryGB * 0.3 * 5); // 30% of memory, 200MB per worker
+
+    // Base calculation: use 85% of CPU cores, minimum 3, maximum 16
+    // Increased from 75% after testing showed low memory usage (~10MB per worker vs 200MB estimated)
+    let workers = Math.max(3, Math.min(16, Math.floor(cpuCount * 0.85)));
+
+    // Adjust based on available memory (each worker needs ~150MB conservative estimate)
+    // Real usage is much lower (~10-20MB), so we can be more aggressive
+    const maxWorkersByMemory = Math.floor(totalMemoryGB * 0.4 * 6.67); // 40% of memory, ~150MB per worker
     workers = Math.min(workers, maxWorkersByMemory);
-    
-    // Ensure minimum of 4 workers for good performance
-    workers = Math.max(4, workers);
-    
-    console.log(`[UnifiedProcessor] System: ${cpuCount} CPUs, ${totalMemoryGB.toFixed(1)}GB RAM → ${workers} workers`);
+
+    // Ensure minimum of 3 workers for good performance
+    workers = Math.max(3, workers);
+
+    console.log(`[UnifiedProcessor] System: ${cpuCount} CPUs, ${totalMemoryGB.toFixed(1)}GB RAM → ${workers} workers (optimized)`);
     return workers;
   }
 
@@ -2704,18 +2706,6 @@ export class UnifiedImageProcessor extends EventEmitter {
       }
     }
 
-    // Per batch molto grandi, riduci drasticamente il parallelismo per prevenire crash di memoria
-    if (imageFiles.length > 3000) {
-      console.warn(`[UnifiedProcessor] Very large batch detected (${imageFiles.length} images), reducing parallelism to 1 worker to prevent memory crashes`);
-      this.config.maxConcurrentWorkers = 1;
-    } else if (imageFiles.length > 1500) {
-      console.warn(`[UnifiedProcessor] Large batch detected (${imageFiles.length} images), reducing parallelism to 2 workers to prevent memory issues`);
-      this.config.maxConcurrentWorkers = Math.min(this.config.maxConcurrentWorkers, 2);
-    } else if (imageFiles.length > 1000) {
-      console.warn(`[UnifiedProcessor] Medium batch detected (${imageFiles.length} images), reducing parallelism to 3 workers for stability`);
-      this.config.maxConcurrentWorkers = Math.min(this.config.maxConcurrentWorkers, 3);
-    }
-
     // Solo imposta i contatori se non stiamo processando chunk
     // (i chunk mantengono i contatori globali impostati da processBatchInChunks)
     // Se totalImages è già maggiore del batch corrente, siamo in modalità chunk
@@ -2815,7 +2805,8 @@ export class UnifiedImageProcessor extends EventEmitter {
           const executionData = {
             id: this.config.executionId, // Use existing execution ID
             user_id: currentUserId,
-            project_id: 'default', // TODO: Use actual project ID when available
+            project_id: null, // Desktop executions have no project association
+            name: `Desktop - ${(this.config.category || 'motorsport').charAt(0).toUpperCase() + (this.config.category || 'motorsport').slice(1)} - ${new Date().toLocaleString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}`,
             category: this.config.category || 'motorsport',
             total_images: imageFiles.length,
             processed_images: 0, // Will be updated at the end
@@ -2841,7 +2832,8 @@ export class UnifiedImageProcessor extends EventEmitter {
             .single();
 
           if (error) {
-            console.error(`[UnifiedProcessor] ❌ Failed to create execution record:`, error);
+            console.error(`[UnifiedProcessor] ❌ Failed to create execution record:`, JSON.stringify(error, null, 2));
+            console.error(`[UnifiedProcessor] Error details - code: ${error.code}, message: ${error.message}, details: ${error.details}, hint: ${error.hint}`);
           } else {
             console.log(`[UnifiedProcessor] ✅ Execution record created in database: ${data.id}`);
           }

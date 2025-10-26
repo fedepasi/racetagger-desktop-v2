@@ -97,7 +97,8 @@
       },
       "signIgnore": [
         "vendor/darwin/lib/Image/ExifTool/Geolocation.dat",
-        "vendor/darwin/lib/Image/ExifTool/*.dat"
+        "vendor/darwin/lib/Image/ExifTool/*.dat",
+        "vendor/win32"
       ]
     },
     "afterPack": "scripts/post-pack-fixes.js",

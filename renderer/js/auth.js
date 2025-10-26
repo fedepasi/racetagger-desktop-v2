@@ -107,7 +107,7 @@ function handleLogin(event) {
   // Show loading indicator
   const submitBtn = loginForm.querySelector('button[type="submit"]');
   const originalText = submitBtn.textContent;
-  submitBtn.textContent = 'Accesso in corso...';
+  submitBtn.textContent = 'Login in corso...';
   submitBtn.disabled = true;
   
   // Send login request to main process
@@ -127,16 +127,16 @@ function validatePassword(password) {
   const errors = [];
 
   if (password.length < 8) {
-    errors.push('Password must be at least 8 characters long');
+    errors.push('La password deve essere lunga almeno 8 caratteri');
   }
   if (!/[A-Z]/.test(password)) {
-    errors.push('Password must contain at least one uppercase letter');
+    errors.push('La password deve contenere almeno una lettera maiuscola');
   }
   if (!/[a-z]/.test(password)) {
-    errors.push('Password must contain at least one lowercase letter');
+    errors.push('La password deve contenere almeno una lettera minuscola');
   }
   if (!/[0-9]/.test(password)) {
-    errors.push('Password must contain at least one number');
+    errors.push('La password deve contenere almeno un numero');
   }
 
   return errors;
@@ -353,7 +353,7 @@ function handleLoginResult(result) {
       }
     }
   } else {
-    showAuthError('login', result.error || 'Error during login');
+    showAuthError('login', result.error || 'Errore durante il login');
   }
 }
 
@@ -365,7 +365,7 @@ function handleRegisterResult(result) {
 
   if (result.success) {
     // Show success message
-    showAuthSuccess('register', 'Account created successfully! Please check your email to verify your account before signing in.');
+    showAuthSuccess('register', 'Account creato con successo! Controlla la tua email per verificare il tuo account prima di effettuare il login.');
 
     // Reset form
     registerForm.reset();
@@ -390,7 +390,7 @@ function handleRegisterResult(result) {
       switchAuthTab('login');
     }, 5000);
   } else {
-    showAuthError('register', result.error || 'An error occurred during registration');
+    showAuthError('register', result.error || 'Si è verificato un errore durante la registrazione');
   }
 }
 
@@ -465,7 +465,7 @@ function updateTokenBalance(tokenInfo) {
     existingRefreshBtn.classList.remove('spinning');
     
     // Show success feedback
-    showNotification('Token Balance Updated', 'Your token balance has been refreshed successfully.');
+    showNotification('Saldo Token Aggiornato', 'Il tuo saldo token è stato aggiornato con successo.');
     console.log('Token refresh completed, button restored');
   }
 }
@@ -584,7 +584,7 @@ function handleTokenRefresh() {
     window.api.send('force-token-refresh');
   } else if (!authState.isAuthenticated) {
     console.log('[Auth] Cannot refresh tokens - user not authenticated');
-    showNotification('Refresh Failed', 'Please login to refresh token balance.');
+    showNotification('Aggiornamento Fallito', 'Effettua il login per aggiornare il saldo token.');
     // Reset button immediately if not authenticated
     if (refreshBtn) {
       refreshBtn.innerHTML = originalText;
@@ -597,7 +597,7 @@ function handleTokenRefresh() {
 // Handle auth error
 function handleAuthError(error) {
   console.error('Auth error:', error);
-  showNotification('Authentication error', error.message || 'An authentication error occurred');
+  showNotification('Errore di autenticazione', error.message || 'Si è verificato un errore di autenticazione');
 }
 
 // Show auth error
