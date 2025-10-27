@@ -647,16 +647,21 @@ console.log('[Main Process] main.ts: setupAuthHandlers() called.');
   ipcMain.on('force-token-refresh', async (event: IpcMainEvent) => {
     try {
       console.log('[Main] Force token refresh requested');
-      
+
       // Get both balance and pending tokens
       const tokenInfo = await authService.forceTokenInfoRefresh();
-      
+
       // Send balance as usual for backward compatibility
       event.sender.send('token-balance', tokenInfo.balance);
-      
+
       // Also send pending tokens info
       event.sender.send('pending-tokens', tokenInfo.pending);
-      
+
+      // Also refresh sport categories while we're at it
+      console.log('[Main] Refreshing sport categories...');
+      await getSportCategories();
+      console.log('[Main] Sport categories refreshed successfully');
+
       console.log('[Main] Force token refresh completed, sent balance and pending to frontend');
     } catch (error: any) {
       console.error('[Main] Force token refresh failed:', error);

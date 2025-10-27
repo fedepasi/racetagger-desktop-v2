@@ -16,14 +16,16 @@ function getElectronApp() {
 }
 
 // --- Supabase Client Initialization ---
-// Utilizziamo il client Supabase da authService per assicurarci che utilizzi lo stesso token di autenticazione
-let supabase: SupabaseClient;
+// Inizializza il client Supabase direttamente invece di aspettare la chiamata lazy
+let supabase: SupabaseClient = createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.key);
 
 // Funzione per ottenere un client Supabase aggiornato
 export function getSupabaseClient(): SupabaseClient {
-  // Aggiorniamo il riferimento al client Supabase da authService se non ancora inizializzato
-  if (!supabase) {
-    supabase = authService.getSupabaseClient();
+  // Aggiorniamo il riferimento al client Supabase da authService se disponibile
+  // Questo permette di usare il client autenticato quando disponibile
+  const authSupabase = authService.getSupabaseClient();
+  if (authSupabase) {
+    supabase = authSupabase;
   }
   return supabase;
 }

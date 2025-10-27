@@ -1078,17 +1078,23 @@ export class AuthService {
     
     try {
       // Import dei servizi database (dynamic import per evitare circular dependencies)
-      const { 
-        getProjectsOnline, 
-        loadLastUsedCsvFromSupabase 
+      const {
+        getProjectsOnline,
+        loadLastUsedCsvFromSupabase,
+        getSportCategories
       } = await import('./database-service');
       
       // 1. Scarica e ripopola la cache dei Projects
       console.log('[AuthService] Downloading projects from Supabase...');
       await getProjectsOnline();
       console.log('[AuthService] Projects loaded successfully');
-      
-      // 2. Ripristina l'ultimo CSV usato dall'utente
+
+      // 2. Carica le sport categories
+      console.log('[AuthService] Loading sport categories...');
+      await getSportCategories();
+      console.log('[AuthService] Sport categories loaded successfully');
+
+      // 3. Ripristina l'ultimo CSV usato dall'utente
       console.log('[AuthService] Loading last used CSV from Supabase...');
       const csvData = await loadLastUsedCsvFromSupabase();
       
