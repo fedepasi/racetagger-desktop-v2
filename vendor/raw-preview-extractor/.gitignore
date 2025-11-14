@@ -57,3 +57,6 @@ examples/electron-app/node_modules/
 
 # Logs
 *.log
+
+# Windows reserved files
+nul

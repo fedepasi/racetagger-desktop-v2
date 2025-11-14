@@ -82,7 +82,13 @@
       "Bash(export APPLE_TEAM_ID=\"MNP388VJLQ\")",
       "Bash(xcrun notarytool history:*)",
       "Bash(xcrun stapler staple:*)",
-      "Bash(spctl:*)"
+      "Bash(spctl:*)",
+      "Bash(dir)",
+      "Bash(npm run build:win:x64:*)",
+      "Bash(del /F /Q \"\\?\\C:\\Users\\Federico\\Documents\\Federico\\In Lavorazione - Siti Web\\racetagger-desktop-v2\\vendor\\raw-preview-extractor\\nul\")",
+      "Bash(npm run clean:*)",
+      "Bash(python -c \"import os; os.remove(r''vendor\\raw-preview-extractor\\nul'')\")",
+      "Bash(npm run build:ts:*)"
     ],
     "deny": [],
     "ask": []

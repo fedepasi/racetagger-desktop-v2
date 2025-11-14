@@ -84,6 +84,7 @@
     "dist/",
     "src/cpp/",
     "binding.gyp",
-    "prebuilds/"
+    "prebuilds/",
+    "!nul"
   ]
 }
