@@ -98,10 +98,11 @@ class UnifiedImageWorker extends EventEmitter {
   private cacheManager: CacheManager;
   private filesystemTimestampExtractor: FilesystemTimestampExtractor;
   private analysisLogger?: AnalysisLogger;
+  private networkMonitor?: NetworkMonitor;
   private sportCategories: any[] = []; // Store sport categories data
   private currentSportCategory: any = null; // Current category config
 
-  private constructor(config: UnifiedProcessorConfig, analysisLogger?: AnalysisLogger) {
+  private constructor(config: UnifiedProcessorConfig, analysisLogger?: AnalysisLogger, networkMonitor?: NetworkMonitor) {
     super();
     // TEMPORARY: Force V3 bounding box detection to be enabled by default for testing
     if (config.enableAdvancedAnnotations === undefined) {
@@ -115,6 +116,7 @@ class UnifiedImageWorker extends EventEmitter {
     this.cleanupManager = new CleanupManager();
     this.supabase = createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.key);
     this.analysisLogger = analysisLogger;
+    this.networkMonitor = networkMonitor;
 
     // DEBUG: Log the full config to trace participant preset data
     console.log(`[UnifiedWorker] Constructor called with config:`, {
@@ -135,8 +137,8 @@ class UnifiedImageWorker extends EventEmitter {
   /**
    * Factory method to create and initialize a UnifiedImageWorker
    */
-  static async create(config: UnifiedProcessorConfig, analysisLogger?: AnalysisLogger): Promise<UnifiedImageWorker> {
-    const worker = new UnifiedImageWorker(config, analysisLogger);
+  static async create(config: UnifiedProcessorConfig, analysisLogger?: AnalysisLogger, networkMonitor?: NetworkMonitor): Promise<UnifiedImageWorker> {
+    const worker = new UnifiedImageWorker(config, analysisLogger, networkMonitor);
 
     await worker.initializeParticipantsData();
     await worker.initializeSportConfigurations();
@@ -1019,8 +1021,11 @@ class UnifiedImageWorker extends EventEmitter {
       console.log(`[UnifiedWorker] Extension conversion: ${fileName} (${originalExt}) → storage as .${fileExt} (${mimeType})`);
     }
     
-    console.log(`[UnifiedWorker] Uploading ${fileName} to storage...`);
-    
+    console.log(`[UnifiedWorker] Uploading ${fileName} to storage (${(buffer.length / 1024).toFixed(1)}KB)...`);
+
+    // Track upload time and size for network monitoring
+    const uploadStartTime = Date.now();
+
     const { error: uploadError } = await this.supabase.storage
       .from('uploaded-images')
       .upload(storageFileName, buffer, {
@@ -1028,7 +1033,15 @@ class UnifiedImageWorker extends EventEmitter {
         upsert: false,
         contentType: mimeType
       });
-    
+
+    const uploadEndTime = Date.now();
+    const uploadDurationMs = uploadEndTime - uploadStartTime;
+
+    // Record upload metrics for network monitoring (if available)
+    if (this.networkMonitor) {
+      this.networkMonitor.recordUploadAttempt(!uploadError, uploadDurationMs, buffer.length);
+    }
+
     if (uploadError) {
       throw new Error(`Upload failed for ${fileName}: ${uploadError.message}`);
     }
@@ -2414,6 +2427,7 @@ export class UnifiedImageProcessor extends EventEmitter {
   private networkMonitor?: NetworkMonitor;
   private performanceTimer?: PerformanceTimer;
   private errorTracker?: ErrorTracker;
+  private systemEnvironment?: any; // Store for updating with final network speed
 
   constructor(config: Partial<UnifiedProcessorConfig> = {}) {
     super();
@@ -2739,7 +2753,7 @@ export class UnifiedImageProcessor extends EventEmitter {
       );
 
       // TIER 1 TELEMETRY: Collect enhanced system environment (optional, safe)
-      let systemEnvironment: any = undefined;
+      this.systemEnvironment = undefined;
 
       try {
         // Initialize telemetry trackers (optional)
@@ -2762,7 +2776,7 @@ export class UnifiedImageProcessor extends EventEmitter {
 
         // Collect environment info
         const { app } = await import('electron');
-        systemEnvironment = {
+        this.systemEnvironment = {
           hardware: hardwareInfo,
           network: networkMetrics,
           environment: {
@@ -2785,7 +2799,7 @@ export class UnifiedImageProcessor extends EventEmitter {
       this.analysisLogger.logExecutionStart(
         imageFiles.length,
         undefined, // participantPresetId not needed anymore with direct data passing
-        systemEnvironment // Optional enhanced telemetry
+        this.systemEnvironment // Optional enhanced telemetry
       );
 
       console.log(`[UnifiedProcessor] Analysis logging enabled for execution ${this.config.executionId}`);
@@ -2822,7 +2836,7 @@ export class UnifiedImageProcessor extends EventEmitter {
               enableAdvancedAnnotations: this.config.enableAdvancedAnnotations
             },
             // TIER 1 TELEMETRY: Add system environment telemetry
-            system_environment: systemEnvironment
+            system_environment: this.systemEnvironment
           };
 
           const { data, error } = await supabase
@@ -3104,6 +3118,12 @@ export class UnifiedImageProcessor extends EventEmitter {
 
         if (this.networkMonitor) {
           networkStats = this.networkMonitor.getMetrics();
+
+          // Update systemEnvironment.network with final upload speed for backward compatibility
+          if (this.systemEnvironment && this.systemEnvironment.network && networkStats.upload_speed_mbps !== undefined) {
+            this.systemEnvironment.network.upload_speed_mbps = networkStats.upload_speed_mbps;
+            console.log(`[UnifiedProcessor] ✅ Updated system_environment.network with final upload speed: ${networkStats.upload_speed_mbps} Mbps`);
+          }
         }
 
         if (this.errorTracker) {
@@ -3157,7 +3177,11 @@ export class UnifiedImageProcessor extends EventEmitter {
             updated_at: new Date().toISOString(),
             // TIER 1 TELEMETRY: Add telemetry fields
             performance_breakdown: performanceBreakdown,
-            error_summary: errorSummary
+            memory_stats: memoryStats,
+            network_stats: networkStats,
+            error_summary: errorSummary,
+            // Update system_environment with final network speed (backward compatibility)
+            system_environment: this.systemEnvironment
           };
 
           const { error } = await supabase
@@ -3193,7 +3217,7 @@ export class UnifiedImageProcessor extends EventEmitter {
   private async processWithWorker(imageFile: UnifiedImageFile): Promise<UnifiedProcessingResult> {
     this.activeWorkers++;
 
-    const worker = await UnifiedImageWorker.create(this.config, this.analysisLogger);
+    const worker = await UnifiedImageWorker.create(this.config, this.analysisLogger, this.networkMonitor);
 
     try {
       // Calculate temporal context in main process and pass to worker

@@ -662,6 +662,10 @@ console.log('[Main Process] main.ts: setupAuthHandlers() called.');
       await getSportCategories();
       console.log('[Main] Sport categories refreshed successfully');
 
+      // Notify frontend to reload categories in the UI
+      event.sender.send('categories-updated');
+      console.log('[Main] Sent categories-updated event to frontend');
+
       console.log('[Main] Force token refresh completed, sent balance and pending to frontend');
     } catch (error: any) {
       console.error('[Main] Force token refresh failed:', error);

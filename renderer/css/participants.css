@@ -403,7 +403,7 @@
 
 /* Container a 2 colonne per Preset Info + Folder Organization */
 .preset-header-row {
-  display: grid;
+  display: block;
   grid-template-columns: 1fr 1fr; /* 50% - 50% */
   gap: 1.5rem;
   margin-bottom: 1.5rem;

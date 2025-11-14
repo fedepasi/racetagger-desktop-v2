@@ -24,14 +24,14 @@ export interface NetworkMetrics {
  * Tracks network performance and upload statistics
  */
 export class NetworkMonitor {
-  private uploadAttempts: Array<{ success: boolean; durationMs: number }> = [];
+  private uploadAttempts: Array<{ success: boolean; durationMs: number; fileSizeBytes?: number }> = [];
   private uploadRetries = 0;
   private uploadFailures = 0;
   private uploadSuccesses = 0;
 
   /**
-   * Measure initial network metrics (latency and upload speed)
-   * This runs once at the start of execution
+   * Measure initial network metrics (latency only)
+   * Upload speed will be calculated from real image uploads
    *
    * @param timeout Maximum time to wait for measurements (ms)
    */
@@ -57,18 +57,7 @@ export class NetworkMonitor {
         metrics.supabase_latency_ms = latency;
       }
 
-      // Measure upload speed with timeout
-      const speedPromise = this.estimateUploadSpeed();
-      const speed = await Promise.race([
-        speedPromise,
-        this.timeoutPromise(timeout, undefined)
-      ]);
-
-      if (speed !== undefined) {
-        metrics.upload_speed_mbps = speed;
-      }
-
-      console.log('[NetworkMonitor] Initial metrics collected:', metrics);
+      console.log('[NetworkMonitor] Initial metrics collected (upload speed will be calculated from real uploads):', metrics);
     } catch (error) {
       console.warn('[NetworkMonitor] Failed to measure initial metrics, using partial data:', error);
     }
@@ -105,58 +94,6 @@ export class NetworkMonitor {
     }
   }
 
-  /**
-   * Estimate upload speed with small test file
-   * Uploads a 100KB test file and calculates MB/s
-   */
-  private async estimateUploadSpeed(): Promise<number | undefined> {
-    try {
-      const supabase = getSupabaseClient();
-
-      // Create a 100KB test buffer
-      const testSize = 100 * 1024; // 100KB
-      const testData = Buffer.alloc(testSize, 'x');
-
-      // Generate unique test file name
-      const testFileName = `_network-test-${Date.now()}.tmp`;
-      const testPath = `network-tests/${testFileName}`;
-
-      const startTime = Date.now();
-
-      // Upload test file
-      const { error } = await supabase.storage
-        .from('analysis-logs')
-        .upload(testPath, testData, {
-          cacheControl: '60',
-          upsert: true
-        });
-
-      const endTime = Date.now();
-      const durationMs = endTime - startTime;
-
-      // Clean up test file (don't wait for completion)
-      supabase.storage
-        .from('analysis-logs')
-        .remove([testPath])
-        .catch(() => {
-          // Ignore cleanup errors
-        });
-
-      if (error) {
-        console.warn('[NetworkMonitor] Upload speed test failed:', error.message);
-        return undefined;
-      }
-
-      // Calculate speed in MB/s, then convert to Mbps
-      const speedMBps = (testSize / 1024 / 1024) / (durationMs / 1000);
-      const speedMbps = speedMBps * 8; // Convert MB/s to Mbps
-
-      return Math.round(speedMbps * 10) / 10; // Round to 1 decimal
-    } catch (error) {
-      console.warn('[NetworkMonitor] Failed to estimate upload speed:', error);
-      return undefined;
-    }
-  }
 
   /**
    * Detect network type (WiFi, Ethernet, etc.)
@@ -207,9 +144,12 @@ export class NetworkMonitor {
 
   /**
    * Record an upload attempt (success or failure)
+   * @param success Whether the upload succeeded
+   * @param durationMs Duration of upload in milliseconds
+   * @param fileSizeBytes Size of file in bytes (optional, used to calculate speed)
    */
-  recordUploadAttempt(success: boolean, durationMs: number): void {
-    this.uploadAttempts.push({ success, durationMs });
+  recordUploadAttempt(success: boolean, durationMs: number, fileSizeBytes?: number): void {
+    this.uploadAttempts.push({ success, durationMs, fileSizeBytes });
 
     if (success) {
       this.uploadSuccesses++;
@@ -240,8 +180,32 @@ export class NetworkMonitor {
       ? (this.uploadSuccesses / totalAttempts) * 100
       : 0;
 
+    // Calculate upload speed from real uploads with file size data
+    let uploadSpeedMbps: number | undefined = undefined;
+    const uploadsWithSize = successfulUploads.filter(a => a.fileSizeBytes && a.fileSizeBytes > 0 && a.durationMs > 0);
+
+    if (uploadsWithSize.length > 0) {
+      // Calculate speed in Mbps for each upload
+      const speeds = uploadsWithSize.map(upload => {
+        // Convert bytes to megabits: (bytes * 8) / 1,000,000
+        // Convert ms to seconds: ms / 1000
+        return (upload.fileSizeBytes! * 8 / 1_000_000) / (upload.durationMs / 1000);
+      });
+
+      // Take median (more robust than average)
+      speeds.sort((a, b) => a - b);
+      const median = speeds.length % 2 === 0
+        ? (speeds[speeds.length / 2 - 1] + speeds[speeds.length / 2]) / 2
+        : speeds[Math.floor(speeds.length / 2)];
+
+      uploadSpeedMbps = Math.round(median * 10) / 10; // Round to 1 decimal
+
+      console.log(`[NetworkMonitor] Upload speed calculated from ${uploadsWithSize.length} real uploads: ${uploadSpeedMbps} Mbps (median)`);
+    }
+
     return {
       network_type: this.detectNetworkType(),
+      upload_speed_mbps: uploadSpeedMbps,
       upload_retries: this.uploadRetries,
       upload_failures: this.uploadFailures,
       upload_success_count: this.uploadSuccesses,

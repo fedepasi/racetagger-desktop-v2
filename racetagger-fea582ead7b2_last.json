@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "racetagger",
+  "private_key_id": "fea582ead7b2a3049a3bdd1c2544c461f835242a",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQDRgWKCBLyI6QA9\n2Cfe5GrNA3LbMzTp8NOm6qWacL+v5lAKcHEAZhv6Ohi7FdLFmGcftjenack0kQtY\nsj9UXaN9hVhn92i+5ZBtD0Z99bmqzPlOSGR9/S9qPtMcgX8OgRvvbE9PcFsttSqF\nTrdnZBSPBoS8B8gd6H4K8ddQTXVZzD22kulCp01Ciotn1ZZymeM4bggnvte/nlON\nnvYZ1D4VbBgkYDt3mglQqEV9/CAMb7WaWJ8L18o9dgw5WAfgTvAlf1cMsKbTLVsh\n+gwwSKeZvar4eH3Wnjknqe6NswUaUKUajXKIYU5Vz9XwHIQksouGhY1UxFQxuqz7\nDMd7eUH1AgMBAAECggEAAk0KNKcYNkdYi3z08ABbbzYmyErJMX/YDbduL+urxrVM\nTpRIQN0F2Qs0zTVOO+MpYn9WDeEo0uXj0NVcnZPcyyeiiPDr888oL05y/LxIWiKZ\noATSQmQFYrt3dEOiQiLwXmz5wTR9ZlhvIZshcMro6o9b/mMCTUwrWJhzM8A7jmQm\no0p7v+K+mkfInrLKGGwvqY1ixi6I9nDdaSruXPFmsU0YpanU8okp/nyKdXpBAOrn\n2tG66YLOUPTDCZBgnoSV+mdzZ0+78IXrHWSrEXS1+dg0/N4hyTfpYm2yXTUqEvic\nrA+HqY34AWInVsF7Nv8NzHWVghdocNF7n0vdkl1SUQKBgQDq2aHH1bbD0i2i7zQv\nlZtdTrG7RJUXhaeBRDiJBq8Q0WTrNiFmMfYomXMdmO4Qeg4xWgAf43/TIl5qC6jj\nqTIwprAzeoZDhKQoMSHoaftHvmPM7DlNgEO47i+4QTxtb4A8z4lRHfBb9NE7JRYb\nqMUW8bhzFy7sPeyAYCDIFchJUQKBgQDkX3D+2GiD5EzR6N8bchaJ3hmW2Kmd8EIm\nDCePNWYHh/nuvqTyR9T3WCj6Cn5gwV+9IQELBLmHxgFIqb2f8tGpSnd1iy5b8xL4\nk6S62u3Y0sM+HW2/a2pwjkibVW8JMgqL0LaZthv/SDTWOuzYK+zm04ISj5psvtEj\nWxrocDnFZQKBgQCOepp78lx/UPP+9cBjXhBz+1o4ktMhAiUtd4YVG8j6Gw9u49g/\nd/AvkWkVe8JynJoftsp8jjjujttY2toLxIp+maIsmRj7vW0aNTStHB8m14sUt/vL\n2RU9DMRGtM1EV3Elc4OLgu5f25dUmptfDHUGBoAw0s/U43yoJam9uflZAQKBgQCO\nBRyMH6C/hNaRI7S7qLODgW+Ac7Tn12YLqztev+J3hIRViJGjajBysYyqEqSNHzSe\ntUukwodufCCIQ6b9NVBVa03m92sZG40MsSScX1HSqR9qHXsGs5I59QIKN5MZsNkG\nIgGsjafTld/l6jcoKAjnc1lMmal7Px9oUVvmeQQ0UQKBgQDgGkIUk1q2dMkFpBg4\ncIxhvDaKYuh/KywSDanIbeqPvCjZvoE32ZVF6CJeX9u10m1YdNxyWP0eBj32AMo4\n0pFT4aFF1Fg8ysNdmwa2fl0/uAhzQvQZUJGe4G54dF806HV6mwzkpYv/ZBtmC9Y5\n5HmaIjrm9TmDm9Ne6Tev4YV/AQ==\n-----END PRIVATE KEY-----\n",
+  "client_email": "racetagger-des@racetagger.iam.gserviceaccount.com",
+  "client_id": "107120760482952463579",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/racetagger-des%40racetagger.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}

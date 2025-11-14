@@ -4281,3 +4281,6 @@ body.modal-open {
   color: #16a34a;
   border-bottom-color: #22c55e;
 }
+#login-form label, #register-form label {
+  color:#fff;
+}
