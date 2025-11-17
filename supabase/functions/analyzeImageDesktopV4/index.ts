@@ -44,7 +44,7 @@ interface SportCategory {
   code: string;
   name: string;
   recognition_method: 'gemini' | 'rf-detr';
-  rf_detr_workflow_url?: string;
+  rf_detr_workflow_url?: string;  // Can be direct model URL or workflow URL
   rf_detr_api_key_env?: string;
   ai_prompt?: string;
   fallback_prompt?: string;
@@ -101,7 +101,10 @@ interface SuccessResponse {
   };
   rfDetrUsage?: {
     detectionsCount: number;
-    estimatedCostUSD: number;
+    inferenceTimeMs: number;        // Actual inference time in milliseconds
+    inferenceTimeSec: number;       // Actual inference time in seconds
+    estimatedCostUSD: number;       // Estimated cost ($0.0045 baseline)
+    actualCostUSD: number;          // Actual cost based on inference time
   };
   tokenInfo?: {
     tokensConsumed: number;
@@ -131,26 +134,45 @@ const ROBOFLOW_CONFIG = {
 
 /**
  * Extract race number from RF-DETR class label
- * Format: "MODEL_NUMBER" e.g., "SF-25_16" → "16"
+ * Supports multiple formats:
+ * - "MODEL_NUMBER" format: "SF-25_16" → "16"
+ * - Direct number: "16" → "16"
+ * - Multiple underscores: "MODEL_VARIANT_16" → "16"
  */
 function extractRaceNumberFromLabel(classLabel: string): string | null {
+  console.log(`[RF-DETR] Parsing label: "${classLabel}"`);
+
+  // Check if label is already just a number (e.g., "16")
+  if (/^\d+$/.test(classLabel)) {
+    console.log(`[RF-DETR] ✓ Direct number format: ${classLabel}`);
+    return classLabel;
+  }
+
+  // Try to extract from "MODEL_NUMBER" format
   const parts = classLabel.split('_');
 
-  if (parts.length < 2) {
-    console.warn(`[RF-DETR] Invalid label format: ${classLabel}`);
-    return null;
+  if (parts.length >= 2) {
+    // Last part should be race number
+    const raceNumber = parts[parts.length - 1];
+
+    // Validate it's numeric
+    if (/^\d+$/.test(raceNumber)) {
+      console.log(`[RF-DETR] ✓ Extracted from format "${classLabel}": ${raceNumber}`);
+      return raceNumber;
+    } else {
+      console.warn(`[RF-DETR] ✗ Last part not numeric in label: ${classLabel}`);
+    }
   }
 
-  // Last part is race number
-  const raceNumber = parts[parts.length - 1];
-
-  // Validate it's numeric
-  if (!/^\d+$/.test(raceNumber)) {
-    console.warn(`[RF-DETR] Race number not numeric in label: ${classLabel}`);
-    return null;
+  // Try to find any numeric sequence in the label as fallback
+  const numericMatch = classLabel.match(/\d+/);
+  if (numericMatch) {
+    console.warn(`[RF-DETR] ⚠ Fallback: extracted first number from "${classLabel}": ${numericMatch[0]}`);
+    return numericMatch[0];
   }
 
-  return raceNumber;
+  console.error(`[RF-DETR] ✗ Failed to extract race number from: ${classLabel}`);
+  return null;
 }
 
 /**
@@ -209,17 +231,34 @@ function filterOverlappingDetections(
 
 /**
  * Convert RF-DETR response to standard analysis format
+ * Supports both direct model API and workflow API response formats
  */
 function convertRfDetrToAnalysisFormat(
-  rfDetrResponse: RoboflowResponse[],
+  rfDetrResponse: any,
   iouThreshold: number = ROBOFLOW_CONFIG.overlapThreshold
 ): AnalysisResult[] {
-  if (!rfDetrResponse || rfDetrResponse.length === 0) {
+  if (!rfDetrResponse) {
     console.warn('[RF-DETR] Empty response');
     return [];
   }
 
-  const modelPredictions = rfDetrResponse[0]?.model_predictions;
+  // Auto-detect response format
+  // Direct Model API: { predictions: [...], image: {...} }
+  // Workflow API: [{ model_predictions: { predictions: [...], image: {...} } }]
+  let modelPredictions;
+  if (Array.isArray(rfDetrResponse) && rfDetrResponse[0]?.model_predictions) {
+    // Workflow format
+    console.log('[RF-DETR] Detected workflow API response format');
+    modelPredictions = rfDetrResponse[0].model_predictions;
+  } else if (rfDetrResponse.predictions && rfDetrResponse.image) {
+    // Direct model format
+    console.log('[RF-DETR] Detected direct model API response format');
+    modelPredictions = rfDetrResponse;
+  } else {
+    console.warn('[RF-DETR] Unknown response format');
+    return [];
+  }
+
   if (!modelPredictions?.predictions) {
     console.warn('[RF-DETR] No predictions in response');
     return [];
@@ -227,11 +266,18 @@ function convertRfDetrToAnalysisFormat(
 
   console.log(`[RF-DETR] Raw predictions: ${modelPredictions.predictions.length}`);
 
+  // Log all raw predictions for debugging
+  modelPredictions.predictions.forEach((pred: any, idx: number) => {
+    console.log(`[RF-DETR] Prediction ${idx + 1}: class="${pred.class}", confidence=${pred.confidence.toFixed(3)}`);
+  });
+
   // Filter overlapping detections
   const filtered = filterOverlappingDetections(
     modelPredictions.predictions,
     iouThreshold
   );
+
+  console.log(`[RF-DETR] After NMS filtering: ${filtered.length} detections`);
 
   // Convert to standard format
   const analysis = filtered.map(pred => {
@@ -253,35 +299,47 @@ function convertRfDetrToAnalysisFormat(
       detectionId: pred.detection_id,
       modelSource: 'rf-detr' as const
     };
-  }).filter(result => result.raceNumber !== null); // Filter out invalid labels
+  });
 
-  console.log(`[RF-DETR] Converted to ${analysis.length} valid analysis results`);
-  return analysis;
+  // Log results before filtering
+  console.log(`[RF-DETR] Before label validation: ${analysis.length} results`);
+  const validResults = analysis.filter(result => result.raceNumber !== null);
+  const invalidCount = analysis.length - validResults.length;
+
+  if (invalidCount > 0) {
+    console.warn(`[RF-DETR] ⚠ Filtered out ${invalidCount} results with invalid race numbers`);
+  }
+
+  console.log(`[RF-DETR] Final valid analysis results: ${validResults.length}`);
+  return validResults;
 }
 
 /**
- * Call Roboflow workflow API
+ * Call Roboflow Model API (Direct Model Inference)
+ * Supports direct model URLs: https://serverless.roboflow.com/model-id/version
+ * Returns: { response, inferenceTimeMs, inferenceTimeSec }
  */
-async function callRoboflowWorkflow(
+async function callRoboflowModel(
   imageUrl: string,
-  workflowUrl: string,
+  modelUrl: string,
   apiKey: string
-): Promise<RoboflowResponse[]> {
-  console.log(`[RF-DETR] Calling workflow: ${workflowUrl}`);
+): Promise<{ response: any; inferenceTimeMs: number; inferenceTimeSec: number }> {
+  console.log(`[RF-DETR] Calling model: ${modelUrl}`);
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), ROBOFLOW_CONFIG.timeout);
 
+  // Track inference time
+  const startTime = Date.now();
+
   try {
-    const response = await fetch(workflowUrl, {
+    // Build URL with query parameters for direct model inference
+    const url = new URL(modelUrl);
+    url.searchParams.set('api_key', apiKey);
+    url.searchParams.set('image', imageUrl);
+
+    const response = await fetch(url.toString(), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        api_key: apiKey,
-        inputs: {
-          image: { type: "url", value: imageUrl }
-        }
-      }),
       signal: controller.signal
     });
 
@@ -293,9 +351,18 @@ async function callRoboflowWorkflow(
     }
 
     const data = await response.json();
-    console.log(`[RF-DETR] Response received successfully`);
 
-    return data;
+    // Calculate inference time
+    const inferenceTimeMs = Date.now() - startTime;
+    const inferenceTimeSec = inferenceTimeMs / 1000;
+
+    console.log(`[RF-DETR] ✓ Inference completed in ${inferenceTimeMs}ms (${inferenceTimeSec.toFixed(3)}s)`);
+
+    return {
+      response: data,
+      inferenceTimeMs,
+      inferenceTimeSec
+    };
   } catch (error) {
     clearTimeout(timeoutId);
 
@@ -371,7 +438,7 @@ serve(async (req) => {
     // Get signed URL for image
     const { data: signedUrlData, error: signedUrlError } = await supabaseAdmin
       .storage
-      .from('images-desktop')
+      .from('uploaded-images')
       .createSignedUrl(imagePath, 3600); // 1 hour validity
 
     if (signedUrlError) {
@@ -385,7 +452,7 @@ serve(async (req) => {
     let analysisResult: SuccessResponse;
 
     if (recognitionMethod === 'rf-detr' && sportCategory?.rf_detr_workflow_url) {
-      // Attempt RF-DETR recognition
+      // Attempt RF-DETR recognition (direct model or workflow API)
       try {
         console.log('[V4] Attempting RF-DETR recognition...');
 
@@ -398,22 +465,28 @@ serve(async (req) => {
           throw new Error(`Missing API key: ${apiKeyEnv}`);
         }
 
-        // Call RF-DETR
-        const rfDetrResponse = await callRoboflowWorkflow(
+        // Call RF-DETR with timing tracking
+        const rfDetrResult = await callRoboflowModel(
           imageUrl,
           sportCategory.rf_detr_workflow_url,
           apiKey
         );
 
+        // Calculate actual cost based on inference time
+        // V2 API pricing: $4 per 500 seconds = $0.008 per second
+        const actualCostUSD = rfDetrResult.inferenceTimeSec * (4 / 500);
+
+        console.log(`[RF-DETR] 💰 Cost: $${actualCostUSD.toFixed(5)} (actual) vs $${ROBOFLOW_CONFIG.estimatedCostPerImage} (estimated)`);
+
         // Convert to standard format
-        const analysis = convertRfDetrToAnalysisFormat(rfDetrResponse);
+        const analysis = convertRfDetrToAnalysisFormat(rfDetrResult.response);
 
         if (analysis.length === 0) {
           console.warn('[V4] RF-DETR returned no valid detections, falling back to Gemini');
           throw new Error('No valid RF-DETR detections');
         }
 
-        console.log(`[V4] RF-DETR success: ${analysis.length} detections`);
+        console.log(`[V4] ✓ RF-DETR SUCCESS: ${analysis.length} detections with confidence ${analysis[0]?.confidence.toFixed(3)}`);
 
         // Create image record for tracking
         const { data: imageData, error: imageError } = await supabaseAdmin
@@ -431,8 +504,16 @@ serve(async (req) => {
 
         const imageId = imageData?.id || '';
 
-        // Save analysis results with bounding boxes
+        // Save analysis results with bounding boxes and timing
         if (imageId && analysis.length > 0) {
+          // Extract predictions and image info (works for both formats)
+          const predictions = Array.isArray(rfDetrResult.response)
+            ? rfDetrResult.response[0].model_predictions.predictions
+            : rfDetrResult.response.predictions;
+          const imageSize = Array.isArray(rfDetrResult.response)
+            ? rfDetrResult.response[0].model_predictions.image
+            : rfDetrResult.response.image;
+
           await supabaseAdmin.from('analysis_results').insert({
             image_id: imageId,
             analysis_provider: 'rf-detr',
@@ -440,11 +521,14 @@ serve(async (req) => {
             confidence_score: analysis[0].confidence,
             raw_response: {
               modelSource: 'rf-detr',
-              workflowUrl: sportCategory.rf_detr_workflow_url,
-              predictions: rfDetrResponse[0].model_predictions.predictions,
+              modelUrl: sportCategory.rf_detr_workflow_url,
+              predictions,
               analysis,
               boundingBoxes: analysis.map(a => a.boundingBox),
-              imageSize: rfDetrResponse[0].model_predictions.image,
+              imageSize,
+              inferenceTimeMs: rfDetrResult.inferenceTimeMs,
+              inferenceTimeSec: rfDetrResult.inferenceTimeSec,
+              actualCostUSD,
               timestamp: new Date().toISOString()
             }
           });
@@ -455,14 +539,19 @@ serve(async (req) => {
           analysis,
           rfDetrUsage: {
             detectionsCount: analysis.length,
-            estimatedCostUSD: ROBOFLOW_CONFIG.estimatedCostPerImage
+            inferenceTimeMs: rfDetrResult.inferenceTimeMs,
+            inferenceTimeSec: rfDetrResult.inferenceTimeSec,
+            estimatedCostUSD: ROBOFLOW_CONFIG.estimatedCostPerImage,
+            actualCostUSD
           },
           imageId,
           recognitionMethod: 'rf-detr'
         };
 
-      } catch (rfDetrError) {
-        console.error('[V4] RF-DETR failed, falling back to Gemini:', rfDetrError.message);
+        console.log(`[V4] ✓ RF-DETR analysisResult set with recognitionMethod: ${analysisResult.recognitionMethod}`);
+
+      } catch (rfDetrError: any) {
+        console.error('[V4] ✗ RF-DETR FAILED, falling back to Gemini:', rfDetrError.message);
         // Fall through to Gemini
         analysisResult = null as any; // Will be set by Gemini fallback
       }

@@ -16,7 +16,7 @@ import type { PhaseTimings } from './performance-timer';
 import type { ErrorEvent as TrackedError, ErrorSummary } from './error-tracker';
 
 export interface LogEvent {
-  type: 'EXECUTION_START' | 'IMAGE_ANALYSIS' | 'CORRECTION' | 'TEMPORAL_CLUSTER' | 'PARTICIPANT_MATCH' | 'UNKNOWN_NUMBER' | 'EXECUTION_COMPLETE' | 'ERROR';
+  type: 'EXECUTION_START' | 'IMAGE_ANALYSIS' | 'CORRECTION' | 'TEMPORAL_CLUSTER' | 'PARTICIPANT_MATCH' | 'UNKNOWN_NUMBER' | 'RF_DETR_TIMING' | 'EXECUTION_COMPLETE' | 'ERROR';
   timestamp: string;
   executionId: string;
 }
@@ -58,6 +58,7 @@ export interface VehicleAnalysisData {
     width: number;  // Percentage 0-100 of image width
     height: number; // Percentage 0-100 of image height
   };
+  modelSource?: 'gemini' | 'rf-detr';  // Recognition method used for this vehicle
   corrections: CorrectionData[];
   participantMatch?: any;
   finalResult: {
@@ -92,6 +93,8 @@ export interface ImageAnalysisEvent extends LogEvent {
   thumbnailPath?: string | null;
   microThumbPath?: string | null;
   compressedPath?: string | null;
+  // Recognition method tracking
+  recognitionMethod?: 'gemini' | 'rf-detr';
   // Backward compatibility fields (uses first vehicle data)
   primaryVehicle?: VehicleAnalysisData;
 }
@@ -160,6 +163,18 @@ export interface ParticipantMatchEvent extends LogEvent {
   reasoning: string[];
 }
 
+export interface RfDetrTimingEvent extends LogEvent {
+  type: 'RF_DETR_TIMING';
+  imageId: string;
+  fileName: string;
+  inferenceTimeMs: number;
+  inferenceTimeSec: number;
+  estimatedCostUSD: number;    // Baseline estimate ($0.0045)
+  actualCostUSD: number;        // Actual cost based on time (V2 API: $0.008/sec)
+  detectionsCount: number;
+  modelUrl: string;
+}
+
 export interface ExecutionCompleteEvent extends LogEvent {
   type: 'EXECUTION_COMPLETE';
   totalProcessed: number;
@@ -188,6 +203,16 @@ export interface ExecutionCompleteEvent extends LogEvent {
   };
   networkStats?: NetworkMetrics;
   errorSummary?: ErrorSummary;
+  // Recognition method statistics
+  recognitionStats?: {
+    method: 'gemini' | 'rf-detr' | 'mixed';
+    rfDetrDetections?: number;
+    rfDetrCost?: number;
+    rfDetrTotalInferenceTimeMs?: number;  // Total inference time across all images
+    rfDetrAverageInferenceTimeMs?: number; // Average inference time per image
+    rfDetrActualCost?: number;             // Actual cost based on timing (V2 API)
+    rfDetrEstimatedCost?: number;          // Estimated cost baseline
+  };
 }
 
 export class AnalysisLogger {
@@ -379,6 +404,20 @@ export class AnalysisLogger {
   }
 
   /**
+   * Log RF-DETR timing and cost information
+   */
+  logRfDetrTiming(data: Omit<RfDetrTimingEvent, 'type' | 'timestamp' | 'executionId'>): void {
+    const event: RfDetrTimingEvent = {
+      type: 'RF_DETR_TIMING',
+      timestamp: new Date().toISOString(),
+      executionId: this.executionId,
+      ...data
+    };
+
+    this.writeLine(event);
+  }
+
+  /**
    * Log error (new in enhanced telemetry)
    */
   logError(errorData: TrackedError): void {
@@ -415,6 +454,7 @@ export class AnalysisLogger {
       cpuStats?: ExecutionCompleteEvent['cpuStats'];
       networkStats?: NetworkMetrics;
       errorSummary?: ErrorSummary;
+      recognitionStats?: ExecutionCompleteEvent['recognitionStats'];
     }
   ): void {
     const processingTimeMs = Date.now() - this.stats.startTime;
