@@ -334,6 +334,23 @@ export const APP_CONFIG = {
   }
 };
 
+// Roboflow RF-DETR Configuration
+export interface RoboflowConfig {
+  defaultApiKey: string;               // Default Roboflow API key
+  overlapThreshold: number;            // IoU threshold for filtering overlapping detections (0.0-1.0)
+  minConfidence: number;               // Minimum confidence score for detections (0.0-1.0)
+  estimatedCostPerImage: number;       // Estimated cost per image in USD
+  timeout: number;                     // API request timeout in milliseconds
+}
+
+export const ROBOFLOW_CONFIG: RoboflowConfig = {
+  defaultApiKey: getConfigValue('ROBOFLOW_DEFAULT_API_KEY', 'ROBOFLOW_DEFAULT_API_KEY'),
+  overlapThreshold: 0.5,               // 50% IoU threshold
+  minConfidence: 0.7,                  // 70% minimum confidence
+  estimatedCostPerImage: 0.0045,       // ~$0.0045 per image
+  timeout: 30000                       // 30 seconds timeout
+};
+
 // New performance optimization configuration
 export const PERFORMANCE_CONFIG: PerformanceOptimizations = createPerformanceConfig();
 

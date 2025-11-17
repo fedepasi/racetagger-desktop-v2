@@ -1109,7 +1109,9 @@ class UnifiedImageWorker extends EventEmitter {
     if (this.currentSportCategory?.edge_function_version) {
       // Use sport category's edge_function_version if available
       const version = this.currentSportCategory.edge_function_version;
-      if (version === 3) {
+      if (version === 4) {
+        functionName = 'analyzeImageDesktopV4';
+      } else if (version === 3) {
         functionName = 'analyzeImageDesktopV3';
       } else if (version === 2) {
         functionName = 'analyzeImageDesktopV2';
