@@ -3,9 +3,9 @@
 # ═══════════════════════════════════════════════════════════════
 
 # Deep Learning Framework
-tensorflow>=2.13.0,<2.16.0           # Core ML framework
-tensorflow-macos>=2.13.0; platform_system=="Darwin"  # Mac M1/M2 optimized
-tensorflow-metal>=1.0.0; platform_system=="Darwin"   # Metal GPU acceleration
+tensorflow>=2.13.0,<2.16.0; platform_system!="Darwin"  # Core ML framework (Linux/Windows)
+tensorflow-macos>=2.13.0; platform_system=="Darwin"   # Mac M1/M2 optimized
+tensorflow-metal>=1.0.0; platform_system=="Darwin"    # Metal GPU acceleration
 
 # Image Processing
 Pillow>=10.0.0                       # Image loading and manipulation

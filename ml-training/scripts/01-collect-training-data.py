@@ -127,7 +127,7 @@ class UnsplashCollector:
             'orientation': 'landscape'
         }
 
-        response = self.session.get(url, params=params)
+        response = self.session.get(url, params=params, timeout=30)
 
         if response.status_code == 429:  # Rate limit
             raise Exception("Rate limit exceeded. Wait 1 hour.")
@@ -255,7 +255,7 @@ class PexelsCollector:
             'orientation': 'landscape'
         }
 
-        response = self.session.get(url, params=params)
+        response = self.session.get(url, params=params, timeout=30)
 
         if response.status_code == 429:  # Rate limit
             raise Exception("Rate limit exceeded. Wait 1 minute.")
@@ -388,14 +388,24 @@ def collect_dataset(source: str = 'unsplash', limit: Optional[int] = None):
         sys.exit(1)
 
     print(f"✅ Using source: {source.upper()}")
+    sys.stdout.flush()
 
     # Output directory
+    print("[DEBUG] Getting dataset path...")
+    sys.stdout.flush()
     output_base = get_dataset_path('raw')
+    print(f"[DEBUG] Dataset path: {output_base}")
+    sys.stdout.flush()
 
     # Collect each category
     total_downloaded = 0
 
+    print(f"[DEBUG] Starting category loop, {len(CATEGORIES)} categories")
+    sys.stdout.flush()
+
     for category, config in CATEGORIES.items():
+        print(f"[DEBUG] Processing category: {category}")
+        sys.stdout.flush()
         output_dir = output_base / category
 
         target = config['target']
@@ -434,6 +444,9 @@ def collect_dataset(source: str = 'unsplash', limit: Optional[int] = None):
 # ═══════════════════════════════════════════════════════════════
 
 def main():
+    print("[DEBUG] Starting main()...")
+    sys.stdout.flush()
+
     parser = argparse.ArgumentParser(
         description='Collect F1 training dataset from public APIs'
     )
@@ -452,9 +465,17 @@ def main():
         help='Maximum total images to collect'
     )
 
+    print("[DEBUG] Parsing arguments...")
+    sys.stdout.flush()
+
     args = parser.parse_args()
 
+    print(f"[DEBUG] Arguments parsed: source={args.source}, limit={args.limit}")
+    sys.stdout.flush()
+
     try:
+        print("[DEBUG] Calling collect_dataset()...")
+        sys.stdout.flush()
         collect_dataset(source=args.source, limit=args.limit)
     except KeyboardInterrupt:
         print("\n\n⚠️  Collection interrupted by user")
