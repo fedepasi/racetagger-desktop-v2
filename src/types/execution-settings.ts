@@ -85,6 +85,13 @@ export interface ExecutionSettingsData {
   metadata_strategy?: string;
   manual_metadata_value?: string;
   include_xmp_files?: boolean;
+
+  // RF-DETR Recognition Tracking
+  recognition_method?: 'gemini' | 'rf-detr';
+  recognition_method_version?: string;  // e.g., "V4", "V3", "V2"
+  rf_detr_workflow_url?: string;        // Roboflow workflow URL used
+  rf_detr_detections_count?: number;    // Total RF-DETR detections across all images
+  rf_detr_total_cost?: number;          // Total RF-DETR cost in USD
 }
 
 /**

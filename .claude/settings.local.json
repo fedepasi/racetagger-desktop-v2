@@ -88,7 +88,8 @@
       "Bash(del /F /Q \"\\?\\C:\\Users\\Federico\\Documents\\Federico\\In Lavorazione - Siti Web\\racetagger-desktop-v2\\vendor\\raw-preview-extractor\\nul\")",
       "Bash(npm run clean:*)",
       "Bash(python -c \"import os; os.remove(r''vendor\\raw-preview-extractor\\nul'')\")",
-      "Bash(npm run build:ts:*)"
+      "Bash(npm run build:ts:*)",
+      "Bash(npx supabase:*)"
     ],
     "deny": [],
     "ask": []

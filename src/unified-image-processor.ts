@@ -49,6 +49,10 @@ export interface UnifiedProcessingResult {
   compressedPath?: string;
   thumbnailPath?: string | null;
   microThumbPath?: string | null;
+  // RF-DETR Metrics (from worker)
+  rfDetrDetections?: number;
+  rfDetrCost?: number;
+  recognitionMethod?: 'gemini' | 'rf-detr';
 }
 
 /**
@@ -101,6 +105,10 @@ class UnifiedImageWorker extends EventEmitter {
   private networkMonitor?: NetworkMonitor;
   private sportCategories: any[] = []; // Store sport categories data
   private currentSportCategory: any = null; // Current category config
+  // RF-DETR Metrics Tracking
+  private totalRfDetrDetections: number = 0;
+  private totalRfDetrCost: number = 0;
+  private recognitionMethod: 'gemini' | 'rf-detr' | null = null;
 
   private constructor(config: UnifiedProcessorConfig, analysisLogger?: AnalysisLogger, networkMonitor?: NetworkMonitor) {
     super();
@@ -414,6 +422,22 @@ class UnifiedImageWorker extends EventEmitter {
       // Fase 4: Analisi AI
       const analysisResult = await this.analyzeImage(imageFile.fileName, storagePath, buffer.length, mimeType);
 
+      // Track RF-DETR usage metrics if present
+      if (analysisResult.rfDetrUsage) {
+        this.totalRfDetrDetections += analysisResult.rfDetrUsage.detectionsCount || 0;
+        this.totalRfDetrCost += analysisResult.rfDetrUsage.estimatedCostUSD || 0;
+
+        // Set recognition method based on actual usage
+        if (!this.recognitionMethod) {
+          this.recognitionMethod = 'rf-detr';
+        }
+
+        console.log(`[UnifiedWorker] RF-DETR metrics - Detections: ${analysisResult.rfDetrUsage.detectionsCount}, Cost: $${analysisResult.rfDetrUsage.estimatedCostUSD.toFixed(4)}`);
+      } else if (!this.recognitionMethod && analysisResult.success) {
+        // If no RF-DETR usage but analysis succeeded, it's Gemini
+        this.recognitionMethod = 'gemini';
+      }
+
       // Check for cancellation after AI analysis
       if (this.checkCancellation()) {
         return {
@@ -484,6 +508,7 @@ class UnifiedImageWorker extends EventEmitter {
               width: vehicle.boundingBox.width,
               height: vehicle.boundingBox.height
             } : undefined,
+            modelSource: vehicle.modelSource, // Recognition method used (gemini/rf-detr)
             corrections: corrections.filter((c: any) => c.vehicleIndex === index),
             participantMatch: csvMatch,
             // Temporal information from SmartMatcher (FIXED)
@@ -539,6 +564,8 @@ class UnifiedImageWorker extends EventEmitter {
           thumbnailPath,
           microThumbPath,
           compressedPath,
+          // Recognition method tracking
+          recognitionMethod: analysisResult.recognitionMethod || undefined,
           // Backward compatibility - use first vehicle as primary
           primaryVehicle: vehicles.length > 0 ? vehicles[0] : undefined
         });
@@ -566,7 +593,11 @@ class UnifiedImageWorker extends EventEmitter {
         previewDataUrl,
         compressedPath,
         thumbnailPath,
-        microThumbPath
+        microThumbPath,
+        // RF-DETR Metrics from worker
+        rfDetrDetections: this.totalRfDetrDetections,
+        rfDetrCost: this.totalRfDetrCost,
+        recognitionMethod: this.recognitionMethod || undefined
       };
       
       console.log(`[UnifiedWorker] Successfully processed ${imageFile.fileName} in ${result.processingTimeMs}ms`);
@@ -1109,7 +1140,9 @@ class UnifiedImageWorker extends EventEmitter {
     if (this.currentSportCategory?.edge_function_version) {
       // Use sport category's edge_function_version if available
       const version = this.currentSportCategory.edge_function_version;
-      if (version === 3) {
+      if (version === 4) {
+        functionName = 'analyzeImageDesktopV4';
+      } else if (version === 3) {
         functionName = 'analyzeImageDesktopV3';
       } else if (version === 2) {
         functionName = 'analyzeImageDesktopV2';
@@ -2428,6 +2461,11 @@ export class UnifiedImageProcessor extends EventEmitter {
   private performanceTimer?: PerformanceTimer;
   private errorTracker?: ErrorTracker;
   private systemEnvironment?: any; // Store for updating with final network speed
+  // RF-DETR Metrics Tracking (aggregated from workers)
+  private totalRfDetrDetections: number = 0;
+  private totalRfDetrCost: number = 0;
+  private recognitionMethod: 'gemini' | 'rf-detr' | null = null;
+  private currentSportCategory: any = null; // Current category config from Supabase
 
   constructor(config: Partial<UnifiedProcessorConfig> = {}) {
     super();
@@ -2491,6 +2529,17 @@ export class UnifiedImageProcessor extends EventEmitter {
       if (this.temporalManager) {
         this.temporalManager.initializeFromSportCategories(sportCategories);
         console.log(`[UnifiedProcessor] TemporalClusterManager configurations updated from Supabase`);
+      }
+
+      // Find and store current sport category for RF-DETR tracking
+      this.currentSportCategory = sportCategories.find(
+        (cat: any) => cat.code.toLowerCase() === (this.config.category || 'motorsport').toLowerCase()
+      );
+
+      if (this.currentSportCategory) {
+        console.log(`[UnifiedProcessor] Current sport category loaded: ${this.currentSportCategory.name} (recognition: ${this.currentSportCategory.recognition_method || 'gemini'})`);
+      } else {
+        console.warn(`[UnifiedProcessor] Sport category '${this.config.category}' not found in Supabase`);
       }
 
       console.log(`[UnifiedProcessor] Temporal configurations initialization completed`);
@@ -2833,7 +2882,13 @@ export class UnifiedImageProcessor extends EventEmitter {
               hasParticipantPreset: !!(this.config.participantPresetData && this.config.participantPresetData.length > 0),
               participantCount: this.config.participantPresetData?.length || 0,
               folderOrganizationEnabled: !!this.config.folderOrganization?.enabled,
-              enableAdvancedAnnotations: this.config.enableAdvancedAnnotations
+              enableAdvancedAnnotations: this.config.enableAdvancedAnnotations,
+              // RF-DETR Tracking
+              recognition_method: null, // Will be updated after first image
+              recognition_method_version: this.currentSportCategory?.edge_function_version ? `V${this.currentSportCategory.edge_function_version}` : 'V2',
+              rf_detr_workflow_url: this.currentSportCategory?.rf_detr_workflow_url || null,
+              rf_detr_detections_count: 0, // Will be updated at the end
+              rf_detr_total_cost: 0 // Will be updated at the end
             },
             // TIER 1 TELEMETRY: Add system environment telemetry
             system_environment: this.systemEnvironment
@@ -3101,6 +3156,23 @@ export class UnifiedImageProcessor extends EventEmitter {
     
     console.log(`[UnifiedProcessor] Batch completed: ${results.length} images processed successfully`);
 
+    // Aggregate RF-DETR metrics from all worker results
+    for (const result of results) {
+      if (result.success && result.rfDetrDetections !== undefined) {
+        this.totalRfDetrDetections += result.rfDetrDetections;
+        this.totalRfDetrCost += result.rfDetrCost || 0;
+
+        // Set recognition method from first successful result
+        if (!this.recognitionMethod && result.recognitionMethod) {
+          this.recognitionMethod = result.recognitionMethod;
+        }
+      }
+    }
+
+    if (this.totalRfDetrDetections > 0) {
+      console.log(`[UnifiedProcessor] RF-DETR Total Metrics - Detections: ${this.totalRfDetrDetections}, Total Cost: $${this.totalRfDetrCost.toFixed(4)}`);
+    }
+
     // Finalize analysis logging
     if (this.analysisLogger) {
       const successful = results.filter(r => r.success).length;
@@ -3151,7 +3223,13 @@ export class UnifiedImageProcessor extends EventEmitter {
           performanceBreakdown,
           memoryStats,
           networkStats,
-          errorSummary
+          errorSummary,
+          // Recognition method statistics
+          recognitionStats: this.recognitionMethod ? {
+            method: this.recognitionMethod,
+            rfDetrDetections: this.totalRfDetrDetections > 0 ? this.totalRfDetrDetections : undefined,
+            rfDetrCost: this.totalRfDetrCost > 0 ? this.totalRfDetrCost : undefined
+          } : undefined
         }
       );
 
@@ -3171,6 +3249,21 @@ export class UnifiedImageProcessor extends EventEmitter {
         const currentUserId = authState.isAuthenticated ? authState.user?.id : null;
 
         if (currentUserId && this.config.executionId) {
+          // Get current execution_settings from database
+          const { data: currentExecution } = await supabase
+            .from('executions')
+            .select('execution_settings')
+            .eq('id', this.config.executionId)
+            .single();
+
+          // Update execution_settings with RF-DETR metrics
+          const updatedExecutionSettings = {
+            ...(currentExecution?.execution_settings || {}),
+            recognition_method: this.recognitionMethod,
+            rf_detr_detections_count: this.totalRfDetrDetections,
+            rf_detr_total_cost: this.totalRfDetrCost
+          };
+
           const executionUpdate = {
             processed_images: successful,
             status: successful === results.length ? 'completed' : 'completed_with_errors',
@@ -3181,7 +3274,9 @@ export class UnifiedImageProcessor extends EventEmitter {
             network_stats: networkStats,
             error_summary: errorSummary,
             // Update system_environment with final network speed (backward compatibility)
-            system_environment: this.systemEnvironment
+            system_environment: this.systemEnvironment,
+            // Update execution_settings with RF-DETR metrics
+            execution_settings: updatedExecutionSettings
           };
 
           const { error } = await supabase
