@@ -38,6 +38,13 @@ const validSendReceiveChannels: string[] = [
   // Category and auth refresh channels
   'categories-updated',
   'auth-refresh-completed',
+  // Face Detection IPC channels (main -> renderer -> main)
+  'face-detection-request', 'face-detection-response',
+  'face-detection-single-request', 'face-detection-single-response',
+  'face-descriptor-request', 'face-descriptor-response',
+  // Export Destinations progress channels
+  'export-started',
+  'export-progress',
 ];
 
 const validInvokeChannels: string[] = [
@@ -150,6 +157,36 @@ const validInvokeChannels: string[] = [
 
   // Local Thumbnail Operations
   'find-local-thumbnails',
+
+  // Face Recognition Operations
+  'face-recognition-initialize',
+  'face-recognition-load-descriptors',
+  'face-recognition-match',
+  'face-recognition-status',
+  'face-recognition-clear',
+  'face-recognition-load-from-database',
+  'get-app-path',
+
+  // User Settings & Consent
+  'get-full-settings',
+  'get-training-consent',
+  'set-training-consent',
+  'get-consent-status',
+
+  // Export Destinations Operations
+  'export-destinations-create',
+  'export-destinations-get-all',
+  'export-destinations-get-active',
+  'export-destinations-get-by-id',
+  'export-destinations-get-default',
+  'export-destinations-update',
+  'export-destinations-delete',
+  'export-destinations-set-default',
+  'export-destinations-duplicate',
+  'export-destinations-update-order',
+  'export-destinations-toggle-active',
+  'export-destinations-get-matching',
+  'export-to-destinations',  // Export images to configured destinations
 ];
 
 

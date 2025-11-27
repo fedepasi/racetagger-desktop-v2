@@ -657,6 +657,7 @@ export interface Execution {
   processed_images?: number; // Number of images successfully processed
   total_images?: number; // Total number of images to process
   category?: string; // Sport category (motorsport, running, altro)
+  sport_category_id?: string | null; // UUID - FK to sport_categories table
   execution_settings?: Record<string, any>; // Execution configuration (JSONB)
 }
 
@@ -1182,6 +1183,45 @@ export async function getExecutionsByProjectIdOnline(projectId: string): Promise
   return (data as Execution[]) || [];
 }
 
+/**
+ * Get sport_category_id from category code or name (e.g., "motorsport" -> UUID)
+ * Tries to match by code first (case-insensitive), then by name (case-insensitive)
+ * Returns null if category not found
+ */
+export async function getSportCategoryIdByName(categoryCodeOrName: string): Promise<string | null> {
+  if (!categoryCodeOrName) return null;
+
+  try {
+    // First try to match by code (case-insensitive)
+    const { data: codeData, error: codeError } = await supabase
+      .from('sport_categories')
+      .select('id')
+      .ilike('code', categoryCodeOrName)
+      .single();
+
+    if (!codeError && codeData) {
+      return codeData.id;
+    }
+
+    // Fallback: try to match by name (case-insensitive)
+    const { data: nameData, error: nameError } = await supabase
+      .from('sport_categories')
+      .select('id')
+      .ilike('name', categoryCodeOrName)
+      .single();
+
+    if (!nameError && nameData) {
+      return nameData.id;
+    }
+
+    console.warn(`[DB] Sport category not found for code/name: ${categoryCodeOrName}`);
+    return null;
+  } catch (e) {
+    console.warn(`[DB] Error fetching sport category ID:`, e);
+    return null;
+  }
+}
+
 export async function createExecutionOnline(executionData: Omit<Execution, 'id' | 'user_id' | 'created_at' | 'updated_at'>): Promise<Execution> {
   const userId = getCurrentUserId();
   if (!userId) throw new Error('User not authenticated.');
@@ -1194,7 +1234,7 @@ export async function createExecutionOnline(executionData: Omit<Execution, 'id' 
 
   if (error) throw error;
   if (!data) throw new Error('Failed to create execution: no data returned.');
-  
+
   // cacheExecutionLocal(data as Execution); // TODO: Implementare caching
   return data as Execution;
 }
@@ -2466,6 +2506,7 @@ export interface SportCategory {
     };
     multiEvidenceBonus: number;           // bonus multiplier for multiple evidence types (0-1)
   };
+  scene_classifier_enabled?: boolean;     // Enable ONNX scene classifier to skip crowd/irrelevant scenes
 }
 
 export interface ParticipantPresetSupabase {
@@ -2477,6 +2518,7 @@ export interface ParticipantPresetSupabase {
   is_template?: boolean;
   is_public?: boolean;
   custom_folders?: string[]; // Array di nomi folder personalizzate create dall'utente
+  person_shown_template?: string | null; // Template for person shown in metadata
   created_at?: string;
   updated_at?: string;
   last_used_at?: string;
@@ -2730,9 +2772,9 @@ export async function getUserParticipantPresetsSupabase(includeAllForAdmin: bool
         preset_participants(*)
       `);
 
-    // If not admin mode, filter by user_id or public presets
+    // If not admin mode, filter by user_id, public presets, or official presets
     if (!includeAllForAdmin) {
-      query = query.or(`user_id.eq.${userId},is_public.eq.true`);
+      query = query.or(`user_id.eq.${userId},is_public.eq.true,is_official.eq.true`);
     }
     // If admin mode, get all presets (no filter)
 
@@ -2789,7 +2831,7 @@ export async function getParticipantPresetByIdSupabase(presetId: string): Promis
         preset_participants(*)
       `)
       .eq('id', presetId)
-      .or(`user_id.eq.${userId},is_public.eq.true`)
+      .or(`user_id.eq.${userId},is_public.eq.true,is_official.eq.true`)
       .single();
 
     if (error) {
@@ -2976,6 +3018,85 @@ export async function deleteParticipantPresetSupabase(presetId: string): Promise
 }
 
 /**
+ * Duplicate an official preset for the current user
+ * Creates a personal copy of an official preset that the user can customize
+ */
+export async function duplicateOfficialPresetSupabase(sourcePresetId: string): Promise<ParticipantPresetSupabase> {
+  try {
+    const userId = getCurrentUserId();
+    if (!userId) throw new Error('User not authenticated');
+
+    // Get the source preset (must be official)
+    const { data: sourcePreset, error: sourceError } = await supabase
+      .from('participant_presets')
+      .select(`
+        *,
+        preset_participants(*)
+      `)
+      .eq('id', sourcePresetId)
+      .eq('is_official', true)
+      .single();
+
+    if (sourceError || !sourcePreset) {
+      throw new Error('Source preset not found or is not an official preset');
+    }
+
+    console.log(`[DB] Duplicating official preset "${sourcePreset.name}" for user ${userId}`);
+
+    // Create the new preset (personal copy)
+    const newPreset = await createParticipantPresetSupabase({
+      user_id: userId,
+      name: `${sourcePreset.name} (My Copy)`,
+      description: sourcePreset.description || `Duplicated from Official RT Preset: ${sourcePreset.name}`,
+      category_id: sourcePreset.category_id,
+      custom_folders: sourcePreset.custom_folders || [],
+      person_shown_template: sourcePreset.person_shown_template || null
+    });
+
+    // Copy participants
+    const sourceParticipants = sourcePreset.preset_participants || [];
+    if (sourceParticipants.length > 0) {
+      const participants: Omit<PresetParticipantSupabase, 'id' | 'created_at'>[] = sourceParticipants.map((p: any, index: number) => ({
+        preset_id: newPreset.id!,
+        numero: p.numero || '',
+        nome: p.nome || '',
+        categoria: p.categoria || '',
+        squadra: p.squadra || '',
+        sponsor: p.sponsor || '',
+        metatag: p.metatag || '',
+        plate_number: p.plate_number || '',
+        folder_1: p.folder_1 || '',
+        folder_2: p.folder_2 || '',
+        folder_3: p.folder_3 || '',
+        sort_order: p.sort_order || index,
+        custom_fields: p.custom_fields || {}
+      }));
+
+      await savePresetParticipantsSupabase(newPreset.id!, participants);
+    }
+
+    // Invalidate cache
+    presetsCache = [];
+    cacheLastUpdated = 0;
+
+    console.log(`[DB] Created duplicate preset "${newPreset.name}" with ${sourceParticipants.length} participants`);
+
+    // Return the new preset with participants
+    return {
+      ...newPreset,
+      participants: sourceParticipants.map((p: any) => ({
+        ...p,
+        preset_id: newPreset.id
+      }))
+    };
+
+  } catch (error) {
+    console.error('[DB] Error duplicating official preset:', error);
+    throw error;
+  }
+}
+
+/**
  * Import participants from CSV to Supabase
  */
 export async function importParticipantsFromCSVSupabase(csvData: any[], presetName: string, categoryId?: string): Promise<ParticipantPresetSupabase> {
@@ -3029,6 +3150,523 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
   await savePresetParticipantsSupabase(preset.id!, participants);
 
   return preset;
+}
+
+// ==================== EXPORT DESTINATIONS CRUD OPERATIONS ====================
+
+/**
+ * Export Destination - Unified export configuration
+ * Replaces Folder 1/2/3 and Agencies with autonomous destinations
+ */
+export interface ExportDestination {
+  id?: string;
+  user_id?: string;
+  name: string;
+
+  // Path
+  base_folder?: string;
+  subfolder_pattern?: string;
+
+  // Filename Renaming
+  filename_pattern?: string;
+  filename_sequence_start?: number;
+  filename_sequence_padding?: number;
+  filename_sequence_mode?: 'global' | 'per_subject' | 'per_folder';
+  preserve_original_name?: boolean;
+
+  // Credits
+  credit?: string;
+  source?: string;
+  copyright?: string;
+  copyright_owner?: string;
+
+  // Creator Info
+  creator?: string;
+  authors_position?: string;
+  caption_writer?: string;
+
+  // Contact Info
+  contact_address?: string;
+  contact_city?: string;
+  contact_region?: string;
+  contact_postal_code?: string;
+  contact_country?: string;
+  contact_phone?: string;
+  contact_email?: string;
+  contact_website?: string;
+
+  // Event Info Templates
+  headline_template?: string;
+  title_template?: string;
+  event_template?: string;
+  description_template?: string;
+  category?: string;
+
+  // Location
+  city?: string;
+  country?: string;
+  country_code?: string;
+  location?: string;
+  world_region?: string;
+
+  // Keywords
+  base_keywords?: string[];
+  append_keywords?: boolean;
+
+  // Person Shown
+  person_shown_template?: string;
+
+  // Behavior
+  auto_apply?: boolean;
+  apply_condition?: string;
+  is_default?: boolean;
+  is_active?: boolean;
+  display_order?: number;
+
+  // FTP/SFTP (Pro tier only)
+  upload_method?: 'local' | 'ftp' | 'sftp';
+  ftp_host?: string;
+  ftp_port?: number;
+  ftp_username?: string;
+  ftp_password_encrypted?: string;
+  ftp_remote_path?: string;
+  ftp_passive_mode?: boolean;
+  ftp_secure?: boolean;
+  ftp_concurrent_uploads?: number;
+  ftp_retry_attempts?: number;
+  ftp_timeout_seconds?: number;
+  keep_local_copy?: boolean;
+
+  // Timestamps
+  created_at?: string;
+  updated_at?: string;
+}
+
+/**
+ * Create a new export destination
+ */
+export async function createExportDestination(
+  destinationData: Omit<ExportDestination, 'id' | 'user_id' | 'created_at' | 'updated_at'>
+): Promise<ExportDestination> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+
+  try {
+    // Convert base_keywords array to PostgreSQL array format
+    const dataToInsert = {
+      ...destinationData,
+      user_id: userId,
+      base_keywords: destinationData.base_keywords || []
+    };
+
+    const { data, error } = await withRetry(
+      async () => {
+        return await supabase
+          .from('export_destinations')
+          .insert([dataToInsert])
+          .select()
+          .single();
+      },
+      'createExportDestination'
+    );
+
+    if (error) {
+      console.error('[DB] Error creating export destination:', error);
+      throw error;
+    }
+
+    if (!data) {
+      throw new Error('Failed to create export destination: no data returned');
+    }
+
+    console.log(`[DB] Created export destination: ${data.name}`);
+    return data as ExportDestination;
+
+  } catch (error) {
+    console.error('[DB] Error in createExportDestination:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get all export destinations for the current user
+ */
+export async function getUserExportDestinations(): Promise<ExportDestination[]> {
+  const userId = getCurrentUserId();
+  if (!userId) return [];
+
+  try {
+    const { data, error } = await supabase
+      .from('export_destinations')
+      .select('*')
+      .eq('user_id', userId)
+      .order('display_order', { ascending: true })
+      .order('name', { ascending: true });
+
+    if (error) {
+      console.error('[DB] Error getting export destinations:', error);
+      return [];
+    }
+
+    return (data || []) as ExportDestination[];
+
+  } catch (error) {
+    console.error('[DB] Error in getUserExportDestinations:', error);
+    return [];
+  }
+}
+
+/**
+ * Get active export destinations for the current user
+ */
+export async function getActiveExportDestinations(): Promise<ExportDestination[]> {
+  const userId = getCurrentUserId();
+  if (!userId) return [];
+
+  try {
+    const { data, error } = await supabase
+      .from('export_destinations')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('is_active', true)
+      .order('display_order', { ascending: true });
+
+    if (error) {
+      console.error('[DB] Error getting active export destinations:', error);
+      return [];
+    }
+
+    return (data || []) as ExportDestination[];
+
+  } catch (error) {
+    console.error('[DB] Error in getActiveExportDestinations:', error);
+    return [];
+  }
+}
+
+/**
+ * Get a specific export destination by ID
+ */
+export async function getExportDestinationById(destinationId: string): Promise<ExportDestination | null> {
+  const userId = getCurrentUserId();
+  if (!userId) return null;
+
+  try {
+    const { data, error } = await supabase
+      .from('export_destinations')
+      .select('*')
+      .eq('id', destinationId)
+      .eq('user_id', userId)
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') return null; // Not found
+      console.error('[DB] Error getting export destination:', error);
+      return null;
+    }
+
+    return data as ExportDestination;
+
+  } catch (error) {
+    console.error('[DB] Error in getExportDestinationById:', error);
+    return null;
+  }
+}
+
+/**
+ * Get the default export destination
+ */
+export async function getDefaultExportDestination(): Promise<ExportDestination | null> {
+  const userId = getCurrentUserId();
+  if (!userId) return null;
+
+  try {
+    const { data, error } = await supabase
+      .from('export_destinations')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('is_default', true)
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') return null; // Not found
+      console.error('[DB] Error getting default export destination:', error);
+      return null;
+    }
+
+    return data as ExportDestination;
+
+  } catch (error) {
+    console.error('[DB] Error in getDefaultExportDestination:', error);
+    return null;
+  }
+}
+
+/**
+ * Update an export destination
+ */
+export async function updateExportDestination(
+  destinationId: string,
+  updateData: Partial<Omit<ExportDestination, 'id' | 'user_id' | 'created_at' | 'updated_at'>>
+): Promise<ExportDestination> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+
+  try {
+    const { data, error } = await withRetry(
+      async () => {
+        return await supabase
+          .from('export_destinations')
+          .update(updateData)
+          .eq('id', destinationId)
+          .eq('user_id', userId)
+          .select()
+          .single();
+      },
+      'updateExportDestination'
+    );
+
+    if (error) {
+      console.error('[DB] Error updating export destination:', error);
+      throw error;
+    }
+
+    if (!data) {
+      throw new Error('Export destination not found or access denied');
+    }
+
+    console.log(`[DB] Updated export destination: ${data.name}`);
+    return data as ExportDestination;
+
+  } catch (error) {
+    console.error('[DB] Error in updateExportDestination:', error);
+    throw error;
+  }
+}
+
+/**
+ * Delete an export destination
+ */
+export async function deleteExportDestination(destinationId: string): Promise<void> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+
+  try {
+    const { error } = await supabase
+      .from('export_destinations')
+      .delete()
+      .eq('id', destinationId)
+      .eq('user_id', userId);
+
+    if (error) {
+      console.error('[DB] Error deleting export destination:', error);
+      throw error;
+    }
+
+    console.log(`[DB] Deleted export destination: ${destinationId}`);
+
+  } catch (error) {
+    console.error('[DB] Error in deleteExportDestination:', error);
+    throw error;
+  }
+}
+
+/**
+ * Set an export destination as the default (and unset others)
+ */
+export async function setDefaultExportDestination(destinationId: string): Promise<void> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+
+  try {
+    // First, unset all defaults for this user
+    const { error: unsetError } = await supabase
+      .from('export_destinations')
+      .update({ is_default: false })
+      .eq('user_id', userId);
+
+    if (unsetError) {
+      console.error('[DB] Error unsetting default destinations:', unsetError);
+      throw unsetError;
+    }
+
+    // Then set the new default
+    const { error: setError } = await supabase
+      .from('export_destinations')
+      .update({ is_default: true })
+      .eq('id', destinationId)
+      .eq('user_id', userId);
+
+    if (setError) {
+      console.error('[DB] Error setting default destination:', setError);
+      throw setError;
+    }
+
+    console.log(`[DB] Set default export destination: ${destinationId}`);
+
+  } catch (error) {
+    console.error('[DB] Error in setDefaultExportDestination:', error);
+    throw error;
+  }
+}
+
+/**
+ * Duplicate an export destination
+ */
+export async function duplicateExportDestination(destinationId: string, newName?: string): Promise<ExportDestination> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+
+  try {
+    // Get the original destination
+    const original = await getExportDestinationById(destinationId);
+    if (!original) {
+      throw new Error('Export destination not found');
+    }
+
+    // Create a copy without id, user_id, timestamps, and is_default
+    const { id, user_id, created_at, updated_at, is_default, ...copyData } = original;
+
+    const duplicateData = {
+      ...copyData,
+      name: newName || `${original.name} (Copy)`,
+      is_default: false // Never copy as default
+    };
+
+    return await createExportDestination(duplicateData);
+
+  } catch (error) {
+    console.error('[DB] Error in duplicateExportDestination:', error);
+    throw error;
+  }
+}
+
+/**
+ * Update display order for multiple destinations
+ */
+export async function updateExportDestinationsOrder(
+  destinationOrders: Array<{ id: string; display_order: number }>
+): Promise<void> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+
+  try {
+    // Update each destination's order
+    for (const { id, display_order } of destinationOrders) {
+      const { error } = await supabase
+        .from('export_destinations')
+        .update({ display_order })
+        .eq('id', id)
+        .eq('user_id', userId);
+
+      if (error) {
+        console.error(`[DB] Error updating order for destination ${id}:`, error);
+        throw error;
+      }
+    }
+
+    console.log(`[DB] Updated display order for ${destinationOrders.length} destinations`);
+
+  } catch (error) {
+    console.error('[DB] Error in updateExportDestinationsOrder:', error);
+    throw error;
+  }
+}
+
+/**
+ * Toggle active status of an export destination
+ */
+export async function toggleExportDestinationActive(destinationId: string): Promise<boolean> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+
+  try {
+    // Get current status
+    const destination = await getExportDestinationById(destinationId);
+    if (!destination) {
+      throw new Error('Export destination not found');
+    }
+
+    const newStatus = !destination.is_active;
+
+    const { error } = await supabase
+      .from('export_destinations')
+      .update({ is_active: newStatus })
+      .eq('id', destinationId)
+      .eq('user_id', userId);
+
+    if (error) {
+      console.error('[DB] Error toggling destination active status:', error);
+      throw error;
+    }
+
+    console.log(`[DB] Toggled destination ${destinationId} active: ${newStatus}`);
+    return newStatus;
+
+  } catch (error) {
+    console.error('[DB] Error in toggleExportDestinationActive:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get export destinations matching a condition for auto-apply
+ * @param condition The participant data to match against (e.g., team, number)
+ */
+export async function getMatchingExportDestinations(
+  participantData: { team?: string; number?: string | number; categoria?: string }
+): Promise<ExportDestination[]> {
+  const userId = getCurrentUserId();
+  if (!userId) return [];
+
+  try {
+    // Get all active destinations with auto_apply enabled
+    const { data, error } = await supabase
+      .from('export_destinations')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('is_active', true)
+      .eq('auto_apply', true);
+
+    if (error) {
+      console.error('[DB] Error getting auto-apply destinations:', error);
+      return [];
+    }
+
+    if (!data || data.length === 0) return [];
+
+    // Filter by apply_condition
+    const matching = data.filter((dest: ExportDestination) => {
+      if (!dest.apply_condition) return true; // No condition = applies to all
+
+      const condition = dest.apply_condition.toLowerCase();
+
+      // Parse condition format: "field:value" or "field:value,field2:value2"
+      const conditions = condition.split(',').map(c => c.trim());
+
+      return conditions.every(cond => {
+        const [field, value] = cond.split(':').map(s => s.trim());
+
+        switch (field) {
+          case 'team':
+            return participantData.team?.toLowerCase().includes(value);
+          case 'number':
+            return String(participantData.number) === value;
+          case 'categoria':
+          case 'category':
+            return participantData.categoria?.toLowerCase() === value;
+          default:
+            return false;
+        }
+      });
+    });
+
+    return matching as ExportDestination[];
+
+  } catch (error) {
+    console.error('[DB] Error in getMatchingExportDestinations:', error);
+    return [];
+  }
 }
 
 // ==================== FEATURE FLAGS OPERATIONS ====================

@@ -490,12 +490,12 @@ export class FolderOrganizer {
 
   /**
    * Sanitize filename to remove invalid characters
+   * Note: Spaces are preserved for better readability (works on macOS/Windows)
    */
   private sanitizeFileName(name: string): string {
     return name
-      .replace(/[<>:"/\\|?*]/g, '_') // Replace invalid characters
-      .replace(/\s+/g, '_') // Replace spaces with underscores
-      .replace(/_+/g, '_') // Collapse multiple underscores
+      .replace(/[<>:"/\\|?*]/g, '') // Remove invalid characters
+      .replace(/\s+/g, ' ') // Collapse multiple spaces to single space
       .trim()
       .substring(0, 100); // Limit length
   }

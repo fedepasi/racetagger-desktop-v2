@@ -654,23 +654,144 @@ class ModernResultsDisplay {
     this.downloadJSON(exportData, `${result.filename.replace(/\.[^/.]+$/, '')}_analysis.json`);
   }
   
-  bulkExport() {
-    const selectedResults = Array.from(this.selectedResults).map(id => 
+  async bulkExport() {
+    const selectedResults = Array.from(this.selectedResults).map(id =>
       this.results.find(r => r.id === id)
     ).filter(Boolean);
-    
+
     if (selectedResults.length === 0) return;
-    
+
+    // Check if there are active export destinations
+    try {
+      const destResult = await window.api.invoke('export-destinations-get-active');
+      if (destResult.success && destResult.data && destResult.data.length > 0) {
+        // Export to destinations
+        await this.exportToDestinations(selectedResults);
+      } else {
+        // Fallback to JSON export
+        this.exportAsJSON(selectedResults);
+      }
+    } catch (error) {
+      console.error('[ModernResults] Error checking destinations:', error);
+      // Fallback to JSON export
+      this.exportAsJSON(selectedResults);
+    }
+  }
+
+  exportAsJSON(results) {
     const exportData = {
-      results: selectedResults,
+      results: results,
       summary: {
-        totalImages: selectedResults.length,
-        totalDetections: selectedResults.reduce((sum, r) => sum + (r.detections?.length || 0), 0),
+        totalImages: results.length,
+        totalDetections: results.reduce((sum, r) => sum + (r.detections?.length || 0), 0),
         exportedAt: new Date().toISOString()
       }
     };
-    
+
     this.downloadJSON(exportData, `racetagger_analysis_${new Date().toISOString().split('T')[0]}.json`);
+  }
+
+  async exportToDestinations(results) {
+    // Prepare images data for export
+    const images = results.map(result => ({
+      imagePath: result.imagePath || result.fullImagePath,
+      participant: result.csvMatch || result.participant || null
+    }));
+
+    // Show progress modal
+    this.showExportProgress(images.length);
+
+    // Listen for progress updates
+    const progressHandler = window.api.receive('export-progress', (data) => {
+      this.updateExportProgress(data.current, data.total, data.lastResult);
+    });
+
+    try {
+      const result = await window.api.invoke('export-to-destinations', {
+        images,
+        event: this.eventInfo || null
+      });
+
+      // Remove progress listener
+      if (progressHandler) progressHandler();
+
+      // Hide progress modal
+      this.hideExportProgress();
+
+      if (result.success) {
+        this.showNotification(
+          `Exported ${result.exported} images to ${result.processedImages} destination(s). ${result.failed > 0 ? `${result.failed} failed.` : ''}`,
+          result.failed > 0 ? 'warning' : 'success'
+        );
+      } else {
+        this.showNotification(result.error || 'Export failed', 'error');
+      }
+    } catch (error) {
+      // Remove progress listener
+      if (progressHandler) progressHandler();
+
+      // Hide progress modal
+      this.hideExportProgress();
+
+      console.error('[ModernResults] Export error:', error);
+      this.showNotification('Export failed: ' + error.message, 'error');
+    }
+  }
+
+  showExportProgress(totalImages) {
+    // Create or show export progress modal
+    let progressModal = document.getElementById('export-progress-modal');
+    if (!progressModal) {
+      progressModal = document.createElement('div');
+      progressModal.id = 'export-progress-modal';
+      progressModal.className = 'modal-overlay';
+      progressModal.innerHTML = `
+        <div class="modal-content export-progress-content">
+          <h3>📤 Exporting Images</h3>
+          <div class="export-progress-info">
+            <span id="export-progress-current">0</span> / <span id="export-progress-total">${totalImages}</span>
+          </div>
+          <div class="export-progress-bar">
+            <div class="export-progress-fill" id="export-progress-fill"></div>
+          </div>
+          <div class="export-progress-status" id="export-progress-status">Starting export...</div>
+        </div>
+      `;
+      document.body.appendChild(progressModal);
+    } else {
+      document.getElementById('export-progress-total').textContent = totalImages;
+      document.getElementById('export-progress-current').textContent = '0';
+      document.getElementById('export-progress-fill').style.width = '0%';
+      document.getElementById('export-progress-status').textContent = 'Starting export...';
+    }
+    progressModal.classList.add('active');
+    progressModal.style.display = 'flex';
+  }
+
+  updateExportProgress(current, total, lastResult) {
+    const progressFill = document.getElementById('export-progress-fill');
+    const progressCurrent = document.getElementById('export-progress-current');
+    const progressStatus = document.getElementById('export-progress-status');
+
+    if (progressFill) {
+      progressFill.style.width = `${(current / total) * 100}%`;
+    }
+    if (progressCurrent) {
+      progressCurrent.textContent = current;
+    }
+    if (progressStatus && lastResult) {
+      const successCount = lastResult.successfulExports || 0;
+      const failCount = lastResult.failedExports || 0;
+      progressStatus.textContent = `Last: ${successCount} exported${failCount > 0 ? `, ${failCount} failed` : ''}`;
+    }
+  }
+
+  hideExportProgress() {
+    const progressModal = document.getElementById('export-progress-modal');
+    if (progressModal) {
+      progressModal.classList.remove('active');
+      progressModal.style.display = 'none';
+    }
   }
   
   bulkEditMetadata() {

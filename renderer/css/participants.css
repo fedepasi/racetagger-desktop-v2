@@ -335,12 +335,18 @@
   max-width: 95%;
   width: 95vw;
   max-height: 90vh;
+  display: flex;
+  flex-direction: column;
 }
 
 .participants-modal .modal-body {
   display: flex;
   flex-direction: column;
-  gap: 0;
+  gap: 1rem;
+  max-height: none; /* Override the 70vh limit from generic .modal-body */
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0; /* Allow flex child to shrink */
 }
 
 .participants-modal label {
@@ -403,10 +409,16 @@
 
 /* Container a 2 colonne per Preset Info + Folder Organization */
 .preset-header-row {
-  display: block;
+  display: grid;
   grid-template-columns: 1fr 1fr; /* 50% - 50% */
   gap: 1.5rem;
   margin-bottom: 1.5rem;
+}
+
+@media (max-width: 1200px) {
+  .preset-header-row {
+    grid-template-columns: 1fr; /* Stack on smaller screens */
+  }
 }
 
 .preset-info-section {
@@ -452,8 +464,8 @@
   overflow: auto;
   border: 1px solid var(--border-color);
   border-radius: 6px;
-  min-height: 500px;
-  max-height: 400px;
+  min-height: 350px;  /* Core element - needs good visibility */
+  max-height: 50vh;   /* Use viewport height for better scaling */
 }
 
 .participants-table {
@@ -1376,5 +1388,42 @@
 
   .folder-item select {
     width: 100%;
+  }
+}
+
+/* ========================================
+   Highlight Row Animation
+   - Used when scrolling to modified participant
+   ======================================== */
+.highlight-row {
+  animation: highlight-fade 2s ease-out;
+}
+
+@keyframes highlight-fade {
+  0% {
+    background-color: rgba(59, 130, 246, 0.4); /* accent-color with transparency */
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+/* Dark mode adjustment for highlight */
+@media (prefers-color-scheme: dark) {
+  @keyframes highlight-fade {
+    0% {
+      background-color: rgba(59, 130, 246, 0.35);
+    }
+    100% {
+      background-color: transparent;
+    }
+  }
+}
+
+/* Respect reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  .highlight-row {
+    animation: none;
+    background-color: rgba(59, 130, 246, 0.2);
   }
 }

@@ -1,5 +1,84 @@
 # Changelog - RaceTagger Desktop
 
+## [1.0.11] - 2025-11-27
+
+### 🤖 AI/ML Enhancements
+- **ONNX Detector**: Nuovo sistema di rilevamento locale usando modelli ONNX
+  - Supporto per scene classification (track, paddock, podium, portrait)
+  - Integrazione con UnifiedImageProcessor per routing intelligente
+  - Caricamento e processing modelli ottimizzato
+
+- **Face Recognition (Beta)**: Infrastruttura per riconoscimento volti
+  - Pipeline ML training per classificazione scene
+  - Script di data collection e preparazione dataset
+  - Conversione modelli a ONNX per deployment
+
+### 🔧 Technical Improvements
+- Enhanced model loading and processing in OnnxDetector
+- Improved error handling e logging per debug
+
+---
+
+## [1.0.10] - 2025-10-20
+
+### 🚀 New Features
+- **RF-DETR Recognition**: Integrazione completa sistema RF-DETR via Roboflow
+  - Routing automatico basato su `sport_categories.recognition_method`
+  - Supporto per workflow serverless Roboflow
+  - Label parsing format: `"MODEL_NUMBER"` (es. `"SF-25_16"`)
+  - Fallback automatico a Gemini V3 in caso di errori
+  - Tracking costi separato ($0.0045/image)
+
+- **Target/Plate Recognition**: Aggiunto riconoscimento targhe e plate number
+
+### 📱 Platform Updates
+- **Apple Notarization**: Notarizzazione automatica per build macOS
+  - Stapling ticket incluso nei DMG
+  - Entitlements per hardened runtime
+
+- **Windows x64**: Build ottimizzata e pubblicata
+
+### 🐛 Bug Fixes
+- Fix caricamento sport categories al login e refresh token
+- Fix gestione dinamica 1500 tokens
+- Fix ordinamento partecipanti nei preset
+- Super admin può visualizzare tutti i contenuti
+
+### 💰 Pricing Updates
+- Pricing modal refactored: redirect a web invece di prezzi hardcoded
+- Early Bird deadline check automatico (scade 31 Dec 2025)
+- Migliorato layout modal e info box preset partecipanti
+
+---
+
+## [1.0.9] - 2025-10-06
+
+### 🚀 New Features
+- **Unified Token Architecture**: Semplificata architettura token
+  - `user_tokens.tokens_purchased` come single source of truth
+  - Eliminata duplicazione e confusione nel calcolo balance
+  - Documentazione unificata per calcolo token
+
+- **Export Training Labels**: Nuova funzione per esportare label training
+  - Supporto formati: COCO, YOLO, CSV
+  - Opzione per includere immagini nell'export
+
+### 🎨 UX Improvements
+- Guida Participant Presets accessibile dall'interfaccia
+- Migliorato layout pricing modal
+- Aggiunta info box per onboarding preset partecipanti
+
+### 🐛 Bug Fixes
+- Fix completo handling execution records
+- Fix errori upload JSONL
+- Ottimizzato workflow processing JPEG
+- Migliorata struttura codice per leggibilità
+
+### 📱 Platform Updates
+- Windows x64 build pubblicata
+
+---
+
 ## [1.0.8] - 2025-10-01
 
 ### 🔧 Critical Windows Fixes

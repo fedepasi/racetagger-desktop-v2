@@ -334,6 +334,52 @@ export const APP_CONFIG = {
   }
 };
 
+// Roboflow RF-DETR Configuration
+export interface RoboflowConfig {
+  defaultApiKey: string;               // Default Roboflow API key
+  overlapThreshold: number;            // IoU threshold for filtering overlapping detections (0.0-1.0)
+  minConfidence: number;               // Minimum confidence score for detections (0.0-1.0)
+  estimatedCostPerImage: number;       // Estimated cost per image in USD
+  timeout: number;                     // API request timeout in milliseconds
+}
+
+export const ROBOFLOW_CONFIG: RoboflowConfig = {
+  defaultApiKey: getConfigValue('ROBOFLOW_DEFAULT_API_KEY', 'ROBOFLOW_DEFAULT_API_KEY'),
+  overlapThreshold: 0.5,               // 50% IoU threshold
+  minConfidence: 0.7,                  // 70% minimum confidence
+  estimatedCostPerImage: 0.0045,       // ~$0.0045 per image
+  timeout: 30000                       // 30 seconds timeout
+};
+
+// Validate Roboflow configuration
+export function validateRoboflowConfig(): { valid: boolean; warnings: string[] } {
+  const warnings: string[] = [];
+
+  if (!ROBOFLOW_CONFIG.defaultApiKey || ROBOFLOW_CONFIG.defaultApiKey === '') {
+    warnings.push('ROBOFLOW_DEFAULT_API_KEY is not set. RF-DETR recognition will fail. Please set this environment variable.');
+  }
+
+  if (ROBOFLOW_CONFIG.overlapThreshold < 0 || ROBOFLOW_CONFIG.overlapThreshold > 1) {
+    warnings.push(`Invalid overlapThreshold: ${ROBOFLOW_CONFIG.overlapThreshold}. Must be between 0 and 1.`);
+  }
+
+  if (ROBOFLOW_CONFIG.minConfidence < 0 || ROBOFLOW_CONFIG.minConfidence > 1) {
+    warnings.push(`Invalid minConfidence: ${ROBOFLOW_CONFIG.minConfidence}. Must be between 0 and 1.`);
+  }
+
+  return {
+    valid: warnings.length === 0,
+    warnings
+  };
+}
+
+// Log warnings on config load
+const roboflowValidation = validateRoboflowConfig();
+if (!roboflowValidation.valid) {
+  console.warn('[Config] ⚠️ Roboflow Configuration Issues:');
+  roboflowValidation.warnings.forEach(warning => console.warn(`  - ${warning}`));
+}
+
 // New performance optimization configuration
 export const PERFORMANCE_CONFIG: PerformanceOptimizations = createPerformanceConfig();
 

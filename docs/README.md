@@ -29,7 +29,6 @@ System architecture and technical designs:
 
 - [Token System](./architecture/token-system.md) - Complete token management documentation
 - [Smart Matching](./architecture/smart-matching.md) - Intelligent race number matching
-- [V3 Implementation](./architecture/v3-implementation.md) - Architecture evolution
 - [Execution Tracking](./architecture/execution-tracking.md) - Processing session management
 
 ### ✨ Features
@@ -54,11 +53,13 @@ Deployment and distribution guides:
 Test results, performance reports, and version histories:
 
 - [Performance Tests](./reports/performance-tests.md) - Benchmarking results
-- [Version 1.0.9 Report](./reports/v1.0.9-report.md) - Release notes
-- [Testing Guides](./reports/testing/) - Feature testing documentation
-  - [Early Bird Deadline Testing](./reports/testing/early-bird-deadline.md)
-  - [Pricing Refactor Testing](./reports/testing/pricing-refactor.md)
-- [Changelogs](./reports/changelogs/) - Historical version changes
+- [Development Report](./reports/development-report.md) - Current status report
+
+### 📁 Archive
+
+Historical documentation (no longer actively maintained):
+
+- [Archive](./archive/) - Obsolete docs preserved for reference
 
 ---
 
@@ -129,4 +130,4 @@ When adding or updating documentation:
 
 ---
 
-**Last Updated**: 2025-01-17
+**Last Updated**: 2025-11-27

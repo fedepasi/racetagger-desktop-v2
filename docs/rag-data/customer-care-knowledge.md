@@ -6,11 +6,14 @@ RaceTagger è un'applicazione desktop avanzata che utilizza l'intelligenza artif
 
 ### Cosa fa RaceTagger?
 - Analizza automaticamente migliaia di foto di gare (motorsport, corsa, ciclismo, etc.)
-- Riconosce i numeri di gara dei partecipanti usando AI avanzata
+- Riconosce i numeri di gara dei partecipanti usando **AI avanzata dual-system**:
+  - **Gemini AI Vision**: Riconoscimento generico ad alta precisione
+  - **RF-DETR (Roboflow)**: Object detection specializzato per categorie specifiche (es. F1, MotoGP)
 - Abbina i numeri ai dati dei partecipanti (nome, categoria, squadra)
 - Scrive i metadati direttamente nelle foto (EXIF o file XMP)
 - Organizza automaticamente le foto in cartelle per numero di gara
 - Supporta sia formati standard (JPG, PNG) che RAW (NEF, CR2, ARW, etc.)
+- Riconosce anche targhe e plate number (per eventi con veicoli targati)
 
 ### A chi si rivolge?
 - Fotografi professionisti di eventi sportivi
@@ -362,8 +365,8 @@ Il tuo feedback è prezioso per migliorare RaceTagger! Contattaci per:
 ### Roadmap Future
 RaceTagger è in continua evoluzione. Prossime funzionalità:
 - Sistema a abbonamento mensile (oltre ai pacchetti token)
-- Riconoscimento automatico categoria sport
-- Modalità test A/B per nuovi modelli AI
+- Face recognition per identificare piloti/atleti senza numero visibile
+- Scene classification automatica (pista, paddock, podio, ritratto)
 - Integrazione con servizi di stampa online
 - App mobile per gestione progetti
 
@@ -400,9 +403,12 @@ RaceTagger è in continua evoluzione. Prossime funzionalità:
 - **dcraw**: Software per conversione file RAW
 - **Supabase**: Piattaforma cloud per storage dati
 - **Foto/minuto**: Velocità di elaborazione (circa 100 foto/minuto)
+- **RF-DETR**: Sistema di object detection Roboflow per riconoscimento specializzato
+- **Gemini**: AI di Google per riconoscimento visivo generico
+- **Bounding Box**: Rettangolo che indica la posizione del soggetto riconosciuto nell'immagine
 
 ---
 
-**Ultima modifica**: 2025-11-04
-**Versione App**: 1.0.10+
+**Ultima modifica**: 2025-11-27
+**Versione App**: 1.0.11
 **Stato**: Beta - Pricing e funzionalità possono cambiare

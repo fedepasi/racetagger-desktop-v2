@@ -57,6 +57,7 @@ import {
   updateProjectOnline,
   deleteProjectOnline,
   createExecutionOnline,
+  getSportCategoryIdByName,
   getExecutionsByProjectIdOnline,
   getExecutionByIdOnline,
   updateExecutionOnline,
@@ -106,7 +107,22 @@ import {
   updateParticipantPresetSupabase,
   deleteParticipantPresetSupabase,
   importParticipantsFromCSVSupabase,
-  isFeatureEnabled
+  duplicateOfficialPresetSupabase,
+  isFeatureEnabled,
+  // Export Destinations
+  ExportDestination,
+  createExportDestination,
+  getUserExportDestinations,
+  getActiveExportDestinations,
+  getExportDestinationById,
+  getDefaultExportDestination,
+  updateExportDestination,
+  deleteExportDestination,
+  setDefaultExportDestination,
+  duplicateExportDestination,
+  updateExportDestinationsOrder,
+  toggleExportDestinationActive,
+  getMatchingExportDestinations
 } from './database-service';
 // Determine if we're in development mode - will be set after app is ready
 let isDev = true; // Default to true for safety during initialization
@@ -122,6 +138,8 @@ import { writeKeywordsToImage } from './utils/metadata-writer';
 import { rawConverter } from './utils/raw-converter'; // Import the singleton instance
 import { unifiedImageProcessor, UnifiedImageFile, UnifiedProcessingResult, UnifiedProcessorConfig } from './unified-image-processor';
 import { FolderOrganizerConfig } from './utils/folder-organizer';
+import { faceRecognitionProcessor, StoredFaceDescriptor, DetectedFace, FaceContext } from './face-recognition-processor';
+import { faceDetectionBridge } from './face-detection-bridge';
 
 // Definisci le estensioni supportate a livello globale per riutilizzo
 const RAW_EXTENSIONS = ['.nef', '.arw', '.cr2', '.cr3', '.orf', '.raw', '.rw2', '.dng'];
@@ -300,6 +318,7 @@ type BatchProcessConfig = {
     id: string;
     name: string;
     description?: string;
+    person_shown_template?: string; // Template for IPTC PersonInImage field
     participants: Array<{
       numero?: string;
       nome?: string;
@@ -308,6 +327,19 @@ type BatchProcessConfig = {
       sponsor?: string;
       metatag?: string;
     }>;
+  };
+
+  // Export destinations configuration (automatic export after processing)
+  exportDestinations?: {
+    enabled: boolean;                   // Enable automatic export to destinations
+    destinationIds?: string[];          // Specific destination IDs to export to (empty = all active)
+    event?: {                           // Event info for metadata templates
+      name?: string;
+      date?: string;
+      city?: string;
+      country?: string;
+      location?: string;
+    };
   };
 };
 
@@ -827,6 +859,9 @@ function createWindow() {
   // Set main window reference for auth service
   authService.setMainWindow(mainWindow);
 
+  // Set main window reference for face detection bridge (for IPC communication)
+  faceDetectionBridge.setMainWindow(mainWindow);
+
   // Enable @electron/remote for this window
   if (remoteEnable) {
     remoteEnable(mainWindow.webContents);
@@ -1177,6 +1212,18 @@ function setupDatabaseIpcHandlers() {
     }
   });
 
+  // Duplicate official preset for user
+  ipcMain.handle('supabase-duplicate-official-preset', async (_, presetId: string) => {
+    try {
+      console.log('[IPC] Duplicating official preset:', presetId);
+      const newPreset = await duplicateOfficialPresetSupabase(presetId);
+      return { success: true, data: newPreset };
+    } catch (e: any) {
+      console.error('[IPC] Error duplicating official preset:', e);
+      return { success: false, error: e.message };
+    }
+  });
+
   // Cache Management Handlers
   ipcMain.handle('supabase-cache-data', async () => {
     try {
@@ -1191,6 +1238,251 @@ function setupDatabaseIpcHandlers() {
       const isEnabled = await isFeatureEnabled(featureName);
       return { success: true, data: isEnabled };
     } catch (e: any) { return { success: false, error: e.message }; }
+  });
+
+  // ==================== EXPORT DESTINATIONS IPC HANDLERS ====================
+
+  ipcMain.handle('export-destinations-create', async (_, destinationData: Omit<ExportDestination, 'id' | 'user_id' | 'created_at' | 'updated_at'>) => {
+    try {
+      console.log('[IPC] Creating export destination:', destinationData.name);
+      const destination = await createExportDestination(destinationData);
+      return { success: true, data: destination };
+    } catch (e: any) {
+      console.error('[IPC] Error creating export destination:', e);
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('export-destinations-get-all', async () => {
+    try {
+      const destinations = await getUserExportDestinations();
+      return { success: true, data: destinations };
+    } catch (e: any) {
+      console.error('[IPC] Error getting export destinations:', e);
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('export-destinations-get-active', async () => {
+    try {
+      const destinations = await getActiveExportDestinations();
+      return { success: true, data: destinations };
+    } catch (e: any) {
+      console.error('[IPC] Error getting active export destinations:', e);
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('export-destinations-get-by-id', async (_, destinationId: string) => {
+    try {
+      const destination = await getExportDestinationById(destinationId);
+      return { success: true, data: destination };
+    } catch (e: any) {
+      console.error('[IPC] Error getting export destination:', e);
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('export-destinations-get-default', async () => {
+    try {
+      const destination = await getDefaultExportDestination();
+      return { success: true, data: destination };
+    } catch (e: any) {
+      console.error('[IPC] Error getting default export destination:', e);
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('export-destinations-update', async (_, { destinationId, updateData }: { destinationId: string, updateData: Partial<ExportDestination> }) => {
+    try {
+      console.log('[IPC] Updating export destination:', destinationId);
+      const destination = await updateExportDestination(destinationId, updateData);
+      return { success: true, data: destination };
+    } catch (e: any) {
+      console.error('[IPC] Error updating export destination:', e);
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('export-destinations-delete', async (_, destinationId: string) => {
+    try {
+      console.log('[IPC] Deleting export destination:', destinationId);
+      await deleteExportDestination(destinationId);
+      return { success: true };
+    } catch (e: any) {
+      console.error('[IPC] Error deleting export destination:', e);
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('export-destinations-set-default', async (_, destinationId: string) => {
+    try {
+      console.log('[IPC] Setting default export destination:', destinationId);
+      await setDefaultExportDestination(destinationId);
+      return { success: true };
+    } catch (e: any) {
+      console.error('[IPC] Error setting default export destination:', e);
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('export-destinations-duplicate', async (_, { destinationId, newName }: { destinationId: string, newName?: string }) => {
+    try {
+      console.log('[IPC] Duplicating export destination:', destinationId);
+      const destination = await duplicateExportDestination(destinationId, newName);
+      return { success: true, data: destination };
+    } catch (e: any) {
+      console.error('[IPC] Error duplicating export destination:', e);
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('export-destinations-update-order', async (_, destinationOrders: Array<{ id: string; display_order: number }>) => {
+    try {
+      console.log('[IPC] Updating export destinations order');
+      await updateExportDestinationsOrder(destinationOrders);
+      return { success: true };
+    } catch (e: any) {
+      console.error('[IPC] Error updating export destinations order:', e);
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('export-destinations-toggle-active', async (_, destinationId: string) => {
+    try {
+      console.log('[IPC] Toggling export destination active:', destinationId);
+      const newStatus = await toggleExportDestinationActive(destinationId);
+      return { success: true, data: newStatus };
+    } catch (e: any) {
+      console.error('[IPC] Error toggling export destination active:', e);
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('export-destinations-get-matching', async (_, participantData: { team?: string; number?: string | number; categoria?: string }) => {
+    try {
+      const destinations = await getMatchingExportDestinations(participantData);
+      return { success: true, data: destinations };
+    } catch (e: any) {
+      console.error('[IPC] Error getting matching export destinations:', e);
+      return { success: false, error: e.message };
+    }
+  });
+
+  // Export images to destinations
+  ipcMain.handle('export-to-destinations', async (_, data: {
+    images: Array<{
+      imagePath: string;
+      participant?: {
+        numero?: string | number;
+        nome?: string;
+        surname?: string;
+        team?: string;
+        squadra?: string;
+        car_model?: string;
+        nationality?: string;
+        categoria?: string;
+      };
+    }>;
+    destinationIds?: string[]; // If not provided, uses all active destinations
+    event?: {
+      name?: string;
+      date?: string;
+      city?: string;
+      country?: string;
+      location?: string;
+    };
+  }) => {
+    try {
+      const exportModule = await import('./utils/export-destination-processor');
+      const { exportDestinationProcessor } = exportModule;
+
+      console.log(`[IPC] Export to destinations requested: ${data.images.length} images`);
+
+      // Get destinations to export to
+      let destinations: ExportDestination[];
+      if (data.destinationIds && data.destinationIds.length > 0) {
+        // Get specific destinations
+        const allDests = await Promise.all(
+          data.destinationIds.map(id => getExportDestinationById(id))
+        );
+        destinations = allDests.filter((d): d is ExportDestination => d !== null);
+      } else {
+        // Get all active destinations
+        destinations = await getActiveExportDestinations();
+      }
+
+      if (destinations.length === 0) {
+        return {
+          success: false,
+          error: 'No active export destinations configured',
+          exported: 0,
+          failed: 0
+        };
+      }
+
+      console.log(`[IPC] Exporting to ${destinations.length} destination(s)`);
+
+      // Convert event date string to Date object
+      const eventInfo = data.event ? {
+        name: data.event.name,
+        date: data.event.date ? new Date(data.event.date) : undefined,
+        city: data.event.city,
+        country: data.event.country,
+        location: data.event.location
+      } : undefined;
+
+      // Reset processor stats for this batch
+      exportDestinationProcessor.resetStats();
+
+      // Process each image
+      const results = [];
+      for (const imageData of data.images) {
+        const participant = imageData.participant ? {
+          numero: imageData.participant.numero,
+          nome: imageData.participant.nome,
+          name: imageData.participant.nome,
+          surname: imageData.participant.surname,
+          team: imageData.participant.team,
+          squadra: imageData.participant.squadra || imageData.participant.team,
+          car_model: imageData.participant.car_model,
+          nationality: imageData.participant.nationality,
+          categoria: imageData.participant.categoria
+        } : undefined;
+
+        const result = await exportDestinationProcessor.exportToDestinations(
+          imageData.imagePath,
+          destinations,
+          participant,
+          eventInfo
+        );
+        results.push(result);
+
+        // Send progress update
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('export-progress', {
+            current: results.length,
+            total: data.images.length,
+            lastImage: imageData.imagePath,
+            lastResult: result
+          });
+        }
+      }
+
+      const stats = exportDestinationProcessor.getStats();
+      console.log(`[IPC] Export complete: ${stats.totalExports} successful, ${stats.failedExports} failed`);
+
+      return {
+        success: true,
+        exported: stats.totalExports,
+        failed: stats.failedExports,
+        processedImages: stats.processedImages,
+        results
+      };
+    } catch (e: any) {
+      console.error('[IPC] Error exporting to destinations:', e);
+      return { success: false, error: e.message, exported: 0, failed: 0 };
+    }
   });
 
   // Analysis Log Handler (for Log Visualizer compatibility)
@@ -2559,12 +2851,20 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
     try {
       // Determina il nome dell'execution
       const executionName = config.executionName || `Analysis_${new Date().toISOString().replace(/[:.]/g, '-')}`;
-      
+
+      // Get sport_category_id from category name (e.g., "motorsport" -> UUID)
+      let sportCategoryId: string | null = null;
+      if (config.category) {
+        sportCategoryId = await getSportCategoryIdByName(config.category);
+        console.log(`[Tracking] Resolved category "${config.category}" to sport_category_id: ${sportCategoryId}`);
+      }
+
       const newExecution = await createExecutionOnline({
         project_id: config.projectId || null, // NULL per executions standalone
         name: executionName,
         execution_at: new Date().toISOString(),
-        status: 'running'
+        status: 'running',
+        sport_category_id: sportCategoryId
       });
       currentExecutionId = newExecution.id!;
       console.log(`[Tracking] Created ${config.projectId ? 'project' : 'standalone'} execution ${currentExecutionId} for tracking`);
@@ -2794,6 +3094,7 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
       category: config.category || 'motorsport',
       executionId: currentExecutionId || undefined, // Pass execution_id to link images to this execution
       participantPresetData: config.participantPreset?.participants || [], // Pass participant data directly to workers
+      personShownTemplate: config.participantPreset?.person_shown_template || undefined, // Template for IPTC PersonInImage field
       folderOrganization: folderOrgConfig,
       keywordsMode: config.keywordsMode || 'append', // How to handle existing keywords
       descriptionMode: config.descriptionMode || 'append', // How to handle existing description
@@ -2817,6 +3118,7 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
       csvDataLength: processorConfig.csvData?.length || 0,
       hasParticipantPreset: !!config.participantPreset,
       participantPresetName: config.participantPreset?.name,
+      personShownTemplate: processorConfig.personShownTemplate || 'not configured',
       keywordsMode: processorConfig.keywordsMode,
       descriptionMode: processorConfig.descriptionMode
     });
@@ -2880,11 +3182,96 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
           });
         }
 
+        // Automatic export to destinations (if configured)
+        let exportResult = null;
+        if (config.exportDestinations?.enabled) {
+          try {
+            console.log('[Main Process] Starting automatic export to destinations...');
+            safeSend('export-started', { totalImages: results.length });
+
+            const exportModule = await import('./utils/export-destination-processor');
+            const { exportDestinationProcessor } = exportModule;
+
+            // Get destinations to export to
+            let destinations: ExportDestination[];
+            if (config.exportDestinations.destinationIds && config.exportDestinations.destinationIds.length > 0) {
+              const allDests = await Promise.all(
+                config.exportDestinations.destinationIds.map(id => getExportDestinationById(id))
+              );
+              destinations = allDests.filter((d): d is ExportDestination => d !== null);
+            } else {
+              destinations = await getActiveExportDestinations();
+            }
+
+            if (destinations.length > 0) {
+              // Reset processor stats for this batch
+              exportDestinationProcessor.resetStats();
+
+              // Convert event date string to Date object
+              const eventInfo = config.exportDestinations.event ? {
+                name: config.exportDestinations.event.name,
+                date: config.exportDestinations.event.date ? new Date(config.exportDestinations.event.date) : undefined,
+                city: config.exportDestinations.event.city,
+                country: config.exportDestinations.event.country,
+                location: config.exportDestinations.event.location
+              } : undefined;
+
+              // Process each result
+              for (let i = 0; i < results.length; i++) {
+                const result = results[i];
+                const participant = result.csvMatch ? {
+                  numero: result.csvMatch.numero,
+                  nome: result.csvMatch.nome,
+                  name: result.csvMatch.nome,
+                  surname: result.csvMatch.surname,
+                  team: result.csvMatch.squadra,
+                  squadra: result.csvMatch.squadra,
+                  car_model: result.csvMatch.car_model,
+                  nationality: result.csvMatch.nationality,
+                  categoria: result.csvMatch.categoria
+                } : undefined;
+
+                await exportDestinationProcessor.exportToDestinations(
+                  result.originalPath,
+                  destinations,
+                  participant,
+                  eventInfo
+                );
+
+                // Send progress update
+                safeSend('export-progress', {
+                  current: i + 1,
+                  total: results.length,
+                  lastImage: result.originalPath
+                });
+              }
+
+              const stats = exportDestinationProcessor.getStats();
+              exportResult = {
+                success: true,
+                exported: stats.totalExports,
+                failed: stats.failedExports,
+                processedImages: stats.processedImages
+              };
+              console.log(`[Main Process] Automatic export completed: ${stats.totalExports} exported, ${stats.failedExports} failed`);
+            } else {
+              console.log('[Main Process] No active export destinations found, skipping automatic export');
+            }
+          } catch (exportError) {
+            console.error('[Main Process] Automatic export error:', exportError);
+            exportResult = {
+              success: false,
+              error: exportError instanceof Error ? exportError.message : 'Export failed'
+            };
+          }
+        }
+
         // Send the actual results array to the renderer with execution ID for log visualizer
         safeSend('batch-complete', {
           results,
           executionId: currentExecutionId,
-          isProcessingComplete: true
+          isProcessingComplete: true,
+          exportResult
         });
       })
       .catch(async (error) => {
@@ -2949,12 +3336,20 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
     try {
       // Determina il nome dell'execution
       const executionName = config.executionName || `Folder_Analysis_${new Date().toISOString().replace(/[:.]/g, '-')}`;
-      
+
+      // Get sport_category_id from category name (e.g., "motorsport" -> UUID)
+      let sportCategoryId: string | null = null;
+      if (config.category) {
+        sportCategoryId = await getSportCategoryIdByName(config.category);
+        console.log(`[Tracking] Resolved category "${config.category}" to sport_category_id: ${sportCategoryId}`);
+      }
+
       const newExecution = await createExecutionOnline({
         project_id: config.projectId || null, // NULL per executions standalone
         name: executionName,
         execution_at: new Date().toISOString(),
-        status: 'running'
+        status: 'running',
+        sport_category_id: sportCategoryId
       });
       currentExecutionId = newExecution.id!;
       console.log(`[Tracking] Created ${config.projectId ? 'project' : 'standalone'} execution ${currentExecutionId} for folder analysis tracking`);
@@ -2968,7 +3363,7 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
       }
     }
   }
-  
+
   if (!mainWindow) {
     console.error('handleFolderAnalysis: mainWindow is null');
     return;
@@ -3870,6 +4265,14 @@ app.whenReady().then(async () => { // Added async here
   console.log('[Main Process] Checking app version...');
   versionCheckResult = await checkAppVersion();
 
+  // Register early IPC handlers needed by renderer on load
+  ipcMain.handle('get-app-path', () => {
+    return app.getAppPath();
+  });
+  ipcMain.handle('get-app-version', () => {
+    return app.getVersion();
+  });
+
   createWindow();
   
   // Cleanup all temp files at startup
@@ -3960,11 +4363,7 @@ app.whenReady().then(async () => { // Added async here
       };
     }
   });
-  
-  ipcMain.handle('get-app-version', () => {
-    return app.getVersion();
-  });
-  
+
   ipcMain.handle('open-download-url', async (_, url: string) => {
     if (url) {
       await shell.openExternal(url);
@@ -3983,6 +4382,53 @@ app.whenReady().then(async () => { // Added async here
   ipcMain.handle('get-pending-tokens', handleGetPendingTokens);
   ipcMain.handle('get-token-info', handleGetTokenInfo);
   ipcMain.on('cancel-batch-processing', handleCancelBatchProcessing);
+
+  // TRAINING CONSENT: IPC handlers for user consent management
+  ipcMain.handle('get-training-consent', async () => {
+    try {
+      const { consentService } = await import('./consent-service');
+      return await consentService.getTrainingConsent();
+    } catch (error) {
+      console.error('[Main] Error getting training consent:', error);
+      return true; // Default to true on error
+    }
+  });
+
+  ipcMain.handle('set-training-consent', async (_event, consent: boolean) => {
+    try {
+      const { consentService } = await import('./consent-service');
+      return await consentService.setTrainingConsent(consent);
+    } catch (error) {
+      console.error('[Main] Error setting training consent:', error);
+      return false;
+    }
+  });
+
+  ipcMain.handle('get-consent-status', async () => {
+    try {
+      const { consentService } = await import('./consent-service');
+      return await consentService.getConsentStatus();
+    } catch (error) {
+      console.error('[Main] Error getting consent status:', error);
+      return { trainingConsent: true, consentUpdatedAt: null };
+    }
+  });
+
+  // USER SETTINGS: IPC handler for Settings screen
+  ipcMain.handle('get-full-settings', async () => {
+    try {
+      const { userPreferencesService } = await import('./user-preferences-service');
+      return await userPreferencesService.getFullSettings();
+    } catch (error) {
+      console.error('[Main] Error getting full settings:', error);
+      return {
+        account: { email: '', userId: '', userRole: 'user' },
+        tokens: { total: 0, used: 0, remaining: 0, pending: 0 },
+        subscription: { plan: null, isActive: false, expiresAt: null },
+        privacy: { trainingConsent: true, consentUpdatedAt: null }
+      };
+    }
+  });
 
   // FOLDER ORGANIZATION: IPC handlers (available for all authenticated users)
   if (APP_CONFIG.features.ENABLE_FOLDER_ORGANIZATION) {
@@ -5157,6 +5603,137 @@ app.whenReady().then(async () => { // Added async here
       return { success: false, error: (error as Error).message };
     }
   });
+
+  // ============================================
+  // Face Recognition IPC Handlers
+  // ============================================
+
+  // Initialize face recognition processor
+  ipcMain.handle('face-recognition-initialize', async () => {
+    try {
+      console.log('[FaceRecognition IPC] Initializing face recognition...');
+      const result = await faceRecognitionProcessor.initialize();
+      console.log('[FaceRecognition IPC] Initialization result:', result);
+      return result;
+    } catch (error) {
+      console.error('[FaceRecognition IPC] Initialization error:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  // Load face descriptors for matching
+  ipcMain.handle('face-recognition-load-descriptors', async (_, descriptors: StoredFaceDescriptor[]) => {
+    try {
+      console.log(`[FaceRecognition IPC] Loading ${descriptors.length} face descriptors...`);
+      faceRecognitionProcessor.loadFaceDescriptors(descriptors);
+      const count = faceRecognitionProcessor.getDescriptorCount();
+      console.log(`[FaceRecognition IPC] Loaded ${count} unique drivers`);
+      return { success: true, count };
+    } catch (error) {
+      console.error('[FaceRecognition IPC] Error loading descriptors:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  // Match detected faces against loaded descriptors
+  ipcMain.handle('face-recognition-match', async (_, faces: DetectedFace[], context: FaceContext = 'auto') => {
+    try {
+      console.log(`[FaceRecognition IPC] Matching ${faces.length} faces with context: ${context}`);
+      const result = faceRecognitionProcessor.matchFaces(faces, context);
+      console.log(`[FaceRecognition IPC] Matched ${result.matchedDrivers.length} drivers`);
+      return result;
+    } catch (error) {
+      console.error('[FaceRecognition IPC] Match error:', error);
+      return { success: false, error: (error as Error).message, faces: [], matchedDrivers: [], inferenceTimeMs: 0 };
+    }
+  });
+
+  // Get face recognition status
+  ipcMain.handle('face-recognition-status', async () => {
+    try {
+      const modelInfo = faceRecognitionProcessor.getModelInfo();
+      return {
+        success: true,
+        ...modelInfo
+      };
+    } catch (error) {
+      console.error('[FaceRecognition IPC] Status error:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  // Clear loaded face descriptors
+  ipcMain.handle('face-recognition-clear', async () => {
+    try {
+      faceRecognitionProcessor.clearDescriptors();
+      console.log('[FaceRecognition IPC] Descriptors cleared');
+      return { success: true };
+    } catch (error) {
+      console.error('[FaceRecognition IPC] Clear error:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  // Load face descriptors from Supabase sport_category_faces table
+  ipcMain.handle('face-recognition-load-from-database', async (_, categoryCode?: string) => {
+    try {
+      console.log(`[FaceRecognition IPC] Loading face descriptors from database${categoryCode ? ` for category: ${categoryCode}` : ''}...`);
+
+      const supabase = getSupabaseClient();
+
+      // Query sport_category_faces table
+      let query = supabase
+        .from('sport_category_faces')
+        .select('*');
+
+      if (categoryCode) {
+        query = query.eq('sport_category_code', categoryCode);
+      }
+
+      const { data: faces, error } = await query;
+
+      if (error) {
+        console.error('[FaceRecognition IPC] Database query error:', error);
+        return { success: false, error: error.message };
+      }
+
+      if (!faces || faces.length === 0) {
+        console.log('[FaceRecognition IPC] No face descriptors found in database');
+        return { success: true, count: 0, message: 'No faces found' };
+      }
+
+      // Convert database format to StoredFaceDescriptor format
+      const descriptors: StoredFaceDescriptor[] = faces
+        .filter((face: any) => face.face_descriptor && face.face_descriptor.length === 128)
+        .map((face: any) => ({
+          id: face.id,
+          driverId: face.id,
+          driverName: face.driver_name,
+          team: face.team || '',
+          carNumber: face.car_number || '',
+          descriptor: face.face_descriptor,
+          referencePhotoUrl: face.reference_photo_url,
+          source: 'global' as const,
+          photoType: 'reference',
+          isPrimary: true
+        }));
+
+      // Load into processor
+      faceRecognitionProcessor.loadFaceDescriptors(descriptors);
+      const count = faceRecognitionProcessor.getDescriptorCount();
+
+      console.log(`[FaceRecognition IPC] Loaded ${count} drivers from database (${descriptors.length} valid descriptors)`);
+      return { success: true, count, totalInDb: faces.length, validDescriptors: descriptors.length };
+
+    } catch (error) {
+      console.error('[FaceRecognition IPC] Error loading from database:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  // ============================================
+  // End Face Recognition IPC Handlers
+  // ============================================
 
   // Update image metadata with manual correction
   async function updateImageMetadataWithCorrection(correction: {

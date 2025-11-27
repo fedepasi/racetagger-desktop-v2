@@ -1,0 +1,43 @@
+{
+  "categories": [
+    "crowd_scene",
+    "garage_pitlane",
+    "podium_celebration",
+    "portrait_paddock",
+    "racing_action"
+  ],
+  "category_to_index": {
+    "crowd_scene": 0,
+    "garage_pitlane": 1,
+    "podium_celebration": 2,
+    "portrait_paddock": 3,
+    "racing_action": 4
+  },
+  "index_to_category": {
+    "0": "crowd_scene",
+    "1": "garage_pitlane",
+    "2": "podium_celebration",
+    "3": "portrait_paddock",
+    "4": "racing_action"
+  },
+  "input_size": [
+    224,
+    224
+  ],
+  "num_classes": 5,
+  "model_type": "ResNet18",
+  "preprocessing": "classification_models resnet18 preprocess_input",
+  "final_val_accuracy": 0.8767772316932678,
+  "training_config": {
+    "phase1_epochs": 15,
+    "phase1_lr": 0.0005,
+    "phase2_epochs": 35,
+    "phase2_lr": 0.0001,
+    "unfreeze_layers": 30,
+    "dense_units": 256,
+    "dropout": 0.4,
+    "label_smoothing": 0.1,
+    "mixup_alpha": 0.2,
+    "patience": 10
+  }
+}

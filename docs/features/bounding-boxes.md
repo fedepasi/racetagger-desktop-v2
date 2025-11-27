@@ -1,9 +1,65 @@
-# Racetagger V3: Bounding Box Detection
+# Racetagger: Bounding Box Detection & Recognition Systems
 
 ## Overview
-Racetagger V3 adds support for **bounding box detection** in addition to the existing text recognition features.
+Racetagger supporta **bounding box detection** e multiple sistemi di riconoscimento per l'analisi delle immagini sportive.
 
-**Good news**: You **do NOT need to update** the AI prompts in the `sport_categories` database table. The V3 Edge Function automatically adds the bounding box requirement to ALL prompts at runtime.
+**Versioni Edge Function disponibili:**
+- **V2**: Riconoscimento base (senza bounding box)
+- **V3**: Riconoscimento con bounding box auto-generati (Gemini)
+- **V4**: Dual recognition con RF-DETR + Gemini fallback
+- **V5**: Versione più recente con ottimizzazioni
+
+**Routing automatico**: Il sistema sceglie automaticamente la versione in base a:
+- `sport_categories.recognition_method` (gemini o rf-detr)
+- `sport_categories.edge_function_version` (2, 3, 4, 5)
+
+---
+
+## V4: RF-DETR Recognition (Produzione)
+
+### Cos'è RF-DETR
+RF-DETR (Roboflow Detection Transformer) è un sistema di object detection specializzato che usa modelli custom trainati per riconoscere numeri di gara specifici.
+
+### Come Funziona
+
+1. **Routing basato su categoria**: Se `sport_categories.recognition_method = 'rf-detr'`:
+   - Usa il workflow Roboflow configurato in `rf_detr_workflow_url`
+   - Parsing labels format: `"MODEL_NUMBER"` (es. `"SF-25_16"` → numero 16)
+
+2. **Fallback automatico**: Se RF-DETR fallisce:
+   - Sistema passa automaticamente a Gemini V3
+   - Log errore per debugging
+
+3. **Cost tracking separato**:
+   - RF-DETR: ~$0.0045/image
+   - Tracciato in `execution_settings.rf_detr_detections_count` e `rf_detr_total_cost`
+
+### Configurazione RF-DETR
+
+```sql
+-- Configura categoria per usare RF-DETR
+UPDATE sport_categories
+SET
+  recognition_method = 'rf-detr',
+  rf_detr_workflow_url = 'https://detect.roboflow.com/...',
+  edge_function_version = 4
+WHERE category = 'f1';
+```
+
+### Label Format Requirements
+I modelli RF-DETR devono restituire labels nel formato:
+```
+"MODEL_NUMBER" o "TEAM_NUMBER"
+
+Esempi validi:
+- "SF-25_16" → Race number: 16
+- "MCL39_4"  → Race number: 4
+- "Ducati_93" → Race number: 93
+```
+
+---
+
+## V3: Bounding Box con Gemini (Legacy)
 
 ## How It Works
 
@@ -193,5 +249,31 @@ A: Gemini 2.5 Flash provides good bbox accuracy. Results improve with:
 ## Support
 For issues or questions:
 - Check Edge Function logs in Supabase Dashboard
-- Review V3 source code: `/supabase/functions/analyzeImageDesktopV3/index.ts`
+- Review source code: `/supabase/functions/analyzeImageDesktopV*/index.ts`
 - Test with sample images first
+
+---
+
+## Routing Logic nel Desktop App
+
+Il file `src/unified-image-processor.ts` gestisce il routing:
+
+```typescript
+// Lines ~1720-1740
+if (recognitionMethod === 'rf-detr') {
+  functionName = 'analyzeImageDesktopV4';
+} else if (edgeFunctionVersion === 3) {
+  functionName = 'analyzeImageDesktopV3';
+} else if (edgeFunctionVersion === 2) {
+  functionName = 'analyzeImageDesktopV2';
+} else {
+  // Default based on category settings
+  functionName = hasBboxSupport
+    ? 'analyzeImageDesktopV3'
+    : 'analyzeImageDesktopV2';
+}
+```
+
+---
+
+*Ultimo aggiornamento: v1.0.11 - Novembre 2025*

@@ -70,7 +70,8 @@ document.addEventListener('DOMContentLoaded', () => {
       e.preventDefault();
       sidebarNavItems.forEach(navItem => navItem.classList.remove('active'));
       item.classList.add('active');
-      const sectionName = item.querySelector('.nav-text').textContent.trim().toLowerCase();
+      // Use data-section attribute if available, otherwise fall back to nav-text
+      const sectionName = item.dataset.section || item.querySelector('.nav-text').textContent.trim().toLowerCase();
       handleNavigation(sectionName);
     });
   });
@@ -352,8 +353,16 @@ function handleNavigation(sectionName) {
 
   if (targetSection) {
     targetSection.classList.add('active-section');
+
+    // Dispatch section-changed event for components that need to react
+    document.dispatchEvent(new CustomEvent('section-changed', {
+      detail: { section: sectionName }
+    }));
+
+    // Section-specific initialization
     if (sectionName === 'home') { loadRecentPresets(); }
     else if (sectionName === 'progetti') { loadAllProjects(); }
+    // Settings section is handled via the section-changed event in settings.js
   } else {
     console.warn(`Content section #${targetSectionId} not found.`);
     const homeSection = document.getElementById('section-home');

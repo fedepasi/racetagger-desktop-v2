@@ -10,14 +10,25 @@ RaceTagger è un'applicazione desktop professionale per fotografi sportivi che a
 ### 1. Analisi Automatica delle Immagini
 
 #### Riconoscimento AI dei Numeri di Gara
+- **Dual Recognition System**: Due metodi di riconoscimento configurabili per categoria:
+  - **Gemini AI Vision**: Riconoscimento generico con alta precisione
+  - **RF-DETR (Roboflow)**: Object detection specializzato per modelli specifici
 - **Riconoscimento multi-numero**: Identifica automaticamente tutti i numeri visibili in un'immagine (piloti, moto, pettorine, auto)
 - **Intelligenza contestuale**: Distingue tra diversi tipi di numeri (numero di gara, sponsor, pubblicità)
-- **Alta precisione**: Sistema AI addestrato specificamente su immagini sportive
+- **Target/Plate Recognition**: Supporto per targhe e plate number
 - **Gestione di casi complessi**:
   - Numeri parzialmente oscurati
   - Angolazioni difficili
   - Numeri in movimento (motion blur)
   - Scarsa illuminazione
+
+#### RF-DETR Recognition (v1.0.10+)
+- **Roboflow Integration**: Workflow serverless per object detection
+- **Label Format**: `"MODEL_NUMBER"` (es. `"SF-25_16"` → numero 16)
+- **Configurazione per categoria**: Ogni sport category può usare RF-DETR o Gemini
+- **Fallback automatico**: Se RF-DETR fallisce, usa Gemini V3
+- **Cost tracking separato**: ~$0.0045/image per RF-DETR
+- **Bounding boxes**: Dati completi salvati per training futuro
 
 #### Categorie Sportive Supportate
 - **Motorsport**: Auto, moto, karting, rally
@@ -374,4 +385,4 @@ Analyzed: 2025-01-16
 
 ---
 
-*Ultimo aggiornamento: v1.0.8 - Gennaio 2025*
+*Ultimo aggiornamento: v1.0.11 - Novembre 2025*

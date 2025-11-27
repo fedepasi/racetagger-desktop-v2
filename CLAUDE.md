@@ -129,7 +129,41 @@ This is an advanced Electron desktop application for race photography analysis b
 - **Resize Presets**: VELOCE (1080p), BILANCIATO (1440p), QUALITA (1920p)
 - **Performance Optimization Levels**: DISABLED, CONSERVATIVE, BALANCED, AGGRESSIVE
 - **Streaming Pipeline Configuration** with worker management and disk thresholds
+- **Roboflow RF-DETR Configuration**: API keys, overlap thresholds, confidence levels, cost tracking
 - Comprehensive validation and error handling
+
+### RF-DETR Recognition System (Edge Function V4)
+- **Dual Recognition Support**: Gemini AI Vision + RF-DETR object detection
+- **Database-driven configuration**: Recognition method configured per sport category in `sport_categories` table
+- **Edge Function V4** (`supabase/functions/analyzeImageDesktopV4/`):
+  - Routes to RF-DETR or Gemini based on `sport_categories.recognition_method`
+  - RF-DETR integration with Roboflow serverless workflows
+  - Label format: `"MODEL_NUMBER"` (e.g., `"SF-25_16"` → race number 16)
+  - IoU-based overlap filtering for multiple detections
+  - Automatic fallback to Gemini V3 on RF-DETR failure
+- **Metrics Tracking**: Detections count, cost tracking ($0.0045/image), recognition method logging
+- **Bounding Boxes**: Full detection data saved to `analysis_results.raw_response` for training
+- **SmartMatcher Integration**: Post-processing with same participant matching logic
+- **Management Dashboard**: UI in racetagger-app for configuring RF-DETR per category
+
+**Setup:**
+1. Get Roboflow API key from https://app.roboflow.com/
+2. Add to `.env`: `ROBOFLOW_DEFAULT_API_KEY=your_key_here`
+3. Configure sport category in management dashboard:
+   - Set `recognition_method` to "rf-detr"
+   - Set `rf_detr_workflow_url` to Roboflow workflow endpoint
+   - Set `edge_function_version` to 4
+   - Optional: Set custom API key environment variable name
+
+**Label Format Requirements:**
+- RF-DETR models must return labels in format: `"MODEL_NUMBER"` or `"TEAM_NUMBER"`
+- Examples: `"SF-25_16"`, `"MCL39_4"`, `"Ducati_93"`
+- Race number is extracted from the portion after the underscore
+
+**Cost Tracking:**
+- RF-DETR usage: ~$0.0045 per image
+- Tracked separately from Gemini token usage
+- Metrics stored in `execution_settings`: `rf_detr_detections_count`, `rf_detr_total_cost`
 
 ### File Extensions Support
 - **Standard formats**: JPG, JPEG, PNG, WebP

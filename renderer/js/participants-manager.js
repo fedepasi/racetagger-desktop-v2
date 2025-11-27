@@ -10,6 +10,8 @@ var participantsData = [];
 var isEditingPreset = false;
 var customFolders = []; // Array di nomi folder personalizzate
 var editingRowIndex = -1; // -1 = new participant, >=0 = editing existing
+var currentSortColumn = 0; // Colonna corrente di ordinamento (0 = numero)
+var currentSortDirection = 'asc'; // Direzione: 'asc' o 'desc'
 
 console.log('🔧 [DEBUG] Variables declared:', { currentPreset, participantsData, isEditingPreset, customFolders });
 
@@ -34,6 +36,9 @@ function setupEventListeners() {
   document.getElementById('create-new-preset-btn')?.addEventListener('click', createNewPreset);
   document.getElementById('import-csv-preset-btn')?.addEventListener('click', openCsvImportModal);
   document.getElementById('import-json-preset-btn')?.addEventListener('click', openJsonImportModal);
+
+  // Person Shown Template - live preview
+  document.getElementById('person-shown-template')?.addEventListener('input', updatePersonShownPreview);
 
   // Folder name input - Enter key support and autocomplete
   const folderNameInput = document.getElementById('folder-name-input');
@@ -285,6 +290,7 @@ async function loadParticipantPresets() {
 
 /**
  * Display participant presets in the UI
+ * Separates official presets from user presets for better organization
  */
 function displayParticipantPresets(presets) {
   const container = document.getElementById('presets-list-container');
@@ -300,59 +306,127 @@ function displayParticipantPresets(presets) {
     emptyState.style.display = 'none';
   }
 
-  // Create presets grid
-  const presetsGrid = document.createElement('div');
-  presetsGrid.className = 'presets-grid';
-  presetsGrid.innerHTML = '';
+  // Separate official presets from user presets
+  const officialPresets = presets.filter(p => p.is_official === true);
+  const userPresets = presets.filter(p => p.is_official !== true);
 
-  presets.forEach(preset => {
-    const presetCard = createPresetCard(preset);
-    presetsGrid.appendChild(presetCard);
-  });
-
-  // Clear container and add grid
+  // Clear container
   container.innerHTML = '';
-  container.appendChild(presetsGrid);
+
+  // Display official presets section if there are any
+  if (officialPresets.length > 0) {
+    const officialSection = document.createElement('div');
+    officialSection.className = 'presets-section official-presets-section';
+    officialSection.innerHTML = `
+      <div class="section-header">
+        <h3 class="section-title">
+          <span class="official-badge-title">Official RT Presets</span>
+        </h3>
+        <p class="section-description">Curated presets maintained by RaceTagger. Duplicate to customize.</p>
+      </div>
+    `;
+
+    const officialGrid = document.createElement('div');
+    officialGrid.className = 'presets-grid';
+    officialPresets.forEach(preset => {
+      const presetCard = createPresetCard(preset);
+      officialGrid.appendChild(presetCard);
+    });
+    officialSection.appendChild(officialGrid);
+    container.appendChild(officialSection);
+  }
+
+  // Display user presets section
+  if (userPresets.length > 0) {
+    const userSection = document.createElement('div');
+    userSection.className = 'presets-section user-presets-section';
+    userSection.innerHTML = `
+      <div class="section-header">
+        <h3 class="section-title">My Presets</h3>
+      </div>
+    `;
+
+    const userGrid = document.createElement('div');
+    userGrid.className = 'presets-grid';
+    userPresets.forEach(preset => {
+      const presetCard = createPresetCard(preset);
+      userGrid.appendChild(presetCard);
+    });
+    userSection.appendChild(userGrid);
+    container.appendChild(userSection);
+  } else if (officialPresets.length > 0) {
+    // Show message about creating first preset if only official presets exist
+    const userSection = document.createElement('div');
+    userSection.className = 'presets-section user-presets-section';
+    userSection.innerHTML = `
+      <div class="section-header">
+        <h3 class="section-title">My Presets</h3>
+        <p class="section-description">No personal presets yet. Create your own or duplicate an official preset above.</p>
+      </div>
+    `;
+    container.appendChild(userSection);
+  }
 }
 
 /**
  * Create a preset card element
  */
 function createPresetCard(preset) {
-  console.log('[DEBUG] 🎴 Creating preset card for ID:', preset.id, 'Name:', preset.name);
+  console.log('[DEBUG] 🎴 Creating preset card for ID:', preset.id, 'Name:', preset.name, 'isOfficial:', preset.is_official);
   const card = document.createElement('div');
-  card.className = 'preset-card';
+  const isOfficial = preset.is_official === true;
+  card.className = `preset-card${isOfficial ? ' official-preset-card' : ''}`;
+
+  // Generate different actions based on whether preset is official or user-owned
+  let actionsHtml;
+  if (isOfficial) {
+    // Official presets: only allow duplicate and view (no edit/delete)
+    actionsHtml = `
+      <button class="btn btn-sm btn-primary" onclick="duplicateOfficialPreset('${preset.id}')" title="Duplicate to My Presets">
+        <span class="btn-icon">📋</span> Duplicate
+      </button>
+    `;
+  } else {
+    // User presets: full edit/delete/export capabilities
+    actionsHtml = `
+      <div class="export-dropdown" data-preset-id="${preset.id}">
+        <button class="btn btn-sm btn-secondary dropdown-toggle" title="Export preset">
+          <span class="btn-icon">📥</span>
+        </button>
+        <div class="dropdown-menu">
+          <button class="dropdown-item" data-action="csv">
+            <span class="item-icon">📄</span>
+            <div class="item-content">
+              <span class="item-title">Export as CSV</span>
+              <small class="item-description">For editing in Excel/Sheets</small>
+            </div>
+          </button>
+          <button class="dropdown-item" data-action="json">
+            <span class="item-icon">💾</span>
+            <div class="item-content">
+              <span class="item-title">Export Complete (JSON)</span>
+              <small class="item-description">Full backup with settings</small>
+            </div>
+          </button>
+        </div>
+      </div>
+      <button class="btn btn-sm btn-secondary" onclick="console.log('[DEBUG] ✏️ Edit button CLICKED for preset:', '${preset.id}'); editPreset('${preset.id}')" title="Edit">
+        <span class="btn-icon">✏️</span>
+      </button>
+      <button class="btn btn-sm btn-danger" onclick="deletePreset('${preset.id}')" title="Delete">
+        <span class="btn-icon">🗑️</span>
+      </button>
+    `;
+  }
+
   card.innerHTML = `
     <div class="preset-header">
-      <div class="preset-title">${escapeHtml(preset.name)}</div>
+      <div class="preset-title">
+        ${isOfficial ? '<span class="official-badge" title="Official RT Preset">RT</span>' : ''}
+        ${escapeHtml(preset.name)}
+      </div>
       <div class="preset-actions">
-        <div class="export-dropdown" data-preset-id="${preset.id}">
-          <button class="btn btn-sm btn-secondary dropdown-toggle" title="Export preset">
-            <span class="btn-icon">📥</span>
-          </button>
-          <div class="dropdown-menu">
-            <button class="dropdown-item" data-action="csv">
-              <span class="item-icon">📄</span>
-              <div class="item-content">
-                <span class="item-title">Export as CSV</span>
-                <small class="item-description">For editing in Excel/Sheets</small>
-              </div>
-            </button>
-            <button class="dropdown-item" data-action="json">
-              <span class="item-icon">💾</span>
-              <div class="item-content">
-                <span class="item-title">Export Complete (JSON)</span>
-                <small class="item-description">Full backup with settings</small>
-              </div>
-            </button>
-          </div>
-        </div>
-        <button class="btn btn-sm btn-secondary" onclick="console.log('[DEBUG] ✏️ Edit button CLICKED for preset:', '${preset.id}'); editPreset('${preset.id}')" title="Edit">
-          <span class="btn-icon">✏️</span>
-        </button>
-        <button class="btn btn-sm btn-danger" onclick="deletePreset('${preset.id}')" title="Delete">
-          <span class="btn-icon">🗑️</span>
-        </button>
+        ${actionsHtml}
       </div>
     </div>
     <div class="preset-info">
@@ -363,7 +437,13 @@ function createPresetCard(preset) {
         <span class="stat-label">Participants:</span>
         <span class="stat-value">${preset.participants?.length || 0}</span>
       </div>
-      ${preset.last_used_at ? `
+      ${preset.person_shown_template ? `
+        <div class="stat">
+          <span class="stat-label">Person Shown:</span>
+          <span class="stat-value" title="${escapeHtml(preset.person_shown_template)}">Configured</span>
+        </div>
+      ` : ''}
+      ${!isOfficial && preset.last_used_at ? `
         <div class="stat">
           <span class="stat-label">Last used:</span>
           <span class="stat-value">${formatDate(preset.last_used_at)}</span>
@@ -375,44 +455,46 @@ function createPresetCard(preset) {
     </div>
   `;
 
-  // Add dropdown toggle functionality
+  // Add dropdown toggle functionality (only for non-official presets)
   const dropdown = card.querySelector('.export-dropdown');
-  const toggleBtn = dropdown.querySelector('.dropdown-toggle');
-  const dropdownItems = dropdown.querySelectorAll('.dropdown-item');
+  if (dropdown) {
+    const toggleBtn = dropdown.querySelector('.dropdown-toggle');
+    const dropdownItems = dropdown.querySelectorAll('.dropdown-item');
 
-  // Toggle dropdown on button click
-  toggleBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-
-    // Close all other dropdowns first
-    document.querySelectorAll('.export-dropdown.open').forEach(other => {
-      if (other !== dropdown) {
-        other.classList.remove('open');
-      }
-    });
-
-    // Toggle this dropdown
-    dropdown.classList.toggle('open');
-  });
-
-  // Handle dropdown item clicks
-  dropdownItems.forEach(item => {
-    item.addEventListener('click', (e) => {
+    // Toggle dropdown on button click
+    toggleBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      const action = item.getAttribute('data-action');
-      const presetId = dropdown.getAttribute('data-preset-id');
 
-      // Close dropdown
-      dropdown.classList.remove('open');
+      // Close all other dropdowns first
+      document.querySelectorAll('.export-dropdown.open').forEach(other => {
+        if (other !== dropdown) {
+          other.classList.remove('open');
+        }
+      });
 
-      // Execute action
-      if (action === 'csv') {
-        exportPresetCSV(presetId);
-      } else if (action === 'json') {
-        exportPresetJSON(presetId);
-      }
+      // Toggle this dropdown
+      dropdown.classList.toggle('open');
     });
-  });
+
+    // Handle dropdown item clicks
+    dropdownItems.forEach(item => {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const action = item.getAttribute('data-action');
+        const presetId = dropdown.getAttribute('data-preset-id');
+
+        // Close dropdown
+        dropdown.classList.remove('open');
+
+        // Execute action
+        if (action === 'csv') {
+          exportPresetCSV(presetId);
+        } else if (action === 'json') {
+          exportPresetJSON(presetId);
+        }
+      });
+    });
+  }
 
   return card;
 }
@@ -457,7 +539,12 @@ function createNewPreset() {
   // Reset form
   document.getElementById('preset-name').value = '';
   document.getElementById('preset-description').value = '';
+  document.getElementById('person-shown-template').value = '';
   document.getElementById('preset-editor-title').textContent = 'New Participant Preset';
+
+  // Clear Person Shown preview
+  const previewEl = document.getElementById('person-shown-preview');
+  if (previewEl) previewEl.textContent = '';
 
   // Clear custom folders
   clearCustomFolders();
@@ -646,6 +733,12 @@ function saveParticipantEdit() {
     folder_3: document.getElementById('edit-folder-3').value
   };
 
+  // Salva il numero per lo scroll successivo
+  const participantNumero = numero;
+
+  // Salva l'ordinamento corrente prima di aggiornare
+  const sortState = getCurrentSortState();
+
   if (editingRowIndex === -1) {
     // Add new participant
     participantsData.push(participant);
@@ -657,7 +750,110 @@ function saveParticipantEdit() {
   // Refresh table display
   loadParticipantsIntoTable(participantsData);
 
+  // Ri-applica l'ordinamento salvato
+  if (sortState) {
+    applySortState(sortState);
+  }
+
+  // Scorri al pilota modificato dopo un breve delay per permettere il re-render
+  setTimeout(() => scrollToParticipant(participantNumero), 150);
+
   closeParticipantEditModal();
+}
+
+/**
+ * Get current sort state from table headers
+ * @returns {Object|null} Sort state with columnIndex and direction
+ */
+function getCurrentSortState() {
+  const sortedHeader = document.querySelector('#participants-table th.asc, #participants-table th.desc');
+  if (sortedHeader) {
+    return {
+      columnIndex: sortedHeader.cellIndex,
+      direction: sortedHeader.classList.contains('asc') ? 'asc' : 'desc'
+    };
+  }
+  // Default: ordina per numero (prima colonna) in ordine crescente
+  return { columnIndex: 0, direction: 'asc' };
+}
+
+/**
+ * Apply saved sort state to table
+ * @param {Object} state - Sort state with columnIndex and direction
+ */
+function applySortState(state) {
+  const table = document.getElementById('participants-table');
+  if (!table) return;
+
+  const headers = table.querySelectorAll('th');
+  if (!headers || headers.length === 0) return;
+
+  const header = headers[state.columnIndex];
+  if (!header) return;
+
+  // Prima rimuovi le classi di ordinamento da tutti gli header
+  headers.forEach(h => {
+    h.classList.remove('asc', 'desc');
+  });
+
+  // Ordina i dati manualmente
+  const tbody = document.getElementById('participants-tbody');
+  if (!tbody) return;
+
+  const rows = Array.from(tbody.querySelectorAll('tr'));
+
+  rows.sort((rowA, rowB) => {
+    const cellA = rowA.querySelectorAll('td')[state.columnIndex];
+    const cellB = rowB.querySelectorAll('td')[state.columnIndex];
+
+    if (!cellA || !cellB) return 0;
+
+    const valueA = cellA.getAttribute('data-sort') || cellA.textContent.trim();
+    const valueB = cellB.getAttribute('data-sort') || cellB.textContent.trim();
+
+    // Prova a comparare come numeri
+    const numA = parseFloat(valueA);
+    const numB = parseFloat(valueB);
+
+    let comparison;
+    if (!isNaN(numA) && !isNaN(numB)) {
+      comparison = numA - numB;
+    } else {
+      comparison = valueA.localeCompare(valueB, undefined, { numeric: true, sensitivity: 'base' });
+    }
+
+    return state.direction === 'asc' ? comparison : -comparison;
+  });
+
+  // Ricostruisci il tbody con le righe ordinate
+  rows.forEach(row => tbody.appendChild(row));
+
+  // Aggiungi la classe di ordinamento all'header
+  header.classList.add(state.direction);
+}
+
+/**
+ * Scroll to a participant row and highlight it
+ * @param {string} numero - The participant number to scroll to
+ */
+function scrollToParticipant(numero) {
+  const tbody = document.getElementById('participants-tbody');
+  if (!tbody) return;
+
+  const rows = tbody.querySelectorAll('tr');
+
+  for (const row of rows) {
+    const numCell = row.querySelector('td:first-child');
+    if (numCell && numCell.textContent.trim() === String(numero)) {
+      // Scorri alla riga
+      row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+      // Highlight temporaneo
+      row.classList.add('highlight-row');
+      setTimeout(() => row.classList.remove('highlight-row'), 2000);
+      break;
+    }
+  }
 }
 
 /**
@@ -854,7 +1050,11 @@ async function editPreset(presetId) {
     // Fill form with preset data
     document.getElementById('preset-name').value = currentPreset.name || '';
     document.getElementById('preset-description').value = currentPreset.description || '';
+    document.getElementById('person-shown-template').value = currentPreset.person_shown_template || '';
     document.getElementById('preset-editor-title').textContent = 'Edit Participant Preset';
+
+    // Update Person Shown preview
+    updatePersonShownPreview();
 
     // Load participants into table
     loadParticipantsIntoTable(participantsData);
@@ -871,6 +1071,38 @@ async function editPreset(presetId) {
   } catch (error) {
     console.error('[Participants] Error editing preset:', error);
     showNotification('Error loading preset for editing', 'error');
+  }
+}
+
+/**
+ * Duplicate an official preset to create a personal copy
+ */
+async function duplicateOfficialPreset(presetId) {
+  try {
+    console.log('[Participants] Duplicating official preset:', presetId);
+
+    // Show confirmation
+    const confirmed = await showConfirmDialog(
+      'Duplicate Official Preset',
+      'This will create a personal copy of this official preset that you can customize. Continue?'
+    );
+
+    if (!confirmed) return;
+
+    // Show loading state
+    showNotification('Duplicating preset...', 'info');
+
+    const response = await window.api.invoke('supabase-duplicate-official-preset', presetId);
+
+    if (response.success && response.data) {
+      showNotification(`Created "${response.data.name}" in your presets!`, 'success');
+      await loadParticipantPresets(); // Refresh list
+    } else {
+      showNotification('Error duplicating preset: ' + (response.error || 'Unknown error'), 'error');
+    }
+  } catch (error) {
+    console.error('[Participants] Error duplicating official preset:', error);
+    showNotification('Error duplicating preset', 'error');
   }
 }
 
@@ -1245,6 +1477,7 @@ async function savePreset() {
   try {
     const presetName = document.getElementById('preset-name').value.trim();
     const presetDescription = document.getElementById('preset-description').value.trim();
+    const personShownTemplate = document.getElementById('person-shown-template').value.trim();
 
     // Validation
     if (!presetName) {
@@ -1283,7 +1516,8 @@ async function savePreset() {
       const updateData = {
         name: presetName,
         description: presetDescription,
-        custom_folders: customFolders
+        custom_folders: customFolders,
+        person_shown_template: personShownTemplate || null
       };
 
       const updateResponse = await window.api.invoke('supabase-update-participant-preset', {
@@ -1301,7 +1535,8 @@ async function savePreset() {
       const presetData = {
         name: presetName,
         description: presetDescription,
-        custom_folders: customFolders
+        custom_folders: customFolders,
+        person_shown_template: personShownTemplate || null
       };
 
       const createResponse = await window.api.invoke('supabase-create-participant-preset', presetData);
@@ -1911,6 +2146,47 @@ function showConfirmDialog(title, message) {
 }
 
 /**
+ * Update Person Shown template preview with sample data
+ */
+function updatePersonShownPreview() {
+  const templateInput = document.getElementById('person-shown-template');
+  const previewEl = document.getElementById('person-shown-preview');
+
+  if (!templateInput || !previewEl) return;
+
+  const template = templateInput.value.trim();
+
+  if (!template) {
+    previewEl.textContent = '';
+    return;
+  }
+
+  // Sample data for preview
+  const sampleData = {
+    name: 'Charles Leclerc',
+    surname: 'Leclerc',
+    number: '16',
+    team: 'Ferrari',
+    car_model: 'SF-25',
+    nationality: 'MON'
+  };
+
+  // Replace placeholders
+  let preview = template;
+  preview = preview.replace(/{name}/g, sampleData.name);
+  preview = preview.replace(/{surname}/g, sampleData.surname);
+  preview = preview.replace(/{number}/g, sampleData.number);
+  preview = preview.replace(/{team}/g, sampleData.team);
+  preview = preview.replace(/{car_model}/g, sampleData.car_model);
+  preview = preview.replace(/{nationality}/g, sampleData.nationality);
+
+  // Clean up empty parentheses and extra spaces
+  preview = preview.replace(/\(\s*\)/g, '').replace(/\s+/g, ' ').trim();
+
+  previewEl.textContent = preview ? `Preview: ${preview}` : '';
+}
+
+/**
  * Download CSV template with correct column headers
  */
 function downloadCsvTemplate() {
@@ -1922,6 +2198,7 @@ function downloadCsvTemplate() {
 window.createNewPreset = createNewPreset;
 window.editPreset = editPreset;
 window.deletePreset = deletePreset;
+window.duplicateOfficialPreset = duplicateOfficialPreset;
 window.exportPresetJSON = exportPresetJSON;
 window.exportPresetCSV = exportPresetCSV;
 window.usePreset = usePreset;
@@ -1948,6 +2225,7 @@ window.openParticipantEditModal = openParticipantEditModal;
 window.closeParticipantEditModal = closeParticipantEditModal;
 window.saveParticipantEdit = saveParticipantEdit;
 window.removeParticipant = removeParticipant;
+window.updatePersonShownPreview = updatePersonShownPreview;
 
 // Export utility functions for preset management
 window.getSelectedPreset = getSelectedPreset;

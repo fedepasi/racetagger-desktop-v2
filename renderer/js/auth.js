@@ -71,6 +71,15 @@ function initializeAuth() {
   if (continueDemo) continueDemo.addEventListener('click', handleContinueWithoutLogin);
   if (backToLogin) backToLogin.addEventListener('click', () => switchAuthTab('login'));
 
+  // Sidebar logout button (in Settings section)
+  const sidebarLogoutBtn = document.getElementById('sidebar-logout-btn');
+  if (sidebarLogoutBtn) {
+    sidebarLogoutBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      handleLogout();
+    });
+  }
+
   // Set up password validation for registration form
   setupPasswordValidation();
   
@@ -697,28 +706,40 @@ function handleUpgradeClick() {
 // Update UI based on auth state
 function updateUIForAuthState() {
   const userBar = document.getElementById('user-bar');
-  const sidebarUserName = document.getElementById('sidebar-user-name');
+  const sidebarUserEmail = document.getElementById('sidebar-user-email');
+  const sidebarUserAvatar = document.getElementById('sidebar-user-avatar');
   const tokenDisplay = document.getElementById('token-display');
-  
+
   if (authState.isAuthenticated) {
     // User is logged in
     if (authContainer) {
       authContainer.style.display = 'none';
     }
-    
+
     if (userBar) {
       userBar.style.display = 'flex';
     }
-    
-    if (userInfoDisplay && authState.user) {
-      userInfoDisplay.textContent = `${authState.user.email}`;
+
+    // Update sidebar user email
+    if (sidebarUserEmail && authState.user) {
+      sidebarUserEmail.textContent = authState.user.email;
     }
-    
-    // Update sidebar user name
-    if (sidebarUserName && authState.user) {
-      sidebarUserName.textContent = authState.user.email.split('@')[0];
+
+    // Update sidebar avatar with initials
+    if (sidebarUserAvatar && authState.user) {
+      const email = authState.user.email;
+      const namePart = email.split('@')[0];
+      // Get initials from email (e.g., "john.doe" -> "JD", "johndoe" -> "JO")
+      const parts = namePart.split(/[._-]/);
+      let initials = '';
+      if (parts.length >= 2) {
+        initials = (parts[0][0] + parts[1][0]).toUpperCase();
+      } else {
+        initials = namePart.substring(0, 2).toUpperCase();
+      }
+      sidebarUserAvatar.textContent = initials;
     }
-    
+
     // Update token display in header
     if (tokenDisplay && authState.tokens) {
       const tokenValue = tokenDisplay.querySelector('.token-value');
@@ -726,17 +747,20 @@ function updateUIForAuthState() {
         tokenValue.textContent = authState.tokens.remaining;
       }
     }
-    
+
     // Mostra l'app principale
     if (mainAppContainer) {
       mainAppContainer.classList.remove('hidden');
     }
-    
+
     // Nascondi il container del codice di accesso
     if (accessCodeContainer) {
       accessCodeContainer.classList.add('hidden');
     }
-    
+
+    // Load and setup training consent toggle
+    loadTrainingConsentStatus();
+
     // Gestisci la visibilità delle sezioni sidebar in base al ruolo utente
     updateSidebarVisibility();
   } else {
@@ -954,6 +978,88 @@ function recheckAuthStatus() {
 
 // Esporta la funzione per l'uso globale
 window.recheckAuthStatus = recheckAuthStatus;
+
+// ============================================
+// Training Consent Management
+// ============================================
+
+// Load and display training consent status
+// Note: The header toggle has been moved to Settings page.
+// This function now handles both the legacy header toggle (if exists) and settings toggle.
+async function loadTrainingConsentStatus() {
+  // Legacy header toggle (removed in new UI, but kept for backward compatibility)
+  const headerToggle = document.getElementById('training-consent-toggle');
+  const consentContainer = document.querySelector('.user-consent-toggle');
+  // Settings page toggle
+  const settingsToggle = document.getElementById('settings-training-consent');
+
+  // Hide legacy container if it exists and user not authenticated
+  if (consentContainer) {
+    consentContainer.style.display = authState.isAuthenticated ? 'flex' : 'none';
+  }
+
+  // Early return if neither toggle exists
+  if (!headerToggle && !settingsToggle) {
+    console.log('[Auth] No training consent toggles found in DOM');
+    return;
+  }
+
+  if (!authState.isAuthenticated) {
+    return;
+  }
+
+  try {
+    // Load current consent status from backend
+    const consent = await window.api.invoke('get-training-consent');
+    console.log('[Auth] Training consent loaded:', consent);
+
+    // Update both toggles if they exist
+    if (headerToggle) {
+      headerToggle.checked = consent;
+      // Add change event listener (only once)
+      if (!headerToggle.hasAttribute('data-listener-attached')) {
+        headerToggle.setAttribute('data-listener-attached', 'true');
+        headerToggle.addEventListener('change', handleTrainingConsentChange);
+      }
+    }
+
+    // Settings toggle is handled by settings.js, but sync state here
+    if (settingsToggle) {
+      settingsToggle.checked = consent;
+    }
+  } catch (error) {
+    console.error('[Auth] Error loading training consent:', error);
+    // Default to checked (opt-out model)
+    if (headerToggle) headerToggle.checked = true;
+    if (settingsToggle) settingsToggle.checked = true;
+  }
+}
+
+// Handle training consent toggle change
+async function handleTrainingConsentChange(event) {
+  const newConsent = event.target.checked;
+  console.log('[Auth] Training consent changed to:', newConsent);
+
+  try {
+    const result = await window.api.invoke('set-training-consent', newConsent);
+
+    if (result) {
+      const message = newConsent
+        ? 'Grazie! Le tue immagini aiuteranno a migliorare il riconoscimento.'
+        : 'Consenso rimosso. Le tue future immagini non saranno usate per il training.';
+      showNotification('Preferenze aggiornate', message);
+    } else {
+      // Revert toggle if save failed
+      event.target.checked = !newConsent;
+      showNotification('Errore', 'Impossibile salvare le preferenze. Riprova.');
+    }
+  } catch (error) {
+    console.error('[Auth] Error saving training consent:', error);
+    // Revert toggle on error
+    event.target.checked = !newConsent;
+    showNotification('Errore', 'Impossibile salvare le preferenze. Riprova.');
+  }
+}
 
 // Inizializza quando il documento è pronto
 document.addEventListener('DOMContentLoaded', () => {

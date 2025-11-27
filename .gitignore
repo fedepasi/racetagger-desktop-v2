@@ -78,4 +78,4 @@ vendor/win32/*/exiftool_files/
 vendor/win32/*/exiftool-*/
 
 # Google Cloud credentials (secrets)
-gen-lang-client-*.json
+gen-lang-client-*.jsonml-training/
