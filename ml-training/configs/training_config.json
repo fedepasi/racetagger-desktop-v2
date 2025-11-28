@@ -1,0 +1,107 @@
+{
+  "model": {
+    "architecture": "MobileNetV3Small",
+    "input_size": [224, 224, 3],
+    "num_classes": 5,
+    "weights": "imagenet",
+    "include_top": false,
+    "minimalistic": false
+  },
+
+  "training": {
+    "batch_size": 32,
+    "epochs": 30,
+    "learning_rate": 0.001,
+    "optimizer": "adam",
+    "loss": "categorical_crossentropy",
+    "metrics": ["accuracy", "top_k_categorical_accuracy"]
+  },
+
+  "transfer_learning": {
+    "phase1": {
+      "epochs": 15,
+      "freeze_base": true,
+      "learning_rate": 0.001,
+      "description": "Train only classification head"
+    },
+    "phase2": {
+      "epochs": 15,
+      "unfreeze_last_n_layers": 30,
+      "learning_rate": 0.0001,
+      "description": "Fine-tune last 30 layers of base model"
+    }
+  },
+
+  "custom_head": {
+    "global_pooling": "GlobalAveragePooling2D",
+    "dense_units": 128,
+    "dense_activation": "relu",
+    "dropout_rate": 0.3,
+    "output_activation": "softmax"
+  },
+
+  "callbacks": {
+    "early_stopping": {
+      "enabled": true,
+      "monitor": "val_loss",
+      "patience": 5,
+      "restore_best_weights": true,
+      "verbose": 1
+    },
+    "model_checkpoint": {
+      "enabled": true,
+      "monitor": "val_accuracy",
+      "save_best_only": true,
+      "save_weights_only": false,
+      "verbose": 1
+    },
+    "reduce_lr": {
+      "enabled": true,
+      "monitor": "val_loss",
+      "factor": 0.5,
+      "patience": 3,
+      "min_lr": 1e-7,
+      "verbose": 1
+    },
+    "tensorboard": {
+      "enabled": true,
+      "histogram_freq": 1,
+      "write_graph": true,
+      "write_images": false
+    }
+  },
+
+  "dataset": {
+    "train_split": 0.7,
+    "val_split": 0.2,
+    "test_split": 0.1,
+    "shuffle": true,
+    "seed": 42
+  },
+
+  "class_labels": {
+    "0": "crowd_scene",
+    "1": "garage_pitlane",
+    "2": "podium_celebration",
+    "3": "portrait_paddock",
+    "4": "racing_action"
+  },
+
+  "performance": {
+    "use_mixed_precision": false,
+    "use_xla": false,
+    "prefetch_buffer_size": 2,
+    "comment": "Enable mixed_precision and XLA for faster training on compatible GPUs"
+  },
+
+  "notes": {
+    "target_accuracy": 0.88,
+    "target_top2_accuracy": 0.95,
+    "target_inference_time_ms": 50,
+    "expected_training_time": {
+      "mac_m1": "~2 hours",
+      "rtx_3060": "~1 hour",
+      "cpu_only": "~8 hours"
+    }
+  }
+}

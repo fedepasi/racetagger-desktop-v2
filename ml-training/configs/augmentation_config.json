@@ -1,0 +1,98 @@
+{
+  "training_augmentation": {
+    "enabled": true,
+    "description": "Data augmentation for training set only",
+
+    "rescale": {
+      "factor": 0.00392156862745098,
+      "comment": "1/255.0 - normalize to [0, 1]"
+    },
+
+    "rotation_range": {
+      "degrees": 15,
+      "comment": "Random rotation between -15° and +15°"
+    },
+
+    "width_shift_range": {
+      "factor": 0.1,
+      "comment": "Horizontal shift up to 10% of width"
+    },
+
+    "height_shift_range": {
+      "factor": 0.1,
+      "comment": "Vertical shift up to 10% of height"
+    },
+
+    "shear_range": {
+      "factor": 0.1,
+      "comment": "Shear transformation angle in counter-clockwise direction"
+    },
+
+    "zoom_range": {
+      "factor": 0.15,
+      "comment": "Random zoom between 85% and 115%"
+    },
+
+    "horizontal_flip": {
+      "enabled": true,
+      "comment": "Randomly flip images horizontally (50% chance)"
+    },
+
+    "vertical_flip": {
+      "enabled": false,
+      "comment": "NOT recommended for racing photos (cars don't flip vertically)"
+    },
+
+    "brightness_range": {
+      "min": 0.8,
+      "max": 1.2,
+      "comment": "Random brightness adjustment 80%-120%"
+    },
+
+    "fill_mode": {
+      "mode": "nearest",
+      "comment": "How to fill pixels outside boundaries after transformations"
+    },
+
+    "channel_shift_range": {
+      "enabled": false,
+      "factor": 0.0,
+      "comment": "Random channel shifts (not typically needed)"
+    }
+  },
+
+  "validation_augmentation": {
+    "enabled": false,
+    "description": "Validation/test sets: only rescaling, no augmentation",
+
+    "rescale": {
+      "factor": 0.00392156862745098,
+      "comment": "1/255.0 - normalize to [0, 1]"
+    }
+  },
+
+  "advanced_augmentation": {
+    "enabled": false,
+    "description": "Advanced augmentation techniques (optional, requires imgaug or albumentations)",
+
+    "techniques": [
+      "gaussian_noise",
+      "motion_blur",
+      "contrast_adjustment",
+      "hue_saturation"
+    ],
+
+    "comment": "Enable if training accuracy plateaus. Requires additional dependencies."
+  },
+
+  "notes": {
+    "purpose": "Data augmentation helps prevent overfitting by artificially expanding the training dataset",
+    "recommendation": "Start with default settings. If overfitting occurs (train acc >> val acc), increase augmentation strength",
+    "racing_specific": [
+      "Horizontal flip is OK (cars can be photographed from either side)",
+      "Vertical flip is NOT OK (cars don't drive upside down)",
+      "Rotation should be limited (±15° max, cars are usually level)",
+      "Brightness variation is important (different lighting conditions)"
+    ]
+  }
+}

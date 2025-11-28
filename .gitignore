@@ -79,3 +79,5 @@ vendor/win32/*/exiftool-*/
 
 # Google Cloud credentials (secrets)
 gen-lang-client-*.jsonml-training/
+ml-training/rf-detr-medium.pth
+ml-training/rf-detr-base.pth

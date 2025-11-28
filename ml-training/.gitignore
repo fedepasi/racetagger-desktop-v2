@@ -1,0 +1,217 @@
+# ═══════════════════════════════════════════════════════════════
+# RaceTagger ML Training - Git Ignore
+# ═══════════════════════════════════════════════════════════════
+
+# ───────────────────────────────────────────────────────────────
+# Dataset (GRANDE! Non committare)
+# ───────────────────────────────────────────────────────────────
+
+f1_scenes_dataset/
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.gif
+*.bmp
+*.tiff
+
+# ───────────────────────────────────────────────────────────────
+# Models (PESANTI! Non committare training artifacts)
+# ───────────────────────────────────────────────────────────────
+
+models/
+*.h5
+*.keras
+*.ckpt
+*.pb
+*.pbtxt
+*.tflite
+saved_model/
+checkpoints/
+tfjs_model/
+
+# ECCEZIONE: Committare solo il modello finale deployato
+!models/scene-classifier/model.json
+!models/scene-classifier/weights.bin
+!models/scene-classifier/class_labels.json
+
+# ───────────────────────────────────────────────────────────────
+# Logs e TensorBoard
+# ───────────────────────────────────────────────────────────────
+
+logs/
+tensorboard/
+*.log
+*.tfevents.*
+events.out.tfevents.*
+
+# ───────────────────────────────────────────────────────────────
+# Python
+# ───────────────────────────────────────────────────────────────
+
+# Virtual environments
+venv-ml/
+venv/
+env/
+ENV/
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb_checkpoints/
+*-checkpoint.ipynb
+
+# IPython
+profile_default/
+ipython_config.py
+
+# ───────────────────────────────────────────────────────────────
+# Environment & Secrets
+# ───────────────────────────────────────────────────────────────
+
+.env
+.env.local
+.env.*.local
+*.key
+secrets.json
+credentials.json
+
+# API keys (IMPORTANTE!)
+*_API_KEY*
+*_api_key*
+*API_SECRET*
+
+# ───────────────────────────────────────────────────────────────
+# IDE & Editor
+# ───────────────────────────────────────────────────────────────
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# ───────────────────────────────────────────────────────────────
+# OS
+# ───────────────────────────────────────────────────────────────
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+.directory
+
+# ───────────────────────────────────────────────────────────────
+# Temporary & Cache
+# ───────────────────────────────────────────────────────────────
+
+tmp/
+temp/
+*.tmp
+*.temp
+*.cache
+.cache/
+
+# ───────────────────────────────────────────────────────────────
+# Output Files
+# ───────────────────────────────────────────────────────────────
+
+# Plots e reports (tranne quelli finali)
+*.png
+*.jpg
+*.pdf
+!docs/*.png
+!docs/*.jpg
+!final_report.pdf
+
+# CSV e JSON di output (tranne configs)
+output/
+results/
+*.csv
+!configs/*.json
+!models/scene-classifier/class_labels.json
+
+# ───────────────────────────────────────────────────────────────
+# Large Files
+# ───────────────────────────────────────────────────────────────
+
+# File > 100MB (use Git LFS se necessario)
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# ───────────────────────────────────────────────────────────────
+# Notes
+# ───────────────────────────────────────────────────────────────
+
+# IMPORTANTE:
+# - Dataset e modelli sono troppo grandi per Git
+# - Usa cloud storage (Google Drive, S3, etc.)
+# - Solo il modello finale deployato va committato
+# - API keys e secrets MAI nel repository!
+
+# Per condividere dataset:
+# 1. Upload su Google Drive / S3
+# 2. Condividi link nel README.md
+# 3. Script scarica automaticamente se necessario

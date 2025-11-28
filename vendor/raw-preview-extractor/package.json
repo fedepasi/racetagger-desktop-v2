@@ -17,7 +17,7 @@
     "prebuild:mac": "prebuildify --napi --strip --platform darwin --arch x64+arm64",
     "prebuild:linux": "prebuildify --napi --strip --platform linux --arch x64",
     "prebuild:all": "npm run prebuild:win && npm run prebuild:mac && npm run prebuild:linux",
-    "install": "prebuild-install --runtime napi || npm run build:native",
+    "install": "node -e \"if(require('fs').existsSync('build/Release/raw_extractor.node')){console.log('Using existing prebuilt binary');process.exit(0)}else{process.exit(1)}\" || prebuild-install --runtime napi || npm run build:native",
     "test": "jest",
     "test:memory": "node --expose-gc test/memory-test.js",
     "test:performance": "node test/performance-test.js",
@@ -74,7 +74,7 @@
     "x64",
     "arm64"
   ],
-  "gypfile": true,
+  "gypfile": false,
   "binary": {
     "module_name": "raw_extractor",
     "module_path": "./prebuilds/{platform}-{arch}/",

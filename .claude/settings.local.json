@@ -110,7 +110,8 @@
       "Bash(shasum:*)",
       "Bash(python3:*)",
       "mcp__ide__getDiagnostics",
-      "Bash(sort:*)"
+      "Bash(sort:*)",
+      "Bash(git reset:*)"
     ],
     "deny": [],
     "ask": []
