@@ -46,7 +46,8 @@
       "node_modules/**/*",
       "package.json",
       "vendor/**/*",
-      "renderer/**/*"
+      "renderer/**/*",
+      "src/assets/**/*"
     ],
     "directories": {
       "buildResources": "resources",
@@ -54,6 +55,7 @@
     },
     "asarUnpack": [
       "vendor/**/*",
+      "src/assets/**/*",
       "node_modules/sharp/**/*",
       "node_modules/@img/**/*",
       "node_modules/detect-libc/**/*",

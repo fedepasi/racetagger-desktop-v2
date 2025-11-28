@@ -30,10 +30,11 @@ export interface DetectedFace {
   confidence: number;
 }
 
-export interface DriverMatch {
+export interface PersonMatch {
   faceIndex: number;
-  driverId: string;
-  driverName: string;
+  personId: string;
+  personName: string;
+  personRole?: string;
   team: string;
   carNumber: string;
   confidence: number;
@@ -41,18 +42,24 @@ export interface DriverMatch {
   referencePhotoUrl?: string;
 }
 
+// Alias for backward compatibility
+export type DriverMatch = PersonMatch;
+
 export interface FaceRecognitionResult {
   success: boolean;
   faces: DetectedFace[];
-  matchedDrivers: DriverMatch[];
+  matchedPersons: PersonMatch[];
+  /** @deprecated Use matchedPersons instead */
+  matchedDrivers: PersonMatch[];
   inferenceTimeMs: number;
   error?: string;
 }
 
 export interface StoredFaceDescriptor {
   id: string;
-  driverId: string;
-  driverName: string;
+  personId: string;
+  personName: string;
+  personRole?: string;
   team: string;
   carNumber: string;
   descriptor: number[];
@@ -60,6 +67,10 @@ export interface StoredFaceDescriptor {
   source: 'global' | 'preset';
   photoType?: string;    // 'reference', 'action', 'podium', 'helmet_off'
   isPrimary?: boolean;   // Whether this is the primary photo for display
+  /** @deprecated Use personId instead */
+  driverId?: string;
+  /** @deprecated Use personName instead */
+  driverName?: string;
 }
 
 export type FaceContext = 'portrait' | 'action' | 'podium' | 'auto';
@@ -94,7 +105,7 @@ const CONTEXT_CONFIG: Record<FaceContext, {
 export class FaceRecognitionProcessor {
   private isReady: boolean = false;
   private storedFaces: Map<string, StoredFaceDescriptor> = new Map();
-  private driverDescriptors: Map<string, number[][]> = new Map(); // driverId -> array of descriptors
+  private personDescriptors: Map<string, number[][]> = new Map(); // personId -> array of descriptors
 
   constructor() {
     console.log('[FaceRecognition] Initialized (matching-only mode, no canvas required)');
@@ -122,14 +133,14 @@ export class FaceRecognitionProcessor {
    */
   loadFaceDescriptors(faces: StoredFaceDescriptor[]): void {
     this.storedFaces.clear();
-    this.driverDescriptors.clear();
+    this.personDescriptors.clear();
 
     console.log(`[FaceRecognition] Loading ${faces.length} faces from database...`);
 
     // Debug: Check first face to see descriptor format
     if (faces.length > 0) {
       const first = faces[0];
-      console.log(`[FaceRecognition] First face: driverId=${first.driverId}, driverName=${first.driverName}, descriptor type=${typeof first.descriptor}, isArray=${Array.isArray(first.descriptor)}, length=${first.descriptor?.length}`);
+      console.log(`[FaceRecognition] First face: personId=${first.personId}, personName=${first.personName}, descriptor type=${typeof first.descriptor}, isArray=${Array.isArray(first.descriptor)}, length=${first.descriptor?.length}`);
       if (first.descriptor && first.descriptor.length > 0) {
         console.log(`[FaceRecognition] Descriptor sample (first 5 values): [${first.descriptor.slice(0, 5).join(', ')}]`);
       }
@@ -138,7 +149,7 @@ export class FaceRecognitionProcessor {
     const validFaces = faces.filter(f => {
       const isValid = f.descriptor && Array.isArray(f.descriptor) && f.descriptor.length === 128;
       if (!isValid) {
-        console.log(`[FaceRecognition] Invalid descriptor for ${f.driverName}: isArray=${Array.isArray(f.descriptor)}, length=${f.descriptor?.length}`);
+        console.log(`[FaceRecognition] Invalid descriptor for ${f.personName}: isArray=${Array.isArray(f.descriptor)}, length=${f.descriptor?.length}`);
       }
       return isValid;
     });
@@ -148,9 +159,9 @@ export class FaceRecognitionProcessor {
       return;
     }
 
-    // Group descriptors by driver (supports multiple photos per driver)
+    // Group descriptors by person (supports multiple photos per person)
     for (const face of validFaces) {
-      const key = face.driverId;
+      const key = face.personId;
 
       // Store the primary face (or first face) for reference info
       const existing = this.storedFaces.get(key);
@@ -158,16 +169,16 @@ export class FaceRecognitionProcessor {
         this.storedFaces.set(key, face);
       }
 
-      // Add descriptor to driver's array
-      if (!this.driverDescriptors.has(key)) {
-        this.driverDescriptors.set(key, []);
+      // Add descriptor to person's array
+      if (!this.personDescriptors.has(key)) {
+        this.personDescriptors.set(key, []);
       }
-      this.driverDescriptors.get(key)!.push(face.descriptor);
+      this.personDescriptors.get(key)!.push(face.descriptor);
     }
 
     const totalDescriptors = validFaces.length;
-    const uniqueDrivers = this.driverDescriptors.size;
-    console.log(`[FaceRecognition] Loaded ${totalDescriptors} face descriptors for ${uniqueDrivers} drivers`);
+    const uniquePersons = this.personDescriptors.size;
+    console.log(`[FaceRecognition] Loaded ${totalDescriptors} face descriptors for ${uniquePersons} persons`);
   }
 
   /**
@@ -186,48 +197,48 @@ export class FaceRecognitionProcessor {
   }
 
   /**
-   * Find the best matching driver for a given face descriptor
+   * Find the best matching person for a given face descriptor
    */
   findBestMatch(
     descriptor: number[],
     threshold: number = 0.6
-  ): { driverId: string; distance: number } | null {
+  ): { personId: string; distance: number } | null {
     // Debug: Check descriptor validity
-    console.log(`[FaceRecognition] findBestMatch: descriptor length=${descriptor?.length}, stored drivers=${this.driverDescriptors.size}, threshold=${threshold}`);
+    console.log(`[FaceRecognition] findBestMatch: descriptor length=${descriptor?.length}, stored persons=${this.personDescriptors.size}, threshold=${threshold}`);
 
     if (!descriptor || descriptor.length !== 128) {
       console.log(`[FaceRecognition] Invalid descriptor length: ${descriptor?.length}`);
       return null;
     }
 
-    if (this.driverDescriptors.size === 0) {
+    if (this.personDescriptors.size === 0) {
       console.log('[FaceRecognition] No stored descriptors to match against');
       return null;
     }
 
-    let bestMatch: { driverId: string; distance: number } | null = null;
+    let bestMatch: { personId: string; distance: number } | null = null;
     let closestDistance = Infinity;
-    let closestDriverId = '';
+    let closestPersonId = '';
 
-    for (const [driverId, descriptors] of this.driverDescriptors.entries()) {
-      // Find minimum distance across all descriptors for this driver
+    for (const [personId, descriptors] of this.personDescriptors.entries()) {
+      // Find minimum distance across all descriptors for this person
       for (const refDescriptor of descriptors) {
         const distance = this.euclideanDistance(descriptor, refDescriptor);
 
         // Track closest match even if above threshold (for debugging)
         if (distance < closestDistance) {
           closestDistance = distance;
-          closestDriverId = driverId;
+          closestPersonId = personId;
         }
 
         if (distance < threshold && (!bestMatch || distance < bestMatch.distance)) {
-          bestMatch = { driverId, distance };
+          bestMatch = { personId, distance };
         }
       }
     }
 
     // Debug: Log closest match info
-    console.log(`[FaceRecognition] Closest match: driver=${closestDriverId}, distance=${closestDistance.toFixed(4)}, threshold=${threshold}, matched=${bestMatch !== null}`);
+    console.log(`[FaceRecognition] Closest match: person=${closestPersonId}, distance=${closestDistance.toFixed(4)}, threshold=${threshold}, matched=${bestMatch !== null}`);
 
     return bestMatch;
   }
@@ -245,19 +256,20 @@ export class FaceRecognitionProcessor {
 
     // Limit faces based on context
     const facesToProcess = detectedFaces.slice(0, config.maxFaces);
-    const matchedDrivers: DriverMatch[] = [];
+    const matchedPersons: PersonMatch[] = [];
 
     for (let i = 0; i < facesToProcess.length; i++) {
       const face = facesToProcess[i];
       const match = this.findBestMatch(face.descriptor, config.matchThreshold);
 
       if (match) {
-        const storedFace = this.storedFaces.get(match.driverId);
+        const storedFace = this.storedFaces.get(match.personId);
         if (storedFace) {
-          matchedDrivers.push({
+          matchedPersons.push({
             faceIndex: i,
-            driverId: storedFace.driverId,
-            driverName: storedFace.driverName,
+            personId: storedFace.personId,
+            personName: storedFace.personName,
+            personRole: storedFace.personRole,
             team: storedFace.team,
             carNumber: storedFace.carNumber,
             confidence: 1 - match.distance, // Convert distance to confidence
@@ -269,12 +281,13 @@ export class FaceRecognitionProcessor {
     }
 
     const inferenceTimeMs = Date.now() - startTime;
-    console.log(`[FaceRecognition] Matched ${matchedDrivers.length} of ${facesToProcess.length} faces in ${inferenceTimeMs}ms`);
+    console.log(`[FaceRecognition] Matched ${matchedPersons.length} of ${facesToProcess.length} faces in ${inferenceTimeMs}ms`);
 
     return {
       success: true,
       faces: facesToProcess,
-      matchedDrivers,
+      matchedPersons,
+      matchedDrivers: matchedPersons, // Backward compatibility
       inferenceTimeMs
     };
   }
@@ -291,6 +304,7 @@ export class FaceRecognitionProcessor {
     return {
       success: false,
       faces: [],
+      matchedPersons: [],
       matchedDrivers: [],
       inferenceTimeMs: 0,
       error: 'Face detection must be done in renderer process. Use IPC channel "face-detection-request".'
@@ -317,13 +331,13 @@ export class FaceRecognitionProcessor {
   /**
    * Get the best match from detection results
    */
-  getBestMatch(result: FaceRecognitionResult): DriverMatch | null {
-    if (!result.success || result.matchedDrivers.length === 0) {
+  getBestMatch(result: FaceRecognitionResult): PersonMatch | null {
+    if (!result.success || result.matchedPersons.length === 0) {
       return null;
     }
 
     // Return the match with highest confidence
-    return result.matchedDrivers.reduce((best, current) =>
+    return result.matchedPersons.reduce((best, current) =>
       current.confidence > best.confidence ? current : best
     );
   }
@@ -333,12 +347,12 @@ export class FaceRecognitionProcessor {
    */
   clearDescriptors(): void {
     this.storedFaces.clear();
-    this.driverDescriptors.clear();
+    this.personDescriptors.clear();
     console.log('[FaceRecognition] Cleared all face descriptors');
   }
 
   /**
-   * Get count of loaded drivers
+   * Get count of loaded persons
    */
   getDescriptorCount(): number {
     return this.storedFaces.size;
@@ -350,19 +364,22 @@ export class FaceRecognitionProcessor {
   getModelInfo(): {
     isLoaded: boolean;
     modelsPath: string;
+    personCount: number;
+    /** @deprecated Use personCount instead */
     driverCount: number;
     totalDescriptors: number;
   } {
-    // Count total descriptors across all drivers
+    // Count total descriptors across all persons
     let totalDescriptors = 0;
-    for (const descriptors of this.driverDescriptors.values()) {
+    for (const descriptors of this.personDescriptors.values()) {
       totalDescriptors += descriptors.length;
     }
 
     return {
       isLoaded: this.isReady,
       modelsPath: '(not used - matching only)',
-      driverCount: this.storedFaces.size,
+      personCount: this.storedFaces.size,
+      driverCount: this.storedFaces.size, // Backward compatibility
       totalDescriptors
     };
   }
@@ -372,13 +389,16 @@ export class FaceRecognitionProcessor {
    */
   getStatus(): {
     isReady: boolean;
+    personCount: number;
+    /** @deprecated Use personCount instead */
     driverCount: number;
     totalDescriptors: number;
   } {
     const info = this.getModelInfo();
     return {
       isReady: this.isReady,
-      driverCount: info.driverCount,
+      personCount: info.personCount,
+      driverCount: info.personCount, // Backward compatibility
       totalDescriptors: info.totalDescriptors
     };
   }
@@ -408,31 +428,31 @@ export class FaceRecognitionProcessor {
         return 0;
       }
 
-      // Query drivers for this category
-      const { data: drivers, error: driversError } = await supabase
+      // Query persons for this category
+      const { data: persons, error: personsError } = await supabase
         .from('sport_category_faces')
-        .select('id, driver_name, team, car_number, face_descriptor, reference_photo_url, is_active')
+        .select('id, person_name, person_role, team, car_number, face_descriptor, reference_photo_url, is_active')
         .eq('sport_category_id', category.id)
         .eq('is_active', true);
 
-      if (driversError) {
-        console.error('[FaceRecognition] Error loading drivers from database:', driversError);
+      if (personsError) {
+        console.error('[FaceRecognition] Error loading persons from database:', personsError);
         return 0;
       }
 
-      if (!drivers || drivers.length === 0) {
-        console.log(`[FaceRecognition] No drivers found for category: ${categoryCode}`);
+      if (!persons || persons.length === 0) {
+        console.log(`[FaceRecognition] No persons found for category: ${categoryCode}`);
         return 0;
       }
 
-      console.log(`[FaceRecognition] Found ${drivers.length} drivers for category ${categoryCode}`);
+      console.log(`[FaceRecognition] Found ${persons.length} persons for category ${categoryCode}`);
 
       // Query multi-photo descriptors from sport_category_face_photos
-      const driverIds = drivers.map(d => d.id);
+      const personIds = persons.map(p => p.id);
       const { data: photos, error: photosError } = await supabase
         .from('sport_category_face_photos')
         .select('face_id, photo_url, face_descriptor, photo_type, is_primary, detection_confidence')
-        .in('face_id', driverIds);
+        .in('face_id', personIds);
 
       if (photosError) {
         console.warn('[FaceRecognition] Error loading face photos, falling back to main table:', photosError);
@@ -440,9 +460,9 @@ export class FaceRecognitionProcessor {
 
       // Debug: Log query results
       console.log(`[FaceRecognition] Found ${photos?.length || 0} photos in sport_category_face_photos`);
-      if (drivers.length > 0) {
-        const first = drivers[0];
-        console.log(`[FaceRecognition] First driver: name=${first.driver_name}, face_descriptor type=${typeof first.face_descriptor}, isArray=${Array.isArray(first.face_descriptor)}, length=${first.face_descriptor?.length || 0}`);
+      if (persons.length > 0) {
+        const first = persons[0];
+        console.log(`[FaceRecognition] First person: name=${first.person_name}, face_descriptor type=${typeof first.face_descriptor}, isArray=${Array.isArray(first.face_descriptor)}, length=${first.face_descriptor?.length || 0}`);
       }
       if (photos && photos.length > 0) {
         const firstPhoto = photos[0];
@@ -452,21 +472,22 @@ export class FaceRecognitionProcessor {
       // Build descriptors array - prefer multi-photo table, fallback to main table
       const descriptors: StoredFaceDescriptor[] = [];
 
-      for (const driver of drivers) {
-        // Find photos for this driver
-        const driverPhotos = photos?.filter(p => p.face_id === driver.id) || [];
+      for (const person of persons) {
+        // Find photos for this person
+        const personPhotos = photos?.filter(p => p.face_id === person.id) || [];
 
-        if (driverPhotos.length > 0) {
+        if (personPhotos.length > 0) {
           // Use photos from multi-photo table
-          for (const photo of driverPhotos) {
-            const desc = this.parseDescriptor(photo.face_descriptor, driver.driver_name);
+          for (const photo of personPhotos) {
+            const desc = this.parseDescriptor(photo.face_descriptor, person.person_name);
             if (desc && desc.length === 128) {
               descriptors.push({
-                id: `${driver.id}-${descriptors.length}`,
-                driverId: driver.id,
-                driverName: driver.driver_name || 'Unknown',
-                team: driver.team || '',
-                carNumber: driver.car_number?.toString() || '',
+                id: `${person.id}-${descriptors.length}`,
+                personId: person.id,
+                personName: person.person_name || 'Unknown',
+                personRole: person.person_role,
+                team: person.team || '',
+                carNumber: person.car_number?.toString() || '',
                 descriptor: desc,
                 referencePhotoUrl: photo.photo_url,
                 source: 'preset' as const,
@@ -477,16 +498,17 @@ export class FaceRecognitionProcessor {
           }
         } else {
           // Fallback to face_descriptor in main table
-          const desc = this.parseDescriptor(driver.face_descriptor, driver.driver_name);
+          const desc = this.parseDescriptor(person.face_descriptor, person.person_name);
           if (desc && desc.length === 128) {
             descriptors.push({
-              id: driver.id,
-              driverId: driver.id,
-              driverName: driver.driver_name || 'Unknown',
-              team: driver.team || '',
-              carNumber: driver.car_number?.toString() || '',
+              id: person.id,
+              personId: person.id,
+              personName: person.person_name || 'Unknown',
+              personRole: person.person_role,
+              team: person.team || '',
+              carNumber: person.car_number?.toString() || '',
               descriptor: desc,
-              referencePhotoUrl: driver.reference_photo_url,
+              referencePhotoUrl: person.reference_photo_url,
               source: 'preset' as const,
               photoType: 'reference',
               isPrimary: true
@@ -498,8 +520,8 @@ export class FaceRecognitionProcessor {
       // Load into processor
       this.loadFaceDescriptors(descriptors);
 
-      const driversWithDescriptors = new Set(descriptors.map(d => d.driverId)).size;
-      console.log(`[FaceRecognition] Loaded ${descriptors.length} face descriptors for ${driversWithDescriptors} drivers in ${categoryCode}`);
+      const personsWithDescriptors = new Set(descriptors.map(d => d.personId)).size;
+      console.log(`[FaceRecognition] Loaded ${descriptors.length} face descriptors for ${personsWithDescriptors} persons in ${categoryCode}`);
       return descriptors.length;
 
     } catch (error) {
@@ -511,7 +533,7 @@ export class FaceRecognitionProcessor {
   /**
    * Parse descriptor from various formats (array, string JSON, etc.)
    */
-  private parseDescriptor(descriptor: any, driverName: string): number[] | null {
+  private parseDescriptor(descriptor: any, personName: string): number[] | null {
     if (!descriptor) {
       return null;
     }
@@ -522,11 +544,11 @@ export class FaceRecognitionProcessor {
       try {
         return JSON.parse(descriptor);
       } catch (e) {
-        console.error(`[FaceRecognition] Failed to parse descriptor for ${driverName}:`, e);
+        console.error(`[FaceRecognition] Failed to parse descriptor for ${personName}:`, e);
         return null;
       }
     }
-    console.warn(`[FaceRecognition] Unknown descriptor type for ${driverName}: ${typeof descriptor}`);
+    console.warn(`[FaceRecognition] Unknown descriptor type for ${personName}: ${typeof descriptor}`);
     return null;
   }
 }

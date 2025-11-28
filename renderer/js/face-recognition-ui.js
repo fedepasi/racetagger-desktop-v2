@@ -2,7 +2,7 @@
  * Face Recognition UI Components
  *
  * Provides visual feedback for face recognition results in the desktop app.
- * Shows driver match badges when a face is recognized.
+ * Shows person match badges when a face is recognized.
  */
 
 // ============================================
@@ -11,12 +11,12 @@
 
 /**
  * Create a face match badge element
- * @param {Object} match - Driver match data
- * @param {string} match.driverName - Driver's name
+ * @param {Object} match - Person match data
+ * @param {string} match.personName - Person's name
  * @param {string} match.team - Team name
  * @param {string} match.carNumber - Car/race number
  * @param {number} match.confidence - Match confidence (0-1)
- * @param {string} match.referencePhotoUrl - URL to driver's reference photo
+ * @param {string} match.referencePhotoUrl - URL to person's reference photo
  * @param {string} match.source - Match source ('global' or 'preset')
  * @returns {HTMLElement} Badge element
  */
@@ -27,21 +27,24 @@ function createFaceMatchBadge(match) {
   const confidencePercent = Math.round(match.confidence * 100);
   const confidenceClass = confidencePercent >= 80 ? 'high' : confidencePercent >= 60 ? 'medium' : 'low';
 
+  // Support both personName and driverName for backward compatibility
+  const name = match.personName || match.driverName || 'Unknown';
+
   badge.innerHTML = `
     <div class="face-match-content">
       ${match.referencePhotoUrl ? `
         <img src="${match.referencePhotoUrl}"
              class="face-match-thumb"
-             alt="${match.driverName}"
+             alt="${name}"
              onerror="this.style.display='none'" />
       ` : `
         <div class="face-match-thumb face-match-placeholder">
-          <span>${match.driverName.charAt(0)}</span>
+          <span>${name.charAt(0)}</span>
         </div>
       `}
       <div class="face-match-info">
         <span class="face-match-number">#${match.carNumber}</span>
-        <span class="face-match-name">${match.driverName}</span>
+        <span class="face-match-name">${name}</span>
         <span class="face-match-team">${match.team}</span>
       </div>
       <div class="face-match-confidence ${confidenceClass}">
@@ -59,18 +62,21 @@ function createFaceMatchBadge(match) {
 
 /**
  * Create a compact inline face indicator
- * @param {Object} match - Driver match data
+ * @param {Object} match - Person match data
  * @returns {HTMLElement} Inline indicator element
  */
 function createFaceMatchInline(match) {
+  // Support both personName and driverName for backward compatibility
+  const name = match.personName || match.driverName || 'Unknown';
+
   const indicator = document.createElement('span');
   indicator.className = 'face-match-inline';
   indicator.innerHTML = `
     <span class="face-icon">👤</span>
-    <span class="face-name">${match.driverName}</span>
+    <span class="face-name">${name}</span>
     <span class="face-confidence">${Math.round(match.confidence * 100)}%</span>
   `;
-  indicator.title = `Face match: ${match.driverName} (${match.team}) - ${Math.round(match.confidence * 100)}% confidence`;
+  indicator.title = `Face match: ${name} (${match.team}) - ${Math.round(match.confidence * 100)}% confidence`;
   return indicator;
 }
 
@@ -91,7 +97,7 @@ class FaceRecognitionStats {
     this.facesDetected = 0;
     this.facesMatched = 0;
     this.totalConfidence = 0;
-    this.byDriver = {};
+    this.byPerson = {};
     this.inferenceTimeTotal = 0;
   }
 
@@ -100,7 +106,8 @@ class FaceRecognitionStats {
 
     if (result.faceRecognition) {
       this.facesDetected += result.faceRecognition.facesDetected || 0;
-      this.facesMatched += result.faceRecognition.matchedDrivers || 0;
+      // Support both matchedPersons and matchedDrivers for backward compatibility
+      this.facesMatched += result.faceRecognition.matchedPersons || result.faceRecognition.matchedDrivers || 0;
       this.inferenceTimeTotal += result.faceRecognition.inferenceTimeMs || 0;
     }
 
@@ -109,9 +116,10 @@ class FaceRecognitionStats {
       if (firstMatch.source === 'face_recognition') {
         this.totalConfidence += firstMatch.confidence || 0;
 
-        const driverName = firstMatch.driver_name;
-        if (driverName) {
-          this.byDriver[driverName] = (this.byDriver[driverName] || 0) + 1;
+        // Support both person_name and driver_name for backward compatibility
+        const personName = firstMatch.person_name || firstMatch.driver_name;
+        if (personName) {
+          this.byPerson[personName] = (this.byPerson[personName] || 0) + 1;
         }
       }
     }
@@ -124,7 +132,11 @@ class FaceRecognitionStats {
       facesMatched: this.facesMatched,
       avgConfidence: this.facesMatched > 0 ? this.totalConfidence / this.facesMatched : 0,
       avgInferenceTime: this.totalImages > 0 ? this.inferenceTimeTotal / this.totalImages : 0,
-      topDrivers: Object.entries(this.byDriver)
+      topPersons: Object.entries(this.byPerson)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5),
+      // Backward compatibility
+      topDrivers: Object.entries(this.byPerson)
         .sort((a, b) => b[1] - a[1])
         .slice(0, 5)
     };

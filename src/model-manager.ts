@@ -583,6 +583,55 @@ export class ModelManager {
     console.log(`[ModelManager] Using cached model: ${localModel.localPath}`);
     return localModel.localPath;
   }
+
+  /**
+   * Get all sport categories with local ONNX enabled
+   * Used to pre-download models at app startup
+   */
+  public async getActiveOnnxCategories(): Promise<string[]> {
+    try {
+      const supabase = this.getSupabase();
+      const { data, error } = await supabase
+        .from('sport_categories')
+        .select('code')
+        .eq('use_local_onnx', true);
+
+      if (error || !data) {
+        console.warn('[ModelManager] Failed to fetch active ONNX categories:', error);
+        return [];
+      }
+
+      console.log(`[ModelManager] Found ${data.length} categories with local ONNX enabled`);
+      return data.map(c => c.code);
+    } catch (error) {
+      console.error('[ModelManager] Error fetching active ONNX categories:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Check which models need to be downloaded and calculate total size
+   * Used to show download progress at app startup
+   */
+  public async getModelsToDownload(): Promise<{
+    models: { code: string; sizeMB: number }[];
+    totalSizeMB: number;
+  }> {
+    const categories = await this.getActiveOnnxCategories();
+    const modelsToDownload: { code: string; sizeMB: number }[] = [];
+
+    for (const code of categories) {
+      const status = await this.checkModelStatus(code);
+      if (status.needsDownload || status.needsUpdate) {
+        modelsToDownload.push({ code, sizeMB: status.sizeMB });
+      }
+    }
+
+    const totalSizeMB = modelsToDownload.reduce((sum, m) => sum + m.sizeMB, 0);
+
+    console.log(`[ModelManager] ${modelsToDownload.length} models need download, total size: ${totalSizeMB.toFixed(1)} MB`);
+    return { models: modelsToDownload, totalSizeMB };
+  }
 }
 
 // Export singleton getter for convenience

@@ -45,6 +45,11 @@ const validSendReceiveChannels: string[] = [
   // Export Destinations progress channels
   'export-started',
   'export-progress',
+  // Model download progress channels
+  'model-download-start',
+  'model-download-progress',
+  'model-download-complete',
+  'model-download-error',
 ];
 
 const validInvokeChannels: string[] = [
@@ -116,6 +121,7 @@ const validInvokeChannels: string[] = [
   'get-home-statistics',
   'get-recent-executions',
   'get-user-info',
+  'get-announcements',
   // Folder Organization (Admin Feature)
   'check-folder-organization-enabled',
   'get-folder-organization-config',

@@ -111,7 +111,8 @@
       "Bash(python3:*)",
       "mcp__ide__getDiagnostics",
       "Bash(sort:*)",
-      "Bash(git reset:*)"
+      "Bash(git reset:*)",
+      "Bash(open:*)"
     ],
     "deny": [],
     "ask": []

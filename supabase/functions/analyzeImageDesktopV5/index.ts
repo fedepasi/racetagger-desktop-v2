@@ -21,8 +21,13 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 // ==================== TYPE DEFINITIONS ====================
 
 interface FaceRecognitionMatch {
-  driverId: string;
-  driverName: string;
+  personId: string;
+  personName: string;
+  personRole?: string;
+  /** @deprecated Use personId instead */
+  driverId?: string;
+  /** @deprecated Use personName instead */
+  driverName?: string;
   team: string;
   carNumber: string;
   confidence: number;
@@ -39,7 +44,9 @@ interface FaceRecognitionMatch {
 interface FaceRecognitionResult {
   success: boolean;
   facesDetected: number;
-  matchedDrivers: FaceRecognitionMatch[];
+  matchedPersons: FaceRecognitionMatch[];
+  /** @deprecated Use matchedPersons instead */
+  matchedDrivers?: FaceRecognitionMatch[];
   inferenceTimeMs: number;
   context: 'portrait' | 'action' | 'podium' | 'auto';
 }
@@ -343,23 +350,30 @@ function convertFaceRecognitionToAnalysis(
   faceResult: FaceRecognitionResult,
   minConfidence: number = FACE_RECOGNITION_CONFIG.minConfidence
 ): AnalysisResult[] {
-  if (!faceResult?.success || !faceResult.matchedDrivers?.length) {
+  // Support both matchedPersons and matchedDrivers for backward compatibility
+  const matchedFaces = faceResult?.matchedPersons || faceResult?.matchedDrivers;
+  if (!faceResult?.success || !matchedFaces?.length) {
     return [];
   }
 
-  return faceResult.matchedDrivers
+  return matchedFaces
     .filter(match => match.confidence >= minConfidence)
-    .map(match => ({
-      raceNumber: match.carNumber || null,
-      drivers: match.driverName ? [match.driverName] : [],
-      category: null,
-      teamName: match.team || null,
-      otherText: [],
-      confidence: match.confidence,
-      boundingBox: match.faceBox,
-      modelSource: 'face_recognition' as const,
-      faceMatch: match
-    }));
+    .map(match => {
+      // Support both personName and driverName for backward compatibility
+      const personName = match.personName || match.driverName;
+      return {
+        raceNumber: match.carNumber || null,
+        drivers: personName ? [personName] : [],
+        persons: personName ? [personName] : [],
+        category: null,
+        teamName: match.team || null,
+        otherText: [],
+        confidence: match.confidence,
+        boundingBox: match.faceBox,
+        modelSource: 'face_recognition' as const,
+        faceMatch: match
+      };
+    });
 }
 
 /**
@@ -602,7 +616,7 @@ serve(async (req) => {
             analysis_provider: method,
             recognized_number: merged[0].raceNumber,
             confidence_score: merged[0].confidence,
-            driver_name: merged[0].faceMatch?.driverName || null,
+            person_name: merged[0].faceMatch?.personName || merged[0].faceMatch?.driverName || null,
             raw_response: {
               modelSource: method,
               analysis: merged,

@@ -129,8 +129,17 @@ export class SceneClassifierONNX {
       return devPath;
     }
 
-    // In production (packaged app)
-    const prodPath = path.join(app.getAppPath(), this.MODEL_DIR, this.ONNX_MODEL_NAME);
+    // In production (packaged app) - check asar.unpacked first (for asarUnpack entries)
+    const appPath = app.getAppPath();
+    if (appPath.includes('app.asar')) {
+      const unpackedPath = path.join(appPath.replace('app.asar', 'app.asar.unpacked'), this.MODEL_DIR, this.ONNX_MODEL_NAME);
+      if (fs.existsSync(unpackedPath)) {
+        return unpackedPath;
+      }
+    }
+
+    // In production (packaged app) - check inside asar
+    const prodPath = path.join(appPath, this.MODEL_DIR, this.ONNX_MODEL_NAME);
     if (fs.existsSync(prodPath)) {
       return prodPath;
     }

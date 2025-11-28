@@ -14,7 +14,9 @@
 export interface MatchingConfig {
   weights: {
     raceNumber: number;
-    driverName: number;
+    personName: number;
+    /** @deprecated Use personName instead */
+    driverName?: number;
     sponsor: number;
     team: number;
     category: number;       // weight for category matches (GT3, F1, etc.)
@@ -75,10 +77,12 @@ export class SportConfig {
 
     for (const category of sportCategories) {
       if (category.matching_config && category.code) {
+        const personNameWeight = category.matching_config.weights?.personName || category.matching_config.weights?.driverName || 80;
         const matchingConfig: MatchingConfig = {
           weights: {
             raceNumber: category.matching_config.weights?.raceNumber || 100,
-            driverName: category.matching_config.weights?.driverName || 80,
+            personName: personNameWeight,
+            driverName: personNameWeight, // backward compatibility alias
             sponsor: category.matching_config.weights?.sponsor || 40,
             team: category.matching_config.weights?.team || 60,
             category: category.matching_config.weights?.category || 0,
@@ -110,6 +114,7 @@ export class SportConfig {
   updateSportConfigFromSupabase(sportCode: string, matchingConfig: {
     weights?: {
       raceNumber?: number;
+      personName?: number;
       driverName?: number;
       sponsor?: number;
       team?: number;
@@ -127,10 +132,12 @@ export class SportConfig {
   }): void {
     const existingConfig = this.getConfig(sportCode);
 
+    const personNameWeight = matchingConfig.weights?.personName ?? matchingConfig.weights?.driverName ?? existingConfig.weights.personName;
     const updatedConfig: MatchingConfig = {
       weights: {
         raceNumber: matchingConfig.weights?.raceNumber ?? existingConfig.weights.raceNumber,
-        driverName: matchingConfig.weights?.driverName ?? existingConfig.weights.driverName,
+        personName: personNameWeight,
+        driverName: personNameWeight, // backward compatibility alias
         sponsor: matchingConfig.weights?.sponsor ?? existingConfig.weights.sponsor,
         team: matchingConfig.weights?.team ?? existingConfig.weights.team,
         category: matchingConfig.weights?.category ?? existingConfig.weights.category,
@@ -200,7 +207,8 @@ export class SportConfig {
     this.configs.set('motorsport', {
       weights: {
         raceNumber: 100,  // Very high importance - numbers are primary
-        driverName: 80,   // High importance - drivers are well-known
+        personName: 80,   // High importance - persons are well-known
+        driverName: 80,   // backward compatibility alias
         sponsor: 40,      // Medium importance - many sponsors visible
         team: 60,         // Medium-high importance - team names visible
         category: 0,      // Disabled by default (configured in Supabase)
@@ -222,7 +230,8 @@ export class SportConfig {
     this.configs.set('running', {
       weights: {
         raceNumber: 120,  // Even higher importance - bib numbers critical
-        driverName: 60,   // Lower importance - names less visible
+        personName: 60,   // Lower importance - names less visible
+        driverName: 60,   // backward compatibility alias
         sponsor: 20,      // Low importance - fewer visible sponsors
         team: 30,         // Low importance - team less important
         category: 0,      // Disabled by default (configured in Supabase)
@@ -244,7 +253,8 @@ export class SportConfig {
     this.configs.set('cycling', {
       weights: {
         raceNumber: 110,  // High importance
-        driverName: 50,   // Medium importance
+        personName: 50,   // Medium importance
+        driverName: 50,   // backward compatibility alias
         sponsor: 60,      // Higher importance - cycling has many sponsors
         team: 70,         // High importance - team jerseys prominent
         category: 0,      // Disabled by default (configured in Supabase)
@@ -266,7 +276,8 @@ export class SportConfig {
     this.configs.set('motocross', {
       weights: {
         raceNumber: 110,  // Very high - numbers often 3-digit
-        driverName: 70,   // Medium-high
+        personName: 70,   // Medium-high
+        driverName: 70,   // backward compatibility alias
         sponsor: 50,      // Medium - gear sponsors visible
         team: 40,         // Lower - teams less prominent
         category: 0,      // Disabled by default (configured in Supabase)
@@ -288,7 +299,8 @@ export class SportConfig {
     this.configs.set('rally', {
       weights: {
         raceNumber: 100,  // Very high importance - numbers are critical and stable
-        driverName: 90,   // Higher than motorsport - driver+navigator names are key
+        personName: 90,   // Higher than motorsport - driver+navigator names are key
+        driverName: 90,   // backward compatibility alias
         sponsor: 40,      // Medium importance - sponsors visible but secondary
         team: 70,         // Higher importance - team identification crucial
         category: 0,      // Disabled by default (configured in Supabase)
@@ -310,7 +322,8 @@ export class SportConfig {
     this.configs.set('generic', {
       weights: {
         raceNumber: 90,
-        driverName: 70,
+        personName: 70,
+        driverName: 70,   // backward compatibility alias
         sponsor: 35,
         team: 50,
         category: 0,      // Disabled by default (configured in Supabase)

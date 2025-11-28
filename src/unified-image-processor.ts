@@ -1175,6 +1175,14 @@ class UnifiedImageWorker extends EventEmitter {
       }
       
       // Fase 5: Scrittura dei metadata (XMP per RAW, IPTC per JPEG) con dual-mode system
+      // DEBUG: Log pre-writeMetadata per diagnosi metatag
+      console.log(`[DEBUG-METATAG] Before writeMetadata for ${imageFile.fileName}`);
+      console.log(`[DEBUG-METATAG] processedAnalysis.csvMatch type: ${typeof processedAnalysis.csvMatch}`);
+      console.log(`[DEBUG-METATAG] processedAnalysis.csvMatch isArray: ${Array.isArray(processedAnalysis.csvMatch)}`);
+      if (processedAnalysis.csvMatch) {
+        const firstMatch = Array.isArray(processedAnalysis.csvMatch) ? processedAnalysis.csvMatch[0] : processedAnalysis.csvMatch;
+        console.log(`[DEBUG-METATAG] firstMatch?.entry?.metatag: ${firstMatch?.entry?.metatag || 'UNDEFINED'}`);
+      }
       await this.writeMetadata(imageFile, processedAnalysis.keywords, uploadReadyPath, processedAnalysis.analysis, processedAnalysis.csvMatch);
       
       // ADMIN FEATURE: Fase 6 - Organizzazione in cartelle (condizionale)
@@ -2385,8 +2393,8 @@ class UnifiedImageWorker extends EventEmitter {
           matchType = 'raceNumber';
           matchedValue = topEvidence.value;
           break;
-        case 'driver_name':
-          matchType = 'driverName';
+        case 'person_name':
+          matchType = 'personName';
           matchedValue = topEvidence.value;
           break;
         case 'sponsor':
@@ -2679,6 +2687,11 @@ class UnifiedImageWorker extends EventEmitter {
    * Gestisce sia oggetti singoli che array di csvMatch per immagini multi-veicolo
    */
   private buildExtendedDescription(analysis: any[], csvMatch?: any): string | null {
+    // DEBUG: Log dettagliato per diagnosi metatag
+    console.log(`[DEBUG-METATAG] buildExtendedDescription called`);
+    console.log(`[DEBUG-METATAG] csvMatch type: ${typeof csvMatch}, isArray: ${Array.isArray(csvMatch)}`);
+    console.log(`[DEBUG-METATAG] csvMatch value:`, csvMatch ? JSON.stringify(csvMatch, null, 2).substring(0, 500) : 'NULL');
+
     // Handle both single match (legacy) and array of matches (multi-vehicle)
     if (!csvMatch) {
       console.log(`[UnifiedWorker] No participant preset match - skipping extended description`);
@@ -2686,11 +2699,18 @@ class UnifiedImageWorker extends EventEmitter {
     }
 
     const matches = Array.isArray(csvMatch) ? csvMatch : [csvMatch];
+    console.log(`[DEBUG-METATAG] matches count: ${matches.length}`);
     const descriptions: string[] = [];
 
     // Process each match to collect metatag content
     for (let i = 0; i < matches.length; i++) {
       const match = matches[i];
+      console.log(`[DEBUG-METATAG] match[${i}]:`, {
+        hasMatch: !!match,
+        hasEntry: !!match?.entry,
+        entryKeys: match?.entry ? Object.keys(match.entry) : [],
+        metatag: match?.entry?.metatag || 'UNDEFINED'
+      });
 
       if (!match || !match.entry) {
         console.log(`[UnifiedWorker] Match ${i} has no entry - skipping`);
@@ -2702,6 +2722,7 @@ class UnifiedImageWorker extends EventEmitter {
       // Only use the metatag field from the participant preset
       if (!participant.metatag || participant.metatag.trim() === '') {
         console.log(`[UnifiedWorker] Match ${i} participant preset has empty metatag field - skipping`);
+        console.log(`[DEBUG-METATAG] participant keys:`, Object.keys(participant));
         continue;
       }
 

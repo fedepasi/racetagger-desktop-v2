@@ -470,3 +470,133 @@
 .stat-number.animate {
   animation: countUp 0.6s ease-out;
 }
+
+/* Announcements Section */
+.announcements-section {
+  margin-top: var(--spacing-xl);
+}
+
+.announcements-section .section-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: var(--spacing-md);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+/* Carousel container - auto height */
+.announcements-carousel {
+  position: relative;
+}
+
+/* Card - layout flexbox, no position absolute for single item */
+.announcement-card {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-lg);
+  padding: var(--spacing-lg);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-md);
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+/* Multiple announcements: absolute positioning for carousel effect */
+.announcements-carousel.has-multiple .announcement-card {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.announcements-carousel.has-multiple .announcement-card.active {
+  position: relative;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.announcement-card:hover {
+  border-color: var(--accent-primary);
+  background: var(--bg-light);
+}
+
+.announcement-image {
+  width: 80px;
+  height: 80px;
+  border-radius: var(--border-radius-sm);
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.announcement-content {
+  flex: 1;
+  min-width: 0; /* Prevent flex overflow */
+}
+
+.announcement-title {
+  font-weight: 600;
+  font-size: 1.1rem;
+  color: var(--text-primary);
+  margin-bottom: var(--spacing-xs);
+}
+
+.announcement-description {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin-bottom: var(--spacing-sm);
+}
+
+.announcement-link {
+  color: var(--accent-primary);
+  font-size: 0.85rem;
+  display: inline-block;
+}
+
+.announcement-link:hover {
+  text-decoration: underline;
+}
+
+/* Indicators */
+.announcements-indicators {
+  display: flex;
+  justify-content: center;
+  gap: var(--spacing-sm);
+  margin-top: var(--spacing-md);
+}
+
+.announcements-indicators .indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border-color);
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.announcements-indicators .indicator.active {
+  background: var(--accent-primary);
+}
+
+.announcements-indicators .indicator:hover {
+  background: var(--accent-secondary);
+}
+
+/* Responsive for announcements */
+@media (max-width: 768px) {
+  .announcement-card {
+    flex-direction: column;
+    text-align: center;
+    align-items: center;
+  }
+
+  .announcement-image {
+    width: 60px;
+    height: 60px;
+  }
+}

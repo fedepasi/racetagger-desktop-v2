@@ -12,6 +12,7 @@ import {
   DetectedFace,
   FaceContext,
   FaceRecognitionResult as ProcessorResult,
+  PersonMatch,
   DriverMatch
 } from './face-recognition-processor';
 import * as path from 'path';
@@ -268,16 +269,18 @@ class FaceDetectionBridge {
       matchingTimeMs = Date.now() - matchStartTime;
 
       // Convert processor result to bridge result format
-      const matches: FaceMatchResult[] = processorResult.matchedDrivers.map((driver: DriverMatch): FaceMatchResult => ({
+      // Support both matchedPersons (new) and matchedDrivers (legacy)
+      const matchedList = processorResult.matchedPersons || processorResult.matchedDrivers || [];
+      const matches: FaceMatchResult[] = matchedList.map((person: PersonMatch): FaceMatchResult => ({
         matched: true,
         driverInfo: {
-          driverId: driver.driverId,
-          driverName: driver.driverName,
-          teamName: driver.team,
-          raceNumber: driver.carNumber
+          driverId: person.personId,
+          driverName: person.personName,
+          teamName: person.team,
+          raceNumber: person.carNumber
         },
-        similarity: driver.confidence,
-        faceIndex: driver.faceIndex
+        similarity: person.confidence,
+        faceIndex: person.faceIndex
       }));
 
       // Add unmatched faces

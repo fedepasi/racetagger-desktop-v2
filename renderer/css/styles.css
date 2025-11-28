@@ -5160,3 +5160,125 @@ body.modal-open {
   margin-left: auto;
   margin-right: auto;
 }
+
+/* ============================================
+   Model Download Modal Styles
+   ============================================ */
+
+#model-download-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  backdrop-filter: blur(4px);
+}
+
+#model-download-modal .modal-download {
+  max-width: 450px;
+  width: 90%;
+  background: var(--bg-card, #ffffff);
+  border-radius: var(--radius-lg, 12px);
+  box-shadow: var(--shadow-lg);
+  text-align: center;
+  animation: modalFadeIn 0.3s ease-out;
+}
+
+@keyframes modalFadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+#model-download-modal .download-header {
+  padding: 28px 24px 16px;
+}
+
+#model-download-modal .download-icon {
+  font-size: 48px;
+  display: block;
+  margin-bottom: 12px;
+  line-height: 1;
+}
+
+#model-download-modal .download-header h2 {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 600;
+  color: var(--text-primary, #1e293b);
+}
+
+#model-download-modal .download-body {
+  padding: 0 24px 28px;
+}
+
+#model-download-modal .download-message {
+  font-size: 15px;
+  color: var(--text-primary, #1e293b);
+  margin-bottom: 6px;
+  line-height: 1.5;
+}
+
+#model-download-modal .download-note {
+  font-size: 13px;
+  color: var(--text-secondary, #64748b);
+  margin-bottom: 24px;
+}
+
+#model-download-modal .download-progress-container {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+#model-download-modal .download-progress-bar {
+  flex: 1;
+  height: 10px;
+  background: var(--bg-dark, #f1f5f9);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+#model-download-modal .download-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-primary, #3b82f6), #60a5fa);
+  border-radius: 5px;
+  transition: width 0.3s ease;
+  width: 0%;
+}
+
+#model-download-modal .download-percent {
+  font-weight: 600;
+  font-size: 14px;
+  min-width: 45px;
+  color: var(--text-primary, #1e293b);
+}
+
+#model-download-modal .download-stats {
+  font-size: 14px;
+  color: var(--text-secondary, #64748b);
+  margin-bottom: 20px;
+}
+
+#model-download-modal .download-fun-fact {
+  font-size: 13px;
+  color: var(--text-secondary, #64748b);
+  font-style: italic;
+  min-height: 20px;
+  transition: opacity 0.3s ease;
+  padding: 12px;
+  background: var(--bg-medium, #f8fafc);
+  border-radius: var(--radius-md, 8px);
+  margin: 0;
+}

@@ -117,8 +117,17 @@ export class SceneClassifier {
       return devPath;
     }
 
-    // In production (packaged app)
-    const prodPath = path.join(app.getAppPath(), this.MODEL_DIR);
+    // In production (packaged app) - check asar.unpacked first (for asarUnpack entries)
+    const appPath = app.getAppPath();
+    if (appPath.includes('app.asar')) {
+      const unpackedPath = path.join(appPath.replace('app.asar', 'app.asar.unpacked'), this.MODEL_DIR);
+      if (fs.existsSync(path.join(unpackedPath, 'model.json'))) {
+        return unpackedPath;
+      }
+    }
+
+    // In production (packaged app) - check inside asar
+    const prodPath = path.join(appPath, this.MODEL_DIR);
     if (fs.existsSync(path.join(prodPath, 'model.json'))) {
       return prodPath;
     }

@@ -13,7 +13,9 @@
 
 export enum EvidenceType {
   RACE_NUMBER = 'race_number',
-  DRIVER_NAME = 'driver_name',
+  PERSON_NAME = 'person_name',
+  /** @deprecated Use PERSON_NAME instead */
+  DRIVER_NAME = 'person_name',
   SPONSOR = 'sponsor',
   TEAM = 'team',
   CATEGORY = 'category',
@@ -32,7 +34,9 @@ export interface Evidence {
 export interface MatchingConfig {
   weights: {
     raceNumber: number;
-    driverName: number;
+    personName: number;
+    /** @deprecated Use personName instead */
+    driverName?: number;
     sponsor: number;
     team: number;
   };
@@ -79,16 +83,17 @@ export class EvidenceCollector {
       });
     }
 
-    // Extract driver name evidence
-    if (analysisResult.drivers && Array.isArray(analysisResult.drivers)) {
-      for (const driver of analysisResult.drivers) {
-        if (driver && typeof driver === 'string' && driver.trim().length > 0) {
+    // Extract person name evidence (from drivers/persons array)
+    const persons = analysisResult.persons || analysisResult.drivers;
+    if (persons && Array.isArray(persons)) {
+      for (const person of persons) {
+        if (person && typeof person === 'string' && person.trim().length > 0) {
           evidence.push({
-            type: EvidenceType.DRIVER_NAME,
-            value: driver.trim(),
-            confidence: 0.8, // Driver names typically have good recognition
+            type: EvidenceType.PERSON_NAME,
+            value: person.trim(),
+            confidence: 0.8, // Person names typically have good recognition
             source: 'ocr_analysis',
-            quality: this.assessNameQuality(driver)
+            quality: this.assessNameQuality(person)
           });
         }
       }
@@ -198,7 +203,7 @@ export class EvidenceCollector {
   }
 
   /**
-   * Assess the quality of driver name evidence
+   * Assess the quality of person name evidence
    */
   private assessNameQuality(name: string): number {
     let quality = 1.0;

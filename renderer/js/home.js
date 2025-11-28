@@ -7,13 +7,13 @@
 let homePageData = {
   monthlyPhotos: 0,
   completedEvents: 0,
-  recentWork: [],
   userName: 'Photographer'
 };
 
-// Tips carousel state
-let currentTipIndex = 0;
-let tipCarouselInterval = null;
+// Announcements carousel state
+let announcements = [];
+let currentAnnouncementIndex = 0;
+let announcementCarouselInterval = null;
 
 /**
  * Initialize home page functionality
@@ -24,8 +24,8 @@ function initializeHomePage() {
   // Load user data
   loadHomePageData();
 
-  // Setup tips carousel
-  initializeTipsCarousel();
+  // Load announcements (will only show if there are any)
+  loadAnnouncements();
 
   // Setup navigation functions
   setupNavigationFunctions();
@@ -79,13 +79,6 @@ async function loadHomePageData() {
         homePageData = { ...homePageData, ...statsResult.data };
         updateHomePageUI();
       }
-
-      // Get recent executions
-      const recentResult = await window.api.invoke('get-recent-executions');
-      if (recentResult.success && recentResult.data) {
-        homePageData.recentWork = recentResult.data.slice(0, 6);
-        updateRecentWorkGrid();
-      }
     }
   } catch (error) {
     console.error('[Home] Error loading home page data:', error);
@@ -136,130 +129,127 @@ function animateNumber(elementId, targetValue) {
 }
 
 /**
- * Update recent work grid
+ * Load announcements from Supabase
  */
-function updateRecentWorkGrid() {
-  const grid = document.getElementById('recent-work-grid');
-  const emptyState = document.getElementById('empty-recent-work');
-
-  if (!grid) return;
-
-  if (homePageData.recentWork.length === 0) {
-    // Show empty state
-    if (emptyState) emptyState.style.display = 'block';
-    return;
+async function loadAnnouncements() {
+  try {
+    if (window.api && window.api.invoke) {
+      const result = await window.api.invoke('get-announcements');
+      if (result.success && result.data?.length > 0) {
+        announcements = result.data;
+        renderAnnouncementsCarousel();
+        initializeAnnouncementsCarousel();
+        // Show the section only if there are announcements
+        const section = document.getElementById('announcements-section');
+        if (section) {
+          section.style.display = 'block';
+        }
+      }
+      // If no announcements, section stays hidden (display: none)
+    }
+  } catch (error) {
+    console.log('[Home] Announcements unavailable:', error);
+    // No fallback, section stays hidden
   }
-
-  // Hide empty state
-  if (emptyState) emptyState.style.display = 'none';
-
-  // Create execution cards
-  const workCardsHTML = homePageData.recentWork.map(execution => {
-    // Determine status display
-    const statusIcon = execution.status === 'completed' ? '✅' :
-                      execution.status === 'processing' ? '🔄' :
-                      execution.status === 'failed' ? '❌' : '⏳';
-
-    const statusText = execution.status === 'completed' ? 'Completed' :
-                      execution.status === 'processing' ? 'Processing' :
-                      execution.status === 'failed' ? 'Failed' : 'Unknown';
-
-    // Get category icon
-    const categoryIcon = execution.category === 'motorsport' ? '🏎️' :
-                        execution.category === 'running' ? '🏃' :
-                        '⚡';
-
-    return `
-      <div class="work-card" onclick="viewExecutionResults('${execution.id}')">
-        <div class="work-thumbnail">
-          ${categoryIcon}
-        </div>
-        <div class="work-info">
-          <h3>${escapeHtml(execution.folder_name)}</h3>
-          <div class="work-meta">
-            ID: ${execution.id.slice(-8)} • ${statusIcon} ${statusText}
-          </div>
-          <div class="work-stats">
-            <span class="work-stat">📸 ${execution.total_images_processed || execution.total_images_found || 0} images</span>
-          </div>
-          <div class="work-actions">
-            ${execution.status === 'completed' ? `
-              <button class="btn btn-primary btn-work" onclick="event.stopPropagation(); viewExecutionResults('${execution.id}')">
-                View Results
-              </button>
-            ` : `
-              <button class="btn btn-secondary btn-work" onclick="event.stopPropagation(); rerunExecution('${execution.id}')">
-                Run Again
-              </button>
-            `}
-          </div>
-        </div>
-      </div>
-    `;
-  }).join('');
-
-  grid.innerHTML = workCardsHTML;
 }
 
 /**
- * Initialize tips carousel
+ * Render announcements carousel HTML
  */
-function initializeTipsCarousel() {
-  const indicators = document.querySelectorAll('.indicator');
+function renderAnnouncementsCarousel() {
+  const carousel = document.getElementById('announcements-carousel');
+  const indicators = document.getElementById('announcements-indicators');
+  if (!carousel || !announcements.length) return;
 
-  // Add click handlers to indicators
-  indicators.forEach((indicator, index) => {
-    indicator.addEventListener('click', () => {
-      showTip(index);
-      resetCarouselTimer();
+  // Add class for multiple announcements (enables carousel positioning)
+  if (announcements.length > 1) {
+    carousel.classList.add('has-multiple');
+  } else {
+    carousel.classList.remove('has-multiple');
+  }
+
+  carousel.innerHTML = announcements.map((item, i) => `
+    <div class="announcement-card ${i === 0 ? 'active' : ''}" data-index="${i}"
+         onclick="openAnnouncementLink('${escapeHtml(item.link_url || '')}')">
+      ${item.image_url ? `<img class="announcement-image" src="${escapeHtml(item.image_url)}" alt="" onerror="this.style.display='none'">` : ''}
+      <div class="announcement-content">
+        <p class="announcement-title">${escapeHtml(item.title)}</p>
+        ${item.description ? `<p class="announcement-description">${escapeHtml(item.description)}</p>` : ''}
+        ${item.link_url ? `<span class="announcement-link">Learn more →</span>` : ''}
+      </div>
+    </div>
+  `).join('');
+
+  // Indicators only if more than 1 announcement
+  if (announcements.length > 1) {
+    indicators.innerHTML = announcements.map((_, i) =>
+      `<div class="indicator ${i === 0 ? 'active' : ''}" data-index="${i}"></div>`
+    ).join('');
+  } else {
+    indicators.innerHTML = '';
+  }
+}
+
+/**
+ * Initialize announcements carousel
+ */
+function initializeAnnouncementsCarousel() {
+  if (announcements.length <= 1) return; // No carousel for single announcement
+
+  document.querySelectorAll('#announcements-indicators .indicator').forEach((ind, i) => {
+    ind.addEventListener('click', () => {
+      showAnnouncement(i);
+      resetAnnouncementCarouselTimer();
     });
   });
-
-  // Start auto-rotation
-  startCarouselTimer();
+  startAnnouncementCarouselTimer();
 }
 
 /**
- * Show specific tip
+ * Show specific announcement
  */
-function showTip(index) {
-  const tips = document.querySelectorAll('.tip-card');
-  const indicators = document.querySelectorAll('.indicator');
+function showAnnouncement(index) {
+  document.querySelectorAll('#announcements-carousel .announcement-card').forEach(c => c.classList.remove('active'));
+  document.querySelectorAll('#announcements-indicators .indicator').forEach(i => i.classList.remove('active'));
 
-  // Hide current tip
-  tips.forEach(tip => tip.classList.remove('active'));
-  indicators.forEach(indicator => indicator.classList.remove('active'));
+  const card = document.querySelector(`#announcements-carousel .announcement-card[data-index="${index}"]`);
+  const indicator = document.querySelector(`#announcements-indicators .indicator[data-index="${index}"]`);
 
-  // Show new tip
-  if (tips[index]) {
-    tips[index].classList.add('active');
-  }
-  if (indicators[index]) {
-    indicators[index].classList.add('active');
-  }
-
-  currentTipIndex = index;
+  if (card) card.classList.add('active');
+  if (indicator) indicator.classList.add('active');
+  currentAnnouncementIndex = index;
 }
 
 /**
- * Start carousel auto-rotation
+ * Start announcements carousel auto-rotation
  */
-function startCarouselTimer() {
-  tipCarouselInterval = setInterval(() => {
-    const nextIndex = (currentTipIndex + 1) % 4; // 4 tips total
-    showTip(nextIndex);
-  }, 5000); // Change every 5 seconds
+function startAnnouncementCarouselTimer() {
+  announcementCarouselInterval = setInterval(() => {
+    showAnnouncement((currentAnnouncementIndex + 1) % announcements.length);
+  }, 6000); // 6 seconds per announcement
 }
 
 /**
- * Reset carousel timer
+ * Reset announcements carousel timer
  */
-function resetCarouselTimer() {
-  if (tipCarouselInterval) {
-    clearInterval(tipCarouselInterval);
+function resetAnnouncementCarouselTimer() {
+  if (announcementCarouselInterval) {
+    clearInterval(announcementCarouselInterval);
   }
-  startCarouselTimer();
+  startAnnouncementCarouselTimer();
 }
+
+/**
+ * Open announcement link in external browser
+ */
+window.openAnnouncementLink = function(url) {
+  if (!url) return;
+  if (window.api && window.api.invoke) {
+    window.api.invoke('open-external-url', url);
+  } else {
+    window.open(url, '_blank');
+  }
+};
 
 /**
  * Setup navigation functions
@@ -423,8 +413,8 @@ async function loadAppVersion() {
 
 // Cleanup on page unload
 window.addEventListener('beforeunload', function() {
-  if (tipCarouselInterval) {
-    clearInterval(tipCarouselInterval);
+  if (announcementCarouselInterval) {
+    clearInterval(announcementCarouselInterval);
   }
 });
 

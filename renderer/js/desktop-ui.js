@@ -699,7 +699,92 @@ function getResizeConfig() {
 document.addEventListener('DOMContentLoaded', () => {
   // Small delay to ensure all elements are in DOM
   setTimeout(initializeResizeControls, 100);
+
+  // Setup model download listeners
+  setupModelDownloadListeners();
 });
+
+/**
+ * Setup IPC listeners for model download progress
+ * Shows modal during ONNX model downloads at app startup
+ */
+function setupModelDownloadListeners() {
+  if (!window.api) {
+    console.warn('[ModelDownload] window.api not available');
+    return;
+  }
+
+  const modal = document.getElementById('model-download-modal');
+  const progressFill = document.getElementById('download-progress-fill');
+  const percentText = document.getElementById('download-percent');
+  const currentText = document.getElementById('download-current');
+  const totalText = document.getElementById('download-total');
+  const funFact = document.getElementById('download-fun-fact');
+
+  if (!modal) {
+    console.warn('[ModelDownload] Modal elements not found');
+    return;
+  }
+
+  const funFacts = [
+    '\u{1F3CE}\uFE0F "Like downloading the latest telemetry data..."',
+    '\u{1F3C1} "Preparing your pit crew for race day..."',
+    '\u{1F4F8} "Loading high-speed recognition models..."',
+    '\u{1F527} "Fine-tuning the detection algorithms..."',
+    '\u{1F3C6} "Getting ready to identify champions..."',
+    '\u{26A1} "Optimizing for lightning-fast detection..."'
+  ];
+  let factIndex = 0;
+  let factInterval = null;
+
+  window.api.receive('model-download-start', (data) => {
+    console.log('[ModelDownload] Download started:', data);
+    modal.style.display = 'flex';
+    document.body.classList.add('modal-open');
+    if (totalText) totalText.textContent = `${data.totalSizeMB.toFixed(1)} MB`;
+    if (currentText) currentText.textContent = '0 MB';
+    if (percentText) percentText.textContent = '0%';
+    if (progressFill) progressFill.style.width = '0%';
+
+    // Rotate fun facts every 3 seconds
+    factInterval = setInterval(() => {
+      factIndex = (factIndex + 1) % funFacts.length;
+      if (funFact) funFact.textContent = funFacts[factIndex];
+    }, 3000);
+  });
+
+  window.api.receive('model-download-progress', (data) => {
+    const percent = Math.min(100, Math.round((data.downloadedMB / data.totalMB) * 100));
+    if (progressFill) progressFill.style.width = `${percent}%`;
+    if (percentText) percentText.textContent = `${percent}%`;
+    if (currentText) currentText.textContent = `${data.downloadedMB.toFixed(1)} MB`;
+  });
+
+  window.api.receive('model-download-complete', () => {
+    console.log('[ModelDownload] Download complete');
+    if (factInterval) {
+      clearInterval(factInterval);
+      factInterval = null;
+    }
+    modal.style.display = 'none';
+    document.body.classList.remove('modal-open');
+  });
+
+  window.api.receive('model-download-error', (data) => {
+    console.error('[ModelDownload] Download error:', data);
+    if (factInterval) {
+      clearInterval(factInterval);
+      factInterval = null;
+    }
+    // Show error state - user can close and retry on next app start
+    if (funFact) {
+      funFact.textContent = '\u{274C} Download failed. Please restart the app to retry.';
+      funFact.style.color = 'var(--accent-danger, #ef4444)';
+    }
+  });
+
+  console.log('[ModelDownload] Listeners setup complete');
+}
 
 window.desktopUI = {
   updateUserInfo,

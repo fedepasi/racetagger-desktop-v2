@@ -189,9 +189,11 @@ export class SmartMatcher {
    * Get the active weights for evidence types in the current sport
    */
   getActiveWeights() {
+    const personNameWeight = this.config.weights.personName || this.config.weights.driverName || 80;
     return {
       raceNumber: this.config.weights.raceNumber,
-      driverName: this.config.weights.driverName,
+      personName: personNameWeight,
+      driverName: personNameWeight, // backward compatibility
       sponsor: this.config.weights.sponsor,
       team: this.config.weights.team,
       category: this.config.weights.category,
@@ -549,9 +551,9 @@ export class SmartMatcher {
           weightUsed = weights.raceNumber;
           evidenceType = 'Race Number';
           break;
-        case EvidenceType.DRIVER_NAME:
-          weightUsed = weights.driverName;
-          evidenceType = 'Driver Name';
+        case EvidenceType.PERSON_NAME:
+          weightUsed = weights.personName || weights.driverName || 80;
+          evidenceType = 'Person Name';
           break;
         case EvidenceType.SPONSOR:
           weightUsed = weights.sponsor;
@@ -979,10 +981,12 @@ export class SmartMatcher {
     let bestMatchType: 'exact' | 'partial' | 'fuzzy' | null = null;
 
     for (const participantName of participantNames) {
+      const nameWeight = this.config.weights.personName || this.config.weights.driverName || 80;
+
       // Exact match - apply multiplier for high confidence
       if (participantName === evidenceName) {
         const exactMatchMultiplier = this.getNameMatchMultiplier();
-        bestScore = this.config.weights.driverName * exactMatchMultiplier;
+        bestScore = nameWeight * exactMatchMultiplier;
         bestReason = `Exact name match (${exactMatchMultiplier}x): "${evidenceName}"`;
         bestMatchType = 'exact';
         break; // Exact match found, no need to continue
@@ -990,7 +994,7 @@ export class SmartMatcher {
 
       // Partial match (either direction)
       if (participantName.includes(evidenceName) || evidenceName.includes(participantName)) {
-        const score = this.config.weights.driverName * 0.8;
+        const score = nameWeight * 0.8;
         if (score > bestScore) {
           bestScore = score;
           bestReason = `Partial name match: "${evidenceName}" ↔ "${participantName}"`;
@@ -1002,7 +1006,7 @@ export class SmartMatcher {
       // Fuzzy matching
       const similarity = this.calculateJaroWinklerSimilarity(evidenceName, participantName);
       if (similarity >= this.config.thresholds.nameSimilarity) {
-        const score = this.config.weights.driverName * similarity;
+        const score = nameWeight * similarity;
         if (score > bestScore) {
           bestScore = score;
           bestReason = `Fuzzy name match: "${evidenceName}" ↔ "${participantName}" (similarity: ${(similarity * 100).toFixed(1)}%)`;
@@ -1413,7 +1417,7 @@ export class SmartMatcher {
     const weights = this.config.weights as any;
     switch (type) {
       case EvidenceType.RACE_NUMBER: return weights.raceNumber || 0;
-      case EvidenceType.DRIVER_NAME: return weights.driverName || 0;
+      case EvidenceType.DRIVER_NAME: return weights.personName || weights.driverName || 0;
       case EvidenceType.SPONSOR: return weights.sponsor || 0;
       case EvidenceType.TEAM: return weights.team || 0;
       case EvidenceType.CATEGORY: return weights.category || 0;
@@ -2262,13 +2266,14 @@ export class SmartMatcher {
       const nameMatches: string[] = [];
 
       // Check each recognized name against participant names
+      const nameWeight = this.config.weights.personName || this.config.weights.driverName || 80;
       for (const recognizedName of analysisResult.drivers) {
         const cleanRecognizedName = recognizedName.toLowerCase().trim();
 
         for (const participantName of participantNames) {
           // Exact match gets full multiplier
           if (participantName === cleanRecognizedName) {
-            const exactScore = this.config.weights.driverName * this.getNameMatchMultiplier();
+            const exactScore = nameWeight * this.getNameMatchMultiplier();
             nameMatchScore += exactScore;
             nameMatches.push(`${recognizedName} (exact: +${exactScore})`);
             break; // Found exact match, no need to check fuzzy for this name
@@ -2276,7 +2281,7 @@ export class SmartMatcher {
 
           // Partial match (less priority but still significant)
           else if (participantName.includes(cleanRecognizedName) || cleanRecognizedName.includes(participantName)) {
-            const partialScore = this.config.weights.driverName * 0.8;
+            const partialScore = nameWeight * 0.8;
             if (partialScore > 0) { // Only add if it's the best match for this recognized name
               nameMatchScore += partialScore;
               nameMatches.push(`${recognizedName} (partial: +${partialScore})`);

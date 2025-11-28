@@ -246,132 +246,11 @@
           </div>
         </div>
 
-        <!-- Recent Executions Section -->
-        <div class="home-section">
-          <h2 class="section-title">Recent Executions</h2>
-          <div id="recent-work-grid" class="recent-work-grid">
-            <!-- Recent executions will be loaded here dynamically -->
-            <div class="empty-state" id="empty-recent-work">
-              <div class="empty-icon">🔄</div>
-              <h3>No recent executions yet</h3>
-              <p>Start your first analysis to see your executions here!</p>
-              <button class="btn btn-primary" onclick="navigateToAnalysis()">Get Started</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Quick Start Guide -->
-        <div class="home-section">
-          <h2 class="section-title">Quick Start Guide</h2>
-          <div class="quick-start-steps">
-            <div class="step-card">
-              <div class="step-icon">📁</div>
-              <div class="step-content">
-                <h3>Select Photos</h3>
-                <p>Choose your racing photos folder</p>
-              </div>
-            </div>
-            <div class="step-arrow">→</div>
-            <div class="step-card">
-              <div class="step-icon">🏎️</div>
-              <div class="step-content">
-                <h3>AI Recognition</h3>
-                <p>AI automatically detects race numbers</p>
-              </div>
-            </div>
-            <div class="step-arrow">→</div>
-            <div class="step-card">
-              <div class="step-icon">💾</div>
-              <div class="step-content">
-                <h3>Get Results</h3>
-                <p>Receive organized results instantly</p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Quick Actions -->
-        <div class="home-section">
-          <h2 class="section-title">Quick Actions</h2>
-          <div class="quick-actions">
-            <div class="action-card" onclick="navigateToAnalysis()">
-              <div class="action-icon">📸</div>
-              <div class="action-content">
-                <h3>Analyze Photos</h3>
-                <p>Start a new race analysis</p>
-              </div>
-            </div>
-            <div class="action-card" onclick="navigateToAnalysis()">
-              <div class="action-icon">📁</div>
-              <div class="action-content">
-                <h3>Organize by Number</h3>
-                <p>Auto-organize photos into folders</p>
-              </div>
-            </div>
-            <div class="action-card" onclick="navigateToParticipants()">
-              <div class="action-icon">👥</div>
-              <div class="action-content">
-                <h3>Manage Participants</h3>
-                <p>Create and manage participant presets</p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Tips Carousel -->
-        <div class="home-section">
-          <h2 class="section-title">Tips & Tricks</h2>
-          <div class="tips-carousel">
-            <div class="tip-card active" data-tip="0">
-              <div class="tip-icon">💡</div>
-              <p>You can automatically organize photos into folders by race number</p>
-            </div>
-            <div class="tip-card" data-tip="1">
-              <div class="tip-icon">📸</div>
-              <p>We support RAW files from Canon, Nikon, Sony and more</p>
-            </div>
-            <div class="tip-card" data-tip="2">
-              <div class="tip-icon">⚡</div>
-              <p>For live events, analyze while shooting for immediate results</p>
-            </div>
-            <div class="tip-card" data-tip="3">
-              <div class="tip-icon">🎯</div>
-              <p>Best results with frontal vehicle shots</p>
-            </div>
-          </div>
-          <div class="tip-indicators">
-            <div class="indicator active" data-tip="0"></div>
-            <div class="indicator" data-tip="1"></div>
-            <div class="indicator" data-tip="2"></div>
-            <div class="indicator" data-tip="3"></div>
-          </div>
-        </div>
-
-        <!-- Popular Use Cases -->
-        <div class="home-section">
-          <h2 class="section-title">Popular Use Cases</h2>
-          <div class="use-cases">
-            <div class="use-case">
-              <div class="use-case-icon">🏁</div>
-              <h3>Rally</h3>
-              <p>Track rally cars through stages</p>
-            </div>
-            <div class="use-case">
-              <div class="use-case-icon">🏎️</div>
-              <h3>Circuit Racing</h3>
-              <p>Monitor lap times and positions</p>
-            </div>
-            <div class="use-case">
-              <div class="use-case-icon">⏰</div>
-              <h3>Endurance</h3>
-              <p>Long-distance race tracking</p>
-            </div>
-            <div class="use-case">
-              <div class="use-case-icon">🏃</div>
-              <h3>Karting</h3>
-              <p>High-speed kart competitions</p>
-            </div>
-          </div>
+        <!-- Announcements Section (dynamically rendered if content exists) -->
+        <div id="announcements-section" class="home-section announcements-section" style="display: none;">
+          <h2 class="section-title">📢 Latest News & Tips</h2>
+          <div class="announcements-carousel" id="announcements-carousel"></div>
+          <div class="announcements-indicators" id="announcements-indicators"></div>
         </div>
       </div>
 
@@ -1980,6 +1859,36 @@
         <button class="btn btn-warning" onclick="continueWithoutDng()">
           <i class="fas fa-forward"></i> Continue Without RAW Support
         </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Model Download Modal (shown at startup if models need downloading) -->
+  <div id="model-download-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-content modal-download">
+      <div class="download-header">
+        <span class="download-icon">&#x2B07;&#xFE0F;</span>
+        <h2>Downloading Resources</h2>
+      </div>
+      <div class="download-body">
+        <p class="download-message">
+          Downloading required resources...
+        </p>
+        <p class="download-note">
+          This only happens once (or after updates).
+        </p>
+        <div class="download-progress-container">
+          <div class="download-progress-bar">
+            <div id="download-progress-fill" class="download-progress-fill"></div>
+          </div>
+          <span id="download-percent" class="download-percent">0%</span>
+        </div>
+        <div id="download-stats" class="download-stats">
+          <span id="download-current">0 MB</span> / <span id="download-total">0 MB</span>
+        </div>
+        <p id="download-fun-fact" class="download-fun-fact">
+          &#x1F3CE;&#xFE0F; "Like downloading the latest telemetry data..."
+        </p>
       </div>
     </div>
   </div>

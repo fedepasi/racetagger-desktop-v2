@@ -140,6 +140,7 @@ import { unifiedImageProcessor, UnifiedImageFile, UnifiedProcessingResult, Unifi
 import { FolderOrganizerConfig } from './utils/folder-organizer';
 import { faceRecognitionProcessor, StoredFaceDescriptor, DetectedFace, FaceContext } from './face-recognition-processor';
 import { faceDetectionBridge } from './face-detection-bridge';
+import { getModelManager } from './model-manager';
 
 // Definisci le estensioni supportate a livello globale per riutilizzo
 const RAW_EXTENSIONS = ['.nef', '.arw', '.cr2', '.cr3', '.orf', '.raw', '.rw2', '.dng'];
@@ -1897,6 +1898,31 @@ function setupDatabaseIpcHandlers() {
       return { success: false, name: 'Photographer' };
     }
   });
+
+  // Get desktop announcements for home page
+  ipcMain.handle('get-announcements', async () => {
+    console.log('[Announcements] Fetching desktop announcements...');
+    try {
+      const supabase = getSupabaseClient();
+      const { data, error } = await supabase
+        .from('desktop_announcements')
+        .select('title, description, image_url, link_url')
+        .eq('is_active', true)
+        .order('display_order', { ascending: true })
+        .limit(5);
+
+      if (error) {
+        console.error('[Announcements] Supabase error:', error);
+        return { success: false, data: [] };
+      }
+
+      console.log(`[Announcements] Retrieved ${data?.length || 0} announcements`);
+      return { success: true, data: data || [] };
+    } catch (error) {
+      console.error('[Announcements] Error fetching announcements:', error);
+      return { success: false, data: [] };
+    }
+  });
 }
 
 // Removed handleImageAnalysis since we only support folder processing now
@@ -3637,7 +3663,7 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
               
               if (matchByName) {
                 csvMatch = {
-                  matchType: 'driverName',
+                  matchType: 'personName',
                   matchedValue: driver,
                   entry: matchByName
                 };
@@ -4229,12 +4255,71 @@ async function handleFeedbackSubmission(event: IpcMainEvent, feedbackData: any) 
       success: true,
       message: 'Feedback salvato con successo'
     });
-    
+
   } catch (error: any) {
     console.error('Errore durante l\'invio del feedback:', error);
     if (mainWindow) {
       mainWindow.webContents.send('feedback-error', error.message || 'Si è verificato un errore durante l\'invio del feedback');
     }
+  }
+}
+
+/**
+ * Check and download ONNX models at app startup
+ * Shows progress modal in renderer if downloads are needed
+ */
+async function checkAndDownloadModels(): Promise<void> {
+  try {
+    const modelManager = getModelManager();
+
+    // Set the authenticated Supabase client
+    const supabaseClient = getSupabaseClient();
+    modelManager.setSupabaseClient(supabaseClient);
+
+    // Check which models need to be downloaded
+    const { models, totalSizeMB } = await modelManager.getModelsToDownload();
+
+    if (models.length === 0) {
+      console.log('[Main Process] All ONNX models are already cached');
+      return;
+    }
+
+    console.log(`[Main Process] Need to download ${models.length} models (${totalSizeMB.toFixed(1)} MB)`);
+
+    // Notify renderer to show download modal
+    safeSend('model-download-start', {
+      totalModels: models.length,
+      totalSizeMB
+    });
+
+    // Download each model with progress tracking
+    let downloadedTotal = 0;
+    for (let i = 0; i < models.length; i++) {
+      const model = models[i];
+      console.log(`[Main Process] Downloading model ${i + 1}/${models.length}: ${model.code}`);
+
+      await modelManager.downloadModel(model.code, (percent, downloadedMB, totalMB) => {
+        safeSend('model-download-progress', {
+          currentModel: i + 1,
+          totalModels: models.length,
+          modelPercent: percent,
+          downloadedMB: downloadedTotal + downloadedMB,
+          totalMB: totalSizeMB
+        });
+      });
+
+      downloadedTotal += model.sizeMB;
+    }
+
+    // Notify renderer that download is complete
+    safeSend('model-download-complete');
+    console.log('[Main Process] All ONNX models downloaded successfully');
+  } catch (error) {
+    console.error('[Main Process] Error downloading models:', error);
+    safeSend('model-download-error', {
+      message: error instanceof Error ? error.message : 'Unknown error'
+    });
+    throw error;
   }
 }
 
@@ -4267,7 +4352,13 @@ app.whenReady().then(async () => { // Added async here
 
   // Register early IPC handlers needed by renderer on load
   ipcMain.handle('get-app-path', () => {
-    return app.getAppPath();
+    // In production, assets are in app.asar.unpacked, not app.asar
+    // This is needed for face-api.js to load models via fetch()
+    const appPath = app.getAppPath();
+    if (appPath.includes('app.asar')) {
+      return appPath.replace('app.asar', 'app.asar.unpacked');
+    }
+    return appPath;
   });
   ipcMain.handle('get-app-version', () => {
     return app.getVersion();
@@ -4304,6 +4395,16 @@ app.whenReady().then(async () => { // Added async here
   } catch (cacheError) {
     console.error('[Main Process] Error caching Supabase data:', cacheError);
     // Don't fail startup if cache fails, data will be loaded on-demand
+  }
+
+  // Check and download ONNX models at startup
+  console.log('[Main Process] Checking ONNX models...');
+  try {
+    await checkAndDownloadModels();
+    console.log('[Main Process] ONNX model check completed');
+  } catch (modelError) {
+    console.error('[Main Process] Error checking/downloading models:', modelError);
+    // Don't fail startup if model download fails
   }
 
   // NOTE: The test code has been removed from startup to prevent conflicts with UI events.
@@ -5707,8 +5808,9 @@ app.whenReady().then(async () => { // Added async here
         .filter((face: any) => face.face_descriptor && face.face_descriptor.length === 128)
         .map((face: any) => ({
           id: face.id,
-          driverId: face.id,
-          driverName: face.driver_name,
+          personId: face.id,
+          personName: face.person_name,
+          personRole: face.person_role,
           team: face.team || '',
           carNumber: face.car_number || '',
           descriptor: face.face_descriptor,
@@ -5722,7 +5824,7 @@ app.whenReady().then(async () => { // Added async here
       faceRecognitionProcessor.loadFaceDescriptors(descriptors);
       const count = faceRecognitionProcessor.getDescriptorCount();
 
-      console.log(`[FaceRecognition IPC] Loaded ${count} drivers from database (${descriptors.length} valid descriptors)`);
+      console.log(`[FaceRecognition IPC] Loaded ${count} persons from database (${descriptors.length} valid descriptors)`);
       return { success: true, count, totalInDb: faces.length, validDescriptors: descriptors.length };
 
     } catch (error) {
