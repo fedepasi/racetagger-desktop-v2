@@ -94,6 +94,16 @@ export const SUPABASE_CONFIG = {
   offlineMode: false
 };
 
+// Edge Function Version Compatibility
+// This defines the maximum edge_function_version this app version supports
+// Categories with a higher edge_function_version will be hidden from the user
+// Version history:
+// - V2: Basic analysis (app 1.0.0 - 1.0.7)
+// - V3: Advanced annotations (app 1.0.8+)
+// - V4: RF-DETR support (app 1.0.9+)
+// - V5: Vehicle recognition, face recognition (app 1.0.11+)
+export const MAX_SUPPORTED_EDGE_FUNCTION_VERSION = 5;
+
 // Resize presets for image optimization before upload
 export enum ResizePreset {
   VELOCE = 'veloce',

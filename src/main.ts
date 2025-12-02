@@ -4364,17 +4364,26 @@ app.whenReady().then(async () => { // Added async here
     return app.getVersion();
   });
 
+  // Return the maximum supported edge function version for this app
+  ipcMain.handle('get-max-supported-edge-function-version', () => {
+    const { MAX_SUPPORTED_EDGE_FUNCTION_VERSION } = require('./config');
+    return MAX_SUPPORTED_EDGE_FUNCTION_VERSION;
+  });
+
   createWindow();
   
-  // Cleanup all temp files at startup
+  // Cleanup temp files older than 7 days at startup and start periodic cleanup
   console.log('[Main Process] Cleaning up temporary files at startup...');
   try {
     await rawConverter.cleanupAllTempFiles();
 
-    // Also cleanup files from the centralized temp directory
+    // Cleanup files from the centralized temp directory (older than 7 days)
     const { CleanupManager } = require('./utils/cleanup-manager');
     const cleanupManager = new CleanupManager();
     await cleanupManager.startupCleanup();
+
+    // Start periodic cleanup (every 24h, files older than 7 days)
+    cleanupManager.startPeriodicCleanup();
   } catch (cleanupError) {
     console.error('[Main Process] Error during startup cleanup:', cleanupError);
   }

@@ -2003,11 +2003,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Load dynamic sport categories with optimized caching
 async function loadDynamicCategories(forceRefresh = false) {
-  const CACHE_KEY = 'racetagger_sport_categories';
   const CACHE_DURATION = 30 * 60 * 1000; // 30 minutes
 
   console.log(`[RENDERER] Loading dynamic categories (forceRefresh: ${forceRefresh})...`);
   console.log(`[RENDERER] window.api available:`, !!window.api);
+
+  // Get max supported version to include in cache key (ensures cache invalidation on app update)
+  let maxSupportedVersion = 5; // fallback default
+  try {
+    if (window.api) {
+      maxSupportedVersion = await window.api.invoke('get-max-supported-edge-function-version');
+    }
+  } catch (e) {
+    console.warn('[VERSION COMPAT] Could not get max supported version for cache key:', e);
+  }
+
+  // Include version in cache key to auto-invalidate when app is updated
+  const CACHE_KEY = `racetagger_sport_categories_v${maxSupportedVersion}`;
 
   // Check sessionStorage cache first (unless forced refresh)
   if (!forceRefresh) {
@@ -2018,7 +2030,7 @@ async function loadDynamicCategories(forceRefresh = false) {
         const age = Date.now() - timestamp;
 
         if (age < CACHE_DURATION) {
-          console.log(`Using cached categories from sessionStorage (${Math.round(age/1000)}s old)`);
+          console.log(`Using cached categories from sessionStorage (${Math.round(age/1000)}s old, version V${maxSupportedVersion})`);
           populateCategorySelect(data);
           return;
         } else {
@@ -2059,10 +2071,36 @@ async function loadDynamicCategories(forceRefresh = false) {
     if (result.success && result.data && result.data.length > 0) {
       console.log(`Loaded ${result.data.length} categories from backend cache`);
 
-      // Save to sessionStorage for future use
+      // Filter categories based on edge_function_version compatibility
+      let filteredCategories = result.data;
+      try {
+        const maxSupportedVersion = await window.api.invoke('get-max-supported-edge-function-version');
+        console.log(`[VERSION COMPAT] This app supports edge_function_version up to V${maxSupportedVersion}`);
+
+        const originalCount = result.data.length;
+        filteredCategories = result.data.filter(category => {
+          // Categories without edge_function_version are assumed compatible (legacy V2)
+          const categoryVersion = category.edge_function_version || 2;
+          const isCompatible = categoryVersion <= maxSupportedVersion;
+
+          if (!isCompatible) {
+            console.log(`[VERSION COMPAT] Hiding category "${category.name}" (requires V${categoryVersion}, app supports up to V${maxSupportedVersion})`);
+          }
+
+          return isCompatible;
+        });
+
+        if (filteredCategories.length < originalCount) {
+          console.log(`[VERSION COMPAT] Filtered out ${originalCount - filteredCategories.length} incompatible categories`);
+        }
+      } catch (versionError) {
+        console.warn('[VERSION COMPAT] Could not check version compatibility, showing all categories:', versionError);
+      }
+
+      // Save to sessionStorage for future use (save filtered data)
       try {
         sessionStorage.setItem(CACHE_KEY, JSON.stringify({
-          data: result.data,
+          data: filteredCategories,
           timestamp: Date.now()
         }));
         console.log('Categories cached to sessionStorage');
@@ -2070,7 +2108,7 @@ async function loadDynamicCategories(forceRefresh = false) {
         console.warn('Failed to cache categories to sessionStorage:', error);
       }
 
-      populateCategorySelect(result.data);
+      populateCategorySelect(filteredCategories);
     } else {
       console.warn('Failed to load categories or no categories found, using fallback');
       console.warn('Error:', result.error);
@@ -2147,9 +2185,16 @@ async function refreshCategories() {
   console.log('Manual categories refresh requested');
 
   try {
-    // Clear sessionStorage cache
-    sessionStorage.removeItem('racetagger_sport_categories');
-    console.log('Cleared sessionStorage cache');
+    // Clear all versioned sessionStorage caches
+    const keysToRemove = [];
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const key = sessionStorage.key(i);
+      if (key && key.startsWith('racetagger_sport_categories')) {
+        keysToRemove.push(key);
+      }
+    }
+    keysToRemove.forEach(key => sessionStorage.removeItem(key));
+    console.log(`Cleared ${keysToRemove.length} sessionStorage cache entries`);
 
     // Refresh backend cache
     if (window.api) {

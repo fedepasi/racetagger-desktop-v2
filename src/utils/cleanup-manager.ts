@@ -231,55 +231,84 @@ export class CleanupManager extends EventEmitter {
   }
 
   /**
-   * Pulisce file temporanei orfani nella directory (non tracciati)
+   * Pulisce file temporanei orfani nella directory e sottodirectory (non tracciati)
+   * @param olderThanMinutes Pulisce file più vecchi di X minuti (default: 60)
    */
   async cleanupOrphans(olderThanMinutes: number = 60): Promise<void> {
-    console.log(`[CleanupManager] Cleaning up orphan files older than ${olderThanMinutes} minutes`);
+    console.log(`[CleanupManager] Cleaning up orphan files older than ${olderThanMinutes} minutes (${Math.round(olderThanMinutes / 60 / 24 * 10) / 10} days)`);
 
     try {
-      const files = await fsPromises.readdir(this.tempDirectory);
       const cutoffTime = Date.now() - (olderThanMinutes * 60 * 1000);
-      
+
       let orphansFound = 0;
       let orphansDeleted = 0;
       let bytesFreed = 0;
 
-      for (const fileName of files) {
-        const filePath = path.join(this.tempDirectory, fileName);
-        
+      // Funzione ricorsiva per pulire directory e sottodirectory
+      const cleanDirectory = async (dirPath: string): Promise<void> => {
+        let entries: string[];
         try {
-          const stat = await fsPromises.stat(filePath);
-          
-          // Skip se il file è più recente del cutoff
-          if (stat.mtime.getTime() > cutoffTime) {
-            continue;
-          }
-
-          // Skip se il file è attualmente tracciato
-          const isTracked = Array.from(this.tempFiles.values()).some(tf => 
-            tf.path === filePath || (tf.associatedFiles && tf.associatedFiles.includes(filePath))
-          );
-          
-          if (isTracked) {
-            continue;
-          }
-
-          orphansFound++;
-          
-          // Elimina file orfano
-          await fsPromises.unlink(filePath);
-          orphansDeleted++;
-          bytesFreed += stat.size;
-          
-          console.log(`[CleanupManager] Deleted orphan: ${fileName} (${Math.round(stat.size / 1024 / 1024 * 100) / 100}MB)`);
-          
-        } catch (error: any) {
-          console.error(`[CleanupManager] Error processing orphan ${fileName}:`, error);
+          entries = await fsPromises.readdir(dirPath);
+        } catch (error) {
+          return; // Directory non accessibile, skip
         }
-      }
 
-      console.log(`[CleanupManager] Orphan cleanup completed: ${orphansDeleted}/${orphansFound} deleted, ${Math.round(bytesFreed / 1024 / 1024 * 100) / 100}MB freed`);
-      
+        for (const entryName of entries) {
+          const entryPath = path.join(dirPath, entryName);
+
+          try {
+            const stat = await fsPromises.stat(entryPath);
+
+            // Se è una directory, puliscila ricorsivamente
+            if (stat.isDirectory()) {
+              await cleanDirectory(entryPath);
+
+              // Dopo la pulizia, rimuovi la directory se vuota
+              try {
+                const remainingFiles = await fsPromises.readdir(entryPath);
+                if (remainingFiles.length === 0) {
+                  await fsPromises.rmdir(entryPath);
+                  console.log(`[CleanupManager] Removed empty directory: ${entryName}`);
+                }
+              } catch {
+                // Directory non vuota o errore, ignora
+              }
+              continue;
+            }
+
+            // Skip se il file è più recente del cutoff
+            if (stat.mtime.getTime() > cutoffTime) {
+              continue;
+            }
+
+            // Skip se il file è attualmente tracciato
+            const isTracked = Array.from(this.tempFiles.values()).some(tf =>
+              tf.path === entryPath || (tf.associatedFiles && tf.associatedFiles.includes(entryPath))
+            );
+
+            if (isTracked) {
+              continue;
+            }
+
+            orphansFound++;
+
+            // Elimina file orfano
+            await fsPromises.unlink(entryPath);
+            orphansDeleted++;
+            bytesFreed += stat.size;
+
+          } catch (error: any) {
+            // Ignora errori su singoli file
+          }
+        }
+      };
+
+      // Pulisci ricorsivamente dalla directory principale
+      await cleanDirectory(this.tempDirectory);
+
+      const mbFreed = Math.round(bytesFreed / 1024 / 1024 * 100) / 100;
+      console.log(`[CleanupManager] Orphan cleanup completed: ${orphansDeleted}/${orphansFound} deleted, ${mbFreed}MB freed`);
+
       this.emit('orphan-cleanup-complete', {
         orphansFound,
         orphansDeleted,
@@ -387,7 +416,7 @@ export class CleanupManager extends EventEmitter {
   }
 
   /**
-   * Startup cleanup - remove all temp files from previous sessions
+   * Startup cleanup - remove temp files older than 7 days
    */
   async startupCleanup(): Promise<void> {
     console.log('[CleanupManager] Performing startup cleanup of temporary files...');
@@ -396,12 +425,54 @@ export class CleanupManager extends EventEmitter {
       // Clean up all tracked files (should be empty at startup)
       await this.cleanupAll();
 
-      // Clean up all orphan files (don't wait for age)
-      await this.cleanupOrphans(0);
+      // Clean up orphan files older than 7 days (7 * 24 * 60 = 10080 minutes)
+      const SEVEN_DAYS_IN_MINUTES = 7 * 24 * 60;
+      await this.cleanupOrphans(SEVEN_DAYS_IN_MINUTES);
 
       console.log('[CleanupManager] Startup cleanup completed');
     } catch (error) {
       console.error('[CleanupManager] Error during startup cleanup:', error);
+    }
+  }
+
+  private periodicCleanupTimer: NodeJS.Timeout | null = null;
+
+  /**
+   * Avvia la pulizia periodica dei file temporanei (ogni 24 ore)
+   * Pulisce file più vecchi di 7 giorni
+   */
+  startPeriodicCleanup(): void {
+    // Evita timer duplicati
+    if (this.periodicCleanupTimer) {
+      return;
+    }
+
+    const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+    const SEVEN_DAYS_IN_MINUTES = 7 * 24 * 60;
+
+    console.log('[CleanupManager] Starting periodic cleanup (every 24h, files older than 7 days)');
+
+    this.periodicCleanupTimer = setInterval(async () => {
+      console.log('[CleanupManager] Running scheduled periodic cleanup...');
+      try {
+        await this.cleanupOrphans(SEVEN_DAYS_IN_MINUTES);
+      } catch (error) {
+        console.error('[CleanupManager] Periodic cleanup error:', error);
+      }
+    }, TWENTY_FOUR_HOURS_MS);
+
+    // Non bloccare la chiusura dell'app
+    this.periodicCleanupTimer.unref();
+  }
+
+  /**
+   * Ferma la pulizia periodica
+   */
+  stopPeriodicCleanup(): void {
+    if (this.periodicCleanupTimer) {
+      clearInterval(this.periodicCleanupTimer);
+      this.periodicCleanupTimer = null;
+      console.log('[CleanupManager] Periodic cleanup stopped');
     }
   }
 }

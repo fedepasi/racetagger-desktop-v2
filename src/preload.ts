@@ -73,6 +73,7 @@ const validInvokeChannels: string[] = [
   'get-version-check-result',
   'is-force-update-required',
   'get-app-version',
+  'get-max-supported-edge-function-version',
   'open-download-url',
   'quit-app-for-update',
   // Image/File Operations

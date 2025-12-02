@@ -928,6 +928,55 @@ class UnifiedImageWorker extends EventEmitter {
             });
           }
 
+          // Write metadata from face recognition matches
+          for (const match of matchedDrivers) {
+            const raceNumber = match.raceNumber;
+
+            // Find participant in preset data
+            const participant = this.participantsData.length > 0
+              ? this.participantsData.find((p: any) =>
+                  String(p.numero) === String(raceNumber) ||
+                  String(p.number) === String(raceNumber)
+                )
+              : null;
+
+            // Write metatag to XMP:Description if available
+            if (participant?.metatag) {
+              workerLog.info(`[FaceRecognition] Writing metatag "${participant.metatag}" for race number ${raceNumber}`);
+              const descriptionMode = this.config.descriptionMode || 'append';
+              await writeExtendedDescription(imageFile.originalPath, participant.metatag, descriptionMode);
+            }
+
+            // Build and write keywords from face recognition data
+            const faceKeywords: string[] = [];
+
+            // Add race number
+            if (raceNumber) {
+              faceKeywords.push(String(raceNumber));
+            }
+
+            // Add driver name (from match or participant)
+            const driverName = match.drivers[0] || participant?.nome_pilota || participant?.nome;
+            if (driverName) {
+              // Split name into individual words (filter words > 1 char)
+              const nameWords = driverName.split(/\s+/).filter((w: string) => w.length > 1);
+              faceKeywords.push(...nameWords);
+            }
+
+            // Add team
+            const team = match.teamName || participant?.squadra || participant?.team;
+            if (team) {
+              faceKeywords.push(team);
+            }
+
+            // Write keywords if we have any
+            if (faceKeywords.length > 0) {
+              workerLog.info(`[FaceRecognition] Writing keywords [${faceKeywords.join(', ')}] for ${imageFile.fileName}`);
+              const keywordsMode = this.config.keywordsMode || 'append';
+              await writeKeywordsToImage(imageFile.originalPath, faceKeywords, false, keywordsMode);
+            }
+          }
+
           return {
             fileId: imageFile.id,
             fileName: imageFile.fileName,
