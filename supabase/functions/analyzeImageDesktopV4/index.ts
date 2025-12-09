@@ -130,6 +130,72 @@ const ROBOFLOW_CONFIG = {
   timeout: 30000                  // 30 seconds
 };
 
+// ==================== TOKEN DEDUCTION HELPER ====================
+
+/**
+ * Deduct 1 token from user's balance
+ * Uses userId directly from request body (not email lookup)
+ */
+async function deductToken(
+  supabaseAdmin: any,
+  userId: string
+): Promise<{ success: boolean; remainingTokens: number; error?: string }> {
+  try {
+    if (!userId) {
+      console.log(`[V4 TOKEN] No userId provided, skipping deduction`);
+      return { success: false, remainingTokens: 0, error: 'No userId provided' };
+    }
+
+    console.log(`[V4 TOKEN] Deducting 1 token for userId: ${userId}`);
+
+    // Query user_tokens directly by userId
+    const { data: userTokenData, error: userTokenError } = await supabaseAdmin
+      .from('user_tokens')
+      .select('user_id, tokens_purchased, tokens_used')
+      .eq('user_id', userId)
+      .single();
+
+    if (userTokenError && userTokenError.code === 'PGRST116') {
+      console.log(`[V4 TOKEN] No token record found for userId ${userId}, allowing free analysis`);
+      return { success: true, remainingTokens: 0 };
+    } else if (userTokenError) {
+      console.error(`[V4 TOKEN] Failed to get user token data:`, userTokenError);
+      return { success: false, remainingTokens: 0, error: userTokenError.message };
+    }
+
+    const current_purchased = userTokenData.tokens_purchased || 0;
+    const current_used = userTokenData.tokens_used || 0;
+    const availableBalance = current_purchased - current_used;
+
+    if (availableBalance < 1) {
+      console.warn(`[V4 TOKEN] Insufficient tokens: ${availableBalance} available`);
+      return { success: false, remainingTokens: availableBalance, error: 'Insufficient tokens' };
+    }
+
+    // Consume 1 token
+    const { error: updateError } = await supabaseAdmin
+      .from('user_tokens')
+      .update({
+        tokens_used: current_used + 1,
+        last_updated: new Date().toISOString()
+      })
+      .eq('user_id', userId);
+
+    if (updateError) {
+      console.error(`[V4 TOKEN] Failed to consume token:`, updateError);
+      return { success: false, remainingTokens: availableBalance, error: updateError.message };
+    }
+
+    const remainingTokens = availableBalance - 1;
+    console.log(`[V4 TOKEN] ✓ Token consumed. Remaining: ${remainingTokens}`);
+    return { success: true, remainingTokens };
+
+  } catch (error: any) {
+    console.error(`[V4 TOKEN] Exception:`, error);
+    return { success: false, remainingTokens: 0, error: error.message };
+  }
+}
+
 // ==================== RF-DETR UTILITY FUNCTIONS ====================
 
 /**
@@ -550,6 +616,16 @@ serve(async (req) => {
 
         console.log(`[V4] ✓ RF-DETR analysisResult set with recognitionMethod: ${analysisResult.recognitionMethod}`);
 
+        // Deduct token for RF-DETR success (1 image = 1 token)
+        if (userId) {
+          const tokenResult = await deductToken(supabaseAdmin, userId);
+          analysisResult.tokenInfo = {
+            tokensConsumed: tokenResult.success ? 1 : 0,
+            remainingTokens: tokenResult.remainingTokens,
+            consumptionSuccessful: tokenResult.success
+          };
+        }
+
       } catch (rfDetrError: any) {
         console.error('[V4] ✗ RF-DETR FAILED, falling back to Gemini:', rfDetrError.message);
         // Fall through to Gemini
@@ -563,6 +639,7 @@ serve(async (req) => {
 
       // Delegate to analyzeImageDesktopV3 for Gemini processing
       // This reuses all the tested V3 logic (prompts, parsing, token management, etc.)
+      // V3 will handle token deduction (no skipTokenDeduction flag)
       const v3Url = `${Deno.env.get('SUPABASE_URL')}/functions/v1/analyzeImageDesktopV3`;
       const v3Response = await fetch(v3Url, {
         method: 'POST',
@@ -570,7 +647,7 @@ serve(async (req) => {
           'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(body)
+        body: JSON.stringify(body) // V3 handles token deduction
       });
 
       if (!v3Response.ok) {

@@ -374,7 +374,7 @@ function handleRegisterResult(result) {
 
   if (result.success) {
     // Show success message
-    showAuthSuccess('register', 'Account creato con successo! Controlla la tua email per verificare il tuo account prima di effettuare il login.');
+    showAuthSuccess('register', 'Account created successfully! Check your email to verify your account before logging in.');
 
     // Reset form
     registerForm.reset();

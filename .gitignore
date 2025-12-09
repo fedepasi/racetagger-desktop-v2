@@ -81,3 +81,4 @@ vendor/win32/*/exiftool-*/
 gen-lang-client-*.jsonml-training/
 ml-training/rf-detr-medium.pth
 ml-training/rf-detr-base.pth
+ml-training/formula_e_dataset/

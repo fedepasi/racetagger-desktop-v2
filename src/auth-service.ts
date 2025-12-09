@@ -670,6 +670,22 @@ export class AuthService {
 
       if (error) {
         console.error('Registration error:', error);
+        // When edge function returns non-2xx status, the error message is generic
+        // but the actual error details are in the response body (error.context)
+        if (data && data.error) {
+          return { success: false, error: data.error };
+        }
+        // Try to extract error from the response context
+        if (error.context && typeof error.context.json === 'function') {
+          try {
+            const errorBody = await error.context.json();
+            if (errorBody && errorBody.error) {
+              return { success: false, error: errorBody.error };
+            }
+          } catch (parseError) {
+            console.error('Failed to parse error response:', parseError);
+          }
+        }
         return { success: false, error: error.message };
       }
 

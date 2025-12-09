@@ -1,0 +1,93 @@
+{
+  "project_name": "Formula_E_2025_Roboflow_Training",
+  "description": "Configurazione label per Roboflow. ID classi incrementali (0-N). Nome classe = Numero di Gara.",
+
+  "labels": {
+    "0": "1",
+    "1": "3",
+    "2": "7",
+    "3": "9",
+    "4": "11",
+    "5": "13",
+    "6": "14",
+    "7": "16",
+    "8": "21",
+    "9": "22",
+    "10": "23",
+    "11": "25",
+    "12": "27",
+    "13": "28",
+    "14": "33",
+    "15": "37",
+    "16": "48",
+    "17": "51",
+    "18": "77",
+    "19": "94"
+  },
+
+  "groups": {
+    "andretti": {
+      "name": "Andretti Formula E",
+      "color": "#ED1A3B",
+      "labels": ["12", "13"]
+    },
+    "kiro": {
+      "name": "CUPRA KIRO",
+      "color": "#000000",
+      "labels": ["1", "14"]
+    },
+    "ds_penske": {
+      "name": "DS PENSKE",
+      "color": "#C4A25E",
+      "labels": ["2", "18"]
+    },
+    "envision": {
+      "name": "Envision Racing",
+      "color": "#00BE2D",
+      "labels": ["6", "7"]
+    },
+    "jaguar": {
+      "name": "Jaguar TCS Racing",
+      "color": "#111111",
+      "labels": ["3", "5"]
+    },
+    "lola": {
+      "name": "Lola Yamaha ABT",
+      "color": "#0046AD",
+      "labels": ["4", "9"]
+    },
+    "mahindra": {
+      "name": "Mahindra Racing",
+      "color": "#DD052B",
+      "labels": ["8", "16"]
+    },
+    "nissan": {
+      "name": "Nissan Formula E Team",
+      "color": "#C3002F",
+      "labels": ["0", "10"]
+    },
+    "porsche": {
+      "name": "Porsche Formula E Team",
+      "color": "#000000",
+      "labels": ["17", "19"]
+    },
+    "Citroen": {
+      "name": "CITROËN RACING",
+      "color": "#FF8000",
+      "labels": ["11","15"]
+    }
+  },
+
+  "shortcuts": {
+    "a": ["12", "13"],
+    "k": ["1", "14"],
+    "d": ["2", "18"],
+    "e": ["6", "7"],
+    "j": ["3", "5"],
+    "l": ["4", "9"],
+    "m": ["8", "16"],
+    "n": ["0", "10"],
+    "p": ["17", "19"],
+    "c": ["11", "15"]
+  }
+}

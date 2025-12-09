@@ -89,7 +89,7 @@ serve(async (req) => {
       return new Response(
         JSON.stringify({
           success: false,
-          error: 'Email already registered.',
+          error: 'This email is already registered. Please sign in instead, or use a different email address.',
           errorType: 'duplicate_email'
         }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }

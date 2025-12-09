@@ -48,7 +48,7 @@ serve(async (req) => {
       throw new Error(`Failed to parse request body: ${jsonError.message}`);
     }
 
-    const { imagePath: reqImagePath, originalFilename: reqOriginalFilename, mimeType: reqMimeType, sizeBytes: reqSizeBytes, modelName: requestedModelName, userId, category: reqCategory, userEmail: reqUserEmail, executionId, participantPreset } = requestBody;
+    const { imagePath: reqImagePath, originalFilename: reqOriginalFilename, mimeType: reqMimeType, sizeBytes: reqSizeBytes, modelName: requestedModelName, userId, category: reqCategory, userEmail: reqUserEmail, executionId, participantPreset, skipTokenDeduction } = requestBody;
 
     // Assign to outer scope variables
     imagePath = reqImagePath;
@@ -955,71 +955,77 @@ Respond ONLY with a valid JSON array where each object represents one detected v
 
 
     // 10. ANALYSIS SUCCESSFUL - GET TOKEN BALANCE AND CONSUME 1 TOKEN
-    console.log(`[TOKEN CONSUMPTION] Analysis successful. Getting token balance and consuming 1 token for user: ${userEmail}`);
-    
-    try {
-      // Get user ID from email by checking the user_tokens table directly
-      const { data: userTokenData, error: userTokenError } = await supabaseAdmin
-        .from('user_tokens')
-        .select('user_id, tokens_purchased, tokens_used')
-        .eq('user_email', userEmail)
-        .single();
-      
-      let userId;
-      let current_purchased = 0;
-      let current_used = 0;
-      
-      if (userTokenError && userTokenError.code === 'PGRST116') {
-        // No user tokens record found - this is a new user
-        console.log(`[TOKEN INFO] No token record found for ${userEmail}, treating as new user`);
-        availableBalance = 0;
-        userId = null; // We'll skip token consumption for new users
-      } else if (userTokenError) {
-        console.error(`[TOKEN ERROR] Failed to get user token data for ${userEmail}:`, userTokenError);
-        throw new Error(`Token system error: ${userTokenError.message}`);
-      } else {
-        userId = userTokenData.user_id;
-        current_purchased = userTokenData.tokens_purchased || 0;
-        current_used = userTokenData.tokens_used || 0;
-        availableBalance = current_purchased - current_used;
-        console.log(`[TOKEN INFO] Found token record for ${userEmail}: ${availableBalance} tokens available`);
-      }
-      
-      // Check if user has enough tokens
-      if (!userId || availableBalance < 1) {
-        if (!userId) {
-          console.warn(`[TOKEN WARNING] No token record for ${userEmail}, allowing free analysis`);
-          remainingTokens = 0;
-          consumeError = null; // Allow analysis for new users
-        } else {
-          console.warn(`[TOKEN WARNING] User ${userEmail} has insufficient tokens (${availableBalance} available, 1 required)`);
-          remainingTokens = availableBalance; // Keep current balance
-          consumeError = { message: 'Insufficient tokens', code: 'INSUFFICIENT_TOKENS' };
-        }
-      } else {
-        // Consume 1 token by updating tokens_used directly
-        const { error: updateError } = await supabaseAdmin
-          .from('user_tokens')
-          .update({ 
-            tokens_used: current_used + 1,
-            updated_at: new Date().toISOString()
-          })
-          .eq('user_id', userId);
-        
-        if (updateError) {
-          console.error(`[TOKEN ERROR] Failed to consume token for ${userEmail}:`, updateError);
-          remainingTokens = availableBalance; // Keep original balance if consumption failed
-          consumeError = updateError;
-        } else {
-          remainingTokens = availableBalance - 1;
-          console.log(`[TOKEN SUCCESS] Successfully consumed 1 token for ${userEmail}. Remaining: ${remainingTokens}`);
-        }
-      }
-    } catch (tokenError) {
-      console.error(`[TOKEN ERROR] Exception during token processing for ${userEmail}:`, tokenError);
+    // Skip token deduction if flag is set (e.g., when called from V4 which already deducted)
+    if (skipTokenDeduction) {
+      console.log(`[TOKEN CONSUMPTION] Skipping token deduction for ${userEmail} (skipTokenDeduction=true)`);
+      remainingTokens = -1; // Indicate skipped
+      consumeError = null;
+    } else if (!userId) {
+      // No userId provided - skip token deduction but allow analysis
+      console.log(`[TOKEN CONSUMPTION] No userId provided for ${userEmail}, skipping token deduction`);
       availableBalance = 0;
       remainingTokens = 0;
-      consumeError = tokenError;
+      consumeError = null;
+    } else {
+      console.log(`[TOKEN CONSUMPTION] Analysis successful. Getting token balance and consuming 1 token for userId: ${userId}`);
+
+      try {
+        // Query user_tokens directly using userId from request body
+        const { data: userTokenData, error: userTokenError } = await supabaseAdmin
+          .from('user_tokens')
+          .select('user_id, tokens_purchased, tokens_used')
+          .eq('user_id', userId)
+          .single();
+
+        let current_purchased = 0;
+        let current_used = 0;
+
+        if (userTokenError && userTokenError.code === 'PGRST116') {
+          // No user tokens record found - this is a new user
+          console.log(`[TOKEN INFO] No token record found for userId: ${userId}, treating as new user`);
+          availableBalance = 0;
+          remainingTokens = 0;
+          consumeError = null; // Allow analysis for new users
+        } else if (userTokenError) {
+          console.error(`[TOKEN ERROR] Failed to get user token data for userId ${userId}:`, userTokenError);
+          throw new Error(`Token system error: ${userTokenError.message}`);
+        } else {
+          current_purchased = userTokenData.tokens_purchased || 0;
+          current_used = userTokenData.tokens_used || 0;
+          availableBalance = current_purchased - current_used;
+          console.log(`[TOKEN INFO] Found token record for userId ${userId}: ${availableBalance} tokens available`);
+
+          // Check if user has enough tokens
+          if (availableBalance < 1) {
+            console.warn(`[TOKEN WARNING] User ${userId} has insufficient tokens (${availableBalance} available, 1 required)`);
+            remainingTokens = availableBalance; // Keep current balance
+            consumeError = { message: 'Insufficient tokens', code: 'INSUFFICIENT_TOKENS' };
+          } else {
+            // Consume 1 token by updating tokens_used directly
+            const { error: updateError } = await supabaseAdmin
+              .from('user_tokens')
+              .update({
+                tokens_used: current_used + 1,
+                last_updated: new Date().toISOString()
+              })
+              .eq('user_id', userId);
+
+            if (updateError) {
+              console.error(`[TOKEN ERROR] Failed to consume token for userId ${userId}:`, updateError);
+              remainingTokens = availableBalance; // Keep original balance if consumption failed
+              consumeError = updateError;
+            } else {
+              remainingTokens = availableBalance - 1;
+              console.log(`[TOKEN SUCCESS] Successfully consumed 1 token for userId ${userId}. Remaining: ${remainingTokens}`);
+            }
+          }
+        }
+      } catch (tokenError) {
+        console.error(`[TOKEN ERROR] Exception during token processing for userId ${userId}:`, tokenError);
+        availableBalance = 0;
+        remainingTokens = 0;
+        consumeError = tokenError;
+      }
     }
     
     // 11. Return success response including CORS headers

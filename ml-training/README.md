@@ -289,6 +289,48 @@ Per migliorare il modello:
 3. **Testa edge cases**: Notturne, pioggia, angoli estremi
 4. **Report issues**: Apri issue su GitHub con esempi
 
+## 🎬 Video Frame Extractor
+
+Tool per estrarre frame da video di highlights e creare dataset per object detection.
+
+### Workflow
+
+```bash
+# 1. Estrai frame dal video (2 fps, scene detection automatica)
+python scripts/10-video-frame-extractor.py extract \
+    --video highlights_f1.mp4 \
+    --output ./f1_cars_dataset \
+    --fps 2 \
+    --threshold 0.7
+
+# 2. Labeling interattivo CLI (per scena)
+python scripts/10-video-frame-extractor.py label --input ./f1_cars_dataset
+
+# 3. Oppure usa la GUI per labeling visuale
+python scripts/11-video-labeler-gui.py --input ./f1_cars_dataset
+
+# 4. Organizza frame per label
+python scripts/10-video-frame-extractor.py organize --input ./f1_cars_dataset
+
+# 5. Esporta per Roboflow
+python scripts/10-video-frame-extractor.py export --input ./f1_cars_dataset --project f1-2024
+```
+
+### Features
+
+- **Scene Detection**: Raggruppa automaticamente frame simili (stessa inquadratura)
+- **Labeling per Blocco**: Label una volta, applica a tutti i frame della scena
+- **Shortcut Numerici**: Digita numero pilota (1, 16, 44...) per labeling veloce
+- **GUI Visuale**: Interfaccia grafica con preview immagini e bottoni team
+- **Export Roboflow**: Pronto per upload su Roboflow per bbox labeling
+
+### Label Format
+
+Per RF-DETR il formato label è: `MODEL_DRIVER`
+- `SF24_LEC` = Ferrari SF24, Leclerc (#16)
+- `RB20_VER` = Red Bull RB20, Verstappen (#1)
+- `MCL38_NOR` = McLaren MCL38, Norris (#4)
+
 ## 📄 Licenza
 
 Questo modulo di training è parte di RaceTagger Desktop.
