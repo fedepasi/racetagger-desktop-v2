@@ -893,41 +893,6 @@ class UnifiedImageWorker extends EventEmitter {
           // Generate preview for UI even with face-only recognition
           const previewDataUrl = `data:${mimeType};base64,${buffer.toString('base64')}`;
 
-          // Log the face recognition analysis for results page
-          if (this.analysisLogger) {
-            const faceVehicles = matchedDrivers.map((driver, idx) => ({
-              vehicleIndex: idx,
-              raceNumber: driver.raceNumber ?? undefined,
-              drivers: driver.drivers,
-              team: driver.teamName ?? undefined,
-              confidence: driver.confidence,
-              modelSource: undefined,
-              corrections: [] as any[],
-              finalResult: {
-                raceNumber: driver.raceNumber ?? undefined,
-                team: driver.teamName ?? undefined,
-                drivers: driver.drivers,
-                matchedBy: 'face_recognition'
-              }
-            }));
-
-            this.analysisLogger.logImageAnalysis({
-              imageId: imageFile.id,
-              fileName: imageFile.fileName,
-              originalFileName: path.basename(imageFile.originalPath),
-              originalPath: imageFile.originalPath,
-              supabaseUrl: `local://${imageFile.originalPath}`,
-              aiResponse: {
-                rawText: `FACE_RECOGNITION: ${matchedDrivers.length} drivers identified`,
-                totalVehicles: matchedDrivers.length,
-                vehicles: faceVehicles
-              },
-              thumbnailPath,
-              microThumbPath,
-              compressedPath
-            });
-          }
-
           // Write metadata from face recognition matches
           for (const match of matchedDrivers) {
             const raceNumber = match.raceNumber;
@@ -1002,6 +967,129 @@ class UnifiedImageWorker extends EventEmitter {
             csvMatch: faceRecognitionCsvMatches
           };
           await this.organizeToFolders(imageFile, faceProcessedAnalysis, uploadReadyPath);
+
+          // ============================================
+          // Upload to Supabase Storage and save to database (like normal flow)
+          // ============================================
+          let faceRecognitionStoragePath: string | null = null;
+          let faceRecognitionImageId: string | null = null;
+
+          try {
+            // Get userId from authService (same as other flows)
+            const { authService } = await import('./auth-service');
+            const authState = authService.getAuthState();
+            const faceRecUserId = authState.isAuthenticated ? authState.user?.id : null;
+
+            // 1. Upload image to Supabase Storage
+            faceRecognitionStoragePath = await this.uploadToStorage(
+              imageFile.fileName,
+              buffer,
+              mimeType
+            );
+            workerLog.info(`[FaceRecognition] Uploaded to Supabase: ${faceRecognitionStoragePath}`);
+
+            // 2. Save to 'images' table
+            if (this.supabase && faceRecognitionStoragePath && faceRecUserId) {
+              const { data: imageRecord, error: imageError } = await this.supabase
+                .from('images')
+                .insert({
+                  user_id: faceRecUserId,
+                  original_filename: imageFile.fileName,
+                  storage_path: faceRecognitionStoragePath,
+                  mime_type: mimeType,
+                  size_bytes: buffer.length,
+                  execution_id: this.config.executionId || null,
+                  status: 'analyzed'
+                })
+                .select('id')
+                .single();
+
+              if (imageError) {
+                workerLog.error(`[FaceRecognition] Error saving to images table: ${imageError.message}`);
+              } else if (imageRecord) {
+                faceRecognitionImageId = imageRecord.id;
+                workerLog.info(`[FaceRecognition] Saved to images table: ${faceRecognitionImageId}`);
+
+                // 3. Save to 'analysis_results' table
+                const primaryMatch = matchedDrivers[0];
+                const { error: analysisError } = await this.supabase
+                  .from('analysis_results')
+                  .insert({
+                    image_id: faceRecognitionImageId,
+                    analysis_provider: 'face_recognition',
+                    recognized_number: primaryMatch.raceNumber,
+                    confidence_score: primaryMatch.confidence,
+                    confidence_level: primaryMatch.confidence >= 0.8 ? 'high' : primaryMatch.confidence >= 0.6 ? 'medium' : 'low',
+                    raw_response: {
+                      modelSource: 'face_recognition',
+                      matchedDrivers: matchedDrivers,
+                      sceneCategory: sceneClassification?.category,
+                      inferenceTimeMs: faceRecognitionResult?.detectionTimeMs || 0
+                    },
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    estimated_cost_usd: 0,
+                    execution_time_ms: processingTimeMs
+                  });
+
+                if (analysisError) {
+                  workerLog.error(`[FaceRecognition] Error saving to analysis_results: ${analysisError.message}`);
+                }
+              }
+            } else if (!faceRecUserId) {
+              workerLog.warn(`[FaceRecognition] Skipping DB save: user not authenticated`);
+            }
+
+            // 4. Deduct 1 token
+            if (faceRecUserId) {
+              await authService.useTokens(1, faceRecUserId);
+              workerLog.info(`[FaceRecognition] Deducted 1 token for user ${faceRecUserId}`);
+            }
+
+            // 5. Log to JSONL with real Supabase URL
+            if (this.analysisLogger) {
+              const { SUPABASE_CONFIG } = await import('./config');
+              const faceSupabaseUrl = faceRecognitionStoragePath
+                ? `${SUPABASE_CONFIG.url}/storage/v1/object/public/uploaded-images/${faceRecognitionStoragePath}`
+                : `local://${imageFile.originalPath}`;
+
+              const faceVehiclesForLog = matchedDrivers.map((driver, idx) => ({
+                vehicleIndex: idx,
+                raceNumber: driver.raceNumber ?? undefined,
+                drivers: driver.drivers,
+                team: driver.teamName ?? undefined,
+                confidence: driver.confidence,
+                corrections: [] as any[],
+                finalResult: {
+                  raceNumber: driver.raceNumber ?? undefined,
+                  team: driver.teamName ?? undefined,
+                  drivers: driver.drivers,
+                  matchedBy: 'face_recognition'
+                }
+              }));
+
+              this.analysisLogger.logImageAnalysis({
+                imageId: imageFile.id,
+                fileName: imageFile.fileName,
+                originalFileName: path.basename(imageFile.originalPath),
+                originalPath: imageFile.originalPath,
+                supabaseUrl: faceSupabaseUrl,
+                aiResponse: {
+                  rawText: `FACE_RECOGNITION: ${matchedDrivers.length} drivers identified`,
+                  totalVehicles: matchedDrivers.length,
+                  vehicles: faceVehiclesForLog
+                },
+                thumbnailPath,
+                microThumbPath,
+                compressedPath
+              });
+              workerLog.info(`[FaceRecognition] Logged to JSONL with URL: ${faceSupabaseUrl}`);
+            }
+
+          } catch (uploadError: any) {
+            workerLog.error(`[FaceRecognition] Error during Supabase upload/save: ${uploadError.message}`);
+            // Non bloccare il processing per errori di upload
+          }
 
           return {
             fileId: imageFile.id,
