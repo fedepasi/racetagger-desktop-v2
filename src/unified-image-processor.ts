@@ -977,6 +977,32 @@ class UnifiedImageWorker extends EventEmitter {
             }
           }
 
+          // Build csvMatch array for folder organization from face recognition matches
+          const faceRecognitionCsvMatches = matchedDrivers.map(driver => {
+            // Find participant in preset data to get folder_1, folder_2, folder_3
+            const participant = this.participantsData.find((p: any) =>
+              String(p.numero) === String(driver.raceNumber) ||
+              String(p.number) === String(driver.raceNumber)
+            );
+
+            return {
+              entry: participant || {
+                numero: driver.raceNumber,
+                nome: driver.drivers[0],
+                squadra: driver.teamName
+              },
+              matchedNumber: driver.raceNumber,
+              confidence: driver.confidence
+            };
+          }).filter(m => m.entry?.numero);
+
+          // ADMIN FEATURE: Organize face recognition results into folders
+          const faceProcessedAnalysis = {
+            analysis: matchedDrivers.map(d => ({ raceNumber: d.raceNumber })),
+            csvMatch: faceRecognitionCsvMatches
+          };
+          await this.organizeToFolders(imageFile, faceProcessedAnalysis, uploadReadyPath);
+
           return {
             fileId: imageFile.id,
             fileName: imageFile.fileName,
