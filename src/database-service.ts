@@ -653,6 +653,7 @@ export interface Execution {
   results_reference?: string | null;
   created_at?: string; // ISO 8601 String
   updated_at?: string; // ISO 8601 String
+  completed_at?: string | null; // ISO 8601 String - When execution finished
   // Tracking fields for execution progress
   processed_images?: number; // Number of images successfully processed
   total_images?: number; // Total number of images to process
@@ -2507,6 +2508,7 @@ export interface SportCategory {
     multiEvidenceBonus: number;           // bonus multiplier for multiple evidence types (0-1)
   };
   scene_classifier_enabled?: boolean;     // Enable ONNX scene classifier to skip crowd/irrelevant scenes
+  save_segmentation_masks?: boolean;      // Save full RLE mask data in JSONL logs for debugging/training
 }
 
 export interface ParticipantPresetSupabase {

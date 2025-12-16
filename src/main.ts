@@ -3193,7 +3193,10 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
           try {
             await updateExecutionOnline(currentExecutionId, {
               status: 'completed',
-              results_reference: `${results.length} images processed`
+              results_reference: `${results.length} images processed`,
+              completed_at: new Date().toISOString(),
+              total_images: executionStats.totalImages,
+              processed_images: results.length
             });
             console.log(`[Tracking] Updated execution ${currentExecutionId} status to completed`);
           } catch (error) {
@@ -3803,7 +3806,10 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
       try {
         await updateExecutionOnline(currentExecutionId, {
           status: 'completed',
-          results_reference: `${completedImages}/${totalImages} images processed successfully`
+          results_reference: `${completedImages}/${totalImages} images processed successfully`,
+          completed_at: new Date().toISOString(),
+          total_images: totalImages,
+          processed_images: completedImages
         });
         console.log(`[Tracking] Updated execution ${currentExecutionId} status to completed`);
       } catch (error) {
@@ -3817,7 +3823,7 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
         console.warn('[Tracking] Failed to track execution settings:', error);
       });
     }
-    
+
     // Notifica il completamento del batch processing
     mainWindow.webContents.send('enhanced-processing-complete', {
       totalImages,
@@ -4370,6 +4376,18 @@ app.whenReady().then(async () => { // Added async here
     return MAX_SUPPORTED_EDGE_FUNCTION_VERSION;
   });
 
+  // CRITICAL: Register all IPC handlers BEFORE creating window to avoid race conditions
+  // The renderer will call these handlers immediately on load
+  console.log('[Main Process] Registering IPC handlers before window creation...');
+  setupAuthHandlers();
+  setupWindowControlHandlers();
+
+  // Register token handlers needed immediately by renderer
+  ipcMain.handle('submit-token-request', handleTokenRequest);
+  ipcMain.handle('get-token-balance', handleGetTokenBalance);
+  ipcMain.handle('get-pending-tokens', handleGetPendingTokens);
+  ipcMain.handle('get-token-info', handleGetTokenInfo);
+
   createWindow();
   
   // Cleanup temp files older than 7 days at startup and start periodic cleanup
@@ -4387,8 +4405,7 @@ app.whenReady().then(async () => { // Added async here
   } catch (cleanupError) {
     console.error('[Main Process] Error during startup cleanup:', cleanupError);
   }
-  setupAuthHandlers();
-  setupWindowControlHandlers();
+  // NOTE: setupAuthHandlers() and setupWindowControlHandlers() already called BEFORE createWindow()
   initializeDatabaseSchema(); // Usa il nome esportato corretto
   
   
@@ -4487,10 +4504,8 @@ app.whenReady().then(async () => { // Added async here
     forceUpdateRequired = false;
     app.quit();
   });
-  ipcMain.handle('submit-token-request', handleTokenRequest);
-  ipcMain.handle('get-token-balance', handleGetTokenBalance);
-  ipcMain.handle('get-pending-tokens', handleGetPendingTokens);
-  ipcMain.handle('get-token-info', handleGetTokenInfo);
+  // NOTE: Token handlers (submit-token-request, get-token-balance, get-pending-tokens, get-token-info)
+  // are now registered BEFORE createWindow() to avoid race conditions
   ipcMain.on('cancel-batch-processing', handleCancelBatchProcessing);
 
   // TRAINING CONSENT: IPC handlers for user consent management

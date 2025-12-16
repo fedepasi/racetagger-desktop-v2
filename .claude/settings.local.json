@@ -128,7 +128,9 @@
       "Bash(ROBOFLOW_API_KEY=\"111577bf-d905-4cff-a598-91b17df2365a\" roboflow import:*)",
       "Bash(ROBOFLOW_API_KEY=\"rf_3yxxEEH82ZYpsvfHCa5bVZJCHKu1\" roboflow import:*)",
       "Bash(ROBOFLOW_API_KEY=\"TFPr3dOFx7zh8Xoszccz\" roboflow import:*)",
-      "Bash(do [ ! -f \"$f%.jpg.txt\" ])"
+      "Bash(do [ ! -f \"$f%.jpg.txt\" ])",
+      "Bash(pip3 show:*)",
+      "Bash(pip3 install:*)"
     ],
     "deny": [],
     "ask": []

@@ -102,7 +102,8 @@ export const SUPABASE_CONFIG = {
 // - V3: Advanced annotations (app 1.0.8+)
 // - V4: RF-DETR support (app 1.0.9+)
 // - V5: Vehicle recognition, face recognition (app 1.0.11+)
-export const MAX_SUPPORTED_EDGE_FUNCTION_VERSION = 5;
+// - V6: Crop + Context multi-image analysis (app 1.0.12+)
+export const MAX_SUPPORTED_EDGE_FUNCTION_VERSION = 6;
 
 // Resize presets for image optimization before upload
 export enum ResizePreset {
@@ -389,6 +390,144 @@ if (!roboflowValidation.valid) {
   console.warn('[Config] ⚠️ Roboflow Configuration Issues:');
   roboflowValidation.warnings.forEach(warning => console.warn(`  - ${warning}`));
 }
+
+// ============================================================================
+// CROP-CONTEXT CONFIGURATION (V6 Edge Function)
+// ============================================================================
+
+/**
+ * Configuration for crop extraction from original images
+ */
+export interface CropContextCropConfig {
+  paddingPercent: number;   // Padding around bbox (0.15 = 15%)
+  minPaddingPx: number;     // Minimum padding in pixels (50px)
+  minDimension: number;     // Minimum crop dimension (640px)
+  maxDimension: number;     // Maximum crop dimension (1024px)
+  jpegQuality: number;      // JPEG quality (90)
+}
+
+/**
+ * Configuration for negative/context image generation
+ */
+export interface CropContextNegativeConfig {
+  enabled: boolean;         // Whether to generate negative
+  maskColor: string;        // Mask color (#000000 for black)
+  maxDimension: number;     // Maximum dimension (1440px)
+  jpegQuality: number;      // JPEG quality (80)
+}
+
+/**
+ * Configuration for multi-subject handling
+ */
+export interface CropContextMultiSubjectConfig {
+  maxCropsPerRequest: number;  // Maximum crops in single API call (5)
+  strategy: 'batch' | 'sequential';
+}
+
+/**
+ * Full crop-context configuration (stored in sport_categories.crop_config)
+ * When enabled=true, YOLOv8-seg segmentation is automatically used for subject isolation
+ */
+export interface CropContextConfig {
+  enabled: boolean;
+  crop: CropContextCropConfig;
+  negative: CropContextNegativeConfig;
+  multiSubject: CropContextMultiSubjectConfig;
+}
+
+/**
+ * Default crop-context configuration
+ * Used when sport_categories.crop_config has partial data
+ */
+export const DEFAULT_CROP_CONTEXT_CONFIG: CropContextConfig = {
+  enabled: false,
+  crop: {
+    paddingPercent: 0.15,
+    minPaddingPx: 50,
+    minDimension: 640,
+    maxDimension: 1024,
+    jpegQuality: 90
+  },
+  negative: {
+    enabled: true,
+    maskColor: '#000000',
+    maxDimension: 1440,
+    jpegQuality: 80
+  },
+  multiSubject: {
+    maxCropsPerRequest: 5,
+    strategy: 'batch'
+  }
+};
+
+// ============================================================================
+// GENERIC SEGMENTER CONFIGURATION (YOLOv8-seg)
+// ============================================================================
+
+/**
+ * Configuration for the generic segmentation model (YOLOv8-seg)
+ * This model runs BEFORE recognition to isolate subjects in images
+ */
+export interface GenericSegmenterConfig {
+  enabled: boolean;                   // Enable generic segmentation
+  modelType: 'yolov8n-seg' | 'yolov8s-seg';  // Model variant
+  confidenceThreshold: number;        // Minimum confidence for detections (0-1)
+  iouThreshold: number;               // IoU threshold for NMS (0-1)
+  maskThreshold: number;              // Threshold for mask binarization (0-1)
+  relevantClasses: number[];          // COCO class IDs to detect
+}
+
+/**
+ * Configuration for mask-based crop extraction
+ */
+export interface MaskCropConfig {
+  enabled: boolean;                   // Enable mask-based isolation
+  backgroundMode: 'black' | 'blur' | 'transparent';  // How to handle background
+  blurRadius: number;                 // Blur radius if backgroundMode is 'blur'
+  maskOtherSubjects: boolean;         // Mask overlapping subjects in crop
+  featherEdge: number;                // Pixels to feather mask edges
+}
+
+/**
+ * COCO class IDs for relevant subjects
+ */
+export const COCO_RELEVANT_CLASSES = {
+  PERSON: 0,
+  BICYCLE: 1,
+  CAR: 2,
+  MOTORCYCLE: 3,
+  BUS: 5,
+  TRUCK: 7,
+} as const;
+
+/**
+ * Default generic segmenter configuration
+ */
+export const DEFAULT_GENERIC_SEGMENTER_CONFIG: GenericSegmenterConfig = {
+  enabled: true,
+  modelType: 'yolov8n-seg',
+  confidenceThreshold: 0.25,
+  iouThreshold: 0.45,
+  maskThreshold: 0.5,
+  relevantClasses: [
+    COCO_RELEVANT_CLASSES.PERSON,
+    COCO_RELEVANT_CLASSES.CAR,
+    COCO_RELEVANT_CLASSES.MOTORCYCLE,
+    COCO_RELEVANT_CLASSES.BUS,
+    COCO_RELEVANT_CLASSES.TRUCK,
+  ],
+};
+
+/**
+ * Default mask crop configuration
+ */
+export const DEFAULT_MASK_CROP_CONFIG: MaskCropConfig = {
+  enabled: true,
+  backgroundMode: 'black',
+  blurRadius: 20,
+  maskOtherSubjects: true,
+  featherEdge: 2,
+};
 
 // New performance optimization configuration
 export const PERFORMANCE_CONFIG: PerformanceOptimizations = createPerformanceConfig();

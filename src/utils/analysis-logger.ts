@@ -61,7 +61,15 @@ export interface VehicleAnalysisData {
     width: number;  // Percentage 0-100 of image width (or pixels for RF-DETR)
     height: number; // Percentage 0-100 of image height (or pixels for RF-DETR)
   };
-  modelSource?: 'gemini' | 'rf-detr' | 'local-onnx';  // Recognition method used for this vehicle
+  // Segmentation mask info (YOLOv8-seg) - full mask data NOT stored (too large)
+  segmentation?: {
+    used: boolean;           // Was segmentation mask applied
+    cocoClass: string;       // 'car', 'motorcycle', 'person', etc.
+    cocoClassId: number;     // COCO class ID (2=car, 3=motorcycle, 0=person)
+    maskConfidence: number;  // Segmentation confidence (0-1)
+    maskedOthers: number;    // Number of other subjects masked out in this crop
+  };
+  modelSource?: 'gemini' | 'rf-detr' | 'local-onnx' | 'gemini-v6-seg';  // Recognition method used for this vehicle
   corrections: CorrectionData[];
   participantMatch?: any;
   finalResult: {
@@ -79,6 +87,8 @@ export interface ImageAnalysisEvent extends LogEvent {
   originalFileName?: string;
   originalPath?: string;
   supabaseUrl?: string;
+  // Base64 preview image for display in management portal (when no Supabase URL available)
+  previewDataUrl?: string;
   aiResponse: {
     rawText: string;
     totalVehicles: number;
@@ -97,9 +107,17 @@ export interface ImageAnalysisEvent extends LogEvent {
   microThumbPath?: string | null;
   compressedPath?: string | null;
   // Recognition method tracking
-  recognitionMethod?: 'gemini' | 'rf-detr' | 'local-onnx';
+  recognitionMethod?: 'gemini' | 'rf-detr' | 'local-onnx' | 'gemini-v6-seg';
   // Original image dimensions for bbox mapping (especially useful for local-onnx)
   imageSize?: { width: number; height: number };
+  // Segmentation preprocessing info (YOLOv8-seg used before recognition)
+  segmentationPreprocessing?: {
+    used: boolean;           // Was YOLOv8-seg segmentation used
+    detectionsCount: number; // Number of subjects detected by YOLO
+    inferenceMs: number;     // YOLO inference time in milliseconds
+    cropsExtracted: number;  // Number of masked crops created
+    masksApplied: boolean;   // Were masks applied to isolate subjects
+  };
   // Backward compatibility fields (uses first vehicle data)
   primaryVehicle?: VehicleAnalysisData;
 }
@@ -241,6 +259,17 @@ export class AnalysisLogger {
     startTime: Date.now()
   };
 
+  // Backpressure management for large batches
+  private writeQueue: string[] = [];
+  private isWriting: boolean = false;
+  private writeCount: number = 0;
+  private readonly FLUSH_INTERVAL = 50; // Flush to disk every 50 writes
+
+  // Database dual-write system (corrections, clusters, unknown numbers)
+  private dbWriteQueue: Array<{ type: 'correction' | 'cluster' | 'unknown'; data: any }> = [];
+  private dbWriteInterval: NodeJS.Timeout | null = null;
+  private readonly DB_FLUSH_INTERVAL_MS = 5000; // Flush to DB every 5 seconds
+
   constructor(executionId: string, category: string, userId: string, options: { appendMode?: boolean; readOnly?: boolean } = {}) {
     this.executionId = executionId;
     this.userId = userId;
@@ -283,6 +312,15 @@ export class AnalysisLogger {
     // this.uploadInterval = setInterval(() => {
     //   this.uploadToSupabase(false);
     // }, 30000);
+
+    // Start database dual-write interval (non-blocking best-effort)
+    if (!options.readOnly) {
+      this.dbWriteInterval = setInterval(() => {
+        this.flushDatabaseWrites().catch(err => {
+          console.warn('[AnalysisLogger] DB flush error (non-blocking):', err.message);
+        });
+      }, this.DB_FLUSH_INTERVAL_MS);
+    }
 
     console.log(`[AnalysisLogger] Local file: ${this.localFilePath}`);
     console.log(`[AnalysisLogger] Supabase path: ${this.supabaseUploadPath}`);
@@ -357,7 +395,27 @@ export class AnalysisLogger {
     // Update stats
     this.stats.corrections[data.correctionType]++;
 
+    // Write to JSONL (primary)
     this.writeLine(event);
+
+    // Queue for DB write (dual-write for redundancy)
+    this.dbWriteQueue.push({
+      type: 'correction',
+      data: {
+        execution_id: this.executionId,
+        user_id: this.userId,
+        image_id: data.imageId,
+        correction_type: data.correctionType,
+        field: data.field,
+        original_value: data.originalValue,
+        corrected_value: data.correctedValue,
+        confidence: data.confidence,
+        reason: data.reason,
+        message: message,
+        vehicle_index: (data as any).vehicleIndex || null,
+        details: data.details || null
+      }
+    });
 
     console.log(`[AnalysisLogger] Correction: ${message}`);
   }
@@ -373,7 +431,25 @@ export class AnalysisLogger {
       ...data
     };
 
+    // Write to JSONL (primary)
     this.writeLine(event);
+
+    // Queue for DB write (dual-write for redundancy)
+    this.dbWriteQueue.push({
+      type: 'unknown',
+      data: {
+        execution_id: this.executionId,
+        user_id: this.userId,
+        image_id: data.imageId,
+        file_name: data.fileName,
+        detected_numbers: data.detectedNumbers,
+        participant_preset_name: data.participantPresetName || null,
+        participant_count: data.participantCount,
+        applied_fuzzy_correction: data.appliedFuzzyCorrection,
+        fuzzy_attempts: data.fuzzyAttempts || null,
+        organization_folder: data.organizationFolder
+      }
+    });
 
     const fuzzyInfo = data.appliedFuzzyCorrection ?
       ` (attempted fuzzy correction on ${data.fuzzyAttempts?.length || 0} candidates)` : '';
@@ -393,7 +469,24 @@ export class AnalysisLogger {
     };
 
     this.stats.temporalClusters++;
+
+    // Write to JSONL (primary)
     this.writeLine(event);
+
+    // Queue for DB write (dual-write for redundancy)
+    this.dbWriteQueue.push({
+      type: 'cluster',
+      data: {
+        execution_id: this.executionId,
+        user_id: this.userId,
+        cluster_images: data.clusterImages,
+        cluster_size: data.clusterImages.length,
+        duration_ms: data.duration,
+        is_burst_mode: data.burstMode,
+        common_number: data.commonNumber || null,
+        sport: data.sport
+      }
+    });
   }
 
   /**
@@ -524,14 +617,170 @@ export class AnalysisLogger {
   }
 
   /**
-   * Write a line to the JSONL file
+   * Write a line to the JSONL file with backpressure handling
+   * Uses a queue system to prevent data loss when buffer fills up
    */
   private writeLine(data: any): void {
     try {
+      // Skip if in read-only mode
+      if (!this.fileStream) {
+        return;
+      }
+
       const line = JSON.stringify(data) + '\n';
-      this.fileStream.write(line);
+      this.writeQueue.push(line);
+      this.processWriteQueue();
     } catch (error) {
-      console.error('[AnalysisLogger] Error writing line:', error);
+      console.error('[AnalysisLogger] Error queueing write:', error);
+    }
+  }
+
+  /**
+   * Process the write queue with backpressure handling
+   * Ensures all data is written even when buffer fills up
+   */
+  private processWriteQueue(): void {
+    if (this.isWriting || this.writeQueue.length === 0 || !this.fileStream || this.fileStream.destroyed) {
+      return;
+    }
+
+    this.isWriting = true;
+
+    const writeNext = (): void => {
+      if (this.writeQueue.length === 0 || !this.fileStream || this.fileStream.destroyed) {
+        this.isWriting = false;
+        return;
+      }
+
+      const line = this.writeQueue.shift()!;
+      const canContinue = this.fileStream.write(line);
+      this.writeCount++;
+
+      // Periodic flush to ensure data is persisted to disk
+      if (this.writeCount % this.FLUSH_INTERVAL === 0) {
+        // Force a sync write to disk for durability
+        try {
+          const fd = (this.fileStream as any).fd;
+          if (fd !== undefined && fd !== null) {
+            fs.fsyncSync(fd);
+          }
+        } catch (syncError) {
+          // fsync may fail if fd is not available, continue anyway
+        }
+        console.log(`[AnalysisLogger] Flushed ${this.writeCount} entries to disk`);
+      }
+
+      if (canContinue) {
+        // Buffer has space, continue immediately
+        setImmediate(writeNext);
+      } else {
+        // Buffer is full, wait for drain event
+        console.log(`[AnalysisLogger] Buffer full, waiting for drain (${this.writeQueue.length} entries queued)`);
+        this.fileStream.once('drain', () => {
+          writeNext();
+        });
+      }
+    };
+
+    writeNext();
+  }
+
+  /**
+   * Flush all pending writes and ensure they're persisted to disk
+   * Call this before finalize() for guaranteed data persistence
+   */
+  async flushWrites(): Promise<void> {
+    // Wait for write queue to empty
+    while (this.writeQueue.length > 0 || this.isWriting) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+
+    // Ensure all data is written to disk
+    if (this.fileStream && !this.fileStream.destroyed) {
+      await new Promise<void>((resolve) => {
+        // Wait for drain if needed
+        if (this.fileStream.writableNeedDrain) {
+          this.fileStream.once('drain', () => resolve());
+        } else {
+          resolve();
+        }
+      });
+
+      // Force sync to disk
+      try {
+        const fd = (this.fileStream as any).fd;
+        if (fd !== undefined && fd !== null) {
+          fs.fsyncSync(fd);
+        }
+      } catch (syncError) {
+        console.warn('[AnalysisLogger] fsync warning:', syncError);
+      }
+    }
+
+    console.log(`[AnalysisLogger] All ${this.writeCount} writes flushed to disk`);
+  }
+
+  /**
+   * Flush all pending database writes (corrections, clusters, unknown numbers)
+   * Best-effort: failures don't block execution, JSONL is primary backup
+   */
+  async flushDatabaseWrites(): Promise<void> {
+    if (this.dbWriteQueue.length === 0) {
+      return;
+    }
+
+    const batch = [...this.dbWriteQueue];
+    this.dbWriteQueue = [];
+
+    try {
+      // Group by type for batch inserts
+      const corrections = batch.filter(b => b.type === 'correction').map(b => b.data);
+      const clusters = batch.filter(b => b.type === 'cluster').map(b => b.data);
+      const unknowns = batch.filter(b => b.type === 'unknown').map(b => b.data);
+
+      const promises: Promise<void>[] = [];
+
+      if (corrections.length > 0) {
+        promises.push(
+          (async () => {
+            const { error } = await this.supabase.from('image_corrections').insert(corrections);
+            if (error) console.warn('[AnalysisLogger] DB corrections insert error:', error.message);
+            else console.log(`[AnalysisLogger] DB: ${corrections.length} corrections saved`);
+          })()
+        );
+      }
+
+      if (clusters.length > 0) {
+        promises.push(
+          (async () => {
+            const { error } = await this.supabase.from('temporal_clusters').insert(clusters);
+            if (error) console.warn('[AnalysisLogger] DB clusters insert error:', error.message);
+            else console.log(`[AnalysisLogger] DB: ${clusters.length} clusters saved`);
+          })()
+        );
+      }
+
+      if (unknowns.length > 0) {
+        promises.push(
+          (async () => {
+            const { error } = await this.supabase.from('unknown_numbers').insert(unknowns);
+            if (error) console.warn('[AnalysisLogger] DB unknown_numbers insert error:', error.message);
+            else console.log(`[AnalysisLogger] DB: ${unknowns.length} unknown numbers saved`);
+          })()
+        );
+      }
+
+      await Promise.allSettled(promises);
+      console.log(`[AnalysisLogger] DB batch flush complete: ${batch.length} records`);
+
+    } catch (error: any) {
+      console.error('[AnalysisLogger] DB flush failed:', error.message);
+      // Put failed items back in queue for retry (up to a limit to prevent memory bloat)
+      if (this.dbWriteQueue.length < 1000) {
+        this.dbWriteQueue = [...batch, ...this.dbWriteQueue];
+      } else {
+        console.warn('[AnalysisLogger] DB write queue full, discarding failed batch');
+      }
     }
   }
 
@@ -695,6 +944,23 @@ export class AnalysisLogger {
         this.uploadInterval = null;
       }
 
+      // CRITICAL: Flush all pending writes before closing stream
+      // This ensures all queued data is written to disk, preventing data loss
+      console.log(`[AnalysisLogger] Flushing ${this.writeQueue.length} pending writes before finalize...`);
+      await this.flushWrites();
+
+      // Stop database write interval
+      if (this.dbWriteInterval) {
+        clearInterval(this.dbWriteInterval);
+        this.dbWriteInterval = null;
+      }
+
+      // Flush all pending database writes (best-effort, non-blocking for finalize)
+      if (this.dbWriteQueue.length > 0) {
+        console.log(`[AnalysisLogger] Flushing ${this.dbWriteQueue.length} pending DB writes before finalize...`);
+        await this.flushDatabaseWrites();
+      }
+
       // Close file stream
       if (this.fileStream && !this.fileStream.destroyed) {
         await new Promise<void>((resolve) => {
@@ -731,6 +997,7 @@ export class AnalysisLogger {
 
   /**
    * Cleanup resources if needed
+   * WARNING: This may lose pending writes. Use finalize() for graceful shutdown.
    */
   cleanup(): void {
     if (this.uploadInterval) {
@@ -738,9 +1005,40 @@ export class AnalysisLogger {
       this.uploadInterval = null;
     }
 
+    // Stop database write interval
+    if (this.dbWriteInterval) {
+      clearInterval(this.dbWriteInterval);
+      this.dbWriteInterval = null;
+    }
+
+    // Log warning if there are pending writes that will be lost
+    if (this.writeQueue.length > 0) {
+      console.warn(`[AnalysisLogger] WARNING: Cleanup called with ${this.writeQueue.length} pending JSONL writes that will be lost!`);
+    }
+    if (this.dbWriteQueue.length > 0) {
+      console.warn(`[AnalysisLogger] WARNING: Cleanup called with ${this.dbWriteQueue.length} pending DB writes that will be lost!`);
+    }
+
+    // Clear write queues
+    this.writeQueue = [];
+    this.dbWriteQueue = [];
+    this.isWriting = false;
+
     if (this.fileStream && !this.fileStream.destroyed) {
       this.fileStream.destroy();
     }
+  }
+
+  /**
+   * Get current write statistics for debugging
+   */
+  getWriteStats(): { writeCount: number; pendingWrites: number; pendingDbWrites: number; isWriting: boolean } {
+    return {
+      writeCount: this.writeCount,
+      pendingWrites: this.writeQueue.length,
+      pendingDbWrites: this.dbWriteQueue.length,
+      isWriting: this.isWriting
+    };
   }
 }
 

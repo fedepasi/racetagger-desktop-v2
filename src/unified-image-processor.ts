@@ -23,9 +23,31 @@ import { ErrorTracker } from './utils/error-tracker';
 import { SceneClassifierONNX, SceneCategory, SceneClassificationResult } from './scene-classifier-onnx';
 import { OnnxDetector, getOnnxDetector, OnnxAnalysisResult } from './onnx-detector';
 import { ModelManager, getModelManager, ModelStatus } from './model-manager';
+import { GenericSegmenter, getGenericSegmenter, SegmentationResult, GenericSegmenterOutput } from './generic-segmenter';
 import { createComponentLogger } from './utils/logger';
 import { faceDetectionBridge, FaceRecognitionResult } from './face-detection-bridge';
 import { consentService } from './consent-service';
+import {
+  extractCropContext,
+  cropsToBase64,
+  negativeToBase64,
+  CropContextResult,
+  BoundingBox as CropBoundingBox,
+  CropConfig,
+  NegativeConfig,
+  DEFAULT_CROP_CONFIG,
+  DEFAULT_NEGATIVE_CONFIG,
+  // Mask-based crop extraction (V6 with segmentation)
+  extractCropsWithMasks,
+  maskedCropsToBase64,
+  SegmentedDetection,
+  MaskedCropResult,
+  MaskCropConfig,
+  DEFAULT_MASK_CROP_CONFIG,
+  SegmentationMaskData,
+  MaskedCropBase64Result,
+  ExtractMaskOptions
+} from './utils/crop-context-extractor';
 
 // Create component loggers for macro-flow visibility
 const log = createComponentLogger('Processor');
@@ -138,6 +160,10 @@ class UnifiedImageWorker extends EventEmitter {
   private onnxDetector: OnnxDetector | null = null;
   private onnxDetectorEnabled: boolean = false;
   private onnxModelLoaded: boolean = false;
+  // Generic Segmenter (YOLOv8-seg for universal subject isolation before recognition)
+  private genericSegmenter: GenericSegmenter | null = null;
+  private genericSegmenterEnabled: boolean = false;
+  private genericSegmenterLoaded: boolean = false;
   // Face Recognition (browser-based detection via IPC bridge)
   private faceRecognitionEnabled: boolean = false;
   private faceDescriptorsLoaded: boolean = false;
@@ -192,6 +218,9 @@ class UnifiedImageWorker extends EventEmitter {
 
     // Initialize ONNX Detector for local inference (after sport configs are loaded)
     await worker.initializeOnnxDetector();
+
+    // Initialize Generic Segmenter for V6 crop-context with masks (YOLOv8-seg)
+    await worker.initializeGenericSegmenter();
 
     // Initialize Face Recognition for driver identification (uses category's face descriptors)
     await worker.initializeFaceRecognition();
@@ -280,6 +309,49 @@ class UnifiedImageWorker extends EventEmitter {
       log.warn(`ONNX detector initialization failed for ${this.category}`, error);
       this.onnxDetectorEnabled = false;
       this.onnxModelLoaded = false;
+    }
+  }
+
+  /**
+   * Initialize Generic Segmenter for universal subject isolation (YOLOv8-seg)
+   * This model runs BEFORE any recognition to extract clean crops with segmentation masks.
+   * Automatically enabled when crop_config.enabled = true (no separate flag needed)
+   */
+  private async initializeGenericSegmenter(): Promise<void> {
+    // Segmentation is automatically used when crop_config is enabled
+    // No separate "use_segmentation" flag - keep config simple
+    const cropConfig = this.currentSportCategory?.crop_config;
+    if (!cropConfig?.enabled) {
+      log.info(`Generic segmenter DISABLED for category ${this.category} (crop_config not enabled)`);
+      this.genericSegmenterEnabled = false;
+      return;
+    }
+
+    try {
+      log.info(`Initializing Generic Segmenter (YOLOv8-seg) for category: ${this.category}`);
+
+      // Get singleton instance
+      this.genericSegmenter = getGenericSegmenter();
+
+      // Set the authenticated Supabase client for model downloads
+      const modelManager = getModelManager();
+      modelManager.setSupabaseClient(this.supabase);
+
+      // Load model (will download from Supabase if not cached locally)
+      const loaded = await this.genericSegmenter.loadModel();
+
+      if (loaded) {
+        this.genericSegmenterEnabled = true;
+        this.genericSegmenterLoaded = true;
+        log.info(`Generic Segmenter initialized - YOLOv8-seg ready for subject isolation`);
+      } else {
+        log.warn(`Generic Segmenter not available - falling back to bbox-based crops`);
+        this.genericSegmenterEnabled = false;
+      }
+    } catch (error) {
+      log.warn(`Generic Segmenter initialization failed`, error);
+      this.genericSegmenterEnabled = false;
+      this.genericSegmenterLoaded = false;
     }
   }
 
@@ -534,6 +606,491 @@ class UnifiedImageWorker extends EventEmitter {
     // Check sport category recognition method
     const recognitionMethod = this.currentSportCategory?.recognition_method;
     return recognitionMethod === 'local-onnx';
+  }
+
+  /**
+   * Check if crop-context strategy should be used for analysis
+   * BACKWARD COMPATIBLE: Returns false if crop_config is null or disabled
+   */
+  private shouldUseCropContext(): boolean {
+    // Check if crop_config exists and is enabled
+    const cropConfig = this.currentSportCategory?.crop_config;
+
+    // BACKWARD COMPATIBILITY: If crop_config is null/undefined, use standard flow
+    if (!cropConfig) {
+      return false;
+    }
+
+    // Check if enabled flag is explicitly true
+    if (cropConfig.enabled !== true) {
+      return false;
+    }
+
+    // Crop-context only makes sense for Gemini categories (not local-onnx, not rf-detr)
+    const recognitionMethod = this.currentSportCategory?.recognition_method;
+    if (recognitionMethod === 'local-onnx' || recognitionMethod === 'rf-detr') {
+      log.debug(`[CropContext] Disabled for ${recognitionMethod} category - using standard flow`);
+      return false;
+    }
+
+    log.info(`[CropContext] Enabled for category ${this.category}`);
+    return true;
+  }
+
+  /**
+   * Get crop configuration from sport category or defaults
+   */
+  private getCropContextConfig(): {
+    crop: CropConfig;
+    negative: NegativeConfig;
+    maxCrops: number;
+    strategy: 'batch' | 'sequential';
+  } {
+    const categoryConfig = this.currentSportCategory?.crop_config;
+
+    return {
+      crop: {
+        ...DEFAULT_CROP_CONFIG,
+        ...(categoryConfig?.crop || {})
+      },
+      negative: {
+        ...DEFAULT_NEGATIVE_CONFIG,
+        ...(categoryConfig?.negative || {})
+      },
+      maxCrops: categoryConfig?.multiSubject?.maxCropsPerRequest || 5,
+      strategy: categoryConfig?.multiSubject?.strategy || 'batch'
+    };
+  }
+
+  /**
+   * Run generic detection to get bounding boxes for crop extraction
+   * Uses ONNX detector with a generic model or falls back to edge detection
+   */
+  private async runGenericDetection(imageBuffer: Buffer): Promise<Array<{ boundingBox: CropBoundingBox; confidence: number; detectionId: string }>> {
+    try {
+      // Try ONNX detector if available (even for non-ONNX categories)
+      if (this.onnxDetector && this.onnxModelLoaded) {
+        const result = await this.onnxDetector.detect(imageBuffer);
+
+        if (result.results.length > 0) {
+          log.info(`[CropContext] ONNX detected ${result.results.length} subjects`);
+          return result.results.map((r, idx) => ({
+            boundingBox: r.boundingBox || { x: 0, y: 0, width: 1, height: 1 },
+            confidence: r.confidence,
+            detectionId: `det_${idx}`
+          }));
+        }
+      }
+
+      // Fallback: No detections found, return empty array
+      // The calling code will handle this by falling back to standard analysis
+      log.warn(`[CropContext] No detections found, will fallback to standard analysis`);
+      return [];
+    } catch (error) {
+      log.error(`[CropContext] Generic detection failed:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Run generic segmentation using YOLOv8-seg to get bounding boxes + masks
+   * This is the PRIMARY detection method when segmentation is enabled - runs BEFORE any recognition.
+   * Returns SegmentedDetection[] for use with extractCropsWithMasks()
+   */
+  /**
+   * Result from generic segmentation including metadata for logging
+   */
+  private lastSegmentationMetadata: {
+    used: boolean;
+    detectionsCount: number;
+    inferenceMs: number;
+    masksApplied: boolean;
+  } | null = null;
+
+  private async runGenericSegmentation(imageBuffer: Buffer): Promise<SegmentedDetection[]> {
+    // Reset metadata
+    this.lastSegmentationMetadata = null;
+
+    if (!this.genericSegmenter || !this.genericSegmenterLoaded) {
+      log.debug(`[Segmentation] Generic segmenter not available, falling back to bbox detection`);
+      return [];
+    }
+
+    try {
+      const startTime = Date.now();
+      const result: GenericSegmenterOutput = await this.genericSegmenter.detect(imageBuffer);
+
+      if (result.detections.length === 0) {
+        log.info(`[Segmentation] YOLOv8-seg found no subjects (${result.inferenceTimeMs}ms)`);
+        // Track even empty segmentation attempts
+        this.lastSegmentationMetadata = {
+          used: true,
+          detectionsCount: 0,
+          inferenceMs: result.inferenceTimeMs,
+          masksApplied: false
+        };
+        return [];
+      }
+
+      log.info(`[Segmentation] YOLOv8-seg detected ${result.detections.length} subjects in ${result.inferenceTimeMs}ms`);
+
+      // Track segmentation metadata for logging
+      this.lastSegmentationMetadata = {
+        used: true,
+        detectionsCount: result.detections.length,
+        inferenceMs: result.inferenceTimeMs,
+        masksApplied: true
+      };
+
+      // Convert SegmentationResult to SegmentedDetection for crop extraction
+      const segmentedDetections: SegmentedDetection[] = result.detections.map((det: SegmentationResult) => ({
+        bbox: {
+          x: det.bbox.x,
+          y: det.bbox.y,
+          width: det.bbox.width,
+          height: det.bbox.height,
+        },
+        mask: {
+          data: det.mask,
+          width: det.maskDims[0],
+          height: det.maskDims[1],
+        },
+        confidence: det.confidence,
+        classId: det.classId,
+        className: det.className,
+        detectionId: det.detectionId,
+      }));
+
+      return segmentedDetections;
+    } catch (error) {
+      log.error(`[Segmentation] Generic segmentation failed:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Analyze image using crop-context strategy (V6 edge function)
+   * Now supports two modes:
+   * 1. SEGMENTATION MODE (preferred): Uses YOLOv8-seg to isolate subjects with masks
+   * 2. BBOX MODE (fallback): Uses ONNX detector for simple bounding boxes
+   */
+  private async analyzeWithCropContext(
+    imageFile: UnifiedImageFile,
+    compressedBuffer: Buffer,
+    mimeType: string
+  ): Promise<any> {
+    const startTime = Date.now();
+    log.info(`[CropContext] Starting crop-context analysis for ${imageFile.fileName}`);
+
+    try {
+      const cropContextConfig = this.getCropContextConfig();
+      let cropsPayload: any[] = [];
+      let negativePayload: any | undefined;
+      let extractedCrops: any[] = [];
+
+      // Step 1: Try SEGMENTATION first (YOLOv8-seg with masks) if enabled
+      if (this.genericSegmenterEnabled && this.genericSegmenterLoaded) {
+        log.info(`[CropContext] Using SEGMENTATION mode (YOLOv8-seg with masks)`);
+
+        const segmentations = await this.runGenericSegmentation(compressedBuffer);
+
+        if (segmentations.length > 0) {
+          // Use mask-based crop extraction
+          const maskConfig: Partial<MaskCropConfig> = {
+            enabled: true,
+            backgroundMode: 'black',  // Mask other subjects with black
+            maskOtherSubjects: true,
+          };
+
+          // Check if we should save raw mask data for visualization
+          const saveSegmentationMasks = this.currentSportCategory?.save_segmentation_masks ?? false;
+          const extractMaskOptions: ExtractMaskOptions = {
+            includeRawMaskData: saveSegmentationMasks,
+          };
+
+          const maskedCropResult = await extractCropsWithMasks(
+            imageFile.originalPath,
+            segmentations,
+            cropContextConfig.crop,
+            maskConfig,
+            cropContextConfig.maxCrops,
+            extractMaskOptions
+          );
+
+          if (maskedCropResult.crops.length > 0) {
+            log.info(`[CropContext] Extracted ${maskedCropResult.crops.length} masked crops in ${maskedCropResult.processingTimeMs}ms${saveSegmentationMasks ? ' (with RLE mask data)' : ''}`);
+
+            // Convert to base64 payload for V6, optionally including RLE mask data
+            cropsPayload = maskedCropsToBase64(maskedCropResult.crops, { includeRawMaskData: saveSegmentationMasks });
+            extractedCrops = maskedCropResult.crops;
+
+            // Note: Negative is not typically needed with segmentation since masks already isolate subjects
+            negativePayload = undefined;
+          } else {
+            log.warn(`[CropContext] Mask crop extraction failed, falling back to bbox mode`);
+          }
+        } else {
+          // YOLO-seg found no subjects - handle fallback based on sport_categories settings
+          log.info(`[CropContext] YOLOv8-seg found no subjects, checking fallback strategy`);
+
+          // FALLBACK STRATEGY: Never skip the image
+          // Check if scene classifier should be used, or analyze full image
+          if (this.currentSportCategory?.use_scene_classifier && this.sceneClassificationEnabled) {
+            log.info(`[CropContext] Using scene classifier for routing (no subjects detected)`);
+            // Return null to trigger standard analysis with scene classification
+            return null;
+          } else {
+            log.info(`[CropContext] Analyzing full image with Gemini (no subjects detected)`);
+            // Return null to trigger standard upload+analyze flow
+            return null;
+          }
+        }
+      }
+
+      // Step 2: If no segmentation crops, fall back to BBOX mode (original detection)
+      if (!cropsPayload || cropsPayload.length === 0) {
+        log.info(`[CropContext] Using BBOX mode (fallback to ONNX detector)`);
+
+        const detections = await this.runGenericDetection(compressedBuffer);
+
+        // If no detections, fallback to standard analysis
+        if (detections.length === 0) {
+          log.warn(`[CropContext] No detections found, falling back to standard upload+analyze`);
+          return null; // Signal to caller to use standard flow
+        }
+
+        // Extract crops using bbox-only method
+        const bboxesWithIds = detections.map(d => ({
+          ...d.boundingBox,
+          detectionId: d.detectionId
+        }));
+
+        const cropContextResult = await extractCropContext(
+          imageFile.originalPath,
+          compressedBuffer,
+          bboxesWithIds,
+          cropContextConfig.crop,
+          cropContextConfig.negative,
+          cropContextConfig.maxCrops
+        );
+
+        // If crop extraction failed, fallback
+        if (cropContextResult.crops.length === 0) {
+          log.warn(`[CropContext] Crop extraction failed, falling back to standard analysis`);
+          return null;
+        }
+
+        log.info(`[CropContext] Extracted ${cropContextResult.crops.length} bbox crops${cropContextResult.negative ? ' + negative' : ''} in ${cropContextResult.processingTimeMs}ms`);
+
+        // Prepare payload for V6 edge function (bbox mode)
+        cropsPayload = cropsToBase64(cropContextResult.crops);
+        negativePayload = cropContextResult.negative
+          ? negativeToBase64(cropContextResult.negative)
+          : undefined;
+        extractedCrops = cropContextResult.crops;
+      }
+
+      // Get auth info
+      const authState = authService.getAuthState();
+      const userId = authState.isAuthenticated ? authState.user?.id : null;
+
+      let allAnalysis: any[] = [];
+      let totalUsage = { inputTokens: 0, outputTokens: 0, estimatedCostUSD: 0 };
+      let tokensUsed = 0;
+
+      // Step 4: Call V6 edge function based on strategy
+      if (cropContextConfig.strategy === 'sequential') {
+        // SEQUENTIAL: Process each crop one at a time
+        log.info(`[CropContext] Using SEQUENTIAL strategy - processing ${cropsPayload.length} crops one by one`);
+
+        for (let i = 0; i < cropsPayload.length; i++) {
+          const singleCropPayload = {
+            crops: [cropsPayload[i]],
+            negative: negativePayload, // Include context with each call
+            category: this.category,
+            userId,
+            executionId: this.config.executionId,
+            // DB write support: imageId for analysis_results correlation
+            imageId: imageFile.id,
+            originalFileName: imageFile.fileName,
+            participantPreset: this.participantsData.length > 0 ? {
+              name: 'Preset Dynamic',
+              participants: this.participantsData
+            } : undefined,
+            modelName: APP_CONFIG.defaultModel
+          };
+
+          log.info(`[CropContext] Sequential call ${i + 1}/${cropsPayload.length}`);
+
+          const response = await Promise.race([
+            this.supabase.functions.invoke('analyzeImageDesktopV6', { body: singleCropPayload }),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('V6 function invocation timeout')), 60000)
+            )
+          ]) as any;
+
+          if (response.error) {
+            log.warn(`[CropContext] Sequential call ${i + 1} failed:`, response.error);
+            continue; // Continue with next crop
+          }
+
+          if (response.data.success && response.data.cropAnalysis) {
+            const cropResult = response.data.cropAnalysis[0];
+            if (cropResult) {
+              // Get bbox from response or local data, convert from 0-1 to 0-100 for logging
+              const rawBbox = cropResult.originalBbox || extractedCrops.find((c: any) => c.detectionId === cropResult.detectionId)?.originalBbox;
+              const boundingBox = rawBbox ? {
+                x: rawBbox.x * 100,
+                y: rawBbox.y * 100,
+                width: rawBbox.width * 100,
+                height: rawBbox.height * 100
+              } : undefined;
+
+              allAnalysis.push({
+                raceNumber: cropResult.raceNumber,
+                drivers: cropResult.drivers || [],
+                category: this.category,
+                teamName: cropResult.teamName,
+                otherText: cropResult.otherText || [],
+                confidence: cropResult.confidence,
+                boundingBox,
+                modelSource: 'gemini-v6-crop-seq'
+              });
+            }
+            // Accumulate usage
+            if (response.data.usage) {
+              totalUsage.inputTokens += response.data.usage.inputTokens || 0;
+              totalUsage.outputTokens += response.data.usage.outputTokens || 0;
+              totalUsage.estimatedCostUSD += response.data.usage.estimatedCostUSD || 0;
+            }
+          }
+
+          // Deduct token for each sequential call
+          if (userId) {
+            await authService.useTokens(1, undefined, this.config.onTokenUsed);
+            tokensUsed++;
+          }
+        }
+
+        log.info(`[CropContext] Sequential processing complete: ${allAnalysis.length} results from ${cropsPayload.length} crops`);
+
+      } else {
+        // BATCH: Send all crops in a single call (default)
+        log.info(`[CropContext] Using BATCH strategy - sending ${cropsPayload.length} crops in single call`);
+
+        const v6Payload = {
+          crops: cropsPayload,
+          negative: negativePayload,
+          category: this.category,
+          userId,
+          executionId: this.config.executionId,
+          // DB write support: imageId for analysis_results correlation
+          imageId: imageFile.id,
+          originalFileName: imageFile.fileName,
+          participantPreset: this.participantsData.length > 0 ? {
+            name: 'Preset Dynamic',
+            participants: this.participantsData
+          } : undefined,
+          modelName: APP_CONFIG.defaultModel
+        };
+
+        const response = await Promise.race([
+          this.supabase.functions.invoke('analyzeImageDesktopV6', { body: v6Payload }),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('V6 function invocation timeout')), 60000)
+          )
+        ]) as any;
+
+        if (response.error) {
+          log.error(`[CropContext] V6 edge function error:`, response.error);
+          throw new Error(`V6 function error: ${response.error.message || 'Unknown error'}`);
+        }
+
+        if (!response.data.success) {
+          log.error(`[CropContext] V6 analysis failed:`, response.data.error);
+          throw new Error(`V6 analysis failed: ${response.data.error || 'Unknown error'}`);
+        }
+
+        // Transform V6 response to standard analysis format
+        const v6Result = response.data;
+        allAnalysis = v6Result.cropAnalysis.map((crop: any) => {
+          // Get bbox from response or local data, convert from 0-1 to 0-100 for logging
+          const rawBbox = crop.originalBbox || extractedCrops.find((c: any) => c.detectionId === crop.detectionId)?.originalBbox;
+          const boundingBox = rawBbox ? {
+            x: rawBbox.x * 100,
+            y: rawBbox.y * 100,
+            width: rawBbox.width * 100,
+            height: rawBbox.height * 100
+          } : undefined;
+
+          return {
+            raceNumber: crop.raceNumber,
+            drivers: crop.drivers || [],
+            category: this.category,
+            teamName: crop.teamName,
+            otherText: crop.otherText || [],
+            confidence: crop.confidence,
+            boundingBox,
+            modelSource: 'gemini-v6-crop'
+          };
+        });
+
+        totalUsage = v6Result.usage || totalUsage;
+
+        // Deduct single token for batch call
+        if (userId) {
+          await authService.useTokens(1, undefined, this.config.onTokenUsed);
+          tokensUsed = 1;
+        }
+      }
+
+      // Check if we got any results
+      if (allAnalysis.length === 0) {
+        log.warn(`[CropContext] No analysis results obtained, falling back to standard`);
+        return null;
+      }
+
+      log.info(`[CropContext] Token(s) deducted: ${tokensUsed} for ${imageFile.fileName}`);
+
+      // Track recognition method
+      if (!this.recognitionMethod) {
+        this.recognitionMethod = 'gemini';
+      }
+
+      const processingTimeMs = Date.now() - startTime;
+      log.info(`[CropContext] Analysis complete in ${processingTimeMs}ms: ${allAnalysis.length} results, strategy: ${cropContextConfig.strategy}`);
+
+      // Include segmentation preprocessing info if available
+      // Extract mask data from cropsPayload (only if save_segmentation_masks is enabled)
+      const extractedMasks = (cropsPayload as MaskedCropBase64Result[])
+        .filter(crop => crop.maskData)
+        .map(crop => crop.maskData!);
+
+      const segmentationPreprocessing = this.lastSegmentationMetadata ? {
+        used: this.lastSegmentationMetadata.used,
+        detectionsCount: this.lastSegmentationMetadata.detectionsCount,
+        inferenceMs: this.lastSegmentationMetadata.inferenceMs,
+        cropsExtracted: extractedCrops.length,
+        masksApplied: this.lastSegmentationMetadata.masksApplied,
+        // Include RLE mask data only if available (non-empty array)
+        ...(extractedMasks.length > 0 ? { masks: extractedMasks } : {})
+      } : undefined;
+
+      return {
+        success: true,
+        analysis: allAnalysis,
+        usage: totalUsage,
+        cropContextUsed: true,
+        strategy: cropContextConfig.strategy,
+        segmentationPreprocessing,
+        recognitionMethod: 'gemini-v6-seg'
+      };
+
+    } catch (error: any) {
+      log.error(`[CropContext] Analysis failed:`, error);
+      // Return null to signal fallback to standard flow
+      return null;
+    }
   }
 
   /**
@@ -828,6 +1385,7 @@ class UnifiedImageWorker extends EventEmitter {
             originalFileName: path.basename(imageFile.originalPath),
             originalPath: imageFile.originalPath,
             supabaseUrl: `local://${imageFile.originalPath}`,
+            previewDataUrl, // Include base64 preview for management portal
             aiResponse: {
               rawText: `SKIPPED: ${sceneClassification.category} scene (${(sceneClassification.confidence * 100).toFixed(0)}% confidence)`,
               totalVehicles: 0,
@@ -950,16 +1508,22 @@ class UnifiedImageWorker extends EventEmitter {
               String(p.number) === String(driver.raceNumber)
             );
 
+            // For face recognition without race number, use person name as folder
+            const personName = driver.drivers[0];
+            const folderName = driver.raceNumber
+              ? String(driver.raceNumber)
+              : personName?.replace(/\s+/g, '_') || 'Unknown';
+
             return {
               entry: participant || {
-                numero: driver.raceNumber,
-                nome: driver.drivers[0],
+                numero: folderName,  // Use raceNumber OR person name as folder identifier
+                nome: personName,
                 squadra: driver.teamName
               },
-              matchedNumber: driver.raceNumber,
+              matchedNumber: driver.raceNumber || folderName,
               confidence: driver.confidence
             };
-          }).filter(m => m.entry?.numero);
+          });
 
           // ADMIN FEATURE: Organize face recognition results into folders
           const faceProcessedAnalysis = {
@@ -1113,7 +1677,7 @@ class UnifiedImageWorker extends EventEmitter {
       }
 
       // ============================================
-      // Fase 3 & 4: Analysis (Local ONNX or Cloud API)
+      // Fase 3 & 4: Analysis (Local ONNX, Crop-Context V6, or Standard Cloud API)
       // ============================================
       let analysisResult: any;
       let storagePath: string | null = null;
@@ -1136,8 +1700,39 @@ class UnifiedImageWorker extends EventEmitter {
           }
           log.info(`[Local ONNX] Completed: ${analysisResult.localOnnxUsage.detectionsCount} detections in ${analysisResult.localOnnxUsage.inferenceMs}ms`);
         }
+      } else if (this.shouldUseCropContext()) {
+        // CROP-CONTEXT STRATEGY (V6) - High-res crops + context negative
+        // BACKWARD COMPATIBLE: Only used if crop_config.enabled = true in sport_categories
+        log.info(`[CropContext] Using crop-context strategy for ${imageFile.fileName}`);
+
+        // ALWAYS upload compressed image to Supabase Storage for reference in management portal
+        // This ensures supabaseUrl is available in JSONL logs for image visualization
+        storagePath = await this.uploadToStorage(imageFile.fileName, buffer, mimeType);
+        log.info(`[CropContext] Uploaded reference image to storage: ${storagePath}`);
+
+        if (this.checkCancellation()) {
+          return {
+            fileId: imageFile.id,
+            fileName: imageFile.fileName,
+            originalPath: imageFile.originalPath,
+            success: false,
+            error: 'Processing cancelled by user',
+            processingTimeMs: Date.now() - startTime
+          };
+        }
+
+        // Try crop-context analysis (uses base64 crops, not the uploaded image)
+        analysisResult = await this.analyzeWithCropContext(imageFile, buffer, mimeType);
+
+        // If crop-context returns null, it signals fallback to standard flow
+        if (analysisResult === null) {
+          log.warn(`[CropContext] Falling back to standard cloud analysis for ${imageFile.fileName}`);
+
+          // storagePath already available from upload above
+          analysisResult = await this.analyzeImage(imageFile.fileName, storagePath, buffer.length, mimeType);
+        }
       } else {
-        // CLOUD API - Upload and analyze via Edge Function
+        // STANDARD CLOUD API - Upload and analyze via Edge Function (V2/V3/V4/V5)
         // Fase 3: Upload su Supabase Storage
         storagePath = await this.uploadToStorage(imageFile.fileName, buffer, mimeType);
 
@@ -1330,6 +1925,8 @@ class UnifiedImageWorker extends EventEmitter {
           recognitionMethod: analysisResult.recognitionMethod || undefined,
           // Original image dimensions for bbox mapping (especially useful for local-onnx)
           imageSize: analysisResult.imageSize || undefined,
+          // Segmentation preprocessing info (YOLOv8-seg used before recognition)
+          segmentationPreprocessing: analysisResult.segmentationPreprocessing || undefined,
           // Backward compatibility - use first vehicle as primary
           primaryVehicle: vehicles.length > 0 ? vehicles[0] : undefined
         });
@@ -1917,7 +2514,14 @@ class UnifiedImageWorker extends EventEmitter {
     if (this.currentSportCategory?.edge_function_version) {
       // Use sport category's edge_function_version if available
       const version = this.currentSportCategory.edge_function_version;
-      if (version === 4) {
+      if (version === 6) {
+        // V6 is handled by analyzeWithCropContext() when crop_config is enabled
+        // If we reach here, it means crop_config is disabled, so fallback to V5
+        functionName = 'analyzeImageDesktopV5';
+        console.log(`[UnifiedProcessor] V6 category but crop_config disabled, falling back to V5`);
+      } else if (version === 5) {
+        functionName = 'analyzeImageDesktopV5';
+      } else if (version === 4) {
         functionName = 'analyzeImageDesktopV4';
       } else if (version === 3) {
         functionName = 'analyzeImageDesktopV3';

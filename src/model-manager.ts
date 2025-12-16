@@ -634,5 +634,221 @@ export class ModelManager {
   }
 }
 
+// ==================== GENERIC MODELS SUPPORT ====================
+
+/**
+ * Generic model info (not category-specific)
+ */
+export interface GenericModelInfo {
+  modelType: string;
+  version: string;
+  storagePath: string;
+  checksum: string;
+  sizeBytes: number;
+  inputSize: [number, number];
+}
+
+/**
+ * Generic model local entry
+ */
+interface GenericModelEntry {
+  modelType: string;
+  version: string;
+  localPath: string;
+  checksum: string;
+  downloadedAt: string;
+  sizeBytes: number;
+}
+
+/**
+ * Known generic models with hardcoded defaults
+ * These models are NOT category-specific - they're general purpose
+ */
+const GENERIC_MODELS: Record<string, GenericModelInfo> = {
+  'yolov8n-seg': {
+    modelType: 'yolov8n-seg',
+    version: '1.0',
+    storagePath: 'generic/yolov8n-seg.onnx',
+    checksum: '', // Will be populated from database or skipped
+    sizeBytes: 14_000_000, // ~14MB
+    inputSize: [640, 640],
+  },
+  'yolov8s-seg': {
+    modelType: 'yolov8s-seg',
+    version: '1.0',
+    storagePath: 'generic/yolov8s-seg.onnx',
+    checksum: '',
+    sizeBytes: 45_000_000, // ~45MB
+    inputSize: [640, 640],
+  },
+};
+
+// Add these methods to ModelManager class
+ModelManager.prototype.ensureGenericModelAvailable = async function(
+  this: ModelManager,
+  modelType: 'yolov8n-seg' | 'yolov8s-seg',
+  onProgress?: DownloadProgressCallback
+): Promise<string> {
+  const modelInfo = GENERIC_MODELS[modelType];
+  if (!modelInfo) {
+    throw new Error(`Unknown generic model type: ${modelType}`);
+  }
+
+  // Check 1: Look for bundled model in project directory (development or packaged app)
+  const bundledPaths = [
+    // Development: models/generic/yolov8n-seg.onnx
+    path.join(process.cwd(), 'models', 'generic', `${modelType}.onnx`),
+    // Packaged app (asar.unpacked)
+    path.join(__dirname, '..', 'models', 'generic', `${modelType}.onnx`),
+    path.join(__dirname, '..', '..', 'models', 'generic', `${modelType}.onnx`),
+  ];
+
+  for (const bundledPath of bundledPaths) {
+    if (fs.existsSync(bundledPath)) {
+      console.log(`[ModelManager] Using bundled generic model: ${bundledPath}`);
+      return bundledPath;
+    }
+  }
+
+  // Check 2: Look for cached model in user directory
+  const genericCacheDir = path.join((this as any).cacheDir, 'generic');
+
+  // Ensure generic models directory exists
+  if (!fs.existsSync(genericCacheDir)) {
+    fs.mkdirSync(genericCacheDir, { recursive: true });
+  }
+
+  const localPath = path.join(genericCacheDir, `${modelType}-v${modelInfo.version}.onnx`);
+
+  // Check if already cached
+  if (fs.existsSync(localPath)) {
+    console.log(`[ModelManager] Generic model already cached: ${localPath}`);
+    return localPath;
+  }
+
+  console.log(`[ModelManager] Downloading generic model: ${modelType}`);
+
+  // Try to get model info from database first (for checksum)
+  let remoteChecksum = modelInfo.checksum;
+  try {
+    const supabase = (this as any).getSupabase();
+    const { data } = await supabase
+      .from('generic_models')
+      .select('checksum_sha256, storage_path, size_bytes')
+      .eq('model_type', modelType)
+      .single();
+
+    if (data) {
+      remoteChecksum = data.checksum_sha256;
+      console.log(`[ModelManager] Got checksum from database: ${remoteChecksum?.substring(0, 16)}...`);
+    }
+  } catch (error) {
+    console.log(`[ModelManager] No database entry for ${modelType}, using hardcoded config`);
+  }
+
+  // Get signed URL from Supabase Storage
+  const supabase = (this as any).getSupabase();
+  const { data: signedUrlData, error: signedUrlError } = await supabase.storage
+    .from('onnx-models')
+    .createSignedUrl(modelInfo.storagePath, 3600);
+
+  if (signedUrlError || !signedUrlData?.signedUrl) {
+    throw new Error(`Failed to get download URL for ${modelType}: ${signedUrlError?.message}`);
+  }
+
+  // Download with progress
+  const totalBytes = modelInfo.sizeBytes;
+  const totalMB = totalBytes / (1024 * 1024);
+
+  console.log(`[ModelManager] Downloading from: ${signedUrlData.signedUrl.substring(0, 50)}...`);
+
+  const response = await fetch(signedUrlData.signedUrl);
+  if (!response.ok) {
+    throw new Error(`Download failed: ${response.statusText}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error('Failed to get response reader');
+  }
+
+  const chunks: Uint8Array[] = [];
+  let downloadedBytes = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    chunks.push(value);
+    downloadedBytes += value.length;
+
+    if (onProgress) {
+      const percent = Math.round((downloadedBytes / totalBytes) * 100);
+      const downloadedMB = downloadedBytes / (1024 * 1024);
+      onProgress(percent, downloadedMB, totalMB);
+    }
+  }
+
+  // Combine chunks and write to file
+  const fileBuffer = Buffer.concat(chunks.map(chunk => Buffer.from(chunk)));
+  fs.writeFileSync(localPath, fileBuffer);
+
+  console.log(`[ModelManager] Downloaded generic model: ${fileBuffer.length} bytes to ${localPath}`);
+
+  // Validate checksum if available
+  if (remoteChecksum) {
+    const isValid = await (this as any).validateChecksum(localPath, remoteChecksum);
+    if (!isValid) {
+      fs.unlinkSync(localPath);
+      throw new Error(`Checksum validation failed for ${modelType}`);
+    }
+    console.log('[ModelManager] Generic model checksum validated');
+  }
+
+  return localPath;
+};
+
+ModelManager.prototype.getGenericModelPath = function(
+  this: ModelManager,
+  modelType: string
+): string | null {
+  const modelInfo = GENERIC_MODELS[modelType];
+  if (!modelInfo) return null;
+
+  // Check 1: Look for bundled model in project directory
+  const bundledPaths = [
+    path.join(process.cwd(), 'models', 'generic', `${modelType}.onnx`),
+    path.join(__dirname, '..', 'models', 'generic', `${modelType}.onnx`),
+    path.join(__dirname, '..', '..', 'models', 'generic', `${modelType}.onnx`),
+  ];
+
+  for (const bundledPath of bundledPaths) {
+    if (fs.existsSync(bundledPath)) {
+      return bundledPath;
+    }
+  }
+
+  // Check 2: Look for cached model
+  const genericCacheDir = path.join((this as any).cacheDir, 'generic');
+  const localPath = path.join(genericCacheDir, `${modelType}-v${modelInfo.version}.onnx`);
+
+  if (fs.existsSync(localPath)) {
+    return localPath;
+  }
+
+  return null;
+};
+
+// Extend type declarations
+declare module './model-manager' {
+  interface ModelManager {
+    ensureGenericModelAvailable(
+      modelType: 'yolov8n-seg' | 'yolov8s-seg',
+      onProgress?: DownloadProgressCallback
+    ): Promise<string>;
+    getGenericModelPath(modelType: string): string | null;
+  }
+}
+
 // Export singleton getter for convenience
 export const getModelManager = (): ModelManager => ModelManager.getInstance();
