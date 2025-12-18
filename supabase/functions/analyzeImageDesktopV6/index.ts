@@ -18,7 +18,17 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { GoogleGenerativeAI } from 'https://esm.sh/@google/generative-ai@0.15.0';
+import { VertexAI } from 'https://esm.sh/@google-cloud/vertexai@1.1.0';
+
+// ==================== VERTEX AI CONFIGURATION ====================
+
+// Vertex AI Configuration (same as V3)
+const VERTEX_PROJECT_ID = Deno.env.get('VERTEX_PROJECT_ID');
+const VERTEX_LOCATION = Deno.env.get('VERTEX_LOCATION') || 'europe-west1';
+const VERTEX_SERVICE_ACCOUNT_KEY = Deno.env.get('VERTEX_SERVICE_ACCOUNT_KEY');
+const USE_VERTEX = !!(VERTEX_PROJECT_ID && VERTEX_LOCATION && VERTEX_SERVICE_ACCOUNT_KEY);
+
+console.log(`[V6 VERTEX CONFIG] Vertex AI ${USE_VERTEX ? 'ENABLED' : 'DISABLED'} (Project: ${VERTEX_PROJECT_ID || 'none'}, Location: ${VERTEX_LOCATION})`);
 
 // ==================== TYPE DEFINITIONS ====================
 
@@ -117,7 +127,12 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const DEFAULT_MODEL = 'gemini-2.5-flash-lite';
+// V6: Modello controllato dalla edge function (ignora modelName dall'app)
+const DEFAULT_MODEL = 'gemini-3-flash-preview';
+
+// Gemini 3 Flash specific parameters
+const THINKING_LEVEL = 'MINIMAL';     // MINIMAL, LOW, MEDIUM, HIGH - MINIMAL per velocità/costo
+const MEDIA_RESOLUTION = 'ULTRA_HIGH'; // LOW, MEDIUM, HIGH, ULTRA_HIGH - ULTRA_HIGH per test iniziale
 
 // ==================== PROMPT GENERATION ====================
 
@@ -175,28 +190,38 @@ Rispondi SOLO con un oggetto JSON valido in questo formato esatto:
 }`;
 }
 
-// ==================== GEMINI API CALL ====================
+// ==================== VERTEX AI GEMINI API CALL ====================
 
 async function analyzeWithGemini(
   crops: CropData[],
   negative: NegativeData | undefined,
-  prompt: string,
-  modelName: string
-): Promise<{ result: any; inputTokens: number; outputTokens: number }> {
-  const geminiApiKey = Deno.env.get('GEMINI_API_KEY');
-  if (!geminiApiKey) {
-    throw new Error('GEMINI_API_KEY environment variable not set');
+  prompt: string
+): Promise<{ result: string; inputTokens: number; outputTokens: number }> {
+  if (!USE_VERTEX) {
+    throw new Error('Vertex AI not configured - set VERTEX_PROJECT_ID, VERTEX_LOCATION and VERTEX_SERVICE_ACCOUNT_KEY');
   }
 
-  const genAI = new GoogleGenerativeAI(geminiApiKey);
-  const model = genAI.getGenerativeModel({ model: modelName });
+  // Parse service account credentials
+  const credentials = JSON.parse(VERTEX_SERVICE_ACCOUNT_KEY!);
 
-  // Build multi-image content array
-  const contentParts: any[] = [{ text: prompt }];
+  // Initialize Vertex AI client
+  const vertexAI = new VertexAI({
+    project: VERTEX_PROJECT_ID!,
+    location: VERTEX_LOCATION,
+    googleAuthOptions: {
+      credentials: credentials
+    }
+  });
+
+  // Get generative model
+  const model = vertexAI.getGenerativeModel({ model: DEFAULT_MODEL });
+
+  // Build content parts
+  const parts: any[] = [{ text: prompt }];
 
   // Add all crop images
   for (const crop of crops) {
-    contentParts.push({
+    parts.push({
       inlineData: {
         data: crop.imageData,
         mimeType: 'image/jpeg',
@@ -206,7 +231,7 @@ async function analyzeWithGemini(
 
   // Add negative/context image if present
   if (negative) {
-    contentParts.push({
+    parts.push({
       inlineData: {
         data: negative.imageData,
         mimeType: 'image/jpeg',
@@ -214,25 +239,53 @@ async function analyzeWithGemini(
     });
   }
 
-  console.log(`[V6] Calling Gemini with ${crops.length} crops${negative ? ' + 1 context' : ''}`);
+  console.log(`[V6] Calling Vertex AI ${DEFAULT_MODEL} in ${VERTEX_LOCATION} with ${crops.length} crops${negative ? ' + 1 context' : ''}`);
+  console.log(`[V6] Config: thinkingLevel=${THINKING_LEVEL}, mediaResolution=${MEDIA_RESOLUTION}`);
 
-  // Make the API call
-  const result = await model.generateContent(contentParts, {
+  // Build request with Gemini 3 Flash specific parameters
+  const request = {
+    contents: [{
+      role: 'user',
+      parts: parts
+    }],
     generationConfig: {
       responseMimeType: 'application/json',
       temperature: 0.3,
-    },
+      // Gemini 3 Flash specific configurations
+      thinkingConfig: {
+        thinkingLevel: THINKING_LEVEL
+      },
+      mediaResolution: MEDIA_RESOLUTION
+    }
+  };
+
+  // Call Vertex AI with timeout
+  const timeoutPromise = new Promise((_, reject) => {
+    setTimeout(() => reject(new Error('Vertex AI call timed out after 60 seconds')), 60000);
   });
 
-  const response = await result.response;
+  const vertexPromise = model.generateContent(request);
+  const result: any = await Promise.race([vertexPromise, timeoutPromise]);
 
-  // Extract token usage
-  const usageMetadata = response.usageMetadata || { promptTokenCount: 0, candidatesTokenCount: 0 };
+  console.log(`[V6] Vertex AI response received`);
+
+  // Extract token usage from Vertex AI response
+  const usageMetadata = result.response?.usageMetadata || {};
   const inputTokens = usageMetadata.promptTokenCount || 0;
   const outputTokens = usageMetadata.candidatesTokenCount || 0;
 
+  // Get text response from Vertex AI format
+  const candidate = result.response?.candidates?.[0];
+  if (!candidate) {
+    throw new Error('No candidates in Vertex AI response');
+  }
+  const textPart = candidate.content?.parts?.find((p: any) => p.text);
+  if (!textPart) {
+    throw new Error('No text part in Vertex AI response');
+  }
+
   return {
-    result: response.text(),
+    result: textPart.text,
     inputTokens,
     outputTokens,
   };
@@ -389,17 +442,15 @@ serve(async (req: Request) => {
       partialFlags
     );
 
-    // Call Gemini API
-    const modelToUse = modelName || DEFAULT_MODEL;
+    // Call Vertex AI Gemini (modello controllato dalla edge function, ignora modelName dall'app)
     const { result: responseText, inputTokens, outputTokens } = await analyzeWithGemini(
       crops,
       negative,
-      prompt,
-      modelToUse
+      prompt
     );
 
     const inferenceTimeMs = Date.now() - startTime;
-    console.log(`[V6] Gemini returned in ${inferenceTimeMs}ms`);
+    console.log(`[V6] Vertex AI returned in ${inferenceTimeMs}ms`);
 
     // Parse response
     const { cropAnalysis, contextAnalysis } = parseGeminiResponse(responseText, crops, !!negative);
@@ -407,9 +458,9 @@ serve(async (req: Request) => {
     // Correlate results
     const correlation = correlateResults(cropAnalysis, contextAnalysis, participantPreset?.participants);
 
-    // Calculate cost (approximate)
-    const INPUT_COST_PER_MILLION = 0.10;  // $0.10 per million input tokens
-    const OUTPUT_COST_PER_MILLION = 0.40; // $0.40 per million output tokens
+    // Calculate cost (Gemini 3 Flash Preview pricing)
+    const INPUT_COST_PER_MILLION = 0.50;  // $0.50 per million input tokens
+    const OUTPUT_COST_PER_MILLION = 3.00; // $3.00 per million output tokens
     const estimatedCostUSD = (inputTokens / 1_000_000 * INPUT_COST_PER_MILLION) +
                              (outputTokens / 1_000_000 * OUTPUT_COST_PER_MILLION);
 
@@ -427,6 +478,11 @@ serve(async (req: Request) => {
             estimatedCostUSD,
             inferenceTimeMs,
             recognizedNumbers: cropAnalysis.map(c => c.raceNumber).filter(Boolean),
+            // Gemini 3 Flash config
+            modelUsed: DEFAULT_MODEL,
+            vertexLocation: VERTEX_LOCATION,
+            thinkingLevel: THINKING_LEVEL,
+            mediaResolution: MEDIA_RESOLUTION,
           },
         });
       } catch (logError) {
@@ -468,7 +524,10 @@ serve(async (req: Request) => {
               crops: cropAnalysis,
               context: contextAnalysis,
               correlation: correlation,
-              modelSource: 'gemini-v6-seg'
+              modelSource: DEFAULT_MODEL,
+              vertexLocation: VERTEX_LOCATION,
+              thinkingLevel: THINKING_LEVEL,
+              mediaResolution: MEDIA_RESOLUTION
             },
             // V6-specific columns
             crop_analysis: cropAnalysis,

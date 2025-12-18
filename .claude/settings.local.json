@@ -130,7 +130,8 @@
       "Bash(ROBOFLOW_API_KEY=\"TFPr3dOFx7zh8Xoszccz\" roboflow import:*)",
       "Bash(do [ ! -f \"$f%.jpg.txt\" ])",
       "Bash(pip3 show:*)",
-      "Bash(pip3 install:*)"
+      "Bash(pip3 install:*)",
+      "WebFetch(domain:docs.cloud.google.com)"
     ],
     "deny": [],
     "ask": []

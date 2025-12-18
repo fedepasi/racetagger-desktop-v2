@@ -58,6 +58,9 @@ window.selectedCategory = selectedCategory; // Expose globally for other modules
 let analysisStartTime = null;
 let analysisEndTime = null;
 
+// No preset warning modal callback
+let noPresetWarningCallback = null;
+
 // Unified processor telemetry
 let unifiedProcessingStats = {
   total: 0,
@@ -1372,10 +1375,96 @@ async function handleUploadAndAnalyze() {
   handleFolderAnalysis();
 }
 
+// ==================== No Preset Warning Modal ====================
+
+/**
+ * Show warning modal when starting analysis without a participant preset
+ */
+function showNoPresetWarning() {
+  const modal = document.getElementById('no-preset-warning-modal');
+  if (modal) {
+    modal.classList.add('show');
+    const checkbox = document.getElementById('no-preset-dont-show-again');
+    if (checkbox) checkbox.checked = false;
+  }
+}
+
+/**
+ * Close warning modal and cancel analysis
+ */
+function closeNoPresetWarning() {
+  const modal = document.getElementById('no-preset-warning-modal');
+  if (modal) {
+    modal.classList.remove('show');
+  }
+  if (noPresetWarningCallback) {
+    noPresetWarningCallback(false);
+  }
+}
+
+/**
+ * Continue with analysis despite no preset
+ */
+function continueWithoutPreset() {
+  // Save preference if checkbox is checked
+  const checkbox = document.getElementById('no-preset-dont-show-again');
+  if (checkbox && checkbox.checked) {
+    localStorage.setItem('racetagger-no-preset-warning-dismissed', 'true');
+    console.log('[Renderer] User dismissed no-preset warning permanently');
+  }
+
+  // Close modal
+  const modal = document.getElementById('no-preset-warning-modal');
+  if (modal) {
+    modal.classList.remove('show');
+  }
+
+  // Continue with analysis
+  if (noPresetWarningCallback) {
+    noPresetWarningCallback(true);
+  }
+}
+
+/**
+ * Open the preset creation guide in external browser
+ */
+function openPresetGuide() {
+  window.api.invoke('open-external-url', 'https://www.racetagger.cloud/blog/3-CSV-Starting-Lists-for-Race-Photography');
+}
+
 // Handle folder analysis
 async function handleFolderAnalysis() {
+  // Check if participant preset is selected - show warning if not
+  const hasPreset = window.enhancedFileBrowser?.selectedPreset?.id;
+  const dontShowWarning = localStorage.getItem('racetagger-no-preset-warning-dismissed') === 'true';
+
+  if (!hasPreset && !dontShowWarning) {
+    console.log('[Renderer] No preset selected, showing warning modal');
+    // Show warning modal and wait for user decision
+    return new Promise((resolve) => {
+      noPresetWarningCallback = (shouldContinue) => {
+        noPresetWarningCallback = null;
+        if (shouldContinue) {
+          console.log('[Renderer] User chose to continue without preset');
+          // Continue with analysis
+          proceedWithFolderAnalysis();
+        } else {
+          console.log('[Renderer] User cancelled - no preset selected');
+        }
+        resolve();
+      };
+      showNoPresetWarning();
+    });
+  }
+
+  // Normal flow - proceed with analysis
+  return proceedWithFolderAnalysis();
+}
+
+// Actual folder analysis logic (extracted from handleFolderAnalysis)
+async function proceedWithFolderAnalysis() {
   console.log(`[Renderer] Starting folder analysis for ${selectedFolderImages} images`);
-  
+
   // OLD CODE: Show results container - REMOVED FOR STREAMING VIEW
   // resultsContainer.style.display = 'block';
   // resultsContainer.style.visibility = 'visible';

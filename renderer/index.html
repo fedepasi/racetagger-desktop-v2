@@ -1212,6 +1212,7 @@
             </div>
           </div>
         </div>
+
       </div>
 
       <!-- Destinations Section -->
@@ -1816,6 +1817,50 @@
 
       <div class="modal-footer">
         <button type="button" id="cancel-token-info" class="btn btn-secondary">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- No Preset Warning Modal -->
+  <div id="no-preset-warning-modal" class="modal">
+    <div class="modal-content no-preset-modal">
+      <div class="modal-header">
+        <h2>Improve Your Results</h2>
+        <button class="modal-close" onclick="closeNoPresetWarning()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="no-preset-hero">
+          <div class="hero-icon">💡</div>
+          <p class="hero-text">
+            You're about to start recognition <strong>without a participant preset</strong>.
+          </p>
+        </div>
+
+        <p class="no-preset-intro">
+          While RaceTagger will still detect race numbers, using a participant preset can
+          <strong>significantly improve accuracy</strong> by:
+        </p>
+
+        <ul class="benefits-list">
+          <li><span class="benefit-check">✓</span> Validating detected numbers against known participants</li>
+          <li><span class="benefit-check">✓</span> Auto-filling driver names, teams, and metadata</li>
+          <li><span class="benefit-check">✓</span> Reducing false positives and corrections needed</li>
+        </ul>
+
+        <a href="#" onclick="openPresetGuide(); return false;" class="guide-link">
+          📖 Learn how to create a participant preset
+        </a>
+
+        <label class="dont-show-checkbox">
+          <input type="checkbox" id="no-preset-dont-show-again">
+          <span>Don't show this again</span>
+        </label>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeNoPresetWarning()">Cancel</button>
+        <button class="btn btn-primary" onclick="continueWithoutPreset()">
+          Continue Anyway
+        </button>
       </div>
     </div>
   </div>

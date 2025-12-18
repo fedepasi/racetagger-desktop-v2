@@ -5282,3 +5282,93 @@ body.modal-open {
   border-radius: var(--radius-md, 8px);
   margin: 0;
 }
+
+/* ===== NO PRESET WARNING MODAL ===== */
+
+.no-preset-modal {
+  max-width: 480px;
+  width: 95%;
+}
+
+#no-preset-warning-modal .modal-body {
+  padding: 1.5rem 2rem;
+  display: block;
+}
+
+.no-preset-hero {
+  text-align: center;
+  margin-bottom: 1.5rem;
+}
+
+.no-preset-hero .hero-icon {
+  font-size: 3rem;
+  margin-bottom: 0.75rem;
+}
+
+.no-preset-hero .hero-text {
+  font-size: 1.1rem;
+  color: var(--text-primary);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.no-preset-intro {
+  color: var(--text-secondary);
+  margin-bottom: 1rem;
+  line-height: 1.6;
+}
+
+.benefits-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1.5rem 0;
+}
+
+.benefits-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+  color: var(--text-primary);
+  font-size: 0.95rem;
+}
+
+.benefit-check {
+  color: var(--success-color, #10b981);
+  font-weight: bold;
+  flex-shrink: 0;
+}
+
+.guide-link {
+  display: block;
+  text-align: center;
+  color: var(--primary-color);
+  text-decoration: none;
+  padding: 0.75rem;
+  margin-bottom: 1rem;
+  border-radius: 8px;
+  background: rgba(59, 130, 246, 0.08);
+  transition: background 0.2s ease;
+}
+
+.guide-link:hover {
+  background: rgba(59, 130, 246, 0.15);
+  text-decoration: none;
+}
+
+.dont-show-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  padding: 0.5rem 0;
+}
+
+.dont-show-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary-color);
+  cursor: pointer;
+}
