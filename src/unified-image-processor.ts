@@ -777,10 +777,16 @@ class UnifiedImageWorker extends EventEmitter {
   private async analyzeWithCropContext(
     imageFile: UnifiedImageFile,
     compressedBuffer: Buffer,
-    mimeType: string
+    mimeType: string,
+    uploadReadyPath?: string
   ): Promise<any> {
     const startTime = Date.now();
     log.info(`[CropContext] Starting crop-context analysis for ${imageFile.fileName}`);
+
+    // Use uploadReadyPath for crop extraction (supports RAW files converted to JPEG)
+    // Falls back to originalPath for already-supported formats
+    const effectivePath = uploadReadyPath || imageFile.originalPath;
+    log.info(`[CropContext] Using image path for crop extraction: ${effectivePath}`);
 
     try {
       const cropContextConfig = this.getCropContextConfig();
@@ -809,7 +815,7 @@ class UnifiedImageWorker extends EventEmitter {
           };
 
           const maskedCropResult = await extractCropsWithMasks(
-            imageFile.originalPath,
+            effectivePath,  // Use JPEG-converted path for RAW file support
             segmentations,
             cropContextConfig.crop,
             maskConfig,
@@ -866,7 +872,7 @@ class UnifiedImageWorker extends EventEmitter {
         }));
 
         const cropContextResult = await extractCropContext(
-          imageFile.originalPath,
+          effectivePath,  // Use JPEG-converted path for RAW file support
           compressedBuffer,
           bboxesWithIds,
           cropContextConfig.crop,
@@ -1733,7 +1739,8 @@ class UnifiedImageWorker extends EventEmitter {
         }
 
         // Try crop-context analysis (uses base64 crops, not the uploaded image)
-        analysisResult = await this.analyzeWithCropContext(imageFile, buffer, mimeType);
+        // Pass uploadReadyPath for RAW file support - this is the JPEG conversion of RAW files
+        analysisResult = await this.analyzeWithCropContext(imageFile, buffer, mimeType, uploadReadyPath);
 
         // If crop-context returns null, it signals fallback to standard flow
         if (analysisResult === null) {
@@ -2527,9 +2534,12 @@ class UnifiedImageWorker extends EventEmitter {
       const version = this.currentSportCategory.edge_function_version;
       if (version === 6) {
         // V6 is handled by analyzeWithCropContext() when crop_config is enabled
-        // If we reach here, it means crop_config is disabled, so fallback to V5
+        // If we reach here, it means either:
+        // 1. crop_config is disabled in sport_categories, OR
+        // 2. analyzeWithCropContext() returned null (no subjects detected)
+        // Either way, fallback to V5 for standard cloud analysis
         functionName = 'analyzeImageDesktopV5';
-        console.log(`[UnifiedProcessor] V6 category but crop_config disabled, falling back to V5`);
+        console.log(`[UnifiedProcessor] V6 category: using V5 fallback (crop-context not available or no subjects detected)`);
       } else if (version === 5) {
         functionName = 'analyzeImageDesktopV5';
       } else if (version === 4) {
