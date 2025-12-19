@@ -1029,7 +1029,10 @@ class EnhancedFileBrowser {
       
       console.log(`Enhanced File Browser: Using ${processingType} processing for ${this.selectedFiles.length} files`);
       
-      // DEBUG: Log preset data being passed
+      // DEBUG: Log preset data being passed (including metatag check)
+      const participantsWithMetatag = config.participantPreset?.participants?.filter(p => p.metatag && p.metatag.trim() !== '') || [];
+      console.log(`[DEBUG-METATAG] Config being sent - participants with metatag: ${participantsWithMetatag.length}/${config.participantPreset?.participants?.length || 0}`);
+
       console.log(`[Enhanced File Browser] Preset debugging:`, {
         hasSelectedPreset: !!this.selectedPreset,
         selectedPresetId: this.selectedPreset?.id,
@@ -1206,6 +1209,14 @@ class EnhancedFileBrowser {
 
         console.log(`[Enhanced File Browser] Selected preset: ${this.selectedPreset.name} (${this.selectedPreset.participants.length} participants)`);
         console.log('[Enhanced File Browser] Preset participants:', this.selectedPreset.participants.map(p => `${p.numero}: ${p.nome} (${p.squadra})`));
+        // DEBUG: Verifica metatag nei partecipanti
+        const withMetatag = this.selectedPreset.participants.filter(p => p.metatag && p.metatag.trim() !== '');
+        console.log(`[DEBUG-METATAG] Participants with metatag: ${withMetatag.length}/${this.selectedPreset.participants.length}`);
+        if (withMetatag.length > 0) {
+          console.log('[DEBUG-METATAG] Sample metatag:', withMetatag[0].metatag);
+        } else {
+          console.log('[DEBUG-METATAG] WARNING: No participants have metatag field!');
+        }
       } else {
         console.error('[Enhanced File Browser] Failed to load preset details:', response.error);
       }

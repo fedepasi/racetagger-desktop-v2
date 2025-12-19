@@ -460,12 +460,29 @@ export class AnalysisLogger {
   /**
    * Log temporal cluster analysis
    */
-  logTemporalCluster(data: Omit<TemporalClusterEvent, 'type' | 'timestamp' | 'executionId'>): void {
+  logTemporalCluster(data: Omit<TemporalClusterEvent, 'type' | 'timestamp' | 'executionId'> | { excludedImages?: string[]; excludedCount?: number; reason?: string }): void {
+    // Handle excluded images case (different format)
+    if ('excludedImages' in data && !('clusterImages' in data)) {
+      // Log excluded images as a special event
+      const excludedEvent = {
+        type: 'TEMPORAL_CLUSTER_EXCLUDED' as const,
+        timestamp: new Date().toISOString(),
+        executionId: this.executionId,
+        excludedImages: (data as any).excludedImages || [],
+        excludedCount: (data as any).excludedCount || 0,
+        reason: (data as any).reason || 'Unknown'
+      };
+      this.writeLine(excludedEvent);
+      return;
+    }
+
+    // Standard cluster event
+    const clusterData = data as Omit<TemporalClusterEvent, 'type' | 'timestamp' | 'executionId'>;
     const event: TemporalClusterEvent = {
       type: 'TEMPORAL_CLUSTER',
       timestamp: new Date().toISOString(),
       executionId: this.executionId,
-      ...data
+      ...clusterData
     };
 
     this.stats.temporalClusters++;
@@ -473,20 +490,22 @@ export class AnalysisLogger {
     // Write to JSONL (primary)
     this.writeLine(event);
 
-    // Queue for DB write (dual-write for redundancy)
-    this.dbWriteQueue.push({
-      type: 'cluster',
-      data: {
-        execution_id: this.executionId,
-        user_id: this.userId,
-        cluster_images: data.clusterImages,
-        cluster_size: data.clusterImages.length,
-        duration_ms: data.duration,
-        is_burst_mode: data.burstMode,
-        common_number: data.commonNumber || null,
-        sport: data.sport
-      }
-    });
+    // Queue for DB write (dual-write for redundancy) - with safety check
+    if (clusterData.clusterImages && Array.isArray(clusterData.clusterImages)) {
+      this.dbWriteQueue.push({
+        type: 'cluster',
+        data: {
+          execution_id: this.executionId,
+          user_id: this.userId,
+          cluster_images: clusterData.clusterImages,
+          cluster_size: clusterData.clusterImages.length,
+          duration_ms: clusterData.duration,
+          is_burst_mode: clusterData.burstMode,
+          common_number: clusterData.commonNumber || null,
+          sport: clusterData.sport
+        }
+      });
+    }
   }
 
   /**

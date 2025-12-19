@@ -1104,6 +1104,17 @@ class UnifiedImageWorker extends EventEmitter {
       this.participantsData = this.config.participantPresetData;
       console.log(`[UnifiedWorker] Using participant data passed from frontend: ${this.participantsData.length} participants`);
       console.log(`[UnifiedWorker] Sample participant:`, this.participantsData[0]);
+      // DEBUG: Verifica specificamente il campo metatag per tutti i partecipanti
+      const participantsWithMetatag = this.participantsData.filter(p => p.metatag && p.metatag.trim() !== '');
+      console.log(`[DEBUG-METATAG] Participants with metatag: ${participantsWithMetatag.length}/${this.participantsData.length}`);
+      if (participantsWithMetatag.length > 0) {
+        console.log(`[DEBUG-METATAG] First participant with metatag:`, {
+          numero: participantsWithMetatag[0].numero,
+          metatag: participantsWithMetatag[0].metatag
+        });
+      } else {
+        console.log(`[DEBUG-METATAG] WARNING: No participants have metatag field populated!`);
+      }
     } else if (this.config.csvData && this.config.csvData.length > 0) {
       // Fallback to legacy CSV data
       this.participantsData = this.config.csvData;
@@ -3193,6 +3204,14 @@ class UnifiedImageWorker extends EventEmitter {
         temporalBonus: candidate.temporalBonus || 0,
         isBurstMode: candidate.isBurstModeCandidate || false
       }));
+
+    // DEBUG: Verifica metatag nel participant prima di restituirlo
+    console.log(`[DEBUG-METATAG] convertMatchResultToLegacyFormat - participant metatag:`, {
+      numero: bestMatch.participant.numero || bestMatch.participant.number,
+      hasMetatag: !!bestMatch.participant.metatag,
+      metatagValue: bestMatch.participant.metatag || 'UNDEFINED',
+      participantKeys: Object.keys(bestMatch.participant)
+    });
 
     return {
       matchType,
