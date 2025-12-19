@@ -131,7 +131,9 @@
       "Bash(do [ ! -f \"$f%.jpg.txt\" ])",
       "Bash(pip3 show:*)",
       "Bash(pip3 install:*)",
-      "WebFetch(domain:docs.cloud.google.com)"
+      "WebFetch(domain:docs.cloud.google.com)",
+      "Bash(wc:*)",
+      "Bash(grep:*)"
     ],
     "deny": [],
     "ask": []
