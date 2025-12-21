@@ -1406,6 +1406,9 @@ function addParticipantRow(participant, rowIndex) {
     <td data-sort="${squadra}">${squadra || '<span class="text-muted">-</span>'}</td>
     <td data-sort="${plateNumber}">${plateDisplay}</td>
     <td class="no-sort">
+      <button class="btn btn-sm btn-secondary" onclick="duplicateParticipantFromRow(this)" title="Duplicate participant">
+        <span class="btn-icon">📋</span>
+      </button>
       <button class="btn btn-sm btn-secondary" onclick="openParticipantEditModalFromRow(this)" title="Edit participant">
         <span class="btn-icon">✏️</span>
       </button>
@@ -1436,6 +1439,75 @@ function removeParticipantFromRow(button) {
   const row = button.closest('tr');
   const rowIndex = parseInt(row.getAttribute('data-original-index'), 10);
   removeParticipant(rowIndex);
+}
+
+/**
+ * Duplicate participant from row button (gets index from data attribute)
+ * @param {HTMLElement} button - The button element that was clicked
+ */
+function duplicateParticipantFromRow(button) {
+  const row = button.closest('tr');
+  const rowIndex = parseInt(row.getAttribute('data-original-index'), 10);
+  duplicateParticipant(rowIndex);
+}
+
+/**
+ * Duplicate a participant by index
+ * Creates a copy with the same data (number left as-is for user to modify)
+ * @param {number} rowIndex - Index in participantsData array
+ */
+function duplicateParticipant(rowIndex) {
+  if (rowIndex < 0 || rowIndex >= participantsData.length) {
+    console.error('[Participants] Invalid row index for duplication:', rowIndex);
+    return;
+  }
+
+  const originalParticipant = participantsData[rowIndex];
+
+  // Create a deep copy of the participant
+  const duplicatedParticipant = {
+    numero: originalParticipant.numero || '',
+    nome: originalParticipant.nome || originalParticipant.nome_pilota || '',
+    nome_pilota: originalParticipant.nome || originalParticipant.nome_pilota || '',
+    categoria: originalParticipant.categoria || '',
+    squadra: originalParticipant.squadra || '',
+    plate_number: originalParticipant.plate_number || '',
+    sponsor: originalParticipant.sponsor || '',
+    metatag: originalParticipant.metatag || '',
+    folder_1: originalParticipant.folder_1 || '',
+    folder_2: originalParticipant.folder_2 || '',
+    folder_3: originalParticipant.folder_3 || ''
+  };
+
+  // Add the duplicated participant to the array
+  participantsData.push(duplicatedParticipant);
+
+  // Get current sort state
+  const sortState = getCurrentSortState();
+
+  // Refresh the table
+  loadParticipantsIntoTable(participantsData);
+
+  // Re-apply sort state
+  if (sortState) {
+    applySortState(sortState);
+  }
+
+  // Open edit modal for the new participant so user can modify the number
+  const newIndex = participantsData.length - 1;
+  setTimeout(() => {
+    openParticipantEditModal(newIndex);
+    // Focus on the number field so user can quickly change it
+    setTimeout(() => {
+      const numeroField = document.getElementById('edit-numero');
+      if (numeroField) {
+        numeroField.focus();
+        numeroField.select();
+      }
+    }, 150);
+  }, 100);
+
+  console.log('[Participants] Duplicated participant at index', rowIndex, '-> new index', newIndex);
 }
 
 /**
@@ -2226,6 +2298,8 @@ window.closeParticipantEditModal = closeParticipantEditModal;
 window.saveParticipantEdit = saveParticipantEdit;
 window.removeParticipant = removeParticipant;
 window.updatePersonShownPreview = updatePersonShownPreview;
+window.duplicateParticipant = duplicateParticipant;
+window.duplicateParticipantFromRow = duplicateParticipantFromRow;
 
 // Export utility functions for preset management
 window.getSelectedPreset = getSelectedPreset;
