@@ -636,128 +636,91 @@ export class ModelManager {
 
 // ==================== GENERIC MODELS SUPPORT ====================
 
-/**
- * Generic model info (not category-specific)
- */
-export interface GenericModelInfo {
-  modelType: string;
-  version: string;
-  storagePath: string;
-  checksum: string;
-  sizeBytes: number;
-  inputSize: [number, number];
-}
+import {
+  YOLO_MODEL_REGISTRY,
+  getModelConfig,
+  YoloModelConfig,
+} from './yolo-model-registry';
 
 /**
- * Generic model local entry
+ * Get model path from storage path in registry
+ * Handles different directory structures for different model types
  */
-interface GenericModelEntry {
-  modelType: string;
-  version: string;
-  localPath: string;
-  checksum: string;
-  downloadedAt: string;
-  sizeBytes: number;
-}
+function getModelPaths(modelConfig: YoloModelConfig): string[] {
+  const storagePath = modelConfig.storagePath;
+  const modelFileName = path.basename(storagePath);
+  const modelDir = path.dirname(storagePath);
 
-/**
- * Known generic models with hardcoded defaults
- * These models are NOT category-specific - they're general purpose
- */
-const GENERIC_MODELS: Record<string, GenericModelInfo> = {
-  'yolov8n-seg': {
-    modelType: 'yolov8n-seg',
-    version: '1.0',
-    storagePath: 'generic/yolov8n-seg.onnx',
-    checksum: '', // Will be populated from database or skipped
-    sizeBytes: 14_000_000, // ~14MB
-    inputSize: [640, 640],
-  },
-  'yolov8s-seg': {
-    modelType: 'yolov8s-seg',
-    version: '1.0',
-    storagePath: 'generic/yolov8s-seg.onnx',
-    checksum: '',
-    sizeBytes: 45_000_000, // ~45MB
-    inputSize: [640, 640],
-  },
-};
+  // Build list of possible locations
+  return [
+    // Development: models/detector/weights-detector-v1.onnx or models/generic/yolov8n-seg.onnx
+    path.join(process.cwd(), 'models', storagePath),
+    // Alternative: directly in models folder
+    path.join(process.cwd(), 'models', modelFileName),
+    // Packaged app (asar.unpacked)
+    path.join(__dirname, '..', 'models', storagePath),
+    path.join(__dirname, '..', '..', 'models', storagePath),
+    path.join(__dirname, '..', 'models', modelFileName),
+    path.join(__dirname, '..', '..', 'models', modelFileName),
+  ];
+}
 
 // Add these methods to ModelManager class
 ModelManager.prototype.ensureGenericModelAvailable = async function(
   this: ModelManager,
-  modelType: 'yolov8n-seg' | 'yolov8s-seg',
+  modelId: string,
   onProgress?: DownloadProgressCallback
 ): Promise<string> {
-  const modelInfo = GENERIC_MODELS[modelType];
-  if (!modelInfo) {
-    throw new Error(`Unknown generic model type: ${modelType}`);
+  const modelConfig = getModelConfig(modelId);
+  if (!modelConfig) {
+    throw new Error(`Unknown model: ${modelId}. Available models: ${Object.keys(YOLO_MODEL_REGISTRY).join(', ')}`);
   }
 
+  console.log(`[ModelManager] Looking for model: ${modelId} (${modelConfig.storagePath})`);
+
   // Check 1: Look for bundled model in project directory (development or packaged app)
-  const bundledPaths = [
-    // Development: models/generic/yolov8n-seg.onnx
-    path.join(process.cwd(), 'models', 'generic', `${modelType}.onnx`),
-    // Packaged app (asar.unpacked)
-    path.join(__dirname, '..', 'models', 'generic', `${modelType}.onnx`),
-    path.join(__dirname, '..', '..', 'models', 'generic', `${modelType}.onnx`),
-  ];
+  const bundledPaths = getModelPaths(modelConfig);
 
   for (const bundledPath of bundledPaths) {
     if (fs.existsSync(bundledPath)) {
-      console.log(`[ModelManager] Using bundled generic model: ${bundledPath}`);
+      console.log(`[ModelManager] Using bundled model: ${bundledPath}`);
       return bundledPath;
     }
   }
 
   // Check 2: Look for cached model in user directory
-  const genericCacheDir = path.join((this as any).cacheDir, 'generic');
+  const modelDir = path.dirname(modelConfig.storagePath);
+  const modelCacheDir = path.join((this as any).cacheDir, modelDir);
 
-  // Ensure generic models directory exists
-  if (!fs.existsSync(genericCacheDir)) {
-    fs.mkdirSync(genericCacheDir, { recursive: true });
+  // Ensure models directory exists
+  if (!fs.existsSync(modelCacheDir)) {
+    fs.mkdirSync(modelCacheDir, { recursive: true });
   }
 
-  const localPath = path.join(genericCacheDir, `${modelType}-v${modelInfo.version}.onnx`);
+  const localPath = path.join(modelCacheDir, `${modelId}-v${modelConfig.version}.onnx`);
 
   // Check if already cached
   if (fs.existsSync(localPath)) {
-    console.log(`[ModelManager] Generic model already cached: ${localPath}`);
+    console.log(`[ModelManager] Model already cached: ${localPath}`);
     return localPath;
   }
 
-  console.log(`[ModelManager] Downloading generic model: ${modelType}`);
-
-  // Try to get model info from database first (for checksum)
-  let remoteChecksum = modelInfo.checksum;
-  try {
-    const supabase = (this as any).getSupabase();
-    const { data } = await supabase
-      .from('generic_models')
-      .select('checksum_sha256, storage_path, size_bytes')
-      .eq('model_type', modelType)
-      .single();
-
-    if (data) {
-      remoteChecksum = data.checksum_sha256;
-      console.log(`[ModelManager] Got checksum from database: ${remoteChecksum?.substring(0, 16)}...`);
-    }
-  } catch (error) {
-    console.log(`[ModelManager] No database entry for ${modelType}, using hardcoded config`);
-  }
+  console.log(`[ModelManager] Downloading model: ${modelId}`);
 
   // Get signed URL from Supabase Storage
   const supabase = (this as any).getSupabase();
+  const storagePath = modelConfig.supabasePath || modelConfig.storagePath;
+
   const { data: signedUrlData, error: signedUrlError } = await supabase.storage
     .from('onnx-models')
-    .createSignedUrl(modelInfo.storagePath, 3600);
+    .createSignedUrl(storagePath, 3600);
 
   if (signedUrlError || !signedUrlData?.signedUrl) {
-    throw new Error(`Failed to get download URL for ${modelType}: ${signedUrlError?.message}`);
+    throw new Error(`Failed to get download URL for ${modelId}: ${signedUrlError?.message}`);
   }
 
   // Download with progress
-  const totalBytes = modelInfo.sizeBytes;
+  const totalBytes = modelConfig.sizeBytes;
   const totalMB = totalBytes / (1024 * 1024);
 
   console.log(`[ModelManager] Downloading from: ${signedUrlData.signedUrl.substring(0, 50)}...`);
@@ -793,34 +756,20 @@ ModelManager.prototype.ensureGenericModelAvailable = async function(
   const fileBuffer = Buffer.concat(chunks.map(chunk => Buffer.from(chunk)));
   fs.writeFileSync(localPath, fileBuffer);
 
-  console.log(`[ModelManager] Downloaded generic model: ${fileBuffer.length} bytes to ${localPath}`);
-
-  // Validate checksum if available
-  if (remoteChecksum) {
-    const isValid = await (this as any).validateChecksum(localPath, remoteChecksum);
-    if (!isValid) {
-      fs.unlinkSync(localPath);
-      throw new Error(`Checksum validation failed for ${modelType}`);
-    }
-    console.log('[ModelManager] Generic model checksum validated');
-  }
+  console.log(`[ModelManager] Downloaded model: ${fileBuffer.length} bytes to ${localPath}`);
 
   return localPath;
 };
 
 ModelManager.prototype.getGenericModelPath = function(
   this: ModelManager,
-  modelType: string
+  modelId: string
 ): string | null {
-  const modelInfo = GENERIC_MODELS[modelType];
-  if (!modelInfo) return null;
+  const modelConfig = getModelConfig(modelId);
+  if (!modelConfig) return null;
 
   // Check 1: Look for bundled model in project directory
-  const bundledPaths = [
-    path.join(process.cwd(), 'models', 'generic', `${modelType}.onnx`),
-    path.join(__dirname, '..', 'models', 'generic', `${modelType}.onnx`),
-    path.join(__dirname, '..', '..', 'models', 'generic', `${modelType}.onnx`),
-  ];
+  const bundledPaths = getModelPaths(modelConfig);
 
   for (const bundledPath of bundledPaths) {
     if (fs.existsSync(bundledPath)) {
@@ -829,8 +778,9 @@ ModelManager.prototype.getGenericModelPath = function(
   }
 
   // Check 2: Look for cached model
-  const genericCacheDir = path.join((this as any).cacheDir, 'generic');
-  const localPath = path.join(genericCacheDir, `${modelType}-v${modelInfo.version}.onnx`);
+  const modelDir = path.dirname(modelConfig.storagePath);
+  const modelCacheDir = path.join((this as any).cacheDir, modelDir);
+  const localPath = path.join(modelCacheDir, `${modelId}-v${modelConfig.version}.onnx`);
 
   if (fs.existsSync(localPath)) {
     return localPath;
@@ -843,10 +793,10 @@ ModelManager.prototype.getGenericModelPath = function(
 declare module './model-manager' {
   interface ModelManager {
     ensureGenericModelAvailable(
-      modelType: 'yolov8n-seg' | 'yolov8s-seg',
+      modelId: string,
       onProgress?: DownloadProgressCallback
     ): Promise<string>;
-    getGenericModelPath(modelType: string): string | null;
+    getGenericModelPath(modelId: string): string | null;
   }
 }
 

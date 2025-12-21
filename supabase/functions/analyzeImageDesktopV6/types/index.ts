@@ -86,6 +86,17 @@ Per ogni ritaglio, identifica:
 
 // ==================== REQUEST/RESPONSE TYPES ====================
 
+/**
+ * Bbox source tracking for V6 baseline 2026
+ * Distinguishes where the bounding box originated from:
+ * - 'yolo-seg': YOLOv8-seg segmentation on desktop
+ * - 'onnx-detr': RF-DETR ONNX inference on desktop
+ * - 'manual': User-defined bounding box
+ * - 'full-image': Full image analysis (no detection)
+ * - 'gemini': Gemini-detected bounding box (default fallback)
+ */
+export type BboxSource = 'yolo-seg' | 'onnx-detr' | 'manual' | 'full-image' | 'gemini';
+
 export interface BoundingBox {
   x: number;      // Normalized 0-1
   y: number;      // Normalized 0-1
@@ -128,6 +139,10 @@ export interface RequestBody {
     participants: ParticipantInfo[];
   };
   modelName?: string;  // Ignored - V6 controls model
+
+  // V6 Baseline 2026: New fields for fullImage fallback and bbox tracking
+  fullImage?: string;           // Base64 full image (fallback when crops is empty)
+  bboxSources?: BboxSource[];   // Source of each crop's bounding box
 }
 
 // ==================== ANALYSIS RESULT TYPES ====================
@@ -142,6 +157,7 @@ export interface CropAnalysisResult {
   otherText: string[];
   isPartial: boolean;
   originalBbox?: BoundingBox;
+  bboxSource: BboxSource;   // V6 Baseline 2026: Track bbox origin
 }
 
 export interface ContextAnalysisResult {
@@ -180,6 +196,7 @@ export interface SuccessResponse {
   correlation: CorrelationResult;
   usage: UsageStats;
   inferenceTimeMs: number;
+  usedFullImage?: boolean;  // V6 Baseline 2026: True if fullImage fallback was used
 }
 
 export interface ErrorResponse {

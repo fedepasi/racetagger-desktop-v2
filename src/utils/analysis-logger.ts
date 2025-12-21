@@ -110,13 +110,22 @@ export interface ImageAnalysisEvent extends LogEvent {
   recognitionMethod?: 'gemini' | 'rf-detr' | 'local-onnx' | 'gemini-v6-seg';
   // Original image dimensions for bbox mapping (especially useful for local-onnx)
   imageSize?: { width: number; height: number };
-  // Segmentation preprocessing info (YOLOv8-seg used before recognition)
+  // Segmentation preprocessing info (YOLO model used before recognition)
   segmentationPreprocessing?: {
-    used: boolean;           // Was YOLOv8-seg segmentation used
+    used: boolean;           // Was YOLO segmentation used
+    modelId?: string;        // Model ID used (e.g., 'yolov11-detector-v1')
     detectionsCount: number; // Number of subjects detected by YOLO
     inferenceMs: number;     // YOLO inference time in milliseconds
     cropsExtracted: number;  // Number of masked crops created
     masksApplied: boolean;   // Were masks applied to isolate subjects
+    // Detection bounding boxes for visualization (always available when detections exist)
+    detections?: Array<{
+      bbox: { x: number; y: number; width: number; height: number };
+      classId: number;
+      className: string;
+      confidence: number;
+      detectionId: string;
+    }>;
   };
   // Backward compatibility fields (uses first vehicle data)
   primaryVehicle?: VehicleAnalysisData;

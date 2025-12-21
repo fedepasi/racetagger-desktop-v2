@@ -82,3 +82,8 @@ gen-lang-client-*.jsonml-training/
 ml-training/rf-detr-medium.pth
 ml-training/rf-detr-base.pth
 ml-training/formula_e_dataset/
+venv-ml/bin/
+venv-ml/lib/
+venv-ml/include/
+venv-ml/
+venv-ml/lib/python3.11/site-packages/fontTools/__pycache__/ttx.cpython-311.pyc

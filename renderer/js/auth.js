@@ -15,6 +15,9 @@ let subscriptionDisplay;
 let continueDemo;
 let backToLogin;
 
+// Low token warning - show only once per session
+let lowTokenWarningShown = false;
+
 // Auth state
 let authState = {
   isAuthenticated: false,
@@ -538,9 +541,10 @@ function handleTokenUsed(tokenInfo) {
   // Update token balance
   updateTokenBalance(tokenInfo);
   
-  // Show notification if token balance is low
-  if (tokenInfo.remaining <= 5) {
-    showNotification('Avviso', `Hai solo ${tokenInfo.remaining} token disponibili. Considera l'acquisto di token aggiuntivi.`);
+  // Show notification if token balance is low (once per session)
+  if (tokenInfo.remaining <= 5 && !lowTokenWarningShown) {
+    lowTokenWarningShown = true;
+    showNotification('Warning', `You only have ${tokenInfo.remaining} tokens remaining. Consider purchasing additional tokens.`);
   }
 }
 

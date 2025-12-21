@@ -2,42 +2,48 @@
  * Gemini Analyzer Module
  *
  * Gestisce la chiamata a Vertex AI Gemini per l'analisi delle immagini.
+ * Usa il nuovo SDK @google/genai che supporta endpoint global.
  * Supporta retry con fallback_prompt se il primario fallisce.
  */
 
-import { VertexAI } from 'https://esm.sh/@google-cloud/vertexai@1.1.0';
+import { GoogleGenAI } from 'npm:@google/genai@1.34.0';
 import { CropData, NegativeData, GeminiAnalysisResult } from '../types/index.ts';
 import { VERTEX_AI, LOG_PREFIX } from '../config/constants.ts';
 
-// Cached Vertex AI configuration
-let vertexConfig: {
-  projectId: string;
-  location: string;
-  credentials: any;
-} | null = null;
+// Cached AI client
+let aiClient: GoogleGenAI | null = null;
+let projectId: string | null = null;
 
 /**
- * Initialize Vertex AI configuration from environment variables
+ * Initialize Google GenAI client for Vertex AI
  */
-function initVertexConfig(): typeof vertexConfig {
-  if (vertexConfig) return vertexConfig;
+function initAIClient(): GoogleGenAI {
+  if (aiClient) return aiClient;
 
-  const projectId = Deno.env.get(VERTEX_AI.PROJECT_ID_ENV);
-  const location = Deno.env.get(VERTEX_AI.LOCATION_ENV) || VERTEX_AI.DEFAULT_LOCATION;
+  projectId = Deno.env.get(VERTEX_AI.PROJECT_ID_ENV);
   const serviceAccountKey = Deno.env.get(VERTEX_AI.SERVICE_ACCOUNT_KEY_ENV);
 
   if (!projectId || !serviceAccountKey) {
     throw new Error(
-      `Vertex AI not configured. Set ${VERTEX_AI.PROJECT_ID_ENV}, ${VERTEX_AI.LOCATION_ENV}, and ${VERTEX_AI.SERVICE_ACCOUNT_KEY_ENV}`
+      `Vertex AI not configured. Set ${VERTEX_AI.PROJECT_ID_ENV} and ${VERTEX_AI.SERVICE_ACCOUNT_KEY_ENV}`
     );
   }
 
   const credentials = JSON.parse(serviceAccountKey);
 
-  vertexConfig = { projectId, location, credentials };
-  console.log(`${LOG_PREFIX} Vertex AI configured: Project=${projectId}, Location=${location}`);
+  // Initialize with new SDK - supports global endpoint
+  aiClient = new GoogleGenAI({
+    vertexai: true,
+    project: projectId,
+    location: VERTEX_AI.DEFAULT_LOCATION,  // 'global'
+    googleAuthOptions: {
+      credentials: credentials
+    }
+  });
 
-  return vertexConfig;
+  console.log(`${LOG_PREFIX} Vertex AI configured: Project=${projectId}, Location=${VERTEX_AI.DEFAULT_LOCATION}, Model=${VERTEX_AI.DEFAULT_MODEL}`);
+
+  return aiClient;
 }
 
 /**
@@ -45,7 +51,7 @@ function initVertexConfig(): typeof vertexConfig {
  */
 export function isVertexConfigured(): boolean {
   try {
-    initVertexConfig();
+    initAIClient();
     return true;
   } catch {
     return false;
@@ -67,14 +73,11 @@ export async function analyzeWithGemini(
   prompt: string,
   fallbackPrompt?: string | null
 ): Promise<GeminiAnalysisResult> {
-  const config = initVertexConfig();
-  if (!config) {
-    throw new Error('Vertex AI not configured');
-  }
+  const client = initAIClient();
 
   // Try primary prompt first
   try {
-    return await callGemini(config, crops, negative, prompt);
+    return await callGemini(client, crops, negative, prompt);
   } catch (primaryError: any) {
     console.warn(`${LOG_PREFIX} Primary prompt failed: ${primaryError.message}`);
 
@@ -82,7 +85,7 @@ export async function analyzeWithGemini(
     if (fallbackPrompt) {
       console.log(`${LOG_PREFIX} Retrying with fallback prompt...`);
       try {
-        return await callGemini(config, crops, negative, fallbackPrompt);
+        return await callGemini(client, crops, negative, fallbackPrompt);
       } catch (fallbackError: any) {
         console.error(`${LOG_PREFIX} Fallback prompt also failed: ${fallbackError.message}`);
         throw fallbackError;
@@ -97,25 +100,13 @@ export async function analyzeWithGemini(
  * Internal function to call Gemini API
  */
 async function callGemini(
-  config: NonNullable<typeof vertexConfig>,
+  client: GoogleGenAI,
   crops: CropData[],
   negative: NegativeData | undefined,
   prompt: string
 ): Promise<GeminiAnalysisResult> {
-  // Initialize Vertex AI client
-  const vertexAI = new VertexAI({
-    project: config.projectId,
-    location: config.location,
-    googleAuthOptions: {
-      credentials: config.credentials
-    }
-  });
-
-  // Get generative model
-  const model = vertexAI.getGenerativeModel({ model: VERTEX_AI.DEFAULT_MODEL });
-
-  // Build content parts: prompt + images
-  const parts: any[] = [{ text: prompt }];
+  // Build content parts: images first, then prompt
+  const parts: any[] = [];
 
   // Add all crop images
   for (const crop of crops) {
@@ -137,27 +128,30 @@ async function callGemini(
     });
   }
 
-  console.log(`${LOG_PREFIX} Calling Vertex AI ${VERTEX_AI.DEFAULT_MODEL} with ${crops.length} crops${negative ? ' + 1 context' : ''}`);
+  // Add text prompt last
+  parts.push({ text: prompt });
+
+  console.log(`${LOG_PREFIX} Calling ${VERTEX_AI.DEFAULT_MODEL} with ${crops.length} crops${negative ? ' + 1 context' : ''}`);
   console.log(`${LOG_PREFIX} Config: thinkingLevel=${VERTEX_AI.THINKING_LEVEL}, mediaResolution=${VERTEX_AI.MEDIA_RESOLUTION}`);
 
-  // Build request with Gemini specific parameters
-  const request = {
-    contents: [{
-      role: 'user',
-      parts: parts
-    }],
-    generationConfig: {
-      responseMimeType: 'application/json',
-      temperature: 0.3,
-      // Gemini 3 Flash specific configurations
-      thinkingConfig: {
-        thinkingLevel: VERTEX_AI.THINKING_LEVEL
-      },
-      mediaResolution: VERTEX_AI.MEDIA_RESOLUTION
-    }
+  // Build generation config with Gemini 3 Flash specific parameters
+  const config = {
+    thinkingConfig: {
+      thinkingLevel: VERTEX_AI.THINKING_LEVEL
+    },
+    mediaResolution: VERTEX_AI.MEDIA_RESOLUTION,
+    responseMimeType: 'application/json',
+    temperature: VERTEX_AI.TEMPERATURE,
+    maxOutputTokens: VERTEX_AI.MAX_OUTPUT_TOKENS,
   };
 
-  // Call Vertex AI with timeout
+  // Build contents array
+  const contents = [{
+    role: 'user' as const,
+    parts: parts
+  }];
+
+  // Call with timeout
   const timeoutPromise = new Promise<never>((_, reject) => {
     setTimeout(
       () => reject(new Error(`Vertex AI call timed out after ${VERTEX_AI.TIMEOUT_MS}ms`)),
@@ -165,29 +159,29 @@ async function callGemini(
     );
   });
 
-  const vertexPromise = model.generateContent(request);
-  const result: any = await Promise.race([vertexPromise, timeoutPromise]);
+  const geminiPromise = client.models.generateContent({
+    model: VERTEX_AI.DEFAULT_MODEL,
+    config: config,
+    contents: contents
+  });
+
+  const result: any = await Promise.race([geminiPromise, timeoutPromise]);
 
   console.log(`${LOG_PREFIX} Vertex AI response received`);
 
-  // Extract token usage from Vertex AI response
-  const usageMetadata = result.response?.usageMetadata || {};
+  // Extract token usage
+  const usageMetadata = result.usageMetadata || {};
   const inputTokens = usageMetadata.promptTokenCount || 0;
   const outputTokens = usageMetadata.candidatesTokenCount || 0;
 
-  // Get text response from Vertex AI format
-  const candidate = result.response?.candidates?.[0];
-  if (!candidate) {
-    throw new Error('No candidates in Vertex AI response');
-  }
-
-  const textPart = candidate.content?.parts?.find((p: any) => p.text);
-  if (!textPart) {
-    throw new Error('No text part in Vertex AI response');
+  // Get text response
+  const text = result.text || result.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) {
+    throw new Error('No text in Gemini response');
   }
 
   return {
-    rawResponse: textPart.text,
+    rawResponse: text,
     inputTokens,
     outputTokens,
   };
@@ -204,6 +198,5 @@ export function getCurrentModel(): string {
  * Get current Vertex AI location
  */
 export function getVertexLocation(): string {
-  const config = initVertexConfig();
-  return config?.location || VERTEX_AI.DEFAULT_LOCATION;
+  return VERTEX_AI.DEFAULT_LOCATION;
 }

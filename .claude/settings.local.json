@@ -133,7 +133,13 @@
       "Bash(pip3 install:*)",
       "WebFetch(domain:docs.cloud.google.com)",
       "Bash(wc:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_50babb1bc18dcc6e4fafef1f9f58ed794f8fbead npx supabase functions deploy:*)",
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_v0_bb2bc3f03c37b1b3d7a5154995bceb172d2b8f1e npx supabase functions deploy:*)",
+      "WebFetch(domain:www.npmjs.com)",
+      "Bash(rm:*)",
+      "Bash(brew list:*)",
+      "Bash(/opt/homebrew/opt/python@3.11/bin/python3.11:*)"
     ],
     "deny": [],
     "ask": []

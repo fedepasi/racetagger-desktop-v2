@@ -21,12 +21,14 @@ export const VERTEX_AI = {
   SERVICE_ACCOUNT_KEY_ENV: 'VERTEX_SERVICE_ACCOUNT_KEY',
 
   // Defaults
-  DEFAULT_LOCATION: 'europe-west1',
-  DEFAULT_MODEL: 'gemini-2.0-flash-001',
+  DEFAULT_LOCATION: 'global',  // Gemini 3 Flash only available on global endpoints
+  DEFAULT_MODEL: 'gemini-3-flash-preview',
 
   // Gemini 3 Flash specific parameters
-  THINKING_LEVEL: 'MINIMAL' as const,     // MINIMAL, LOW, MEDIUM, HIGH
-  MEDIA_RESOLUTION: 'ULTRA_HIGH' as const, // LOW, MEDIUM, HIGH, ULTRA_HIGH
+  THINKING_LEVEL: 'MINIMAL' as const,                     // MINIMAL, LOW, MEDIUM, HIGH
+  MEDIA_RESOLUTION: 'MEDIA_RESOLUTION_HIGH' as const,     // MEDIA_RESOLUTION_LOW, MEDIUM, HIGH
+  TEMPERATURE: 0.2,
+  MAX_OUTPUT_TOKENS: 4096,
 
   // Timeouts
   TIMEOUT_MS: 60000,

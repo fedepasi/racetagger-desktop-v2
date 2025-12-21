@@ -2,15 +2,15 @@
  * Generic Segmenter Service
  *
  * Local inference using ONNX Runtime for generic object segmentation.
- * Uses YOLOv8-seg with COCO classes for vehicle/person detection.
+ * Supports both YOLOv8-seg (COCO) and custom YOLOv11 models.
  *
  * This is a SEPARATE model from RF-DETR - it runs BEFORE recognition
  * to isolate subjects and create clean crops without overlaps.
  *
  * Features:
- * - YOLOv8-seg ONNX model loading (COCO pre-trained)
+ * - Multiple YOLO model support via model registry
  * - Instance segmentation with mask output
- * - Relevant classes: person, car, motorcycle, bus, truck
+ * - Per-category class filtering via sport_categories.segmentation_config
  * - Memory-efficient buffer handling
  */
 
@@ -18,25 +18,18 @@ import * as path from 'path';
 import * as fs from 'fs';
 import sharp from 'sharp';
 import { getModelManager } from './model-manager';
+import {
+  getModelConfig,
+  getClassName,
+  classNamesToIds,
+  getDefaultModelId,
+  YoloModelConfig,
+  SegmentationConfig,
+  YOLO_MODEL_REGISTRY,
+} from './yolo-model-registry';
 
 // ONNX Runtime import (lazy loaded)
 let ort: typeof import('onnxruntime-node') | null = null;
-
-// COCO class mapping for relevant classes
-const COCO_CLASSES: Record<number, string> = {
-  0: 'person',
-  1: 'bicycle',
-  2: 'car',
-  3: 'motorcycle',
-  4: 'airplane',
-  5: 'bus',
-  6: 'train',
-  7: 'truck',
-  // ... other classes not relevant for our use case
-};
-
-// Classes we care about for motorsport/sports photography
-const RELEVANT_CLASS_IDS = [0, 2, 3, 5, 7]; // person, car, motorcycle, bus, truck
 
 /**
  * Bounding box in normalized coordinates (0-1)
@@ -74,22 +67,26 @@ export interface GenericSegmenterOutput {
  * Configuration for the segmenter
  */
 export interface GenericSegmenterConfig {
-  modelType: 'yolov8n-seg' | 'yolov8s-seg';
+  modelId: string;                        // Model ID from registry (e.g., 'yolov11-detector-v1')
   confidenceThreshold: number;
   iouThreshold: number;
   maskThreshold: number;
-  relevantClasses: number[];
+  relevantClassIds: number[];             // Class IDs to filter (computed from relevantClassNames)
+  relevantClassNames: string[];           // Class names to filter (e.g., ['vehicle', 'rider'])
+  maxDetections: number;                  // Max detections per image
 }
 
 /**
  * Default configuration
  */
 export const DEFAULT_SEGMENTER_CONFIG: GenericSegmenterConfig = {
-  modelType: 'yolov8n-seg',
+  modelId: getDefaultModelId(),           // 'yolov11-detector-v1'
   confidenceThreshold: 0.25,
   iouThreshold: 0.45,
   maskThreshold: 0.5,
-  relevantClasses: RELEVANT_CLASS_IDS,
+  relevantClassIds: [],                   // Computed from relevantClassNames
+  relevantClassNames: ['vehicle', 'rider', 'runner'],  // Default relevant classes
+  maxDetections: 5,
 };
 
 /**
@@ -101,19 +98,53 @@ export class GenericSegmenter {
   private session: import('onnxruntime-node').InferenceSession | null = null;
   private config: GenericSegmenterConfig;
   private currentModelPath: string | null = null;
+  private currentModelConfig: YoloModelConfig | null = null;
   private isLoading: boolean = false;
   private loadError: Error | null = null;
   private loadingPromise: Promise<boolean> | null = null;
   private lastImageDimensions: { width: number; height: number } | null = null;
 
-  // YOLOv8-seg specific constants
+  // Model-dependent constants (set during loadModel)
   private readonly INPUT_SIZE = 640;
-  private readonly PROTO_SIZE = 160; // Mask prototype size
-  private readonly NUM_CLASSES = 80; // COCO classes
-  private readonly NUM_MASK_COEFFS = 32; // Mask coefficients per detection
+  private PROTO_SIZE = 160;       // Mask prototype size
+  private NUM_CLASSES = 80;       // Number of classes (dynamic based on model)
+  private NUM_MASK_COEFFS = 32;   // Mask coefficients per detection
 
   private constructor(config?: Partial<GenericSegmenterConfig>) {
     this.config = { ...DEFAULT_SEGMENTER_CONFIG, ...config };
+    // Compute class IDs from names
+    this.updateRelevantClassIds();
+  }
+
+  /**
+   * Update relevant class IDs based on class names and current model
+   */
+  private updateRelevantClassIds(): void {
+    if (this.currentModelConfig) {
+      this.config.relevantClassIds = classNamesToIds(
+        this.config.modelId,
+        this.config.relevantClassNames
+      );
+    } else {
+      // Fallback: use class names as-is for lookup later
+      this.config.relevantClassIds = [];
+    }
+  }
+
+  /**
+   * Update configuration (e.g., from sport_categories.segmentation_config)
+   */
+  public updateConfig(segConfig: SegmentationConfig): void {
+    console.log(`[GenericSegmenter] Updating config: modelId=${segConfig.model_id}, classes=${segConfig.relevant_classes.join(',')}`);
+
+    this.config.modelId = segConfig.model_id;
+    this.config.relevantClassNames = segConfig.relevant_classes;
+    this.config.confidenceThreshold = segConfig.confidence_threshold;
+    this.config.iouThreshold = segConfig.iou_threshold;
+    this.config.maxDetections = segConfig.max_detections;
+
+    // Recompute class IDs
+    this.updateRelevantClassIds();
   }
 
   /**
@@ -181,12 +212,25 @@ export class GenericSegmenter {
         throw new Error('ONNX Runtime not available');
       }
 
+      // Get model config from registry
+      this.currentModelConfig = getModelConfig(this.config.modelId) || null;
+      if (!this.currentModelConfig) {
+        throw new Error(`Model '${this.config.modelId}' not found in registry. Available: ${Object.keys(YOLO_MODEL_REGISTRY).join(', ')}`);
+      }
+
+      // Set model-dependent constants from registry
+      this.NUM_CLASSES = this.currentModelConfig.numClasses;
+      this.NUM_MASK_COEFFS = this.currentModelConfig.numMaskCoeffs;
+      this.PROTO_SIZE = this.currentModelConfig.protoSize;
+
+      console.log(`[GenericSegmenter] Model config: ${this.config.modelId}, ${this.NUM_CLASSES} classes, ${this.NUM_MASK_COEFFS} mask coeffs`);
+
       // Get model path - either provided or download from Supabase
       let finalModelPath = modelPath;
 
       if (!finalModelPath) {
         const modelManager = getModelManager();
-        finalModelPath = await modelManager.ensureGenericModelAvailable(this.config.modelType);
+        finalModelPath = await modelManager.ensureGenericModelAvailable(this.config.modelId);
       }
 
       if (!finalModelPath || !fs.existsSync(finalModelPath)) {
@@ -211,9 +255,13 @@ export class GenericSegmenter {
       this.session = await ort!.InferenceSession.create(finalModelPath, sessionOptions);
       this.currentModelPath = finalModelPath;
 
+      // Update relevant class IDs now that model config is loaded
+      this.updateRelevantClassIds();
+
       console.log('[GenericSegmenter] Model loaded successfully');
       console.log(`[GenericSegmenter] Input names: ${this.session.inputNames}`);
       console.log(`[GenericSegmenter] Output names: ${this.session.outputNames}`);
+      console.log(`[GenericSegmenter] Relevant classes: ${this.config.relevantClassNames.join(', ')} -> IDs: [${this.config.relevantClassIds.join(', ')}]`);
 
       return true;
     } catch (error) {
@@ -359,10 +407,11 @@ export class GenericSegmenter {
       // Apply NMS
       const filteredDetections = this.applyNMS(detections, this.config.iouThreshold);
 
-      // Filter by confidence and relevant classes
+      // Filter by confidence and relevant classes, then limit by maxDetections
       const finalDetections = filteredDetections
         .filter(d => d.confidence >= this.config.confidenceThreshold)
-        .filter(d => this.config.relevantClasses.includes(d.classId))
+        .filter(d => this.config.relevantClassIds.length === 0 || this.config.relevantClassIds.includes(d.classId))
+        .slice(0, this.config.maxDetections)
         .map((d, idx) => ({
           ...d,
           detectionId: `seg_${idx}_${Date.now()}`,
@@ -386,9 +435,11 @@ export class GenericSegmenter {
   }
 
   /**
-   * Parse YOLOv8-seg output
+   * Parse YOLO-seg output (supports both YOLOv8 and YOLOv11)
    * Output format:
-   * - output0: [1, 116, 8400] - detections (4 bbox + 80 classes + 32 mask coefficients)
+   * - output0: [1, N, 8400] - detections where N = 4 (bbox) + NUM_CLASSES + 32 (mask coeffs)
+   *   - YOLOv8 COCO: N = 4 + 80 + 32 = 116
+   *   - YOLOv11 Custom: N = 4 + 6 + 32 = 42
    * - output1: [1, 32, 160, 160] - mask prototypes
    */
   private async parseDetectionsWithMasks(
@@ -401,9 +452,12 @@ export class GenericSegmenter {
   ): Promise<SegmentationResult[]> {
     const detections: SegmentationResult[] = [];
 
+    // Expected channels = 4 (bbox) + NUM_CLASSES + 32 (mask coeffs)
+    const expectedChannels = 4 + this.NUM_CLASSES + this.NUM_MASK_COEFFS;
+
     // Get output tensors
     const outputNames = Object.keys(results);
-    console.log(`[GenericSegmenter] Output names: ${outputNames.join(', ')}`);
+    console.log(`[GenericSegmenter] Output names: ${outputNames.join(', ')}, expecting ${expectedChannels} channels`);
 
     // Find detection and prototype outputs
     let detectionsOutput: Float32Array | null = null;
@@ -415,14 +469,14 @@ export class GenericSegmenter {
       const tensor = results[name];
       const dims = tensor.dims;
 
-      // Detection output: [1, 116, 8400] or similar
-      if (dims.length === 3 && dims[1] === 116) {
+      // Detection output: [1, N, 8400] where N matches expected channels
+      if (dims.length === 3 && dims[1] === expectedChannels) {
         detectionsOutput = tensor.data as Float32Array;
         detectionsShape = dims;
         console.log(`[GenericSegmenter] Found detections: ${name}, dims=[${dims}]`);
       }
       // Prototype output: [1, 32, 160, 160]
-      else if (dims.length === 4 && dims[1] === 32) {
+      else if (dims.length === 4 && dims[1] === this.NUM_MASK_COEFFS) {
         prototypesOutput = tensor.data as Float32Array;
         prototypesShape = dims;
         console.log(`[GenericSegmenter] Found prototypes: ${name}, dims=[${dims}]`);
@@ -430,15 +484,17 @@ export class GenericSegmenter {
     }
 
     if (!detectionsOutput) {
-      console.warn('[GenericSegmenter] No detections output found');
+      console.warn(`[GenericSegmenter] No detections output found with ${expectedChannels} channels`);
       return detections;
     }
 
     // Parse detections
-    // YOLOv8-seg output format: [batch, channels, anchors]
-    // channels = 4 (bbox) + 80 (classes) + 32 (mask coeffs) = 116
+    // YOLO-seg output format: [batch, channels, anchors]
+    // channels = 4 (bbox) + NUM_CLASSES + NUM_MASK_COEFFS
     const numAnchors = Number(detectionsShape[2]); // 8400
-    const numChannels = Number(detectionsShape[1]); // 116
+    const numChannels = Number(detectionsShape[1]);
+
+    console.log(`[GenericSegmenter] Parsing ${numAnchors} anchors, ${numChannels} channels, ${this.NUM_CLASSES} classes`);
 
     for (let a = 0; a < numAnchors; a++) {
       // Get class scores and find best class
@@ -454,9 +510,11 @@ export class GenericSegmenter {
         }
       }
 
-      // Skip low confidence or irrelevant classes
+      // Skip low confidence detections (early filter)
       if (maxClassScore < 0.1) continue;
-      if (!this.config.relevantClasses.includes(bestClassId)) continue;
+
+      // Skip irrelevant classes if filter is set
+      if (this.config.relevantClassIds.length > 0 && !this.config.relevantClassIds.includes(bestClassId)) continue;
 
       // Get bbox (cx, cy, w, h in input coordinates)
       const cx = detectionsOutput[0 * numAnchors + a];
@@ -509,7 +567,7 @@ export class GenericSegmenter {
 
       detections.push({
         classId: bestClassId,
-        className: COCO_CLASSES[bestClassId] || `class_${bestClassId}`,
+        className: getClassName(this.config.modelId, bestClassId),
         confidence: maxClassScore,
         bbox,
         mask,
@@ -694,7 +752,22 @@ export class GenericSegmenter {
   public dispose(): void {
     this.session = null;
     this.currentModelPath = null;
+    this.currentModelConfig = null;
     console.log('[GenericSegmenter] Resources disposed');
+  }
+
+  /**
+   * Get current model ID
+   */
+  public getModelId(): string {
+    return this.config.modelId;
+  }
+
+  /**
+   * Check if a different model is needed
+   */
+  public needsModelReload(newModelId: string): boolean {
+    return this.currentModelConfig?.modelId !== newModelId;
   }
 }
 

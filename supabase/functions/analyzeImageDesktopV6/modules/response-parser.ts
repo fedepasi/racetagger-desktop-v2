@@ -11,7 +11,8 @@ import {
   ContextAnalysisResult,
   RecognitionConfig,
   CorrelationResult,
-  ParticipantInfo
+  ParticipantInfo,
+  BboxSource
 } from '../types/index.ts';
 import { RESPONSE_DEFAULTS, LOG_PREFIX } from '../config/constants.ts';
 
@@ -22,13 +23,15 @@ import { RESPONSE_DEFAULTS, LOG_PREFIX } from '../config/constants.ts';
  * @param crops - Original crop data for metadata
  * @param hasNegative - Whether context image was included
  * @param recognitionConfig - Config for filtering results
+ * @param bboxSources - V6 Baseline 2026: Source of each crop's bounding box
  * @returns Parsed crop and context analysis
  */
 export function parseGeminiResponse(
   responseText: string,
   crops: CropData[],
   hasNegative: boolean,
-  recognitionConfig?: RecognitionConfig
+  recognitionConfig?: RecognitionConfig,
+  bboxSources?: BboxSource[]
 ): { cropAnalysis: CropAnalysisResult[]; contextAnalysis: ContextAnalysisResult | null } {
   try {
     // Clean potential markdown formatting
@@ -39,8 +42,8 @@ export function parseGeminiResponse(
 
     const parsed = JSON.parse(cleaned);
 
-    // Parse crop results
-    let cropAnalysis = parseCropResults(parsed.crops || [], crops);
+    // Parse crop results with bboxSource tracking
+    let cropAnalysis = parseCropResults(parsed.crops || [], crops, bboxSources);
 
     // Apply filters from recognition_config
     cropAnalysis = filterCropResults(cropAnalysis, recognitionConfig);
@@ -60,7 +63,7 @@ export function parseGeminiResponse(
 
     // Return empty results on parse failure
     return {
-      cropAnalysis: createEmptyCropResults(crops),
+      cropAnalysis: createEmptyCropResults(crops, bboxSources),
       contextAnalysis: null,
     };
   }
@@ -68,8 +71,13 @@ export function parseGeminiResponse(
 
 /**
  * Parse crop results from Gemini response
+ * V6 Baseline 2026: Now includes bboxSource tracking
  */
-function parseCropResults(geminiCrops: any[], originalCrops: CropData[]): CropAnalysisResult[] {
+function parseCropResults(
+  geminiCrops: any[],
+  originalCrops: CropData[],
+  bboxSources?: BboxSource[]
+): CropAnalysisResult[] {
   return geminiCrops.map((crop: any, idx: number) => ({
     imageIndex: crop.imageIndex || idx + 1,
     detectionId: originalCrops[idx]?.detectionId || `det_${idx}`,
@@ -80,6 +88,7 @@ function parseCropResults(geminiCrops: any[], originalCrops: CropData[]): CropAn
     otherText: Array.isArray(crop.otherText) ? crop.otherText : [],
     isPartial: originalCrops[idx]?.isPartial || false,
     originalBbox: originalCrops[idx]?.originalBbox || undefined,
+    bboxSource: bboxSources?.[idx] || 'gemini',  // V6 Baseline 2026: Default to 'gemini' if not specified
   }));
 }
 
@@ -132,8 +141,9 @@ function parseContextResult(context: any): ContextAnalysisResult {
 
 /**
  * Create empty crop results for error cases
+ * V6 Baseline 2026: Now includes bboxSource tracking
  */
-function createEmptyCropResults(crops: CropData[]): CropAnalysisResult[] {
+function createEmptyCropResults(crops: CropData[], bboxSources?: BboxSource[]): CropAnalysisResult[] {
   return crops.map((crop, idx) => ({
     imageIndex: idx + 1,
     detectionId: crop.detectionId,
@@ -144,6 +154,7 @@ function createEmptyCropResults(crops: CropData[]): CropAnalysisResult[] {
     otherText: [],
     isPartial: crop.isPartial,
     originalBbox: crop.originalBbox || undefined,
+    bboxSource: bboxSources?.[idx] || 'gemini',  // V6 Baseline 2026
   }));
 }
 
