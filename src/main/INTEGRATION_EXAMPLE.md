@@ -104,13 +104,22 @@ app.whenReady().then(async () => {
 
 ```
 src/
-├── main.ts                (~4000 righe invece di 5870)
+├── main.ts                (~3000 righe invece di 5870)
 ├── main/
-│   ├── index.ts           (re-export)
+│   ├── index.ts           (re-export centrale)
 │   ├── ipc/
 │   │   ├── index.ts
 │   │   ├── auth-handlers.ts
-│   │   └── window-handlers.ts
+│   │   ├── window-handlers.ts
+│   │   └── database/
+│   │       ├── index.ts
+│   │       ├── project-handlers.ts
+│   │       ├── execution-handlers.ts
+│   │       ├── preset-handlers.ts
+│   │       ├── sport-category-handlers.ts
+│   │       ├── export-destination-handlers.ts
+│   │       ├── statistics-handlers.ts
+│   │       └── thumbnail-handlers.ts
 │   ├── services/
 │   │   ├── index.ts
 │   │   └── version-checker.ts
@@ -119,10 +128,33 @@ src/
 │       └── safe-ipc.ts
 ```
 
+## Database Handlers (Completato)
+
+I database handlers sono stati estratti e suddivisi in moduli specializzati:
+
+### Integrazione Database Handlers
+
+Aggiungi in `app.whenReady()`:
+
+```typescript
+import { setupDatabaseIpcHandlers, DatabaseHandlersDependencies } from './main/ipc/database';
+
+// In app.whenReady()
+const dbDeps: DatabaseHandlersDependencies = {
+  getMainWindow: () => mainWindow
+};
+setupDatabaseIpcHandlers(dbDeps);
+```
+
+### Rimuovere da main.ts
+
+6. **Linee 912-1900**: `setupDatabaseIpcHandlers` completa
+   - Ora importata da `./main/ipc/database`
+
 ## Prossimi Passi
 
-Una volta che questo funziona, puoi estrarre altri moduli:
+Moduli rimanenti da estrarre:
 
-1. `database-handlers.ts` - Linee 912-1902 (~990 righe)
-2. `processing-handlers.ts` - Linee 2088-3315 (~1200 righe)
-3. `folder-handlers.ts` - Linee 3316-3857 (~540 righe)
+1. `processing-handlers.ts` - Linee 2088-3315 (~1200 righe)
+2. `folder-handlers.ts` - Linee 3316-3857 (~540 righe)
+3. `token-handlers.ts` - Linee 1961-2087 (~125 righe)

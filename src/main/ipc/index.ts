@@ -5,3 +5,4 @@
 
 export * from './auth-handlers';
 export * from './window-handlers';
+export * from './database';
