@@ -16,9 +16,10 @@
  * - csv-handlers.ts: CSV loading and parsing (4 handlers)
  * - analysis-handlers.ts: Analysis logs and pipeline (4 handlers)
  * - face-recognition-handlers.ts: Face detection and matching (6 handlers)
+ * - preset-face-handlers.ts: Preset participant face photos (6 handlers)
  * - version-handlers.ts: App version checking (4 handlers)
  *
- * Total: 117 handlers extracted into modular files
+ * Total: 123 handlers extracted into modular files
  * Note: Some complex handlers (analyze-folder) remain in main.ts due to dependencies
  */
 
@@ -35,6 +36,7 @@ import { registerImageHandlers } from './image-handlers';
 import { registerCsvHandlers } from './csv-handlers';
 import { registerAnalysisHandlers } from './analysis-handlers';
 import { registerFaceRecognitionHandlers } from './face-recognition-handlers';
+import { registerPresetFaceHandlers } from './preset-face-handlers';
 import { registerVersionHandlers } from './version-handlers';
 
 /**
@@ -87,11 +89,14 @@ export function registerAllHandlers(): void {
   // Face recognition handlers (6)
   registerFaceRecognitionHandlers();
 
+  // Preset face handlers (6)
+  registerPresetFaceHandlers();
+
   // Version handlers (4)
   registerVersionHandlers();
 
   console.log('[IPC] ========================================');
-  console.log('[IPC] All handlers registered (117 modular handlers)');
+  console.log('[IPC] All handlers registered (123 modular handlers)');
   console.log('[IPC] ========================================');
 }
 
