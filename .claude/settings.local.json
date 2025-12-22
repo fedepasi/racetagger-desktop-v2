@@ -142,7 +142,11 @@
       "Bash(/opt/homebrew/opt/python@3.11/bin/python3.11:*)",
       "Bash(timeout 30 npm start:*)",
       "Bash(gh auth status:*)",
-      "Bash(SUPABASE_ACCESS_TOKEN=sbp_50babb1bc18dcc6e4fafef1f9f58ed794f8fbead npx supabase functions logs:*)"
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_50babb1bc18dcc6e4fafef1f9f58ed794f8fbead npx supabase functions logs:*)",
+      "Bash(npx electron .)",
+      "Bash(git fetch:*)",
+      "Bash(git merge:*)",
+      "Bash(npm uninstall:*)"
     ],
     "deny": [],
     "ask": []

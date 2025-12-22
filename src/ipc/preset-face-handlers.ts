@@ -22,8 +22,11 @@ import {
   PresetParticipantFacePhoto,
   CreatePresetFacePhotoParams
 } from '../database-service';
-import { v4 as uuidv4 } from 'uuid';
+import * as crypto from 'crypto';
 import * as path from 'path';
+
+// Use native crypto for UUID generation
+const uuidv4 = (): string => crypto.randomUUID();
 
 // Storage bucket name for preset face photos
 const STORAGE_BUCKET = 'preset-participant-photos';
