@@ -107,9 +107,6 @@ export class MemoryPoolManager extends EventEmitter {
     if (this.config.enabled) {
       this.initializePools();
       this.startMaintenance();
-      console.log(`[MemoryPool] Initialized with ${buffersPerCategory} buffers per category, ${this.config.maxMemoryMB}MB limit`);
-    } else {
-      console.log('[MemoryPool] Memory pooling disabled');
     }
   }
 
@@ -254,7 +251,6 @@ export class MemoryPoolManager extends EventEmitter {
     }
 
     // Last resort - direct allocation (won't be pooled)
-    console.warn(`[MemoryPool] Pool exhausted for category ${category}, allocating directly`);
     return this.createBuffer(requestedSize, category, false);
   }
 
@@ -263,13 +259,11 @@ export class MemoryPoolManager extends EventEmitter {
    */
   releaseBuffer(buffer: PooledBuffer): void {
     if (!buffer || !buffer.id) {
-      console.warn('[MemoryPool] Invalid buffer provided for release');
       return;
     }
 
     const activeBuffer = this.activeBuffers.get(buffer.id);
     if (!activeBuffer) {
-      console.warn(`[MemoryPool] Buffer ${buffer.id} not found in active buffers`);
       return;
     }
 
@@ -365,7 +359,6 @@ export class MemoryPoolManager extends EventEmitter {
    * Perform emergency cleanup when memory is running low
    */
   private async performEmergencyCleanup(): Promise<void> {
-    console.log('[MemoryPool] Performing emergency cleanup...');
     
     let releasedBuffers = 0;
     let releasedBytes = 0;
@@ -398,8 +391,6 @@ export class MemoryPoolManager extends EventEmitter {
       releasedBytes,
       remainingBuffers: this.getTotalBufferCount()
     });
-    
-    console.log(`[MemoryPool] Emergency cleanup released ${releasedBuffers} buffers (${Math.round(releasedBytes / 1024 / 1024)}MB)`);
   }
 
   /**
@@ -478,7 +469,6 @@ export class MemoryPoolManager extends EventEmitter {
     });
 
     if (suspiciousBuffers.length > 0) {
-      console.warn(`[MemoryPool] Potential memory leak detected: ${suspiciousBuffers.length} buffers active for >10min`);
       this.emit('memoryLeakDetected', {
         suspiciousBuffers: suspiciousBuffers.length,
         bufferIds: suspiciousBuffers.map(b => b.id)
@@ -538,13 +528,6 @@ export class MemoryPoolManager extends EventEmitter {
    */
   updateConfiguration(newConfig: Partial<MemoryPoolConfig>): void {
     this.config = { ...this.config, ...newConfig };
-    
-    console.log('[MemoryPool] Configuration updated:', {
-      enabled: this.config.enabled,
-      maxMemoryMB: this.config.maxMemoryMB,
-      buffersPerCategory: this.config.buffersPerCategory
-    });
-    
     this.emit('configurationUpdated', this.config);
   }
 
@@ -552,7 +535,6 @@ export class MemoryPoolManager extends EventEmitter {
    * Shutdown the memory pool manager
    */
   async shutdown(): Promise<void> {
-    console.log('[MemoryPool] Shutting down...');
     this.isShutdown = true;
 
     // Clear intervals
@@ -584,7 +566,6 @@ export class MemoryPoolManager extends EventEmitter {
       global.gc();
     }
 
-    console.log('[MemoryPool] Shutdown complete');
     this.emit('shutdown', this.stats);
   }
 }

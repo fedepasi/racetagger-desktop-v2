@@ -25,13 +25,10 @@ const ExportDestinationsManager = {
       return;
     }
 
-    console.log('[ExportDestinations] Initializing...');
-
     try {
       this.setupEventListeners();
       await this.loadDestinations();
       this.isInitialized = true;
-      console.log('[ExportDestinations] Initialized successfully');
     } catch (error) {
       console.error('[ExportDestinations] Error initializing:', error);
     }
@@ -158,7 +155,6 @@ const ExportDestinationsManager = {
    * Show editor view (replaces openModal)
    */
   showEditor(destinationId = null) {
-    console.log('[ExportDestinations] showEditor called, destinationId:', destinationId);
     this.editingDestinationId = destinationId;
     this.currentView = 'editor';
 
@@ -167,7 +163,6 @@ const ExportDestinationsManager = {
     const title = document.getElementById('dest-editor-title');
 
     if (!listView || !editorView) {
-      console.error('[ExportDestinations] View elements not found!');
       return;
     }
 
@@ -248,7 +243,6 @@ const ExportDestinationsManager = {
         this.destinations = result.data || [];
         this.renderDestinations();
       } else {
-        console.error('[ExportDestinations] Error loading:', result.error);
         this.renderError();
       }
     } catch (error) {
@@ -568,7 +562,6 @@ const ExportDestinationsManager = {
         this.setInputValue('dest-base-folder', result.filePaths[0]);
       }
     } catch (error) {
-      console.error('[ExportDestinations] Error selecting folder:', error);
       this.showToast('Error selecting folder', 'error');
     }
   },
@@ -678,7 +671,6 @@ const ExportDestinationsManager = {
         throw new Error(result.error || 'Failed to save destination');
       }
     } catch (error) {
-      console.error('[ExportDestinations] Error saving:', error);
       this.showToast(error.message || 'Error saving destination', 'error');
     } finally {
       if (saveBtn) {
@@ -708,7 +700,6 @@ const ExportDestinationsManager = {
         throw new Error(result.error);
       }
     } catch (error) {
-      console.error('[ExportDestinations] Error duplicating:', error);
       this.showToast('Error duplicating destination', 'error');
     }
   },
@@ -733,7 +724,6 @@ const ExportDestinationsManager = {
         throw new Error(result.error);
       }
     } catch (error) {
-      console.error('[ExportDestinations] Error deleting:', error);
       this.showToast('Error deleting destination', 'error');
     }
   },
@@ -751,7 +741,6 @@ const ExportDestinationsManager = {
         throw new Error(result.error);
       }
     } catch (error) {
-      console.error('[ExportDestinations] Error toggling active:', error);
       this.showToast('Error updating destination', 'error');
     }
   },
@@ -769,7 +758,6 @@ const ExportDestinationsManager = {
         throw new Error(result.error);
       }
     } catch (error) {
-      console.error('[ExportDestinations] Error setting default:', error);
       this.showToast('Error updating default', 'error');
     }
   },
@@ -792,7 +780,6 @@ const ExportDestinationsManager = {
     } else if (window.DelightSystem && window.DelightSystem.showNotification) {
       window.DelightSystem.showNotification(message, type);
     } else {
-      console.log(`[Toast] ${type}: ${message}`);
       alert(message);
     }
   }
@@ -807,23 +794,17 @@ document.addEventListener('section-changed', (event) => {
 
 // Also initialize on DOMContentLoaded - bind buttons immediately
 document.addEventListener('DOMContentLoaded', () => {
-  console.log('[ExportDestinations] DOMContentLoaded - binding buttons');
-
   // Bind "New Destination" buttons in the destinations page immediately
   const addDestBtn = document.getElementById('add-destination-btn');
   const createFirstBtn = document.getElementById('create-first-dest-btn');
 
   if (addDestBtn) {
-    console.log('[ExportDestinations] Binding add-destination-btn');
     addDestBtn.addEventListener('click', () => {
-      console.log('[ExportDestinations] Add button clicked');
       ExportDestinationsManager.showEditor();
     });
   }
   if (createFirstBtn) {
-    console.log('[ExportDestinations] Binding create-first-dest-btn');
     createFirstBtn.addEventListener('click', () => {
-      console.log('[ExportDestinations] Create first button clicked');
       ExportDestinationsManager.showEditor();
     });
   }

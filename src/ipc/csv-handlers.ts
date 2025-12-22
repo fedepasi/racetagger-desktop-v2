@@ -48,7 +48,6 @@ async function handleStandaloneCSVLoading(event: IpcMainEvent, fileData: any): P
 
     // Convert buffer to string
     const fileContent = fileBuffer.toString('utf8');
-    console.log('[CSV] Content (first 200 chars):', fileContent.substring(0, 200));
 
     // Parse CSV data manually for better control
     const results: CsvEntry[] = [];
@@ -62,7 +61,6 @@ async function handleStandaloneCSVLoading(event: IpcMainEvent, fileData: any): P
     }
 
     const headers = parseCSVLine(lines[0]);
-    console.log('[CSV] Headers:', headers);
 
     // Check required headers
     const numeroIndex = headers.indexOf('numero');
@@ -110,17 +108,13 @@ async function handleStandaloneCSVLoading(event: IpcMainEvent, fileData: any): P
       }
     }
 
-    console.log('[CSV] Parsing complete, found', results.length, 'valid entries');
-
     // Store the CSV data globally
     setGlobalCsvData(results);
 
     // Save CSV to Supabase if user is authenticated
     if (authService.isAuthenticated() && results.length > 0) {
       try {
-        console.log(`[CSV] Saving "${fileName}" to Supabase...`);
         await saveCsvToSupabase(results, fileName);
-        console.log('[CSV] Saved to Supabase successfully');
       } catch (csvSaveError) {
         console.error('[CSV] Error saving to Supabase:', csvSaveError);
         // Don't block loading if Supabase save fails
@@ -148,7 +142,6 @@ async function handleStandaloneCSVLoading(event: IpcMainEvent, fileData: any): P
  */
 async function handleCsvLoading(event: IpcMainEvent, fileData: { buffer: Uint8Array, name: string, projectId?: string, standalone?: boolean }): Promise<void> {
   const mainWindow = getMainWindow();
-  console.log('[CSV] handleCsvLoading called.');
 
   // If standalone loading is requested, use the dedicated function
   if (fileData.standalone) {
@@ -161,7 +154,6 @@ async function handleCsvLoading(event: IpcMainEvent, fileData: { buffer: Uint8Ar
     const actualBuffer = Buffer.from(rawBuffer);
 
     if (projectId) {
-      console.log(`[CSV] Received CSV for project ${projectId}. Uploading to storage...`);
       const storagePath = await uploadCsvToStorage(projectId, actualBuffer, fileName);
       const updatedProject = await updateProjectOnline(projectId, { base_csv_storage_path: storagePath });
       mainWindow.webContents.send('csv-loaded', {
@@ -169,7 +161,6 @@ async function handleCsvLoading(event: IpcMainEvent, fileData: { buffer: Uint8Ar
       });
     } else {
       // Support CSV loading without project for one-shot analysis
-      console.log('[CSV] Processing CSV for one-shot analysis without project association');
 
       // Read CSV content
       const csvContent = actualBuffer.toString('utf-8');
@@ -183,7 +174,6 @@ async function handleCsvLoading(event: IpcMainEvent, fileData: { buffer: Uint8Ar
         try {
           // Extract header
           const headers = parseCSVLine(lines[0]);
-          console.log('[CSV] Headers:', headers);
 
           // Process data rows
           const csvEntries: CsvEntry[] = [];
@@ -231,7 +221,6 @@ async function handleCsvLoading(event: IpcMainEvent, fileData: { buffer: Uint8Ar
 
           // Save CSV data for global use
           setGlobalCsvData(csvEntries);
-          console.log(`[CSV] Processed ${csvEntries.length} valid entries`);
 
           mainWindow.webContents.send('csv-loaded', {
             filename: fileName,
@@ -264,7 +253,6 @@ async function handleCsvLoading(event: IpcMainEvent, fileData: { buffer: Uint8Ar
 function handleCsvTemplateDownload(event: IpcMainEvent): void {
   const mainWindow = getMainWindow();
   try {
-    console.log('[CSV] Template download requested');
     if (!mainWindow) {
       console.error('[CSV] No main window available');
       return;
@@ -285,7 +273,6 @@ function handleCsvTemplateDownload(event: IpcMainEvent): void {
       filters: [{ name: 'CSV Files', extensions: ['csv'] }]
     }).then(result => {
       if (result.canceled || !result.filePath) {
-        console.log('[CSV] Save dialog canceled');
         return;
       }
 
@@ -297,7 +284,6 @@ function handleCsvTemplateDownload(event: IpcMainEvent): void {
           return;
         }
 
-        console.log('[CSV] Template saved to:', result.filePath);
         // Notify the renderer
         mainWindow?.webContents.send('csv-template-saved', result.filePath);
       });
@@ -317,7 +303,6 @@ function handleCsvTemplateDownload(event: IpcMainEvent): void {
 // ==================== Register Handlers ====================
 
 export function registerCsvHandlers(): void {
-  console.log('[IPC] Registering CSV handlers...');
 
   // CSV loading (with project support)
   ipcMain.on('load-csv', handleCsvLoading);
@@ -339,12 +324,9 @@ export function registerCsvHandlers(): void {
   ipcMain.handle('clear-csv-data', async () => {
     try {
       setGlobalCsvData([]);
-      console.log('[CSV] Data cleared');
       return { success: true };
     } catch (error: any) {
       return { success: false, error: error.message };
     }
   });
-
-  console.log('[IPC] CSV handlers registered (4 handlers)');
 }

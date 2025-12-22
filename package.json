@@ -12,6 +12,7 @@
     "start": "electron .",
     "build": "tsc && electron-builder",
     "dev": "concurrently \"tsc --watch\" \"electron .\"",
+    "dev:debug": "cross-env DEBUG_MODE=true concurrently \"tsc --watch\" \"electron .\"",
     "compile": "tsc",
     "rebuild": "electron-rebuild",
     "rebuild:sharp": "npx @electron/rebuild -f -w sharp",

@@ -304,24 +304,21 @@ class EnhancedFileBrowser {
   
   async browseFolder() {
     if (!window.api) {
-      console.warn('Electron API not available, fallback to original method');
       // Fallback to original folder selection
       if (window.handleFolderSelection) {
         window.handleFolderSelection();
       }
       return;
     }
-    
+
     try {
       // First try to use original folder selection method for better compatibility
       if (window.api.send) {
-        console.log('Using original select-folder method');
         window.api.send('select-folder');
         return;
       }
-      
+
       // Fallback to new enhanced method
-      console.log('Using new dialog-show-open method');
       const result = await window.api.invoke('dialog-show-open', {
         properties: ['openDirectory'],
         title: 'Select Image Folder'
@@ -346,7 +343,6 @@ class EnhancedFileBrowser {
             this.showNotification('No supported image files found in selected folder', 'warning');
           }
         } catch (filesError) {
-          console.error('Error getting folder files:', filesError);
           this.hideLoading();
           // Fallback: just set the folder path without file details
           this.showNotification(`Selected folder: ${folderPath}`, 'info');
@@ -354,11 +350,9 @@ class EnhancedFileBrowser {
         }
       }
     } catch (error) {
-      console.error('Error browsing folder:', error);
       this.hideLoading();
-      
+
       // Final fallback to original method
-      console.warn('Falling back to original folder selection method');
       if (window.api.send) {
         window.api.send('select-folder');
       } else {
@@ -369,7 +363,6 @@ class EnhancedFileBrowser {
   
   async browseFiles() {
     if (!window.api) {
-      console.warn('Electron API not available - file selection not supported');
       this.showNotification('File selection not available', 'error');
       return;
     }
@@ -403,7 +396,6 @@ class EnhancedFileBrowser {
             this.showNotification('No valid image files could be processed', 'warning');
           }
         } catch (processingError) {
-          console.error('Error processing selected files:', processingError);
           this.hideLoading();
           
           // Fallback: create basic file objects
@@ -425,15 +417,13 @@ class EnhancedFileBrowser {
         }
       }
     } catch (error) {
-      console.error('Error browsing files:', error);
       this.hideLoading();
       this.showNotification('Error selecting files', 'error');
     }
   }
-  
+
   async browseSingleFile() {
     if (!window.api) {
-      console.warn('Electron API not available - single file selection not supported');
       this.showNotification('File selection not available', 'error');
       return;
     }
@@ -454,7 +444,6 @@ class EnhancedFileBrowser {
         this.showNotification('File selected successfully', 'success');
       }
     } catch (error) {
-      console.error('Error browsing single file:', error);
       this.showNotification('Error selecting file', 'error');
     }
   }
@@ -493,7 +482,6 @@ class EnhancedFileBrowser {
         this.showNotification('No valid image files found', 'warning');
       }
     } catch (error) {
-      console.error('Error processing dropped files:', error);
       this.hideLoading();
       this.showNotification('Error processing files', 'error');
     }
@@ -526,7 +514,6 @@ class EnhancedFileBrowser {
         thumbnail: await this.generateThumbnail(filePath)
       };
     } catch (error) {
-      console.error('Error creating file object:', error);
       return null;
     }
   }
@@ -552,11 +539,11 @@ class EnhancedFileBrowser {
         return await window.api.invoke('generate-thumbnail', filePath);
       }
     } catch (error) {
-      console.error('Error generating thumbnail:', error);
+      // Thumbnail generation failed
     }
     return null;
   }
-  
+
   async generateThumbnailFromFile(file) {
     try {
       if (file.type.startsWith('image/')) {
@@ -568,7 +555,7 @@ class EnhancedFileBrowser {
         });
       }
     } catch (error) {
-      console.error('Error generating thumbnail from file:', error);
+      // Thumbnail generation failed
     }
     return null;
   }
@@ -923,12 +910,10 @@ class EnhancedFileBrowser {
       if (typeof window.getSelectedPreset === 'function') {
         const legacyPreset = window.getSelectedPreset();
         if (legacyPreset && legacyPreset.id) {
-          console.log(`[Enhanced File Browser] Found legacy preset: ${legacyPreset.name}, reloading from server...`);
           await this.handlePresetSelection(legacyPreset.id);
         }
       }
     } catch (error) {
-      console.error('[Enhanced File Browser] Error loading selected preset:', error);
       this.selectedPreset = null;
     }
   }
@@ -1000,9 +985,8 @@ class EnhancedFileBrowser {
       this.showNotification('No files selected for processing', 'warning');
       return;
     }
-    
+
     try {
-      console.log(`Enhanced File Browser: Processing ${this.selectedFiles.length} selected files`);
       
       // Build configuration for processing
       const config = {
@@ -1023,29 +1007,12 @@ class EnhancedFileBrowser {
       // Show processing notification
       const processingType = 'unified';
       this.showNotification(
-        `Starting ${processingType} processing of ${this.selectedFiles.length} file${this.selectedFiles.length > 1 ? 's' : ''}...`, 
+        `Starting ${processingType} processing of ${this.selectedFiles.length} file${this.selectedFiles.length > 1 ? 's' : ''}...`,
         'info'
       );
-      
-      console.log(`Enhanced File Browser: Using ${processingType} processing for ${this.selectedFiles.length} files`);
-      
-      // DEBUG: Log preset data being passed (including metatag check)
-      const participantsWithMetatag = config.participantPreset?.participants?.filter(p => p.metatag && p.metatag.trim() !== '') || [];
-      console.log(`[DEBUG-METATAG] Config being sent - participants with metatag: ${participantsWithMetatag.length}/${config.participantPreset?.participants?.length || 0}`);
-
-      console.log(`[Enhanced File Browser] Preset debugging:`, {
-        hasSelectedPreset: !!this.selectedPreset,
-        selectedPresetId: this.selectedPreset?.id,
-        selectedPresetName: this.selectedPreset?.name,
-        participantsCount: this.selectedPreset?.participants?.length || 0,
-        configPresetId: config.participantPreset?.id,
-        configPresetName: config.participantPreset?.name,
-        configParticipantsCount: config.participantPreset?.participants?.length || 0
-      });
 
       // Send to main process for analysis
       if (window.api) {
-        console.log('Sending enhanced file browser request with config:', config);
         window.api.send('analyze-folder', config);
         
         // Optional: Clear selection after starting processing
@@ -1056,7 +1023,6 @@ class EnhancedFileBrowser {
       }
       
     } catch (error) {
-      console.error('Error processing selected files:', error);
       this.showNotification('Error starting file processing: ' + error.message, 'error');
     }
   }
@@ -1113,7 +1079,6 @@ class EnhancedFileBrowser {
     try {
       // Check if user is admin
       const isAdmin = await window.api.invoke('auth-is-admin');
-      console.log('[Enhanced File Browser] User is admin:', isAdmin);
 
       // Use appropriate endpoint based on admin status
       const channelName = isAdmin
@@ -1130,19 +1095,14 @@ class EnhancedFileBrowser {
           participants: preset.participants || []
         }));
 
-        console.log(`[Enhanced File Browser] Loaded ${this.availablePresets.length} available presets:`,
-          this.availablePresets.map(p => `${p.name} (${p.participantCount} participants)`));
-
         this.updatePresetSelector();
 
         // After loading presets, restore the selected one from localStorage
         this.loadSelectedPreset();
       } else {
-        console.warn('[Enhanced File Browser] Failed to load presets:', response.error);
         this.availablePresets = [];
       }
     } catch (error) {
-      console.error('[Enhanced File Browser] Error loading presets:', error);
       this.availablePresets = [];
     }
   }
@@ -1155,7 +1115,6 @@ class EnhancedFileBrowser {
     if (presetSelect) {
       // Load fresh data when user focuses the select (opens dropdown)
       presetSelect.addEventListener('focus', () => {
-        console.log('[Enhanced File Browser] Preset selector focused, reloading presets from database...');
         this.loadAvailablePresets();
       });
 
@@ -1174,13 +1133,10 @@ class EnhancedFileBrowser {
       this.selectedPreset = null;
       // Note: localStorage persistence removed - presets are selected fresh each time
       this.updatePresetDetails();
-      console.log('[Enhanced File Browser] Preset selection cleared');
       return;
     }
 
     try {
-      console.log(`[Enhanced File Browser] Loading preset ${presetId} from server...`);
-
       // Always load full preset data from server to ensure we have complete participants
       const response = await window.api.invoke('supabase-get-participant-preset-by-id', presetId);
       if (response.success && response.data) {
@@ -1206,22 +1162,9 @@ class EnhancedFileBrowser {
         window.dispatchEvent(new CustomEvent('presetSelected', {
           detail: this.selectedPreset
         }));
-
-        console.log(`[Enhanced File Browser] Selected preset: ${this.selectedPreset.name} (${this.selectedPreset.participants.length} participants)`);
-        console.log('[Enhanced File Browser] Preset participants:', this.selectedPreset.participants.map(p => `${p.numero}: ${p.nome} (${p.squadra})`));
-        // DEBUG: Verifica metatag nei partecipanti
-        const withMetatag = this.selectedPreset.participants.filter(p => p.metatag && p.metatag.trim() !== '');
-        console.log(`[DEBUG-METATAG] Participants with metatag: ${withMetatag.length}/${this.selectedPreset.participants.length}`);
-        if (withMetatag.length > 0) {
-          console.log('[DEBUG-METATAG] Sample metatag:', withMetatag[0].metatag);
-        } else {
-          console.log('[DEBUG-METATAG] WARNING: No participants have metatag field!');
-        }
-      } else {
-        console.error('[Enhanced File Browser] Failed to load preset details:', response.error);
       }
     } catch (error) {
-      console.error('[Enhanced File Browser] Error selecting preset:', error);
+      // Failed to select preset
     }
   }
 
@@ -1246,13 +1189,11 @@ class EnhancedFileBrowser {
     // Set current selection if any
     if (this.selectedPreset) {
       presetSelect.value = this.selectedPreset.id;
-      console.log(`[Enhanced File Browser] Set dropdown value to: ${this.selectedPreset.id} (${this.selectedPreset.name})`);
     }
 
     // If no selectedPreset but dropdown has a value, try to sync it
     if (!this.selectedPreset && presetSelect.value) {
       const presetId = presetSelect.value;
-      console.log(`[Enhanced File Browser] Found dropdown value without selectedPreset, syncing: ${presetId}`);
       this.handlePresetSelection(presetId);
     }
   }
@@ -1371,12 +1312,9 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         window.enhancedFileBrowser = new EnhancedFileBrowser();
         analysisSection.classList.add('enhanced-ui-active');
-        console.log('✅ Enhanced File Browser initialized (standalone)');
       } catch (error) {
-        console.error('❌ Enhanced File Browser standalone initialization failed:', error);
+        console.error('Enhanced File Browser initialization failed:', error);
       }
-    } else if (window.enhancedFileBrowser) {
-      console.log('ℹ️ Enhanced File Browser already initialized by coordinator');
     }
   }, 600); // Slightly later than coordinator to avoid conflicts
 });

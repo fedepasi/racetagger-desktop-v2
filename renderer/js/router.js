@@ -60,15 +60,11 @@
    */
   async function loadPage(pageName) {
     if (currentPage === pageName) {
-      console.log(`[Router] Page ${pageName} already loaded, skipping`);
       return;
     }
 
-    console.log(`[Router] Loading page: ${pageName}`);
-
     // Check if this page has been migrated
     if (!migratedPages.has(pageName)) {
-      console.log(`[Router] Page ${pageName} not yet migrated, using legacy navigation`);
       handleLegacyNavigation(pageName);
       return;
     }
@@ -116,7 +112,7 @@
         initializePage(pageName);
       }
     } catch (error) {
-      console.error(`[Router] Error loading page ${pageName}:`, error);
+      console.error('[Router] Error loading page:', error);
       if (pageContainer) {
         pageContainer.innerHTML = `
           <div class="error-page">
@@ -183,8 +179,6 @@
    * Page-specific initialization after loading
    */
   function initializePage(pageName) {
-    console.log(`[Router] Initializing page: ${pageName}`);
-
     switch (pageName) {
       case 'home':
         // Load recent presets if function exists
@@ -286,8 +280,6 @@
    * Initialize the router
    */
   function initRouter() {
-    console.log('[Router] Initializing Navigo router...');
-
     // Get page container
     pageContainer = document.getElementById('page-content');
 
@@ -331,7 +323,6 @@
         loadPage('settings');
       })
       .notFound(() => {
-        console.warn('[Router] Route not found, redirecting to home');
         router.navigate('/');
       });
 
@@ -343,8 +334,6 @@
 
     // Override sidebar navigation clicks
     setupSidebarNavigation(router);
-
-    console.log('[Router] Router initialized successfully');
   }
 
   /**
@@ -380,8 +369,6 @@
   function navigateTo(route) {
     if (window.router) {
       window.router.navigate(route);
-    } else {
-      console.error('[Router] Router not initialized');
     }
   }
 

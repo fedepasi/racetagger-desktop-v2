@@ -164,7 +164,6 @@ class FaceRecognitionService {
     try {
       const result = await window.api.invoke('face-recognition-initialize');
       this.isInitialized = result.success;
-      console.log('[FaceRecognitionService] Initialized:', result);
       return result;
     } catch (error) {
       console.error('[FaceRecognitionService] Init error:', error);
@@ -182,7 +181,6 @@ class FaceRecognitionService {
       if (result.success) {
         this.descriptorCount = result.count;
       }
-      console.log('[FaceRecognitionService] Loaded descriptors:', result);
       return result;
     } catch (error) {
       console.error('[FaceRecognitionService] Load error:', error);
@@ -198,7 +196,6 @@ class FaceRecognitionService {
   async detect(imagePath, context = 'auto') {
     try {
       const result = await window.api.invoke('face-recognition-detect', imagePath, context);
-      console.log('[FaceRecognitionService] Detection result:', result);
       return result;
     } catch (error) {
       console.error('[FaceRecognitionService] Detection error:', error);
@@ -213,7 +210,6 @@ class FaceRecognitionService {
     try {
       return await window.api.invoke('face-recognition-status');
     } catch (error) {
-      console.error('[FaceRecognitionService] Status error:', error);
       return { success: false, error: error.message };
     }
   }
@@ -227,7 +223,6 @@ class FaceRecognitionService {
       this.descriptorCount = 0;
       return result;
     } catch (error) {
-      console.error('[FaceRecognitionService] Clear error:', error);
       return { success: false, error: error.message };
     }
   }

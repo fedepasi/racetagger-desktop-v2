@@ -21,7 +21,6 @@ class ConsentService {
   async getTrainingConsent(): Promise<boolean> {
     const userId = authService.getCurrentUserId();
     if (!userId) {
-      console.log('[ConsentService] No authenticated user, returning default consent (true)');
       return true; // Default to true for unauthenticated users
     }
 
@@ -31,7 +30,6 @@ class ConsentService {
       const userEmail = authState.user?.email?.toLowerCase();
 
       if (!userEmail) {
-        console.warn('[ConsentService] No user email available');
         return true;
       }
 
@@ -42,13 +40,11 @@ class ConsentService {
         .single();
 
       if (error) {
-        console.warn('[ConsentService] Error fetching consent:', error);
         return true; // Default to true on error
       }
 
       // If training_consent is null, default to true (opt-out model)
       const consent = data?.training_consent ?? true;
-      console.log(`[ConsentService] Training consent for ${userEmail}: ${consent}`);
       return consent;
     } catch (error) {
       console.error('[ConsentService] Exception getting training consent:', error);
@@ -62,7 +58,6 @@ class ConsentService {
   async setTrainingConsent(consent: boolean): Promise<boolean> {
     const userId = authService.getCurrentUserId();
     if (!userId) {
-      console.warn('[ConsentService] Cannot set consent: no authenticated user');
       return false;
     }
 
@@ -72,7 +67,6 @@ class ConsentService {
       const userEmail = authState.user?.email?.toLowerCase();
 
       if (!userEmail) {
-        console.warn('[ConsentService] No user email available');
         return false;
       }
 
@@ -91,7 +85,6 @@ class ConsentService {
         return false;
       }
 
-      console.log(`[ConsentService] Training consent updated for ${userEmail}: ${consent}`);
       return true;
     } catch (error) {
       console.error('[ConsentService] Exception setting training consent:', error);

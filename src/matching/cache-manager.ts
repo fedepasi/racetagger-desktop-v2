@@ -390,7 +390,6 @@ export class CacheManager {
         CREATE INDEX IF NOT EXISTS idx_category ON cache_entries(category);
       `);
 
-      console.log('L2 cache (SQLite) initialized');
     } catch (error) {
       console.error('Failed to initialize L2 cache:', error);
     }
@@ -487,7 +486,6 @@ export class CacheManager {
       if (SUPABASE_CONFIG.url && SUPABASE_CONFIG.key) {
         this.supabase = createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.key);
         this.l3Enabled = true;
-        console.log('L3 cache (Supabase) initialized');
       }
     } catch (error) {
       console.error('Failed to initialize L3 cache:', error);

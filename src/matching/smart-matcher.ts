@@ -147,13 +147,11 @@ export class SmartMatcher {
       this.config = this.sportConfig.getConfig(this.sport);
       // Update evidence collector with new config
       this.evidenceCollector = new EvidenceCollector(this.config);
-      console.log(`[SmartMatcher] Configurations updated from Supabase for sport: ${this.sport}`);
     }
 
     // Initialize TemporalClusterManager from Supabase data
     if (this.temporalManager) {
       this.temporalManager.initializeFromSportCategories(sportCategories);
-      console.log(`[SmartMatcher] TemporalClusterManager configurations updated from Supabase`);
     }
   }
 
@@ -222,8 +220,6 @@ export class SmartMatcher {
       : null;
     const confidence = match.score / 100; // Convert score to confidence (0-1)
 
-    console.log(`[SmartMatcher] Storing temporal analysis for ${imageTimestamp.filePath} - Number: ${participantNumber}, Score: ${match.score}, Confidence: ${confidence.toFixed(2)}`);
-
     this.storeTemporalAnalysisResult(
       imageTimestamp.filePath,
       participantNumber,
@@ -243,7 +239,6 @@ export class SmartMatcher {
     timestamp: Date | null
   ): void {
     if (!imagePath || !participantNumber || !timestamp) {
-      console.log(`[SmartMatcher] Skipping temporal cache storage - missing data: path=${!!imagePath}, number=${!!participantNumber}, timestamp=${!!timestamp}`);
       return; // Skip if missing required data
     }
 
@@ -257,8 +252,6 @@ export class SmartMatcher {
       fileName: fileName
     });
 
-    console.log(`[SmartMatcher] Stored in temporal cache: ${fileName} -> Number: ${participantNumber}, Confidence: ${confidence.toFixed(2)}, Cache size: ${SmartMatcher.temporalAnalysisCache.size}`);
-
     // Limit cache size to prevent memory issues (keep last 1000 entries)
     if (SmartMatcher.temporalAnalysisCache.size > 1000) {
       const firstKey = SmartMatcher.temporalAnalysisCache.keys().next().value;
@@ -266,18 +259,14 @@ export class SmartMatcher {
         SmartMatcher.temporalAnalysisCache.delete(firstKey);
       }
     }
-
-    console.log(`[SmartMatcher] Stored temporal analysis for ${cacheKey}: #${participantNumber} (${(confidence * 100).toFixed(1)}%)`);
   }
 
   /**
    * Start a new active processing session
    */
   static startSession(): void {
-    console.log('[SmartMatcher] startSession() called');
     SmartMatcher.isActiveSession = true;
     SmartMatcher.temporalAnalysisCache.clear();
-    console.log('[SmartMatcher] New processing session started, temporal cache cleared, isActiveSession=', SmartMatcher.isActiveSession);
   }
 
   /**
@@ -285,7 +274,6 @@ export class SmartMatcher {
    */
   static endSession(): void {
     SmartMatcher.isActiveSession = false;
-    console.log('[SmartMatcher] Processing session ended');
   }
 
   /**
@@ -293,12 +281,8 @@ export class SmartMatcher {
    */
   static clearTemporalCache(): void {
     // Only clear cache if not in active session (prevents clearing during processing)
-    console.log('[SmartMatcher] clearTemporalCache() called, isActiveSession=', SmartMatcher.isActiveSession);
     if (!SmartMatcher.isActiveSession) {
       SmartMatcher.temporalAnalysisCache.clear();
-      console.log('[SmartMatcher] Temporal analysis cache cleared');
-    } else {
-      console.log('[SmartMatcher] Cache clear skipped - active session in progress');
     }
   }
 
@@ -317,12 +301,8 @@ export class SmartMatcher {
 
     // Check if we already have cached analysis for this exact preset
     if (this.uniquenessCache && this.uniquenessCache.participantsHash === participantsHash) {
-      console.log('[SmartMatcher] Using cached uniqueness analysis');
       return; // Cache hit - reuse existing analysis
     }
-
-    console.log('[SmartMatcher] Computing uniqueness analysis for preset...');
-    const startTime = Date.now();
 
     // Initialize occurrence counters
     const numberOccurrences = new Map<string, number>();
@@ -401,13 +381,6 @@ export class SmartMatcher {
       driverOccurrences,
       teamOccurrences
     };
-
-    const duration = Date.now() - startTime;
-    console.log(`[SmartMatcher] Uniqueness analysis completed in ${duration}ms:`);
-    console.log(`  - Unique numbers: ${uniqueNumbers.size}/${numberOccurrences.size}`);
-    console.log(`  - Unique drivers: ${uniqueDrivers.size}/${driverOccurrences.size}`);
-    console.log(`  - Unique sponsors: ${uniqueSponsors.size}/${sponsorOccurrences.size}`);
-    console.log(`  - Unique teams: ${uniqueTeams.size}/${teamOccurrences.size}`);
   }
 
   /**
@@ -643,8 +616,6 @@ export class SmartMatcher {
     // Step 0: Try fast-track matching based on high-confidence driver name matches
     const fastTrackMatch = this.tryFastTrackNameMatch(analysisResult, participants);
     if (fastTrackMatch) {
-      console.log(`[SmartMatcher] Fast-track match found, skipping OCR corrections and fuzzy matching`);
-
       // Store the successful match in temporal cache for future temporal bonuses
       if (analysisResult.imageTimestamp) {
         this.storeTemporalAnalysis(analysisResult.imageTimestamp, fastTrackMatch);
@@ -666,8 +637,6 @@ export class SmartMatcher {
       };
     }
 
-    console.log(`[SmartMatcher] No fast-track match found, proceeding with standard matching`);
-
     // Step 1: Collect all evidence from analysis result
     const evidence = this.evidenceCollector.extractEvidence(analysisResult);
 
@@ -680,15 +649,11 @@ export class SmartMatcher {
         return participantNumber === recognizedNumber;
       });
 
-    console.log(`[SmartMatcher] Recognized number "${raceNumberEvidence?.value}" exists in database: ${recognizedNumberExists ? 'YES' : 'NO'}`);
-
     // Step 2: Apply OCR corrections to race numbers ONLY if the number doesn't exist
     let correctedEvidence: Evidence[];
     if (recognizedNumberExists) {
-      console.log(`[SmartMatcher] Skipping OCR corrections - recognized number exists`);
       correctedEvidence = evidence; // Use original evidence without OCR corrections
     } else {
-      console.log(`[SmartMatcher] Applying OCR corrections - recognized number doesn't exist`);
       correctedEvidence = await this.ocrCorrector.correctEvidence(evidence, participants);
     }
 
@@ -733,8 +698,6 @@ export class SmartMatcher {
 
     // Step 7: If restrictToPreset is true and we have no valid match, return empty result
     if (restrictToPreset && (!resolvedResult.bestMatch || resolvedResult.bestMatch.score < this.config.thresholds.minimumScore)) {
-      console.log(`[SmartMatcher] Preset restriction active - no valid match found, returning empty result`);
-
       const processingTime = Date.now() - startTime;
 
       return {
@@ -1037,24 +1000,10 @@ export class SmartMatcher {
 
       // COHERENCE VALIDATION: Verify driver name belongs to this participant
       if (!this.participantHasDriver(participant, evidenceName)) {
-        const participantDrivers = [
-          participant.nome_pilota,
-          participant.nome_navigatore,
-          participant.nome_terzo,
-          participant.nome_quarto,
-          participant.nome
-        ].filter(Boolean).map(name => String(name));
-
-        console.warn(`⚠️  [COHERENCE] REJECTED unique driver boost:`);
-        console.warn(`    Evidence driver: "${evidenceName}" (unique in preset - appears ${occurrenceCount}x)`);
-        console.warn(`    Participant #${participant.numero || participant.number} has: [${participantDrivers.join(', ')}]`);
-        console.warn(`    → Driver name doesn't belong to this participant!`);
-        console.warn(`    → This is likely a ghost vehicle or cross-contamination issue`);
-
         // INVALIDATE the match completely
         return {
           score: 0,
-          reason: `⚠️ COHERENCE CHECK FAILED: Unique driver "${evidenceName}" doesn't belong to participant #${participant.numero || participant.number} (has: ${participantDrivers.join(', ')})`
+          reason: `COHERENCE CHECK FAILED: Unique driver "${evidenceName}" doesn't belong to participant #${participant.numero || participant.number}`
         };
       }
 
@@ -1062,9 +1011,7 @@ export class SmartMatcher {
       const originalScore = bestScore;
       bestScore = this.config.weights.raceNumber * 0.95 * (bestMatchType === 'exact' ? 1.0 : 0.85);
 
-      bestReason = `🎯 UNIQUE driver match: "${evidenceName}" (appears only ${occurrenceCount}x in preset) - ${bestMatchType} match - COHERENCE VERIFIED - BOOSTED from ${originalScore.toFixed(1)} to ${bestScore.toFixed(1)} points`;
-
-      console.log(`[SmartMatcher] ${bestReason}`);
+      bestReason = `UNIQUE driver match: "${evidenceName}" (appears only ${occurrenceCount}x in preset) - ${bestMatchType} match - COHERENCE VERIFIED - BOOSTED from ${originalScore.toFixed(1)} to ${bestScore.toFixed(1)} points`;
     }
 
     return { score: bestScore, reason: bestReason };
@@ -1129,18 +1076,10 @@ export class SmartMatcher {
 
       // COHERENCE VALIDATION: Verify sponsor belongs to this participant
       if (!this.participantHasSponsor(participant, evidenceSponsor)) {
-        const participantSponsors = this.extractSponsorsFromParticipant(participant);
-
-        console.warn(`⚠️  [COHERENCE] REJECTED unique sponsor boost:`);
-        console.warn(`    Evidence sponsor: "${evidenceSponsor}" (unique in preset - appears ${occurrenceCount}x)`);
-        console.warn(`    Participant #${participant.numero || participant.number} has: [${participantSponsors.join(', ')}]`);
-        console.warn(`    → Sponsor doesn't belong to this participant!`);
-        console.warn(`    → This is likely a ghost vehicle or cross-contamination issue`);
-
         // INVALIDATE the match completely
         return {
           score: 0,
-          reason: `⚠️ COHERENCE CHECK FAILED: Unique sponsor "${evidenceSponsor}" doesn't belong to participant #${participant.numero || participant.number} (has: ${participantSponsors.join(', ')})`
+          reason: `COHERENCE CHECK FAILED: Unique sponsor "${evidenceSponsor}" doesn't belong to participant #${participant.numero || participant.number}`
         };
       }
 
@@ -1148,9 +1087,7 @@ export class SmartMatcher {
       const originalScore = bestScore;
       bestScore = this.config.weights.raceNumber * 0.9 * (bestMatchType === 'exact' ? 1.0 : 0.8);
 
-      bestReason = `🎯 UNIQUE sponsor match: "${evidenceSponsor}" (appears only ${occurrenceCount}x in preset) - ${bestMatchType} match - COHERENCE VERIFIED - BOOSTED from ${originalScore.toFixed(1)} to ${bestScore.toFixed(1)} points`;
-
-      console.log(`[SmartMatcher] ${bestReason}`);
+      bestReason = `UNIQUE sponsor match: "${evidenceSponsor}" (appears only ${occurrenceCount}x in preset) - ${bestMatchType} match - COHERENCE VERIFIED - BOOSTED from ${originalScore.toFixed(1)} to ${bestScore.toFixed(1)} points`;
     }
 
     return { score: bestScore, reason: bestReason };
@@ -1202,13 +1139,6 @@ export class SmartMatcher {
         commonSponsors.push(evidence);
       }
     }
-
-    console.log(`\n[SmartMatcher] 🔍 ========================================`);
-    console.log(`[SmartMatcher] 🔍 Analyzing ${sponsorEvidence.length} sponsors for participant #${participant.numero || participant.number} (${participant.nome || 'Unknown'}):`);
-    console.log(`[SmartMatcher]   → AI detected: [${sponsorEvidence.map(s => s.value).join(', ')}]`);
-    console.log(`[SmartMatcher]   → Participant has: [${participantSponsors.join(', ')}]`);
-    console.log(`[SmartMatcher]   → ${uniqueSponsors.length} UNIQUE sponsors in AI: [${uniqueSponsors.map(s => s.value).join(', ')}]`);
-    console.log(`[SmartMatcher]   → ${commonSponsors.length} common sponsors in AI: [${commonSponsors.map(s => s.value).join(', ')}]`);
 
     // Step 2: Process sponsors in priority order (unique first)
     const prioritizedSponsors = [...uniqueSponsors, ...commonSponsors];
@@ -1294,14 +1224,11 @@ export class SmartMatcher {
         contradictionParts.push(`${commonContradictions.length} common sponsor(s): [${commonContradictions.join(', ')}] (-${commonContradictions.length * 15}pts)`);
       }
 
-      const contradictionWarning = `⚠️ CONTRADICTION: AI detected sponsor(s) NOT belonging to this participant: ${contradictionParts.join(', ')} - TOTAL PENALTY: -${totalPenalty} points`;
+      const contradictionWarning = `CONTRADICTION: AI detected sponsor(s) NOT belonging to this participant: ${contradictionParts.join(', ')} - TOTAL PENALTY: -${totalPenalty} points`;
       reasoning.push(contradictionWarning);
-
-      console.warn(`[SmartMatcher] ${contradictionWarning}`);
-      console.warn(`  → This suggests the AI may have detected the wrong vehicle or there's sponsor cross-contamination`);
     }
 
-    // Final summary logging
+    // Final summary
     const totalContradictions = uniqueContradictions.length + commonContradictions.length;
     const finalScore = Math.max(0, totalScore);
 
@@ -1312,26 +1239,9 @@ export class SmartMatcher {
 
     let ghostVehicleWarning = '';
     if (totalContradictions >= 2 && contradictionRatio >= 0.5) {
-      ghostVehicleWarning = `🚨 GHOST VEHICLE ALERT: High contradiction rate (${(contradictionRatio * 100).toFixed(0)}% of sponsors don't belong). This may indicate AI detected wrong vehicle or LED display as separate vehicle.`;
-      console.warn(`\n[SmartMatcher] ${ghostVehicleWarning}`);
-      console.warn(`[SmartMatcher]    💡 Suggestion: Check if image contains LED position display, multiple vehicles, or overlapping race numbers`);
+      ghostVehicleWarning = `GHOST VEHICLE ALERT: High contradiction rate (${(contradictionRatio * 100).toFixed(0)}% of sponsors don't belong). This may indicate AI detected wrong vehicle or LED display as separate vehicle.`;
       reasoning.push(ghostVehicleWarning);
     }
-
-    console.log(`[SmartMatcher] 📊 ----------------------------------------`);
-    console.log(`[SmartMatcher] 📊 Sponsor evaluation summary for #${participant.numero || participant.number}:`);
-    console.log(`[SmartMatcher]   ✅ Matched: ${matchedEvidence.length} sponsors`);
-    console.log(`[SmartMatcher]   ⚠️  Contradictions: ${totalContradictions} total (${uniqueContradictions.length} unique, ${commonContradictions.length} common)`);
-    console.log(`[SmartMatcher]   📈 Contradiction ratio: ${(contradictionRatio * 100).toFixed(0)}%`);
-    console.log(`[SmartMatcher]   💯 Score breakdown:`);
-    console.log(`[SmartMatcher]      - Positive matches: ${totalScore + totalPenalty} points`);
-    console.log(`[SmartMatcher]      - Penalty applied: -${totalPenalty} points`);
-    console.log(`[SmartMatcher]      - FINAL SCORE: ${finalScore.toFixed(1)} points`);
-    console.log(`[SmartMatcher]   🎯 Has unique evidence: ${hasUniqueEvidence}`);
-    if (ghostVehicleWarning) {
-      console.log(`[SmartMatcher]   ${ghostVehicleWarning}`);
-    }
-    console.log(`[SmartMatcher] ========================================\n`);
 
     return {
       totalScore: finalScore,
@@ -1381,16 +1291,10 @@ export class SmartMatcher {
 
       // COHERENCE VALIDATION: Verify team belongs to this participant
       if (!this.participantHasTeam(participant, evidenceTeam)) {
-        console.warn(`⚠️  [COHERENCE] REJECTED unique team boost:`);
-        console.warn(`    Evidence team: "${evidenceTeam}" (unique in preset - appears ${occurrenceCount}x)`);
-        console.warn(`    Participant #${participant.numero || participant.number} has: "${participantTeam}"`);
-        console.warn(`    → Team doesn't belong to this participant!`);
-        console.warn(`    → This is likely a ghost vehicle or cross-contamination issue`);
-
         // INVALIDATE the match completely
         return {
           score: 0,
-          reason: `⚠️ COHERENCE CHECK FAILED: Unique team "${evidenceTeam}" doesn't belong to participant #${participant.numero || participant.number} (has: ${participantTeam})`
+          reason: `COHERENCE CHECK FAILED: Unique team "${evidenceTeam}" doesn't belong to participant #${participant.numero || participant.number} (has: ${participantTeam})`
         };
       }
 
@@ -1398,9 +1302,7 @@ export class SmartMatcher {
       const originalScore = bestScore;
       bestScore = this.config.weights.raceNumber * 0.75 * (bestMatchType === 'exact' ? 1.0 : 0.8);
 
-      bestReason = `🎯 UNIQUE team match: "${evidenceTeam}" (appears only ${occurrenceCount}x in preset) - ${bestMatchType} match - COHERENCE VERIFIED - BOOSTED from ${originalScore.toFixed(1)} to ${bestScore.toFixed(1)} points`;
-
-      console.log(`[SmartMatcher] ${bestReason}`);
+      bestReason = `UNIQUE team match: "${evidenceTeam}" (appears only ${occurrenceCount}x in preset) - ${bestMatchType} match - COHERENCE VERIFIED - BOOSTED from ${originalScore.toFixed(1)} to ${bestScore.toFixed(1)} points`;
     }
 
     if (bestScore === 0) {
@@ -1801,7 +1703,6 @@ export class SmartMatcher {
     }
 
     const proximityBonus = this.temporalManager.getProximityBonus(this.sport);
-    console.log(`[SmartMatcher] Applying temporal bonuses for ${this.sport} (bonus: ${proximityBonus} points)`);
 
     // Look for high-confidence matches in temporal neighbors
     const neighborMatches = await this.analyzeTemporalNeighbors(
@@ -1810,11 +1711,8 @@ export class SmartMatcher {
     );
 
     if (neighborMatches.length === 0) {
-      console.log(`[SmartMatcher] No temporal neighbor matches found`);
       return;
     }
-
-    console.log(`[SmartMatcher] Found ${neighborMatches.length} temporal neighbor matches`);
 
     // Apply bonuses to candidates based on temporal evidence
     for (const candidate of candidates) {
@@ -1846,13 +1744,6 @@ export class SmartMatcher {
         candidate.reasoning.push(
           `Temporal proximity bonus: +${temporalBonus} points (${temporalMatches.length} neighbors, ${(avgConfidence * 100).toFixed(1)}% avg confidence${burstModeBonus > 1.0 ? ', burst mode detected' : ''})`
         );
-
-        console.log(`[SmartMatcher] ✨ TEMPORAL BONUS APPLIED ✨`);
-        console.log(`[SmartMatcher] → Vehicle ${vehicleIndex !== undefined ? vehicleIndex : 'unknown'}: Participant ${participantNumber}: +${temporalBonus} points`);
-        console.log(`[SmartMatcher] → Found in ${temporalMatches.length} neighboring images`);
-        console.log(`[SmartMatcher] → Average confidence: ${(avgConfidence * 100).toFixed(1)}%`);
-        console.log(`[SmartMatcher] → ${burstModeBonus > 1.0 ? '🔥 BURST MODE DETECTED (1.5x bonus)' : '📷 Standard temporal bonus'}`);
-        console.log(`[SmartMatcher] → Neighbors: ${temporalMatches.map(m => m.fileName).join(', ')}`);
 
         // Track temporal correction for analysis logging
         this.addCorrection({
@@ -1887,14 +1778,11 @@ export class SmartMatcher {
     neighbors: ImageTimestamp[],
     currentCandidates: MatchCandidate[]
   ): Promise<Array<{ participantNumber: string; confidence: number; timestamp: Date; fileName: string }>> {
-    console.log(`[SmartMatcher] Starting temporal neighbor analysis for ${neighbors.length} neighbors`);
-
     const neighborMatches: Array<{ participantNumber: string; confidence: number; timestamp: Date; fileName: string }> = [];
 
     // Check each temporal neighbor for cached results
     for (const neighbor of neighbors) {
       if (!neighbor.timestamp) {
-        console.log(`[SmartMatcher] Skipping neighbor ${neighbor.fileName} - no valid timestamp`);
         continue;
       }
 
@@ -1902,9 +1790,6 @@ export class SmartMatcher {
       const cachedResult = SmartMatcher.temporalAnalysisCache.get(cacheKey);
 
       if (cachedResult) {
-        // Use cached result for this neighbor
-        console.log(`[SmartMatcher] Found cached result for ${neighbor.fileName}: #${cachedResult.participantNumber} (${(cachedResult.confidence * 100).toFixed(1)}%)`);
-
         // Only include high-confidence matches for temporal bonus
         if (cachedResult.confidence >= 0.7) {
           neighborMatches.push({
@@ -1913,15 +1798,9 @@ export class SmartMatcher {
             timestamp: neighbor.timestamp,
             fileName: neighbor.fileName
           });
-        } else {
-          console.log(`[SmartMatcher] Skipping low-confidence result for ${neighbor.fileName} (${(cachedResult.confidence * 100).toFixed(1)}%)`);
         }
-      } else {
-        console.log(`[SmartMatcher] No cached result for ${neighbor.fileName} - neighbor not yet analyzed`);
       }
     }
-
-    console.log(`[SmartMatcher] Found ${neighborMatches.length} high-confidence neighbor matches from ${neighbors.length} neighbors`);
 
     return neighborMatches;
   }
@@ -1959,8 +1838,6 @@ export class SmartMatcher {
     imagePath: string,
     allImagePaths: string[]
   ): Promise<{ imageTimestamp: ImageTimestamp; temporalNeighbors: ImageTimestamp[] }> {
-    console.log(`[SmartMatcher] Setting temporal context for ${imagePath}`);
-
     // Extract timestamps for all images
     const imageTimestamps: ImageTimestamp[] = [];
 
@@ -1969,7 +1846,7 @@ export class SmartMatcher {
         const timestamp = await this.temporalManager.extractTimestamp(path);
         imageTimestamps.push(timestamp);
       } catch (error) {
-        console.warn(`[SmartMatcher] Failed to extract timestamp for ${path}:`, error);
+        // Skip images with timestamp extraction errors
       }
     }
 
@@ -1985,8 +1862,6 @@ export class SmartMatcher {
       imageTimestamps,
       this.sport
     );
-
-    console.log(`[SmartMatcher] Found ${temporalNeighbors.length} temporal neighbors for ${imagePath}`);
 
     return {
       imageTimestamp: currentImageTimestamp,
@@ -2255,8 +2130,6 @@ export class SmartMatcher {
     let bestCandidate: MatchCandidate | null = null;
     let highestScore = 0;
 
-    console.log(`[FastTrack] Attempting fast-track matching with ${analysisResult.drivers.length} recognized names: ${analysisResult.drivers.join(', ')}`);
-
     // Check each participant for strong name matches
     for (const participant of participants) {
       const participantNames = this.getParticipantDriverNames(participant);
@@ -2326,9 +2199,6 @@ export class SmartMatcher {
 
     // Return candidate only if it exceeds our high-confidence threshold
     if (bestCandidate && bestCandidate.score >= fastTrackThreshold) {
-      console.log(`[FastTrack] Found high-confidence match: participant ${bestCandidate.participant.numero || bestCandidate.participant.number} with score ${bestCandidate.score.toFixed(1)}`);
-      console.log(`[FastTrack] Reasoning: ${bestCandidate.reasoning.join(', ')}`);
-
       // Track this as a fast-track correction
       this.addCorrection({
         type: 'FAST_TRACK',
@@ -2348,7 +2218,6 @@ export class SmartMatcher {
       return bestCandidate;
     }
 
-    console.log(`[FastTrack] No high-confidence name match found (best score: ${highestScore.toFixed(1)}, threshold: ${fastTrackThreshold})`);
     return null;
   }
 }

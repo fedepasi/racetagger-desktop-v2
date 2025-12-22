@@ -2,7 +2,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { SUPABASE_CONFIG, PERFORMANCE_CONFIG } from './config'; // Assumendo che SUPABASE_CONFIG sia esportato da config.ts
+import { SUPABASE_CONFIG, PERFORMANCE_CONFIG, DEBUG_MODE } from './config';
 import { authService } from './auth-service'; // Per ottenere user_id
 import { EventEmitter } from 'events';
 
@@ -37,13 +37,11 @@ try {
   // Tentativo di importare better-sqlite3
   BetterSqlite3Database = require('better-sqlite3');
   BetterSqlite3DatabaseInstance = require('better-sqlite3').Database;
-  console.log('better-sqlite3 imported successfully');
 } catch (error) {
   console.error('Failed to import better-sqlite3:', error);
   // Creiamo un mock di better-sqlite3 per evitare errori
   BetterSqlite3Database = class MockDatabase {
     constructor() {
-      console.warn('Using MockDatabase instead of better-sqlite3');
     }
     prepare() { return { run: () => {}, get: () => null, all: () => [] }; }
     exec() {}
@@ -104,15 +102,12 @@ class DatabaseConnectionPool extends EventEmitter {
     
     // Start maintenance routine
     this.startMaintenance();
-    
-    console.log(`[ConnectionPool] Initialized with ${this.maxConnections} max connections, ${this.minConnections} min connections`);
   }
 
   private async initializePool(): Promise<void> {
     for (let i = 0; i < this.minConnections; i++) {
       await this.createConnection();
     }
-    console.log(`[ConnectionPool] Initialized ${this.minConnections} connections`);
   }
 
   private async createConnection(): Promise<any> {
@@ -157,7 +152,6 @@ class DatabaseConnectionPool extends EventEmitter {
       // Set connection timeout
       const timeout = setTimeout(() => {
         this.releaseConnection(connection);
-        console.warn('[ConnectionPool] Connection auto-released due to timeout');
       }, 30000); // 30 second timeout
       
       this.connectionTimeouts.set(connection, timeout);
@@ -401,8 +395,6 @@ class DatabaseConnectionPool extends EventEmitter {
   }
 
   async shutdown(): Promise<void> {
-    console.log('[ConnectionPool] Shutting down...');
-    
     // Wait for batch queue to complete
     let timeout = 10000; // 10 seconds max
     const start = Date.now();
@@ -425,8 +417,6 @@ class DatabaseConnectionPool extends EventEmitter {
     this.connections.length = 0;
     this.availableConnections.length = 0;
     this.statementCache.clear();
-    
-    console.log('[ConnectionPool] Shutdown complete');
   }
 }
 
@@ -449,11 +439,10 @@ function initializeLocalCacheSchema(): void {
       return;
     }
   } catch (error) {
-    console.warn('[DatabaseService] App not ready check failed, proceeding anyway');
+    // App not ready check failed, proceeding anyway
   }
 
   if (isDbInitialized) {
-    console.log("Local cache database already initialized.");
     return;
   }
 
@@ -478,20 +467,7 @@ function initializeLocalCacheSchema(): void {
       
       // Keep legacy localDB for backward compatibility
       localDB = new BetterSqlite3Database(dbCachePath);
-      
-      console.log(`Database connection pool initialized at: ${dbCachePath}`);
-      
-      // Setup connection pool monitoring
-      connectionPool.on('connectionAcquired', (stats) => {
-        if (false) { // Disable detailed connection logging
-          console.log(`[DB] Connection acquired: ${stats.activeConnections} active, ${stats.availableConnections} available`);
-        }
-      });
-      
-      connectionPool.on('maintenanceComplete', (stats) => {
-        console.log(`[DB] Pool maintenance: ${stats.totalConnections} total, ${stats.cacheHitRate.toFixed(1)}% cache hit rate`);
-      });
-      
+
     } catch (dbError) {
       console.error('Failed to create SQLite database instance:', dbError);
       // Creiamo un'istanza mock per evitare errori
@@ -501,10 +477,7 @@ function initializeLocalCacheSchema(): void {
         exec() {}
         close() { this.open = false; }
       })();
-      console.warn('Using mock database instance instead of better-sqlite3');
     }
-
-    console.log('Initializing local cache database schema...');
 
     const createProjectsCacheTable = `
       CREATE TABLE IF NOT EXISTS Projects (
@@ -607,8 +580,7 @@ function initializeLocalCacheSchema(): void {
     localDB.pragma('cache_size = 10000');
     localDB.pragma('temp_store = MEMORY');
     localDB.pragma('mmap_size = 268435456'); // 256MB
-    
-    console.log('Local cache schema initialized.');
+
     isDbInitialized = true;
 
     // Setup DB close handler only after successful initialization
@@ -620,7 +592,6 @@ function initializeLocalCacheSchema(): void {
       
       if (localDB && localDB.open) {
         localDB.close();
-        console.log('Local cache database connection closed.');
       }
     });
 
@@ -698,7 +669,6 @@ export interface PresetParticipant {
 function getCurrentUserId(): string | null {
   const authState = authService.getAuthState();
   if (!authState.isAuthenticated || !authState.user?.id) {
-    console.warn('User not authenticated or user ID not available');
     return null;
   }
   return authState.user.id;
@@ -715,38 +685,27 @@ async function withRetry<T>(
   
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      console.log(`[DB] Attempting ${operationName} (attempt ${attempt}/${maxRetries})`);
       const result = await operation();
-      
-      if (attempt > 1) {
-        console.log(`[DB] ${operationName} succeeded after ${attempt} attempts`);
-      }
-      
       return result;
     } catch (error: any) {
       lastError = error;
-      console.error(`[DB] ${operationName} failed on attempt ${attempt}:`, error.message);
-      
+
       // Don't retry on authentication or permission errors
-      if (error.message?.includes('authentication') || 
-          error.message?.includes('permission') || 
+      if (error.message?.includes('authentication') ||
+          error.message?.includes('permission') ||
           error.message?.includes('unauthorized') ||
-          error.code === 401 || 
+          error.code === 401 ||
           error.code === 403) {
-        console.log(`[DB] Not retrying ${operationName} due to auth/permission error`);
         throw error;
       }
-      
+
       // Don't retry on the last attempt
       if (attempt === maxRetries) {
-        console.error(`[DB] ${operationName} failed after ${maxRetries} attempts`);
         break;
       }
-      
+
       // Exponential backoff with jitter
       const delay = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000;
-      console.log(`[DB] Retrying ${operationName} in ${Math.round(delay)}ms...`);
-      
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
@@ -758,20 +717,18 @@ async function withRetry<T>(
 async function ensureAuthenticated(): Promise<boolean> {
   const authState = authService.getAuthState();
   if (!authState.isAuthenticated || !authState.session) {
-    console.warn('User not authenticated or session not available');
     return false;
   }
-  
+
   // Verifica se il token è scaduto
   if (authState.session.expires_at) {
     const expiresAt = new Date(authState.session.expires_at);
     const now = new Date();
     if (expiresAt <= now) {
-      console.warn('Session token has expired');
       return false;
     }
   }
-  
+
   return true;
 }
 
@@ -795,103 +752,32 @@ export async function createProjectOnline(projectData: Omit<Project, 'id' | 'use
       console.error('Error getting current user:', userError);
       throw new Error('Failed to verify user authentication: ' + userError.message);
     }
-    
+
     if (!userData || !userData.user || !userData.user.id) {
-      console.error('User data is invalid:', userData);
       throw new Error('User authentication is invalid or expired.');
     }
-    
+
     // Usa l'ID utente ottenuto direttamente da Supabase
     const supabaseUserId = userData.user.id;
-    console.log('Using Supabase user ID for project creation:', supabaseUserId);
-    
-    // Verifica che auth.uid() non sia null
-    try {
-      const { data: authData, error: authError } = await client.rpc('get_auth_uid');
-      console.log('auth.uid() result:', authData);
-      
-      if (authError) {
-        console.error('Error getting auth.uid():', authError);
-        // Non lanciare un errore qui, prova comunque a creare il progetto
-      } else if (!authData) {
-        console.warn('auth.uid() is null. This might cause issues with RLS policies.');
-      } else if (authData !== supabaseUserId) {
-        console.warn(`auth.uid() (${authData}) does not match user ID (${supabaseUserId}). This might cause issues with RLS policies.`);
-      }
-    } catch (authCheckError) {
-      console.error('Exception checking auth.uid():', authCheckError);
-      // Non lanciare un errore qui, prova comunque a creare il progetto
-    }
-    
+
     // Prova a rinnovare la sessione per assicurarsi che il token sia valido
     try {
-      console.log('Refreshing session before creating project...');
       const { data: refreshData, error: refreshError } = await client.auth.refreshSession();
-      
-      if (refreshError) {
-        console.error('Error refreshing session:', refreshError);
-        // Non lanciare un errore qui, prova comunque a creare il progetto
-      } else if (refreshData && refreshData.session) {
-        console.log('Session refreshed successfully. New expiration:', new Date(refreshData.session.expires_at || 0).toLocaleString());
-        
+
+      if (!refreshError && refreshData && refreshData.session) {
         // Aggiorna il client Supabase con la nuova sessione
         await client.auth.setSession({
           access_token: refreshData.session.access_token,
           refresh_token: refreshData.session.refresh_token
         });
-        
+
         // Aggiorna anche il client in authService
         authService.updateSession(refreshData.session);
       }
     } catch (refreshError) {
-      console.error('Exception refreshing session:', refreshError);
       // Non lanciare un errore qui, prova comunque a creare il progetto
     }
-    
-    // Ora prova a inserire il progetto
-    console.log('Attempting to create project with user_id:', supabaseUserId);
-    
-    // Verifica che auth.uid() sia impostato correttamente prima di inserire il progetto
-    try {
-      console.log('Checking auth.uid() before insert...');
-      console.log('Current user ID from authState:', supabaseUserId);
-      
-      // Verifica lo stato della sessione
-      const { data: sessionData, error: sessionError } = await client.auth.getSession();
-      if (sessionError) {
-        console.error('Error getting session:', sessionError);
-      } else {
-        console.log('Current session:', sessionData.session ? 'Valid' : 'Invalid');
-        if (sessionData.session) {
-          console.log('Session expires at:', new Date(sessionData.session.expires_at || 0).toLocaleString());
-          console.log('Session user ID:', sessionData.session.user.id);
-        }
-      }
-      
-      // Verifica auth.uid()
-      const { data: authUidData, error: authUidError } = await client.rpc('get_auth_uid');
-      console.log('Final auth.uid() check before insert:', authUidData);
-      
-      if (authUidError) {
-        console.error('Error in final auth.uid() check:', authUidError);
-        console.error('Error details:', JSON.stringify(authUidError));
-      } else if (!authUidData) {
-        console.warn('Final auth.uid() check returned null. This will likely cause RLS policy violations.');
-        
-        // Prova a verificare se la funzione esiste
-        try {
-          const { data: funcData, error: funcError } = await client.rpc('get_auth_uid');
-          console.log('Function check result:', funcData, funcError);
-        } catch (funcCheckError) {
-          console.error('Exception checking function existence:', funcCheckError);
-        }
-      } else if (authUidData !== supabaseUserId) {
-        console.warn(`auth.uid() (${authUidData}) does not match user ID (${supabaseUserId}). This might cause issues with RLS policies.`);
-      }
-    } catch (finalAuthCheckError) {
-      console.error('Exception in final auth.uid() check:', finalAuthCheckError);
-    }
-    
+
     const { data, error } = await withRetry(
       async () => {
         const result = await client
@@ -906,20 +792,9 @@ export async function createProjectOnline(projectData: Omit<Project, 'id' | 'use
 
     if (error) {
       console.error('Error creating project:', error);
-      
+
       // Se l'errore è relativo a RLS, fornisci un messaggio più chiaro e dettagliato
       if (error.message && error.message.includes('row-level security')) {
-        console.error('RLS policy violation detected. User ID:', supabaseUserId);
-        console.error('Project data:', projectData);
-        
-        // Tenta di ottenere informazioni di debug aggiuntive
-        try {
-          const { data: debugData } = await client.rpc('get_auth_uid');
-          console.error('Debug - auth.uid():', debugData);
-        } catch (debugError) {
-          console.error('Error getting debug info:', debugError);
-        }
-        
         throw new Error(
           'Permission denied: You do not have permission to create projects. ' +
           'This is due to a Row Level Security (RLS) policy violation. ' +
@@ -927,19 +802,17 @@ export async function createProjectOnline(projectData: Omit<Project, 'id' | 'use
           'If the problem persists, contact support with error code: RLS-PROJ-CREATE.'
         );
       }
-      
+
       throw error;
     }
-    
+
     if (!data) throw new Error('Failed to create project: no data returned.');
-    
-    console.log('Project created successfully:', data);
-    
+
     // Aggiorna la cache locale
     await cacheProjectLocal(data as Project);
     return data as Project;
   } catch (error) {
-    console.error('Exception creating project:', error);
+    console.error('Error creating project:', error);
     throw error;
   }
 }
@@ -1215,10 +1088,8 @@ export async function getSportCategoryIdByName(categoryCodeOrName: string): Prom
       return nameData.id;
     }
 
-    console.warn(`[DB] Sport category not found for code/name: ${categoryCodeOrName}`);
     return null;
   } catch (e) {
-    console.warn(`[DB] Error fetching sport category ID:`, e);
     return null;
   }
 }
@@ -1395,12 +1266,9 @@ export function getDatabaseStats() {
  */
 export async function updateDatabaseConfiguration(): Promise<void> {
   if (!connectionPool) {
-    console.log('[DB] Connection pool not available for configuration update');
     return;
   }
-  
-  console.log(`[DB] Performance optimizations: ${PERFORMANCE_CONFIG.enableParallelOptimizations ? 'ENABLED' : 'DISABLED'}`);
-  
+
   // Connection pool adjusts automatically based on PERFORMANCE_CONFIG settings
   // No manual adjustment needed since constructor reads from PERFORMANCE_CONFIG
 }
@@ -1444,17 +1312,13 @@ export async function flushPendingOperations(): Promise<void> {
  */
 export async function syncAllUserDataToSupabase(userId: string): Promise<void> {
   if (!ensureDbInitialized('syncAllUserDataToSupabase')) return;
-  
-  console.log(`[DB] Starting sync of all user data to Supabase for user: ${userId}`);
-  
+
   try {
     // 1. Sincronizza Projects non ancora sincronizzati
     await syncUserProjectsToSupabase(userId);
-    
+
     // 2. Sincronizza Executions non ancora sincronizzate
     await syncUserExecutionsToSupabase(userId);
-    
-    console.log(`[DB] Successfully synced all user data to Supabase`);
   } catch (error) {
     console.error('[DB] Error syncing user data to Supabase:', error);
     throw error;
@@ -1467,39 +1331,34 @@ export async function syncAllUserDataToSupabase(userId: string): Promise<void> {
 async function syncUserProjectsToSupabase(userId: string): Promise<void> {
   try {
     // Ottieni tutti i projects dell'utente dal cache locale
-    const localProjects = connectionPool 
+    const localProjects = connectionPool
       ? await connectionPool.executeQuery<Project[]>('SELECT * FROM Projects WHERE user_id = ?', [userId])
       : localDB.prepare('SELECT * FROM Projects WHERE user_id = ?').all(userId) as Project[];
-    
+
     if (!localProjects || localProjects.length === 0) {
-      console.log('[DB] No local projects to sync');
       return;
     }
-    
-    console.log(`[DB] Syncing ${localProjects.length} projects to Supabase`);
-    
+
     // Per ogni project, assicurati che sia sincronizzato
     for (const project of localProjects) {
       try {
         // Verifica se il project esiste già su Supabase
         const existingProject = await getProjectByIdOnline(project.id!);
-        
+
         if (!existingProject) {
           // Crea nuovo project su Supabase
           await createProjectOnline({
             name: project.name,
             base_csv_storage_path: project.base_csv_storage_path
           });
-          console.log(`[DB] Created project on Supabase: ${project.name}`);
         } else {
           // Aggiorna project esistente se necessario
-          if (project.updated_at && existingProject.updated_at && 
+          if (project.updated_at && existingProject.updated_at &&
               new Date(project.updated_at) > new Date(existingProject.updated_at)) {
             await updateProjectOnline(project.id!, {
               name: project.name,
               base_csv_storage_path: project.base_csv_storage_path
             });
-            console.log(`[DB] Updated project on Supabase: ${project.name}`);
           }
         }
       } catch (projectError) {
@@ -1519,23 +1378,20 @@ async function syncUserProjectsToSupabase(userId: string): Promise<void> {
 async function syncUserExecutionsToSupabase(userId: string): Promise<void> {
   try {
     // Ottieni tutte le executions dell'utente dal cache locale
-    const localExecutions = connectionPool 
+    const localExecutions = connectionPool
       ? await connectionPool.executeQuery<Execution[]>('SELECT * FROM Executions WHERE user_id = ?', [userId])
       : localDB.prepare('SELECT * FROM Executions WHERE user_id = ?').all(userId) as Execution[];
-    
+
     if (!localExecutions || localExecutions.length === 0) {
-      console.log('[DB] No local executions to sync');
       return;
     }
-    
-    console.log(`[DB] Syncing ${localExecutions.length} executions to Supabase`);
-    
+
     // Per ogni execution, assicurati che sia sincronizzata
     for (const execution of localExecutions) {
       try {
         // Verifica se l'execution esiste già su Supabase
         const existingExecution = await getExecutionByIdOnline(execution.id!);
-        
+
         if (!existingExecution) {
           // Crea nuova execution su Supabase
           await createExecutionOnline({
@@ -1545,10 +1401,9 @@ async function syncUserExecutionsToSupabase(userId: string): Promise<void> {
             status: execution.status,
             results_reference: execution.results_reference
           });
-          console.log(`[DB] Created execution on Supabase: ${execution.name}`);
         } else {
           // Aggiorna execution esistente se necessario
-          if (execution.updated_at && existingExecution.updated_at && 
+          if (execution.updated_at && existingExecution.updated_at &&
               new Date(execution.updated_at) > new Date(existingExecution.updated_at)) {
             await updateExecutionOnline(execution.id!, {
               name: execution.name,
@@ -1556,7 +1411,6 @@ async function syncUserExecutionsToSupabase(userId: string): Promise<void> {
               status: execution.status,
               results_reference: execution.results_reference
             });
-            console.log(`[DB] Updated execution on Supabase: ${execution.name}`);
           }
         }
       } catch (executionError) {
@@ -1575,9 +1429,7 @@ async function syncUserExecutionsToSupabase(userId: string): Promise<void> {
  */
 export async function clearAllUserData(userId: string): Promise<void> {
   if (!ensureDbInitialized('clearAllUserData')) return;
-  
-  console.log(`[DB] Clearing all local data for user: ${userId}`);
-  
+
   try {
     if (connectionPool && PERFORMANCE_CONFIG.enableParallelOptimizations) {
       // Usa connection pool per operazioni batch
@@ -1585,18 +1437,16 @@ export async function clearAllUserData(userId: string): Promise<void> {
         { sql: 'DELETE FROM Projects WHERE user_id = ?', params: [userId] },
         { sql: 'DELETE FROM Executions WHERE user_id = ?', params: [userId] }
       ];
-      
+
       await connectionPool.executeBatch(operations);
     } else {
       // Fallback a operazioni singole
       const deleteProjectsStmt = localDB.prepare('DELETE FROM Projects WHERE user_id = ?');
       const deleteExecutionsStmt = localDB.prepare('DELETE FROM Executions WHERE user_id = ?');
-      
+
       deleteProjectsStmt.run(userId);
       deleteExecutionsStmt.run(userId);
     }
-    
-    console.log(`[DB] Successfully cleared all local data for user`);
   } catch (error) {
     console.error('[DB] Error clearing user data:', error);
     throw error;
@@ -1680,10 +1530,9 @@ export async function saveCsvToSupabase(csvData: any[], csvName: string): Promis
       .single();
       
     if (error) throw error;
-    
-    console.log(`[DB] Successfully saved CSV to Supabase: ${csvName}`);
+
     return data as UserCsvMetadata;
-    
+
   } catch (error) {
     console.error('[DB] Error saving CSV to Supabase:', error);
     throw error;
@@ -1708,7 +1557,6 @@ export async function loadLastUsedCsvFromSupabase(): Promise<any[] | null> {
       .single();
       
     if (metaError || !metadata) {
-      console.log('[DB] No CSV metadata found for user');
       return null;
     }
     
@@ -1723,8 +1571,7 @@ export async function loadLastUsedCsvFromSupabase(): Promise<any[] | null> {
     // 3. Converti il Blob in testo e parsifica
     const csvText = await csvData.text();
     const parsedData = parseCsvContent(csvText);
-    
-    console.log(`[DB] Successfully loaded CSV from Supabase: ${metadata.csv_name} (${parsedData.length} entries)`);
+
     return parsedData;
     
   } catch (error) {
@@ -1913,7 +1760,6 @@ export interface ExecutionSettings {
 export async function saveExecutionSettings(settings: Omit<ExecutionSettings, 'id' | 'user_id' | 'created_at'>): Promise<ExecutionSettings> {
   const userId = getCurrentUserId();
   if (!userId) {
-    console.warn('User not authenticated, skipping execution settings tracking');
     throw new Error('User not authenticated');
   }
 
@@ -1938,8 +1784,7 @@ export async function saveExecutionSettings(settings: Omit<ExecutionSettings, 'i
     if (!data) {
       throw new Error('Failed to save execution settings: no data returned.');
     }
-    
-    console.log('[DB] Execution settings saved successfully:', data.id);
+
     return data as ExecutionSettings;
     
   } catch (error) {
@@ -2248,7 +2093,6 @@ export async function createParticipantPreset(presetData: Omit<ParticipantPreset
       preset.description, preset.created_at, preset.updated_at, preset.last_used_at
     );
 
-    console.log(`[DB] Created participant preset: ${preset.name}`);
     return preset;
   } catch (error: any) {
     if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
@@ -2378,8 +2222,6 @@ export async function savePresetParticipants(presetId: string, participants: Omi
     // Aggiorna timestamp del preset
     const updatePresetStmt = localDB.prepare('UPDATE ParticipantPresets SET updated_at = ? WHERE id = ?');
     updatePresetStmt.run(now, presetId);
-
-    console.log(`[DB] Saved ${participants.length} participants to preset ${presetId}`);
   } catch (error) {
     console.error('[DB] Error saving preset participants:', error);
     throw error;
@@ -2428,8 +2270,6 @@ export async function deleteParticipantPreset(presetId: string): Promise<void> {
     if (result.changes === 0) {
       throw new Error('Preset not found or access denied');
     }
-
-    console.log(`[DB] Deleted participant preset ${presetId}`);
   } catch (error) {
     console.error('[DB] Error deleting participant preset:', error);
     throw error;
@@ -2560,9 +2400,6 @@ export async function cacheSupabaseData(): Promise<void> {
   try {
     const userId = getCurrentUserId();
 
-    console.log('[Cache] Loading Supabase data...');
-    console.log(`[Cache] User authenticated: ${!!userId}`);
-
     // Cache sport categories (public data - no user ID required)
     // This ensures categories are always available, even before login
     const { data: categories, error: categoriesError } = await supabase
@@ -2575,7 +2412,6 @@ export async function cacheSupabaseData(): Promise<void> {
       console.error('[Cache] Error loading categories:', categoriesError);
     } else {
       categoriesCache = categories || [];
-      console.log(`[Cache] Cached ${categoriesCache.length} sport categories`);
     }
 
     // Cache user presets (requires authentication)
@@ -2594,15 +2430,12 @@ export async function cacheSupabaseData(): Promise<void> {
         console.error('[Cache] Error loading presets:', presetsError);
       } else {
         presetsCache = presets || [];
-        console.log(`[Cache] Cached ${presetsCache.length} participant presets`);
       }
     } else {
-      console.log('[Cache] No user ID, skipping participant presets cache');
       presetsCache = [];
     }
 
     cacheLastUpdated = Date.now();
-    console.log('[Cache] Supabase data cached successfully');
 
   } catch (error) {
     console.error('[Cache] Failed to cache Supabase data:', error);
@@ -2638,7 +2471,6 @@ export async function refreshCategoriesCache(): Promise<void> {
       console.error('[Cache] Error refreshing categories:', error);
     } else {
       categoriesCache = categories || [];
-      console.log(`[Cache] Refreshed ${categoriesCache.length} sport categories`);
     }
   } catch (error) {
     console.error('[Cache] Failed to refresh categories cache:', error);
@@ -2738,7 +2570,6 @@ export async function createParticipantPresetSupabase(presetData: Omit<Participa
     presetsCache = [];
     cacheLastUpdated = 0;
 
-    console.log(`[DB] Created participant preset in Supabase: ${presetData.name}`);
     return data;
 
   } catch (error) {
@@ -2756,14 +2587,10 @@ export async function getUserParticipantPresetsSupabase(includeAllForAdmin: bool
     const userId = getCurrentUserId();
     if (!userId) return [];
 
-    // TEMPORARILY DISABLE CACHE to force fresh query and debug
     // Return cached data if available and recent
-    // if (presetsCache.length > 0 && (Date.now() - cacheLastUpdated < 30000)) {
-    //   console.log('[DB] Returning cached presets:', presetsCache.length);
-    //   return presetsCache.filter(p => p.user_id === userId || p.is_public);
-    // }
-    console.log('[DB] Cache disabled - forcing fresh query to Supabase');
-    console.log('[DB] includeAllForAdmin:', includeAllForAdmin);
+    if (presetsCache.length > 0 && (Date.now() - cacheLastUpdated < 30000)) {
+      return presetsCache.filter(p => p.user_id === userId || p.is_public);
+    }
 
     // Build query based on admin mode
     let query = supabase
@@ -2789,12 +2616,8 @@ export async function getUserParticipantPresetsSupabase(includeAllForAdmin: bool
       return presetsCache.filter(p => p.user_id === userId || p.is_public);
     }
 
-    console.log('[DB] Raw data from Supabase preset query:', JSON.stringify(data, null, 2));
-
     // Map preset_participants to participants for UI compatibility
     const mappedData = (data || []).map(preset => {
-      console.log('[DB] Processing preset "${preset.name}"');
-
       return {
         ...preset,
         participants: preset.preset_participants || []
@@ -2862,9 +2685,6 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
     const userId = getCurrentUserId();
     if (!userId) throw new Error('User not authenticated');
 
-    console.log(`[DB] Saving ${participants.length} participants to preset ${presetId}`);
-    console.log('[DB] Participants sample:', participants.slice(0, 2));
-
     // Verify preset ownership
     const { data: preset, error: presetError } = await supabase
       .from('participant_presets')
@@ -2889,8 +2709,7 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
 
     // Insert new participants
     if (participants.length > 0) {
-      console.log('[DB] Inserting participants into Supabase...');
-      const { data: insertedData, error: insertError } = await supabase
+      const { error: insertError } = await supabase
         .from('preset_participants')
         .insert(participants.map(p => ({ ...p, preset_id: presetId })));
 
@@ -2898,9 +2717,6 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
         console.error('[DB] Error inserting participants:', insertError);
         throw insertError;
       }
-
-      console.log(`[DB] Successfully inserted ${participants.length} participants`);
-      console.log('[DB] Insert response data:', insertedData);
     }
 
     // Update preset timestamp
@@ -2916,8 +2732,6 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
     // Invalidate cache to force fresh data on next load
     presetsCache = [];
     cacheLastUpdated = 0;
-
-    console.log(`[DB] Saved ${participants.length} participants to preset ${presetId} in Supabase`);
 
   } catch (error) {
     console.error('[DB] Error saving preset participants to Supabase:', error);
@@ -2979,8 +2793,6 @@ export async function updateParticipantPresetSupabase(presetId: string, updateDa
       presetsCache[cacheIndex] = { ...presetsCache[cacheIndex], ...updateData, updated_at: new Date().toISOString() };
     }
 
-    console.log(`[DB] Updated participant preset ${presetId} in Supabase`);
-
   } catch (error) {
     console.error('[DB] Error updating participant preset in Supabase:', error);
     throw error;
@@ -3011,8 +2823,6 @@ export async function deleteParticipantPresetSupabase(presetId: string): Promise
       presetsCache.splice(cacheIndex, 1);
     }
 
-    console.log(`[DB] Deleted participant preset ${presetId} from Supabase`);
-
   } catch (error) {
     console.error('[DB] Error deleting participant preset from Supabase:', error);
     throw error;
@@ -3042,8 +2852,6 @@ export async function duplicateOfficialPresetSupabase(sourcePresetId: string): P
     if (sourceError || !sourcePreset) {
       throw new Error('Source preset not found or is not an official preset');
     }
-
-    console.log(`[DB] Duplicating official preset "${sourcePreset.name}" for user ${userId}`);
 
     // Create the new preset (personal copy)
     const newPreset = await createParticipantPresetSupabase({
@@ -3081,8 +2889,6 @@ export async function duplicateOfficialPresetSupabase(sourcePresetId: string): P
     presetsCache = [];
     cacheLastUpdated = 0;
 
-    console.log(`[DB] Created duplicate preset "${newPreset.name}" with ${sourceParticipants.length} participants`);
-
     // Return the new preset with participants
     return {
       ...newPreset,
@@ -3109,9 +2915,6 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
     description: `Imported from CSV with ${csvData.length} participants`
   });
 
-  console.log('[DB] CSV Import - Raw CSV data sample:', csvData.slice(0, 2));
-  console.log('[DB] CSV Import - Available columns:', Object.keys(csvData[0] || {}));
-
   const participants: Omit<PresetParticipantSupabase, 'id' | 'created_at'>[] = csvData.map((row, index) => {
     const participant = {
       preset_id: preset.id!,
@@ -3137,14 +2940,6 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
         }, {} as any)
       }
     };
-
-    console.log(`[DB] CSV Import - Mapped participant ${index + 1}:`, {
-      numero: participant.numero,
-      nome: participant.nome,
-      categoria: participant.categoria,
-      squadra: participant.squadra,
-      sponsor: participant.sponsor
-    });
 
     return participant;
   });
@@ -3281,7 +3076,6 @@ export async function createExportDestination(
       throw new Error('Failed to create export destination: no data returned');
     }
 
-    console.log(`[DB] Created export destination: ${data.name}`);
     return data as ExportDestination;
 
   } catch (error) {
@@ -3437,7 +3231,6 @@ export async function updateExportDestination(
       throw new Error('Export destination not found or access denied');
     }
 
-    console.log(`[DB] Updated export destination: ${data.name}`);
     return data as ExportDestination;
 
   } catch (error) {
@@ -3464,8 +3257,6 @@ export async function deleteExportDestination(destinationId: string): Promise<vo
       console.error('[DB] Error deleting export destination:', error);
       throw error;
     }
-
-    console.log(`[DB] Deleted export destination: ${destinationId}`);
 
   } catch (error) {
     console.error('[DB] Error in deleteExportDestination:', error);
@@ -3503,8 +3294,6 @@ export async function setDefaultExportDestination(destinationId: string): Promis
       console.error('[DB] Error setting default destination:', setError);
       throw setError;
     }
-
-    console.log(`[DB] Set default export destination: ${destinationId}`);
 
   } catch (error) {
     console.error('[DB] Error in setDefaultExportDestination:', error);
@@ -3567,8 +3356,6 @@ export async function updateExportDestinationsOrder(
       }
     }
 
-    console.log(`[DB] Updated display order for ${destinationOrders.length} destinations`);
-
   } catch (error) {
     console.error('[DB] Error in updateExportDestinationsOrder:', error);
     throw error;
@@ -3602,7 +3389,6 @@ export async function toggleExportDestinationActive(destinationId: string): Prom
       throw error;
     }
 
-    console.log(`[DB] Toggled destination ${destinationId} active: ${newStatus}`);
     return newStatus;
 
   } catch (error) {

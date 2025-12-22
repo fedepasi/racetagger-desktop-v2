@@ -46,7 +46,6 @@ class SmartPresets {
 
   createPresetsInterface(toggleElement, panelElement) {
     // No preset selection interface - always use Fast settings
-    console.log('Applying hardcoded Fast settings (no preset selection)');
     
     // Mark section as enhanced UI active for styling compatibility
     const analysisSection = document.getElementById('section-analysis');
@@ -218,8 +217,6 @@ class SmartPresets {
   }
 
   applyFastSettings() {
-    console.log('Applying hardcoded Fast settings:', this.fastSettings);
-    
     // Apply model selection (Fast AI Model)
     const modelSelect = document.getElementById('model-select');
     if (modelSelect && this.fastSettings.model) {

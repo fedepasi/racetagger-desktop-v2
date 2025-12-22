@@ -66,20 +66,20 @@ export class SessionManager extends EventEmitter {
   private backupFilePath: string;
   private autoSaveInterval: NodeJS.Timeout | null = null;
   private rollbackPoints: RollbackPoint[] = [];
-  
+
   private isEnabled: boolean = false;
 
   constructor() {
     super();
-    
+
     // Initialize file paths
     const userDataPath = app?.getPath('userData') || './';
     this.stateFilePath = path.join(userDataPath, '.optimization-progress.json');
     this.backupFilePath = path.join(userDataPath, '.optimization-progress.backup.json');
-    
+
     // Enable session management if configured
     this.isEnabled = PERFORMANCE_CONFIG.enableSessionResume || false;
-    
+
     if (this.isEnabled) {
       this.loadSessionState();
       this.startAutoSave();
@@ -116,8 +116,6 @@ export class SessionManager extends EventEmitter {
 
     this.saveSessionState();
     this.emit('sessionInitialized', this.sessionState);
-
-    console.log(`📱 Session initialized: ${sessionId} (${totalImages} images)`);
   }
 
   /**
@@ -125,8 +123,8 @@ export class SessionManager extends EventEmitter {
    */
   hasResumableSession(): boolean {
     if (!this.isEnabled) return false;
-    
-    return this.sessionState !== null && !!this.sessionState.batchInfo && 
+
+    return this.sessionState !== null && !!this.sessionState.batchInfo &&
            this.sessionState.batchInfo.processedImages < this.sessionState.batchInfo.totalImages;
   }
 
@@ -146,17 +144,9 @@ export class SessionManager extends EventEmitter {
 
     const session = this.sessionState!;
     session.lastCheckpoint = Date.now();
-    
+
     this.saveSessionState();
     this.emit('sessionResumed', session);
-
-    const progress = session.batchInfo;
-    console.log(`🔄 Session resumed: ${session.sessionId}`);
-    if (progress) {
-      console.log(`   Progress: ${progress.processedImages}/${progress.totalImages} images processed`);
-    }
-    console.log(`   Current phase: ${session.currentPhase}`);
-    console.log(`   Last checkpoint: ${new Date(session.lastCheckpoint).toLocaleTimeString()}`);
 
     return session;
   }
@@ -186,8 +176,6 @@ export class SessionManager extends EventEmitter {
       this.saveSessionState();
 
       this.emit('taskCompleted', { taskId, sessionId: this.sessionState.sessionId });
-      
-      console.log(`✅ Task completed: ${taskId}`);
     }
   }
 
@@ -253,7 +241,7 @@ export class SessionManager extends EventEmitter {
 
     this.rollbackPoints.push(rollbackPoint);
     this.sessionState.optimizationProgress.rollbackPoints.push(rollbackPoint);
-    
+
     // Keep only last 10 rollback points
     if (this.rollbackPoints.length > 10) {
       this.rollbackPoints = this.rollbackPoints.slice(-10);
@@ -262,8 +250,6 @@ export class SessionManager extends EventEmitter {
 
     this.saveSessionState();
     this.emit('rollbackPointCreated', rollbackPoint);
-
-    console.log(`💾 Rollback point created: ${id} - ${description}`);
   }
 
   /**
@@ -278,9 +264,9 @@ export class SessionManager extends EventEmitter {
    */
   rollbackToPoint(rollbackId: string): boolean {
     const rollbackPoint = this.rollbackPoints.find(rp => rp.id === rollbackId);
-    
+
     if (!rollbackPoint) {
-      console.error(`❌ Rollback point not found: ${rollbackId}`);
+      console.error(`[SessionManager] Rollback point not found: ${rollbackId}`);
       return false;
     }
 
@@ -290,19 +276,14 @@ export class SessionManager extends EventEmitter {
       // 2. Reverting file changes (if tracked via git)
       // 3. Updating current session state
 
-      console.log(`🔄 Rolling back to: ${rollbackPoint.description}`);
-      console.log(`   Phase: ${rollbackPoint.phase}, Task: ${rollbackPoint.task}`);
-      console.log(`   Files affected: ${rollbackPoint.filesModified.join(', ')}`);
-
       if (this.sessionState) {
         this.sessionState.currentPhase = rollbackPoint.phase;
         this.sessionState.currentTask = rollbackPoint.task;
         this.sessionState.lastCheckpoint = Date.now();
-        
+
         // Remove completed tasks after rollback point
-        const rollbackTime = rollbackPoint.timestamp;
         // This would require more sophisticated task timestamp tracking
-        
+
         this.saveSessionState();
       }
 
@@ -310,7 +291,7 @@ export class SessionManager extends EventEmitter {
       return true;
 
     } catch (error) {
-      console.error('❌ Rollback failed:', error);
+      console.error('[SessionManager] Rollback failed:', error);
       this.recordError('ROLLBACK', undefined, `Rollback to ${rollbackId} failed: ${error}`);
       return false;
     }
@@ -336,7 +317,7 @@ export class SessionManager extends EventEmitter {
 
     this.emit('errorRecorded', sessionError);
 
-    console.error(`❌ Session error recorded: ${phase}${task ? ` / ${task}` : ''} - ${error}`);
+    console.error(`[SessionManager] Session error recorded: ${phase}${task ? ` / ${task}` : ''} - ${error}`);
   }
 
   /**
@@ -365,7 +346,6 @@ export class SessionManager extends EventEmitter {
     };
 
     this.saveSessionState();
-    console.log(`📊 Performance baseline set: ${averageProcessingTime}ms per image`);
   }
 
   /**
@@ -391,24 +371,14 @@ export class SessionManager extends EventEmitter {
   completeSession(): void {
     if (!this.isEnabled || !this.sessionState) return;
 
-    const duration = Date.now() - this.sessionState.startTime;
-    const batchInfo = this.sessionState.batchInfo;
-
-    console.log(`✅ Session completed: ${this.sessionState.sessionId}`);
-    console.log(`   Duration: ${Math.round(duration / 1000)}s`);
-    if (batchInfo) {
-      console.log(`   Images processed: ${batchInfo.processedImages}/${batchInfo.totalImages}`);
-      console.log(`   Failed images: ${batchInfo.failedImages}`);
-    }
-
     // Archive completed session
     this.archiveSession();
-    
+
     // Clear current session state
     this.sessionState = null;
     this.clearStateFile();
-    
-    this.emit('sessionCompleted', { duration, batchInfo });
+
+    this.emit('sessionCompleted', {});
   }
 
   /**
@@ -420,9 +390,8 @@ export class SessionManager extends EventEmitter {
     this.sessionState = null;
     this.rollbackPoints = [];
     this.clearStateFile();
-    
+
     this.emit('sessionCleared');
-    console.log('🗑️ Session state cleared');
   }
 
   /**
@@ -433,7 +402,7 @@ export class SessionManager extends EventEmitter {
 
     const duration = Date.now() - this.sessionState.startTime;
     const batchInfo = this.sessionState.batchInfo;
-    
+
     return {
       sessionId: this.sessionState.sessionId,
       duration,
@@ -471,9 +440,9 @@ export class SessionManager extends EventEmitter {
       };
 
       fs.writeFileSync(this.stateFilePath, JSON.stringify(stateData, null, 2));
-      
+
     } catch (error) {
-      console.error('Error saving session state:', error);
+      console.error('[SessionManager] Error saving session state:', error);
     }
   }
 
@@ -484,27 +453,24 @@ export class SessionManager extends EventEmitter {
     try {
       if (fs.existsSync(this.stateFilePath)) {
         const stateData = JSON.parse(fs.readFileSync(this.stateFilePath, 'utf8'));
-        
+
         // Validate state data
         if (stateData.sessionId && stateData.startTime) {
           this.sessionState = stateData;
           this.rollbackPoints = stateData.optimizationProgress?.rollbackPoints || [];
-          
+
           // Check if session is recent enough to resume (within last 24 hours)
           const sessionAge = Date.now() - stateData.startTime;
           const maxAge = 24 * 60 * 60 * 1000; // 24 hours
-          
+
           if (sessionAge > maxAge) {
-            console.log('⚠️ Session too old, starting fresh');
             this.clearSession();
             return;
           }
-
-          console.log(`📱 Loaded session state: ${this.sessionState!.sessionId}`);
         }
       }
     } catch (error) {
-      console.error('Error loading session state:', error);
+      console.error('[SessionManager] Error loading session state:', error);
       this.loadBackupState();
     }
   }
@@ -517,10 +483,9 @@ export class SessionManager extends EventEmitter {
       if (fs.existsSync(this.backupFilePath)) {
         const backupData = JSON.parse(fs.readFileSync(this.backupFilePath, 'utf8'));
         this.sessionState = backupData;
-        console.log('📱 Loaded backup session state');
       }
     } catch (error) {
-      console.error('Error loading backup session state:', error);
+      console.error('[SessionManager] Error loading backup session state:', error);
     }
   }
 
@@ -536,7 +501,7 @@ export class SessionManager extends EventEmitter {
         fs.unlinkSync(this.backupFilePath);
       }
     } catch (error) {
-      console.error('Error clearing state files:', error);
+      console.error('[SessionManager] Error clearing state files:', error);
     }
   }
 
@@ -565,12 +530,12 @@ export class SessionManager extends EventEmitter {
         try {
           fs.unlinkSync(path.join(archiveDir, file));
         } catch (error) {
-          console.error('Error deleting old archive:', error);
+          console.error('[SessionManager] Error deleting old archive:', error);
         }
       });
 
     } catch (error) {
-      console.error('Error archiving session:', error);
+      console.error('[SessionManager] Error archiving session:', error);
     }
   }
 

@@ -37,7 +37,6 @@ export async function sendTokenRequestEmail(
       };
     }
 
-    console.log('[Email Service] Preparing token request email...');
 
     const freeTierNote = isFreeTier
       ? '🎁 FREE TIER GRANT'
@@ -105,9 +104,6 @@ export async function sendTokenRequestEmail(
       tags: ['token-request', isFreeTier ? 'free-tier' : 'payment-required']
     };
 
-    console.log('[Email Service] Sending email to Brevo API...');
-    console.log('[Email Service] Email payload:', JSON.stringify(emailPayload, null, 2));
-    
     const response = await fetch(BREVO_API_URL, {
       method: 'POST',
       headers: {
@@ -118,26 +114,15 @@ export async function sendTokenRequestEmail(
       body: JSON.stringify(emailPayload),
     });
 
-    console.log('[Email Service] Brevo API response status:', response.status);
-    
     const responseData = await response.json();
-    console.log('[Email Service] Brevo API response:', responseData);
     
     if (!response.ok) {
-      console.error('[Email Service] Brevo API error:', {
-        status: response.status,
-        statusText: response.statusText,
-        response: responseData
-      });
-      
       return {
         success: false,
         error: `Brevo API error: ${responseData.message || response.statusText}`
       };
     }
 
-    console.log('[Email Service] Email sent successfully:', responseData);
-    
     return {
       success: true,
       messageId: responseData.messageId

@@ -5,8 +5,6 @@ let isChecking = false;
 
 // Initialize force update screen
 document.addEventListener('DOMContentLoaded', async () => {
-    console.log('Force update screen initialized');
-    
     // Load version check result
     await loadUpdateData();
     
@@ -30,7 +28,6 @@ async function loadUpdateData() {
             await checkAgain();
         }
     } catch (error) {
-        console.error('Error loading update data:', error);
         showError('Errore nel caricamento dei dati di aggiornamento');
     }
 }
@@ -81,7 +78,6 @@ function updateUI() {
     window.api.invoke('get-app-version').then(version => {
         currentVersionEl.textContent = version;
     }).catch(error => {
-        console.error('Error getting app version:', error);
         currentVersionEl.textContent = 'Unknown';
     });
 
@@ -145,7 +141,6 @@ async function downloadUpdate() {
             throw new Error('Failed to open download URL');
         }
     } catch (error) {
-        console.error('Error downloading update:', error);
         downloadBtnText.textContent = '❌ Errore Download';
         shakeElement(downloadBtn);
         showError('Errore nell\'apertura del download. Riprova o contatta il supporto.');
@@ -196,7 +191,6 @@ async function checkAgain() {
             throw new Error('No version check result received');
         }
     } catch (error) {
-        console.error('Error checking version:', error);
         checkBtnText.textContent = '❌ Errore';
         shakeElement(checkBtn);
         showError('Errore nel controllo della versione. Riprova tra qualche minuto.');
@@ -214,13 +208,13 @@ async function checkAgain() {
 async function checkVersionSilently() {
     try {
         const result = await window.api.invoke('check-app-version');
-        
+
         if (result && (!result.requires_update || !result.force_update_enabled)) {
             // Update no longer required
             window.location.href = 'index.html';
         }
     } catch (error) {
-        console.warn('Silent version check failed:', error);
+        // Silent check failed, continue
     }
 }
 
@@ -233,7 +227,6 @@ async function quitApp() {
     try {
         await window.api.invoke('quit-app-for-update');
     } catch (error) {
-        console.error('Error quitting app:', error);
         quitBtn.disabled = false;
         quitBtn.textContent = '❌ Exit App';
     }
@@ -348,5 +341,3 @@ document.addEventListener('keydown', (e) => {
         checkAgain();
     }
 });
-
-console.log('Force update script loaded successfully');

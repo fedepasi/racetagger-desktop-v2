@@ -98,7 +98,6 @@ export class SceneClassifier {
     try {
       // Use pure JS version for maximum compatibility
       tf = require('@tensorflow/tfjs');
-      console.log('[SceneClassifier] TensorFlow.js initialized');
       return true;
     } catch (error) {
       console.error('[SceneClassifier] Failed to load TensorFlow.js:', error);
@@ -224,14 +223,12 @@ export class SceneClassifier {
 
       // Get model path
       const modelPath = this.getModelPath();
-      console.log(`[SceneClassifier] Loading model from: ${modelPath}`);
 
       // Load model info
       const modelInfoPath = path.join(modelPath, 'model_info.json');
       if (fs.existsSync(modelInfoPath)) {
         const modelInfoJson = fs.readFileSync(modelInfoPath, 'utf-8');
         this.modelInfo = JSON.parse(modelInfoJson);
-        console.log(`[SceneClassifier] Model info loaded: ${this.modelInfo?.model_type}, accuracy: ${(this.modelInfo?.final_val_accuracy || 0) * 100}%`);
       }
 
       // Load TF.js model using custom file handler for Electron compatibility
@@ -243,9 +240,6 @@ export class SceneClassifier {
 
       // Modello convertito in formato "graph-model" per compatibilità TF.js
       this.model = await tf.loadGraphModel(fileHandler);
-
-      const loadTime = Date.now() - startTime;
-      console.log(`[SceneClassifier] Model loaded in ${loadTime}ms`);
 
       // Warm up the model with a dummy prediction
       await this.warmUp();
@@ -271,9 +265,8 @@ export class SceneClassifier {
       const warmupResult = this.model.predict(dummyInput);
       warmupResult.dispose();
       dummyInput.dispose();
-      console.log('[SceneClassifier] Model warmed up');
     } catch (error) {
-      console.warn('[SceneClassifier] Warmup failed:', error);
+      // Warmup failed - non-critical
     }
   }
 
@@ -364,8 +357,6 @@ export class SceneClassifier {
 
       const inferenceTimeMs = Date.now() - startTime;
 
-      console.log(`[SceneClassifier] Classified as ${topPrediction.category} (${(topPrediction.confidence * 100).toFixed(1)}%) in ${inferenceTimeMs}ms`);
-
       return {
         category: topPrediction.category,
         confidence: topPrediction.confidence,
@@ -411,7 +402,6 @@ export class SceneClassifier {
     this.modelInfo = null;
     this.loadError = null;
     SceneClassifier.instance = null;
-    console.log('[SceneClassifier] Model disposed');
   }
 }
 

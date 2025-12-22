@@ -40,9 +40,10 @@ import {
   importParticipantsFromCSV
 } from '../database-service';
 import { createHandler } from './handler-factory';
+import { DEBUG_MODE } from '../config';
 
 export function registerDatabaseHandlers(): void {
-  console.log('[IPC] Registering database handlers...');
+  if (DEBUG_MODE) console.log('[IPC] Registering database handlers...');
 
   // ==================== PROJECT HANDLERS ====================
 

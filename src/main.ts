@@ -119,7 +119,7 @@ let isDev = true; // Default to true for safety during initialization
 // Don't import @electron/remote at top level - it will be required when needed
 let remoteEnable: any = null; // Will be set after app is ready
 import { createClient } from '@supabase/supabase-js';
-import { SUPABASE_CONFIG, APP_CONFIG, ResizePreset, RESIZE_PRESETS, PIPELINE_CONFIG } from './config';
+import { SUPABASE_CONFIG, APP_CONFIG, ResizePreset, RESIZE_PRESETS, PIPELINE_CONFIG, DEBUG_MODE } from './config';
 import { authService } from './auth-service';
 import * as piexif from 'piexifjs';
 import { createImageProcessor } from './utils/native-modules';
@@ -146,10 +146,7 @@ process.env.NODE_ENV = isDev ? 'development' : 'production';
 // Safe IPC message sending utility
 function safeSend(channel: string, ...args: any[]) {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    console.log(`[Main Process] Sending IPC event: ${channel} with data:`, args);
     mainWindow.webContents.send(channel, ...args);
-  } else {
-    console.warn(`[Main Process] Cannot send IPC event ${channel} - mainWindow unavailable`);
   }
 }
 
@@ -395,7 +392,6 @@ async function getExecutionsFromLogs(): Promise<any[]> {
 
     // Check if analysis logs directory exists
     if (!fs.existsSync(analysisLogsPath)) {
-      console.log('[Executions] Analysis logs directory not found');
       return [];
     }
 
@@ -412,7 +408,6 @@ async function getExecutionsFromLogs(): Promise<any[]> {
         const lines = content.trim().split('\n').filter(line => line.trim());
 
         if (lines.length === 0) {
-          console.log(`[Executions] SKIPPING ${file}: Empty file`);
           continue;
         }
 
@@ -420,15 +415,13 @@ async function getExecutionsFromLogs(): Promise<any[]> {
         let startLine;
         try {
           startLine = JSON.parse(lines[0]);
-          console.log(`[Executions] File ${file} first line type: ${startLine.type || 'undefined'}`);
         } catch (parseError) {
-          console.warn(`[Executions] SKIPPING ${file}: Failed to parse first line:`, lines[0].substring(0, 100));
+          if (DEBUG_MODE) console.warn(`[Executions] SKIPPING ${file}: Failed to parse first line`);
           continue;
         }
 
         if (startLine.type !== 'EXECUTION_START') {
-          console.warn(`[Executions] CRITICAL: File ${file} SKIPPED because first line is not EXECUTION_START (type: ${startLine.type})`);
-          console.warn(`[Executions] First line content:`, lines[0].substring(0, 200));
+          if (DEBUG_MODE) console.warn(`[Executions] File ${file} SKIPPED - first line is not EXECUTION_START`);
           continue;
         }
         // Parse last line to get completion status
@@ -461,12 +454,9 @@ async function getExecutionsFromLogs(): Promise<any[]> {
         };
 
         executions.push(execution);
-        console.log(`[Executions] ✓ Successfully added execution: ${startLine.executionId} (${formattedDate}) [${status}]`);
 
       } catch (error) {
-        console.warn(`[Executions] Failed to parse ${file}:`, error);
-        console.warn(`[Executions] File size: ${content.length} characters`);
-        console.warn(`[Executions] First 200 chars:`, content.substring(0, 200));
+        if (DEBUG_MODE) console.warn(`[Executions] Failed to parse ${file}:`, error);
         continue;
       }
     }
@@ -474,10 +464,6 @@ async function getExecutionsFromLogs(): Promise<any[]> {
     // Sort by timestamp descending (most recent first)
     executions.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
-    console.log(`[Executions] Successfully found ${executions.length} valid executions from ${executionFiles.length} log files`);
-    if (executions.length > 0) {
-      console.log(`[Executions] Most recent execution: ${executions[0].id} (${executions[0].folder_name})`);
-    }
     return executions.slice(0, 6); // Return only 6 most recent
 
   } catch (error) {
@@ -488,7 +474,6 @@ async function getExecutionsFromLogs(): Promise<any[]> {
 
 
 function createWindow() {
-  console.log('[Main Process] Creating main window...');
   mainWindow = new BrowserWindow({
     width: 1400, height: 900,
     icon: path.join(__dirname, '../racetagger-logo.png'),
@@ -523,23 +508,14 @@ function createWindow() {
   // Check if force update is required and load appropriate HTML
   if (isForceUpdateRequired()) {
     const forceUpdatePath = path.join(__dirname, '../../renderer/force-update.html');
-    console.log('[Main Process] Force update required, loading HTML from:', forceUpdatePath);
     mainWindow.loadFile(forceUpdatePath);
   } else {
     const htmlPath = path.join(__dirname, '../../renderer/index.html');
-    console.log('[Main Process] Loading normal application HTML from:', htmlPath);
     mainWindow.loadFile(htmlPath);
   }
-  
-  // Gestione della navigazione tra pagine
-  mainWindow.webContents.on('will-navigate', (event, url) => {
-    console.log(`[Main Process] Navigation requested to: ${url}`);
-    // Lasciamo che la navigazione proceda normalmente
-  });
-  
+
   // Gestisci i link aperti tramite target="_blank" o window.open
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    console.log(`[Main Process] Opening external URL: ${url}`);
     if (url.startsWith('file://') || url.includes('localhost')) {
       // Per link interni (file:// o localhost), apri nella stessa finestra
       return { action: 'allow' };
@@ -559,8 +535,6 @@ function createWindow() {
 //
 // Removed handleImageAnalysis since we only support folder processing now
 async function handleFolderSelection(event: IpcMainEvent) {
-  console.log('[Main Process] handleFolderSelection called.');
-  
   if (!mainWindow) {
     console.error('handleFolderSelection: mainWindow is null');
     return;
@@ -573,13 +547,11 @@ async function handleFolderSelection(event: IpcMainEvent) {
     });
     
     if (result.canceled) {
-      console.log('Folder selection canceled by user');
       // Don't send any message - user simply closed the dialog
       return;
     }
-    
+
     const folderPath = result.filePaths[0];
-    console.log('Selected folder:', folderPath);
     
     // Verifica se la cartella esiste
     if (!fs.existsSync(folderPath)) {
@@ -592,7 +564,6 @@ async function handleFolderSelection(event: IpcMainEvent) {
     const imageFiles = await getImagesFromFolder(folderPath);
     const imageCount = imageFiles.length;
     const rawCount = imageFiles.filter(img => img.isRaw).length;
-    console.log(`Found ${imageCount} images in folder (${rawCount} RAW files)`);
     
     // Invia il percorso della cartella e il conteggio delle immagini al renderer process
     event.sender.send('folder-selected', { 
@@ -617,8 +588,6 @@ async function handleFolderSelection(event: IpcMainEvent) {
 
 // Handle token request submission via secure Edge Function
 async function handleTokenRequest(event: IpcMainInvokeEvent, requestData: any) {
-  console.log('[Main Process] handleTokenRequest called with:', requestData);
-  
   try {
     // Get current user information
     const authState = authService.getAuthState();
@@ -627,10 +596,6 @@ async function handleTokenRequest(event: IpcMainInvokeEvent, requestData: any) {
     }
 
     const tokensRequested = parseInt(requestData.tokensRequested);
-    console.log(`[Main Process] Processing token request: ${tokensRequested} tokens`);
-
-    // Call secure Edge Function instead of direct DB access
-    console.log('[Main Process] Calling handle-token-request Edge Function...');
     
     // Get current session token for Authorization header
     const session = authService.getSession();
@@ -660,11 +625,6 @@ async function handleTokenRequest(event: IpcMainInvokeEvent, requestData: any) {
     // Se success è false, significa che è un errore business logic (es. limite raggiunto)
     // Restituiamo la risposta così come è per permettere al frontend di gestirla
     if (!response.success) {
-      console.log('[Main Process] Edge Function returned business logic error:', response);
-      
-      // Email notification is now handled by Edge Functions only
-      console.log('[Main Process] Email notification will be sent by Edge Function');
-      
       return {
         success: false,
         message: response.error || response.message || 'Request could not be processed',
@@ -673,11 +633,6 @@ async function handleTokenRequest(event: IpcMainInvokeEvent, requestData: any) {
         monthlyUsage: response.monthlyUsage || null
       };
     }
-
-    console.log('[Main Process] Token request processed successfully via Edge Function');
-
-    // Email notification is now handled by Edge Functions only
-    console.log('[Main Process] Email notification will be sent by Edge Function');
 
     return {
       success: true,
@@ -699,11 +654,8 @@ async function handleTokenRequest(event: IpcMainInvokeEvent, requestData: any) {
 
 // Handle token balance request
 async function handleGetTokenBalance(event: IpcMainInvokeEvent): Promise<number> {
-  console.log('[Main Process] handleGetTokenBalance called');
-  
   try {
     const tokenBalance = await authService.getTokenBalance();
-    console.log(`[Main Process] Current token balance: ${tokenBalance}`);
     return typeof tokenBalance === 'number' ? tokenBalance : tokenBalance.remaining;
   } catch (error: any) {
     console.error('[Main Process] Error getting token balance:', error);
@@ -714,11 +666,8 @@ async function handleGetTokenBalance(event: IpcMainInvokeEvent): Promise<number>
 
 // Handle pending tokens request
 async function handleGetPendingTokens(event: IpcMainInvokeEvent): Promise<number> {
-  console.log('[Main Process] handleGetPendingTokens called');
-  
   try {
     const pendingTokens = await authService.getPendingTokens();
-    console.log(`[Main Process] Pending tokens: ${pendingTokens}`);
     return pendingTokens;
   } catch (error: any) {
     console.error('[Main Process] Error getting pending tokens:', error);
@@ -728,11 +677,8 @@ async function handleGetPendingTokens(event: IpcMainInvokeEvent): Promise<number
 
 // Handle complete token info request (balance + pending)
 async function handleGetTokenInfo(event: IpcMainInvokeEvent): Promise<{ balance: any; pending: number }> {
-  console.log('[Main Process] handleGetTokenInfo called');
-  
   try {
     const tokenInfo = await authService.getTokenInfo();
-    console.log('[Main Process] Token info:', tokenInfo);
     return tokenInfo;
   } catch (error: any) {
     console.error('[Main Process] Error getting token info:', error);
@@ -744,15 +690,9 @@ async function handleGetTokenInfo(event: IpcMainInvokeEvent): Promise<{ balance:
 }
 
 async function getImagesFromFolder(folderPath: string): Promise<{ path: string; isRaw: boolean }[]> {
-  console.log('[Main Process] getImagesFromFolder called.');
-  
-  // Log della cartella selezionata
-  console.log(`Scanning folder: ${folderPath}`);
-  
   try {
     // Verifica i permessi della cartella
     await fsPromises.access(folderPath, fs.constants.R_OK);
-    console.log(`Folder ${folderPath} is readable.`);
   } catch (err) {
     console.error(`Error accessing folder ${folderPath}:`, err);
     throw new Error(`Cannot access folder: ${folderPath}. Please check permissions.`);
@@ -762,59 +702,26 @@ async function getImagesFromFolder(folderPath: string): Promise<{ path: string; 
   try {
     // Leggi tutti i file nella cartella
     files = await fsPromises.readdir(folderPath);
-    console.log(`Total files found in folder: ${files.length}`);
   } catch (err) {
     console.error(`Error reading directory ${folderPath}:`, err);
     throw new Error(`Cannot read directory: ${folderPath}.`);
   }
-  
-  // Log di tutti i file trovati e le loro estensioni
-  console.log('All files in folder:');
-  files.forEach(file => {
-    const ext = path.extname(file); // Non convertire in minuscolo qui per il log
-    const lowerExt = ext.toLowerCase();
-    const isSupported = ALL_SUPPORTED_EXTENSIONS.includes(lowerExt);
-    const isRaw = RAW_EXTENSIONS.includes(lowerExt);
-    console.log(`- ${file} (original ext: ${ext}, lower ext: ${lowerExt}, supported: ${isSupported}, isRaw: ${isRaw})`);
-  });
-  
-  // Log delle estensioni supportate
-  console.log('Supported extensions:', ALL_SUPPORTED_EXTENSIONS);
-  console.log('RAW extensions:', RAW_EXTENSIONS);
-  
+
   const imageFiles = files
     .filter(file => {
-      const ext = path.extname(file).toLowerCase(); // Converti in minuscolo per il confronto
-      const isSupported = ALL_SUPPORTED_EXTENSIONS.includes(ext);
-      if (!isSupported) {
-        console.log(`Skipping unsupported file: ${file} (ext: ${ext})`);
-      }
-      return isSupported;
+      const ext = path.extname(file).toLowerCase();
+      return ALL_SUPPORTED_EXTENSIONS.includes(ext);
     })
     .map(file => {
       const filePath = path.join(folderPath, file);
-      const ext = path.extname(file).toLowerCase(); // Converti in minuscolo per il confronto
+      const ext = path.extname(file).toLowerCase();
       const isRaw = RAW_EXTENSIONS.includes(ext);
-      
-      console.log(`Adding file to process: ${file} (ext: ${ext}, isRaw: ${isRaw})`);
-      
       return {
         path: filePath,
         isRaw
       };
     });
-  
-  // Log dei file RAW trovati
-  const rawFiles = imageFiles.filter(img => img.isRaw);
-  if (rawFiles.length > 0) {
-    console.log(`Found ${rawFiles.length} RAW files in folder`);
-    rawFiles.forEach(file => console.log(`RAW file: ${file.path}`));
-  } else {
-    console.log('No RAW files found in folder');
-  }
-  
-  console.log(`Total supported images found: ${imageFiles.length}`);
-  
+
   return imageFiles;
 }
 
@@ -831,10 +738,9 @@ async function handleStandaloneCSVLoading(event: IpcMainEvent, fileData: any) {
     
     const { buffer, name: fileName } = fileData;
     const fileBuffer = Buffer.from(buffer);
-    
+
     // Convert buffer to string
     const fileContent = fileBuffer.toString('utf8');
-    console.log('CSV content (first 200 chars):', fileContent.substring(0, 200));
     
     // Parse CSV data manually for better control
     const results: CsvEntry[] = [];
@@ -848,8 +754,7 @@ async function handleStandaloneCSVLoading(event: IpcMainEvent, fileData: any) {
     }
     
     const headers = parseCSVLine(lines[0]);
-    console.log('CSV headers:', headers);
-    
+
     // Check required headers
     const numeroIndex = headers.indexOf('numero');
     const metatagIndex = headers.indexOf('metatag');
@@ -865,10 +770,9 @@ async function handleStandaloneCSVLoading(event: IpcMainEvent, fileData: any) {
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i].trim();
       if (!line) continue;  // Skip empty lines
-      
+
       const values = parseCSVLine(line);
-      console.log(`Row ${i} values:`, values);
-      
+
       if (values.length >= Math.max(numeroIndex, metatagIndex) + 1) {
         const numero = values[numeroIndex].trim();
         const metatag = values[metatagIndex].trim();
@@ -893,26 +797,19 @@ async function handleStandaloneCSVLoading(event: IpcMainEvent, fileData: any) {
           }
           
           results.push(entry);
-          console.log('Added CSV entry:', entry);
-        } else {
-          console.warn('Skipping row due to missing required fields:', values);
         }
-      } else {
-        console.warn('Skipping row with insufficient values:', values);
+        // Skip rows with missing required fields silently
       }
+      // Skip rows with insufficient values silently
     }
-    
-    console.log('CSV parsing complete, found', results.length, 'valid entries');
-    
+
     // Store the CSV data globally
     csvData = results;
-    
+
     // Save CSV to Supabase if user is authenticated
     if (authService.isAuthenticated() && results.length > 0) {
       try {
-        console.log(`[Main Process] Saving CSV "${fileName}" to Supabase...`);
         await saveCsvToSupabase(results, fileName);
-        console.log('[Main Process] CSV saved to Supabase successfully');
       } catch (csvSaveError) {
         console.error('[Main Process] Error saving CSV to Supabase:', csvSaveError);
         // Non bloccare il caricamento se il salvataggio su Supabase fallisce
@@ -935,8 +832,6 @@ async function handleStandaloneCSVLoading(event: IpcMainEvent, fileData: any) {
 
 // Funzione per il caricamento CSV con supporto per progetti e analisi one-shot
 async function handleCsvLoading(event: IpcMainEvent, fileData: { buffer: Uint8Array, name: string, projectId?: string, standalone?: boolean }) {
-  console.log('[Main Process] handleCsvLoading called.');
-  
   // Se è richiesto il caricamento standalone, usa la funzione dedicata
   if (fileData.standalone) {
     return handleStandaloneCSVLoading(event, fileData);
@@ -948,7 +843,6 @@ async function handleCsvLoading(event: IpcMainEvent, fileData: { buffer: Uint8Ar
     const actualBuffer = Buffer.from(rawBuffer); // Assicura sia un Buffer
 
     if (projectId) {
-      console.log(`Received CSV for project ${projectId}. Uploading to storage...`);
       const storagePath = await uploadCsvToStorage(projectId, actualBuffer, fileName);
       const updatedProject = await updateProjectOnline(projectId, { base_csv_storage_path: storagePath });
       mainWindow.webContents.send('csv-loaded', {
@@ -956,8 +850,6 @@ async function handleCsvLoading(event: IpcMainEvent, fileData: { buffer: Uint8Ar
       });
     } else {
       // Supporta il caricamento CSV anche senza progetto per analisi one-shot
-      console.log('Processing CSV for one-shot analysis without project association');
-      
       // Leggi il contenuto del CSV
       const csvContent = actualBuffer.toString('utf-8');
       const lines = csvContent.split(/\r?\n/);
@@ -970,8 +862,7 @@ async function handleCsvLoading(event: IpcMainEvent, fileData: { buffer: Uint8Ar
         try {
           // Estrai l'intestazione
           const headers = parseCSVLine(lines[0]);
-          console.log('CSV headers:', headers);
-          
+
           // Processa le righe di dati
           const csvEntries: CsvEntry[] = [];
           for (let i = 1; i < lines.length; i++) {
@@ -1018,8 +909,7 @@ async function handleCsvLoading(event: IpcMainEvent, fileData: { buffer: Uint8Ar
           
           // Salva i dati CSV per uso globale
           globalCsvData = csvEntries;
-          console.log(`Processed ${csvEntries.length} valid entries from CSV`);
-          
+
           mainWindow.webContents.send('csv-loaded', {
             filename: fileName, 
             entries: csvEntries.length, 
@@ -1068,17 +958,15 @@ async function saveImagePreview(
     
     if (!fs.existsSync(previewFolder)) {
       await fsPromises.mkdir(previewFolder, { recursive: true });
-      console.log(`Created preview folder: ${previewFolder}`);
     }
-    
+
     // Genera un nome file univoco per la preview
     const baseFileName = path.basename(imagePath);
     const previewFileName = `preview_${Date.now()}_${baseFileName}.jpg`;
     const previewPath = path.join(previewFolder, previewFileName);
-    
+
     // Salva il buffer come file JPEG
     await fsPromises.writeFile(previewPath, previewBuffer);
-    console.log(`Saved preview image to: ${previewPath}`);
     
     return previewPath;
   } catch (error: any) {
@@ -1110,7 +998,6 @@ async function preprocessImageIfNeeded(
   const isRaw = RAW_EXTENSIONS.includes(ext);
 
   if (isRaw) {
-    console.log(`Preprocessing RAW file: ${imagePath}`);
     try {
       // Crea percorsi per file temporanei
       const tmp = require('os').tmpdir();
@@ -1126,19 +1013,17 @@ async function preprocessImageIfNeeded(
         
         // Secondo passo: usa il metodo ottimizzato per convertire DNG in JPEG
         const extractedPath = await rawConverter.convertDngToJpegOptimized(
-          dngFilePath, 
-          outputJpeg, 
+          dngFilePath,
+          outputJpeg,
           95,        // Alta qualità JPEG
           1440       // Limita il lato lungo a 1440px (preset dell'app)
         );
-        console.log(`Successfully converted RAW to full-resolution JPEG using optimized method: ${extractedPath}`);
-        
+
         const buffer = await fsPromises.readFile(extractedPath);
-        
+
         let xmpPath = null;
         if (xmpSidecarExists(imagePath)) {
           xmpPath = imagePath + '.xmp';
-          console.log(`Existing XMP sidecar found: ${xmpPath}`);
         }
 
         let previewPath = null;
@@ -1157,17 +1042,14 @@ async function preprocessImageIfNeeded(
         };
       } catch (optimizedError: any) {
         console.error(`Optimized conversion failed: ${optimizedError.message || 'Unknown error'}`);
-        console.log(`Falling back to standard RAW to JPEG conversion...`);
-        
+
         const fallbackPath = await rawConverter.convertRawToJpeg(imagePath, outputJpeg);
-        console.log(`Successfully converted RAW to JPEG using fallback method: ${fallbackPath}`);
-        
+
         const buffer = await fsPromises.readFile(fallbackPath);
-        
+
         let xmpPath = null;
         if (xmpSidecarExists(imagePath)) {
           xmpPath = imagePath + '.xmp';
-          console.log(`Existing XMP sidecar found: ${xmpPath}`);
         }
 
         let previewPath = null;
@@ -1191,25 +1073,18 @@ async function preprocessImageIfNeeded(
     }
   } else {
     // File standard (JPEG, PNG, etc.)
-    console.log(`[DEBUG] Preprocessing standard file: ${imagePath}`);
     const originalFileBuffer = await fsPromises.readFile(imagePath);
-    console.log(`[DEBUG] Original file buffer size for ${path.basename(imagePath)}: ${originalFileBuffer.length} bytes`);
 
     try {
       // Controlla se il resize è abilitato nella configurazione utente
       const resizeConfig = config?.resize;
       const shouldResize = resizeConfig?.enabled && resizeConfig.preset;
-      
-      console.log(`[DEBUG] Resize config for ${path.basename(imagePath)}:`, resizeConfig);
-      console.log(`[DEBUG] Should resize: ${shouldResize}`);
-      
+
       let buffer: Buffer;
       let tempServiceFilePath: string | undefined;
-      
+
       if (shouldResize) {
         // Applica resize in base alla configurazione utente
-        console.log(`[DEBUG] Applying user resize with preset: ${resizeConfig.preset}`);
-        
         const preset = resizeConfig.preset;
         const presetConfig = RESIZE_PRESETS[preset as ResizePreset];
         
@@ -1217,13 +1092,11 @@ async function preprocessImageIfNeeded(
           const processor = await createImageProcessor(originalFileBuffer);
           const metadata = await processor.metadata();
           const { width = 0, height = 0 } = metadata;
-          
-          console.log(`[DEBUG] Original dimensions: ${width}x${height}, target: ${presetConfig.maxDimension}px`);
-          
+
           // Verifica se è necessario ridimensionare
           const maxDimension = Math.max(width, height);
           const needsResize = maxDimension > presetConfig.maxDimension;
-          
+
           if (needsResize) {
             // Calcola nuove dimensioni mantenendo aspect ratio
             let newWidth, newHeight;
@@ -1234,25 +1107,18 @@ async function preprocessImageIfNeeded(
               newHeight = presetConfig.maxDimension;
               newWidth = Math.round((width * presetConfig.maxDimension) / height);
             }
-            
-            console.log(`[DEBUG] Resizing from ${width}x${height} to ${newWidth}x${newHeight} (quality: ${presetConfig.jpegQuality}%)`);
-            
+
             buffer = await processor
               .resize(newWidth, newHeight, { fit: 'inside', withoutEnlargement: true })
               .jpeg({ quality: presetConfig.jpegQuality, progressive: true })
               .toBuffer();
-              
-            console.log(`[DEBUG] Resized buffer size: ${buffer.length} bytes`);
           } else {
-            console.log(`[DEBUG] Image already smaller than target, no resize needed`);
             buffer = originalFileBuffer;
           }
         } else {
-          console.warn(`[WARN] Unknown resize preset: ${preset}, using original`);
           buffer = originalFileBuffer;
         }
       } else {
-        console.log(`[DEBUG] Resize disabled, using original image`);
         buffer = originalFileBuffer;
       }
       
@@ -1268,7 +1134,6 @@ async function preprocessImageIfNeeded(
         .toBuffer();
 
       await fsPromises.writeFile(tempServiceFilePath, serviceBuffer);
-      console.log(`[DEBUG] Service file created: ${tempServiceFilePath} (${serviceBuffer.length} bytes)`);
 
       return {
         buffer, // Buffer per upload (possibilmente ridimensionato)
@@ -1282,7 +1147,7 @@ async function preprocessImageIfNeeded(
     } catch (error) {
       console.error(`[ERROR] Failed to process image ${imagePath}:`, error);
       // Fallback: usa il file originale
-      console.warn('[WARN] Image processing failed. Using original file.');
+      if (DEBUG_MODE) console.warn('[WARN] Image processing failed. Using original file.');
       return { buffer: originalFileBuffer, mimeType: 'image/jpeg', isRawConverted: false, originalFormat: null, xmpPath: null, tempDngPath: null };
     }
   }
@@ -1308,7 +1173,7 @@ async function trackExecutionSettings(
   try {
     const authState = authService.getAuthState();
     if (!authState.isAuthenticated || !authState.session) {
-      console.warn('[Tracking] User not authenticated, skipping execution settings tracking');
+      if (DEBUG_MODE) console.log('[Tracking] User not authenticated, skipping tracking');
       return;
     }
 
@@ -1360,20 +1225,9 @@ async function trackExecutionSettings(
     // Validate the data before sending
     const validation = validateExecutionSettings(executionSettings);
     if (!validation.isValid) {
-      console.warn('[Tracking] Invalid execution settings data:', validation.errors);
+      if (DEBUG_MODE) console.warn('[Tracking] Invalid execution settings data:', validation.errors);
       // Continue with tracking but log validation issues
     }
-
-    console.log('[Tracking] Sending comprehensive execution settings:', {
-      execution_id: executionSettings.execution_id,
-      client_version: executionSettings.client_version,
-      operating_system: executionSettings.operating_system,
-      ai_model: executionSettings.ai_model,
-      sport_category: executionSettings.sport_category,
-      total_images: executionSettings.total_images_processed,
-      csv_used: executionSettings.csv_data_used,
-      performance_enabled: executionSettings.parallel_processing_enabled
-    });
 
     // Send to edge function
     const client = getSupabaseClient();
@@ -1388,34 +1242,16 @@ async function trackExecutionSettings(
     });
 
     if (error) {
-      console.warn('[Tracking] Failed to track execution settings:', error.message);
-      // Log specific field that might be causing issues
-      if (error.message?.includes('validation')) {
-        console.warn('[Tracking] Validation errors:', validation.errors);
-      }
-    } else {
-      console.log('[Tracking] Comprehensive execution settings tracked successfully');
-      if (data?.inserted_fields) {
-        console.log('[Tracking] Fields successfully inserted:', data.inserted_fields);
-      }
+      if (DEBUG_MODE) console.warn('[Tracking] Failed to track execution settings:', error.message);
     }
 
   } catch (error) {
-    console.warn('[Tracking] Error tracking execution settings:', error);
+    if (DEBUG_MODE) console.warn('[Tracking] Error tracking execution settings:', error);
     // Non propaghiamo l'errore per non bloccare l'execution principale
   }
 }
 
 async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchProcessConfig) {
-  console.log('[Main Process] handleUnifiedImageProcessing called with config:', config);
-
-  // Log participant preset usage
-  if (config.participantPreset) {
-    console.log(`[Main Process] Using participant preset "${config.participantPreset.name}" with ${config.participantPreset.participants?.length || 0} participants`);
-  } else {
-    console.log('[Main Process] No participant preset selected, using CSV data if available');
-  }
-
   if (!mainWindow) {
     console.error('handleUnifiedImageProcessing: mainWindow is null');
     return;
@@ -1443,7 +1279,6 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
       let sportCategoryId: string | null = null;
       if (config.category) {
         sportCategoryId = await getSportCategoryIdByName(config.category);
-        console.log(`[Tracking] Resolved category "${config.category}" to sport_category_id: ${sportCategoryId}`);
       }
 
       const newExecution = await createExecutionOnline({
@@ -1454,18 +1289,11 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
         sport_category_id: sportCategoryId
       });
       currentExecutionId = newExecution.id!;
-      console.log(`[Tracking] Created ${config.projectId ? 'project' : 'standalone'} execution ${currentExecutionId} for tracking`);
     } catch (error: any) {
-      if (error?.code === '23502' && error?.message?.includes('project_id')) {
-        console.warn('[Tracking] ⚠️  Database migration needed: project_id field must be made nullable for standalone executions');
-        console.warn('[Tracking] 📝 Run: ALTER TABLE executions ALTER COLUMN project_id DROP NOT NULL;');
-        console.warn('[Tracking] 🔄 Skipping execution tracking until database is updated...');
-      } else {
-        console.warn('[Tracking] Failed to create execution for tracking:', error);
-      }
+      if (DEBUG_MODE) console.warn('[Tracking] Failed to create execution for tracking:', error);
     }
   }
-  
+
   try {
     const { folderPath, updateExif, csvData } = config;
 
@@ -1477,7 +1305,6 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
     }
 
     // Leggi i file dalla cartella e ottieni i loro timestamp per ordinarli cronologicamente
-    console.log('[Main Process] Reading files and extracting timestamps for temporal ordering...');
     const files = await fsPromises.readdir(folderPath);
 
     // Prima filtra i file supportati
@@ -1501,7 +1328,7 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
             isRaw: RAW_EXTENSIONS.includes(path.extname(file).toLowerCase())
           };
         } catch (error) {
-          console.warn(`[Main Process] Could not get stats for ${file}, using current time as fallback`);
+          if (DEBUG_MODE) console.warn(`[Main Process] Could not get stats for ${file}, using current time as fallback`);
           return {
             file,
             path: fullPath,
@@ -1514,9 +1341,6 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
 
     // Sort AFTER all stats are collected
     const filesWithTimestamps = filesWithStatsUnsorted.sort((a, b) => a.timestamp - b.timestamp);
-
-    console.log(`[Main Process] Files sorted by timestamp. Sample order (first 5):`,
-      filesWithTimestamps.slice(0, 5).map(f => `${f.file} (${new Date(f.timestamp).toISOString()})`));
 
     // Ora mappa i file ordinati alla struttura UnifiedImageFile
     const imageFiles: UnifiedImageFile[] = filesWithTimestamps.map((item, index) => ({
@@ -1536,54 +1360,29 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
       throw new Error('No supported image files found in the selected folder');
     }
 
-    console.log(`[Main Process] Found ${imageFiles.length} images (${imageFiles.filter(f => f.isRaw).length} RAW, ${imageFiles.filter(f => !f.isRaw).length} JPEG/PNG)`);
-    
     // Setup event listeners per progress tracking
     unifiedImageProcessor.removeAllListeners(); // Clear existing listeners
 
     // Temporal analysis progress events
     unifiedImageProcessor.on('temporal-analysis-started', (data: any) => {
-      console.log(`[Main Process] Temporal analysis started: ${data.totalImages} images`);
       safeSend('temporal-analysis-started', data);
     });
 
     unifiedImageProcessor.on('temporal-batch-progress', (data: any) => {
-      console.log(`[Main Process] Temporal batch progress: ${data.processed}/${data.total} (batch ${data.currentBatch}/${data.totalBatches})`);
       safeSend('temporal-batch-progress', data);
     });
 
     unifiedImageProcessor.on('temporal-analysis-complete', (data: any) => {
-      console.log(`[Main Process] Temporal analysis complete: ${data.processedImages}/${data.totalImages} processed, ${data.excludedImages} excluded, ${data.totalClusters} clusters`);
       safeSend('temporal-analysis-complete', data);
     });
 
     unifiedImageProcessor.on('recognition-phase-started', (data: any) => {
-      console.log(`[Main Process] Recognition phase started: ${data.totalImages} images`);
       safeSend('recognition-phase-started', data);
     });
 
     unifiedImageProcessor.on('imageProcessed', (result: UnifiedProcessingResult & { processed: number; total: number; phase?: string; step?: number; totalSteps?: number; progress?: number }) => {
-      console.log(`[Main Process] Unified processor completed: ${result.fileName} (${result.processed}/${result.total})`);
-      console.log(`[Main Process] Analysis data:`, result.analysis ? `${result.analysis.length} vehicles` : 'NO ANALYSIS');
-      
-      // DEBUG: Log result structure to identify analysis field issues
-      console.log(`🔥 [Main Process] DEBUG result structure for ${result.fileName}:`, {
-        hasResult: !!result,
-        resultKeys: result ? Object.keys(result) : [],
-        hasAnalysis: !!result.analysis,
-        analysisType: typeof result.analysis,
-        analysisIsArray: Array.isArray(result.analysis),
-        analysisLength: Array.isArray(result.analysis) ? result.analysis.length : 'not array',
-        analysisContent: result.analysis ? JSON.stringify(result.analysis) : 'undefined/null'
-      });
-
       // Fix: Check both result.analysis and fallback to empty array for edge function v2 compatibility
       const analysis = result.analysis || [];
-
-      console.log(`🔥 [Main Process] Final analysis being sent for ${result.fileName}:`, {
-        analysisLength: Array.isArray(analysis) ? analysis.length : 'not array',
-        analysisContent: analysis ? JSON.stringify(analysis) : 'undefined/null'
-      });
 
       safeSend('image-processed', {
         fileName: result.fileName,
@@ -1604,28 +1403,18 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
         progress: result.progress
       });
     });
-    
+
     unifiedImageProcessor.on('batchComplete', (summary: { successful: number; errors: number; total: number }) => {
-      console.log(`[Main Process] Unified processor batch completed: ${summary.successful}/${summary.total} successful`);
       // REMOVED: Don't send summary as batch-complete, it confuses the renderer
       // The actual results array will be sent after processBatch() completes at line 1460
-      /* safeSend('batch-complete', {
-        successful: summary.successful,
-        errors: summary.errors,
-        total: summary.total
-      }); */
     });
-    
+
     // Listen for uploaded images to cache their Supabase URLs (for RAW thumbnails)
     unifiedImageProcessor.on('image-uploaded', (data: { originalFileName: string; publicUrl: string }) => {
-      console.log(`🖼️ [Main Process] Caching Supabase URL for ${data.originalFileName}: ${data.publicUrl}`);
-      
       // We need to find the original file path for this filename
       // Since we have the filename, we'll cache it by filename for now
       // and during get-local-image we'll try to match by filename
       supabaseImageUrlCache.set(data.originalFileName, data.publicUrl);
-      
-      console.log(`🖼️ [Main Process] Cache now has ${supabaseImageUrlCache.size} entries`);
     });
     
     // Get folder organization config from renderer
@@ -1650,14 +1439,9 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
           destinationPath: destinationPath,
           conflictStrategy: config.folderOrganization.conflictStrategy || 'rename'
         };
-        console.log('[Main Process] Using folder organization config from frontend:', folderOrgConfig);
       } catch (error) {
-        console.log('[Main Process] Could not get folder organization config, feature disabled');
+        // Could not get folder organization config, feature disabled
       }
-    } else if (!authService.hasFolderOrganizationAccess()) {
-      console.log('[Main Process] User does not have folder organization access');
-    } else if (!config.folderOrganization) {
-      console.log('[Main Process] No folder organization config provided by frontend');
     }
 
     // Apply resize configuration from config if provided
@@ -1669,9 +1453,6 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
           jpegQuality: presetConfig.jpegQuality,
           maxDimension: presetConfig.maxDimension
         };
-        console.log(`[Main Process] Using resize preset '${config.resize.preset}': quality=${presetConfig.jpegQuality}%, maxDim=${presetConfig.maxDimension}px`);
-      } else {
-        console.warn(`[Main Process] Unknown resize preset '${config.resize.preset}', using default configuration`);
       }
     }
 
@@ -1690,38 +1471,20 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
       // Add cancellation support
       isCancelled: () => batchProcessingCancelled,
       onTokenUsed: (tokenBalance: any) => {
-        console.log(`[Main Process] UnifiedProcessor token callback received:`, tokenBalance);
         if (mainWindow) {
           mainWindow.webContents.send('token-used', tokenBalance);
-          console.log(`[Main Process] token-used event sent to frontend from UnifiedProcessor`);
         }
       }
     };
 
-    console.log(`[Main Process] Configuring UnifiedProcessor with:`, {
-      participantPresetDataLength: processorConfig.participantPresetData?.length || 0,
-      executionId: processorConfig.executionId,
-      category: processorConfig.category,
-      csvDataLength: processorConfig.csvData?.length || 0,
-      hasParticipantPreset: !!config.participantPreset,
-      participantPresetName: config.participantPreset?.name,
-      personShownTemplate: processorConfig.personShownTemplate || 'not configured',
-      keywordsMode: processorConfig.keywordsMode,
-      descriptionMode: processorConfig.descriptionMode
-    });
-
     // Configura il processor con i parametri necessari
     unifiedImageProcessor.updateConfig(processorConfig);
-    
-    console.log(`[Main Process] Starting unified processing with 4 workers, csvData: ${csvData?.length || 0} rows`);
 
     // Start new temporal analysis session for unified processing
     const { SmartMatcher } = await import('./matching/smart-matcher');
     SmartMatcher.startSession();
-    console.log('[Main Process] New unified processing session started');
 
     // Emit telemetry start event for UI (immediate + via event sender for redundancy)
-    console.log('[Main Process] Sending unified-processing-started with total:', imageFiles.length);
     safeSend('unified-processing-started', {
       totalFiles: imageFiles.length
     });
@@ -1737,8 +1500,6 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
     // This prevents the main thread from blocking during long processing operations
     unifiedImageProcessor.processBatch(imageFiles)
       .then(async (results) => {
-        console.log(`[Main Process] Unified processing completed: ${results.length} results`);
-
         // End temporal analysis session
         const { SmartMatcher: SmartMatcherEnd2 } = await import('./matching/smart-matcher');
         SmartMatcherEnd2.endSession();
@@ -1759,16 +1520,15 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
               total_images: executionStats.totalImages,
               processed_images: results.length
             });
-            console.log(`[Tracking] Updated execution ${currentExecutionId} status to completed`);
           } catch (error) {
-            console.warn('[Tracking] Failed to update execution status:', error);
+            if (DEBUG_MODE) console.warn('[Tracking] Failed to update execution status:', error);
           }
         }
 
         // Traccia le impostazioni di questa execution (asincrono, non bloccante)
         if (currentExecutionId) {
           trackExecutionSettings(currentExecutionId, config, executionStats).catch(error => {
-            console.warn('[Tracking] Failed to track execution settings:', error);
+            if (DEBUG_MODE) console.warn('[Tracking] Failed to track execution settings:', error);
           });
         }
 
@@ -1776,7 +1536,6 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
         let exportResult = null;
         if (config.exportDestinations?.enabled) {
           try {
-            console.log('[Main Process] Starting automatic export to destinations...');
             safeSend('export-started', { totalImages: results.length });
 
             const exportModule = await import('./utils/export-destination-processor');
@@ -1843,9 +1602,6 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
                 failed: stats.failedExports,
                 processedImages: stats.processedImages
               };
-              console.log(`[Main Process] Automatic export completed: ${stats.totalExports} exported, ${stats.failedExports} failed`);
-            } else {
-              console.log('[Main Process] No active export destinations found, skipping automatic export');
             }
           } catch (exportError) {
             console.error('[Main Process] Automatic export error:', exportError);
@@ -1874,15 +1630,14 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
               status: 'failed',
               results_reference: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
             });
-            console.log(`[Tracking] Updated execution ${currentExecutionId} status to failed`);
           } catch (updateError) {
-            console.warn('[Tracking] Failed to update execution status on error:', updateError);
+            if (DEBUG_MODE) console.warn('[Tracking] Failed to update execution status on error:', updateError);
           }
 
           // Traccia comunque le impostazioni anche in caso di errore
           executionStats.executionDurationMs = Date.now() - executionStartTime;
           trackExecutionSettings(currentExecutionId, config, executionStats).catch(trackError => {
-            console.warn('[Tracking] Failed to track execution settings on error:', trackError);
+            if (DEBUG_MODE) console.warn('[Tracking] Failed to track execution settings on error:', trackError);
           });
         }
 
@@ -1904,8 +1659,6 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
 }
 
 async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessConfig) {
-  console.log('[Main Process] handleFolderAnalysis called with config:', config);
-  
   // Reset cancellation flag
   batchProcessingCancelled = false;
   
@@ -1931,7 +1684,6 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
       let sportCategoryId: string | null = null;
       if (config.category) {
         sportCategoryId = await getSportCategoryIdByName(config.category);
-        console.log(`[Tracking] Resolved category "${config.category}" to sport_category_id: ${sportCategoryId}`);
       }
 
       const newExecution = await createExecutionOnline({
@@ -1942,15 +1694,8 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
         sport_category_id: sportCategoryId
       });
       currentExecutionId = newExecution.id!;
-      console.log(`[Tracking] Created ${config.projectId ? 'project' : 'standalone'} execution ${currentExecutionId} for folder analysis tracking`);
     } catch (error: any) {
-      if (error?.code === '23502' && error?.message?.includes('project_id')) {
-        console.warn('[Tracking] ⚠️  Database migration needed: project_id field must be made nullable for standalone executions');
-        console.warn('[Tracking] 📝 Run: ALTER TABLE executions ALTER COLUMN project_id DROP NOT NULL;');
-        console.warn('[Tracking] 🔄 Skipping execution tracking until database is updated...');
-      } else {
-        console.warn('[Tracking] Failed to create execution for tracking:', error);
-      }
+      if (DEBUG_MODE) console.warn('[Tracking] Failed to create execution for tracking:', error);
     }
   }
 
@@ -2008,12 +1753,9 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
     const csvDataToUse = config.csvData || csvData.length > 0 ? csvData : globalCsvData;
     const hasCsvData = csvDataToUse && csvDataToUse.length > 0;
     
-    console.log(`Batch processing ${totalImages} images${hasCsvData ? ' with CSV data' : ''}`);
-
     // Start new temporal analysis session for batch processing
     const { SmartMatcher } = await import('./matching/smart-matcher');
     SmartMatcher.startSession();
-    console.log('[Main Process] New batch processing session started');
 
     // Risultati dell'analisi
     const batchResults = [];
@@ -2022,7 +1764,6 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
     for (const imageInfo of imageFiles) {
       // Controlla se il processing è stato cancellato
       if (batchProcessingCancelled) {
-        console.log('[Main Process] Batch processing cancelled, stopping at image:', path.basename(imageInfo.path));
         break;
       }
       
@@ -2084,9 +1825,8 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
         if (tempServiceFilePath) {
           try {
             await fsPromises.unlink(tempServiceFilePath);
-            console.log(`[DEBUG] Cleaned up service file: ${tempServiceFilePath}`);
           } catch (cleanupError) {
-            console.error(`[ERROR] Failed to clean up service file ${tempServiceFilePath}:`, cleanupError);
+            // Cleanup failed, ignore
           }
         }
         
@@ -2109,7 +1849,6 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
           category: config.category || 'motorsport'
         };
         
-        console.log(`Using model for batch analysis: ${invokeBody.modelName}, category: ${invokeBody.category}`);
         
         // Aggiungi l'userId solo se è disponibile
         if (userId) {
@@ -2125,11 +1864,8 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
           try {
             // Add delay between retries to avoid overwhelming the function
             if (attempt > 1) {
-              console.log(`Retry attempt ${attempt} for ${fileName}...`);
               await new Promise(resolve => setTimeout(resolve, 2000 * attempt)); // Exponential backoff
             }
-            
-            console.log(`Invoking analyzeImageDesktopV2 for ${fileName} (attempt ${attempt}/${maxRetries})...`);
             
             // Add timeout to prevent hanging indefinitely
             const functionTimeout = 60000; // 60 seconds timeout
@@ -2152,12 +1888,10 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
             }
             
             if (!response.data.success) {
-              console.error(`Function returned unsuccessful response for ${fileName} (attempt ${attempt}/${maxRetries}):`, response.data.error);
               throw new Error(`Analysis failed: ${response.data.error || 'Unknown function error'}`);
             }
-            
+
             // If we got here, the function call succeeded
-            console.log(`Successfully analyzed ${fileName} on attempt ${attempt}`);
             break;
             
           } catch (err: any) {
@@ -2178,12 +1912,8 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
         
         // Registra l'utilizzo del token e invia l'aggiornamento in tempo reale
         await authService.useTokens(1, response.data.imageId, (tokenBalance) => {
-          console.log(`[Main Process] Token callback received, sending token-used event:`, tokenBalance);
           if (mainWindow) {
             mainWindow.webContents.send('token-used', tokenBalance);
-            console.log(`[Main Process] token-used event sent to frontend`);
-          } else {
-            console.log(`[Main Process] Cannot send token-used event: mainWindow is null`);
           }
         });
         
@@ -2251,15 +1981,7 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
             // Passa sempre sia i dati CSV che i dati AI alla funzione di aggiornamento
             // La funzione formatMetadataByCategory gestirà le priorità internamente
             await updateImageExif(imagePath, csvMetatag, analysisData, config);
-            
-            if (csvMetatag) {
-              console.log(`Updated metadata for ${fileName} with CSV match: ${csvMetatag}`);
-            } else if (analysisData) {
-              console.log(`Updated metadata for ${fileName} with AI analysis data`);
-            } else {
-              console.log(`Updated metadata for ${fileName} with fallback data`);
-            }
-            
+
           } catch (metadataError) {
             console.error(`Failed to update metadata for ${fileName}:`, metadataError);
             // Non interrompere il processo per errori nei metadati
@@ -2273,7 +1995,6 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
           try {
             const previewBuffer = await fsPromises.readFile(previewPath);
             previewDataUrl = `data:image/jpeg;base64,${previewBuffer.toString('base64')}`;
-            console.log(`Generated preview data URL from saved preview for ${fileName} (${previewBuffer.length} bytes)`);
           } catch (previewError) {
             console.error(`Error reading preview for ${fileName}:`, previewError);
           }
@@ -2282,7 +2003,6 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
           try {
             const base64Data = fileBuffer.toString('base64');
             previewDataUrl = `data:${mimeType};base64,${base64Data}`;
-            console.log(`Generated preview data URL from original buffer for ${fileName} (${fileBuffer.length} bytes)`);
           } catch (bufferError) {
             console.error(`Error generating preview from buffer for ${fileName}:`, bufferError);
           }
@@ -2309,9 +2029,8 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
         if (tempDngPath && fs.existsSync(tempDngPath)) {
           try {
             await fsPromises.unlink(tempDngPath);
-            console.log(`[DNG Cleanup] Removed temporary DNG after processing: ${tempDngPath}`);
           } catch (dngCleanupError) {
-            console.error(`[DNG Cleanup] Failed to remove temporary DNG ${tempDngPath}:`, dngCleanupError);
+            // DNG cleanup failed, ignore
           }
         }
         
@@ -2329,10 +2048,9 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
           const { tempDngPath: errorTempDngPath } = await preprocessImageIfNeeded(imageInfo.path, config);
           if (errorTempDngPath && fs.existsSync(errorTempDngPath)) {
             await fsPromises.unlink(errorTempDngPath);
-            console.log(`[DNG Cleanup] Removed temporary DNG after error: ${errorTempDngPath}`);
           }
         } catch (dngCleanupError) {
-          console.error(`[DNG Cleanup] Failed to cleanup DNG after error for ${imageInfo.path}:`, dngCleanupError);
+          // DNG cleanup failed, ignore
         }
         
         // Continua con la prossima immagine invece di interrompere tutto il batch
@@ -2372,16 +2090,15 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
           total_images: totalImages,
           processed_images: completedImages
         });
-        console.log(`[Tracking] Updated execution ${currentExecutionId} status to completed`);
       } catch (error) {
-        console.warn('[Tracking] Failed to update execution status:', error);
+        if (DEBUG_MODE) console.warn('[Tracking] Failed to update execution status:', error);
       }
     }
 
     // Traccia le impostazioni di questa execution (asincrono, non bloccante)
     if (currentExecutionId) {
       trackExecutionSettings(currentExecutionId, config, executionStats).catch(error => {
-        console.warn('[Tracking] Failed to track execution settings:', error);
+        if (DEBUG_MODE) console.warn('[Tracking] Failed to track execution settings:', error);
       });
     }
 
@@ -2423,15 +2140,14 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
           status: 'failed',
           results_reference: `Error: ${error.message || 'Unknown error'}`
         });
-        console.log(`[Tracking] Updated execution ${currentExecutionId} status to failed`);
       } catch (updateError) {
-        console.warn('[Tracking] Failed to update execution status on error:', updateError);
+        if (DEBUG_MODE) console.warn('[Tracking] Failed to update execution status on error:', updateError);
       }
 
       // Traccia comunque le impostazioni anche in caso di errore
       executionStats.executionDurationMs = Date.now() - executionStartTime;
       trackExecutionSettings(currentExecutionId, config, executionStats).catch(trackError => {
-        console.warn('[Tracking] Failed to track execution settings on error:', trackError);
+        if (DEBUG_MODE) console.warn('[Tracking] Failed to track execution settings on error:', trackError);
       });
     }
     
@@ -2452,12 +2168,9 @@ async function executeWithYield<T>(operation: () => T, description: string): Pro
   return new Promise((resolve, reject) => {
     setImmediate(() => {
       try {
-        console.log(`[YIELD] Starting ${description}`);
         const result = operation();
-        console.log(`[YIELD] Completed ${description}`);
         resolve(result);
       } catch (error) {
-        console.error(`[YIELD] Error in ${description}:`, error);
         reject(error);
       }
     });
@@ -2515,35 +2228,29 @@ async function yieldToEventLoop(delayMs: number = 0): Promise<void> {
  */
 async function cleanupTemporaryDngFiles(folderPath: string): Promise<void> {
   try {
-    console.log('[Main Process] Starting cleanup of temporary DNG files...');
     const files = await fsPromises.readdir(folderPath);
-    let cleanedCount = 0;
-    
+
     for (const file of files) {
       if (file.endsWith('.dng')) {
         const dngPath = path.join(folderPath, file);
         const baseNameWithoutExt = path.basename(file, '.dng');
-        
+
         // Verifica se esiste un file RAW corrispondente
         const possibleRawFiles = RAW_EXTENSIONS
           .filter(ext => ext !== '.dng')
           .map(ext => path.join(folderPath, baseNameWithoutExt + ext));
-        
+
         const hasCorrespondingRaw = possibleRawFiles.some(rawPath => fs.existsSync(rawPath));
-        
+
         if (hasCorrespondingRaw) {
           try {
             await fsPromises.unlink(dngPath);
-            cleanedCount++;
-            console.log(`[Cleanup] Removed temporary DNG: ${dngPath}`);
           } catch (unlinkError) {
-            console.warn(`[Cleanup] Failed to remove DNG file ${dngPath}:`, unlinkError);
+            // DNG cleanup failed, ignore
           }
         }
       }
     }
-    
-    console.log(`[Main Process] DNG cleanup completed: ${cleanedCount} files removed`);
   } catch (error) {
     console.error('[Main Process] Error during DNG cleanup:', error);
   }
@@ -2585,17 +2292,11 @@ async function updateImageExif(
     // Questa funzione gestisce automaticamente le priorità CSV vs AI e la formattazione per categoria
     const category = config?.category || 'motorsport';
     const keywords = formatMetadataByCategory(analysisData, category, metatag);
-    
-    console.log(`Generated keywords for ${path.basename(imagePath)}: ${keywords.length} keywords - ${JSON.stringify(keywords.slice(0, 3))}${keywords.length > 3 ? '...' : ''}`);
-    
-    console.log(`Updating metadata for ${imagePath} with ${keywords.length} keywords`);
-    
+
     // Per i file RAW, utilizziamo sempre i file XMP sidecar
     if (isRaw) {
       try {
-        console.log(`Creating XMP sidecar for RAW file: ${imagePath}`);
         await createXmpSidecar(imagePath, keywords);
-        console.log(`Successfully created XMP sidecar for ${imagePath}`);
         return;
       } catch (xmpError) {
         console.error('Error creating XMP sidecar:', xmpError);
@@ -2609,59 +2310,22 @@ async function updateImageExif(
     
     if (supportedFormats.includes(imageExt)) {
       try {
-        console.log(`Using ExifTool for ${imageExt} file: ${path.basename(imagePath)}`);
-        const startTime = Date.now();
-
-        // Path to ExifTool (use system ExifTool if available, fallback to bundled)
-        let exiftoolPath = 'exiftool'; // Try system ExifTool first
-
-        // Check if we can use system ExifTool, otherwise use bundled version
-        try {
-          const { execSync } = require('child_process');
-          const whichCommand = process.platform === 'win32' ? 'where exiftool' : 'which exiftool';
-          execSync(whichCommand, { stdio: 'ignore' });
-          console.log('Using system ExifTool');
-        } catch {
-          // Fallback to bundled ExifTool - multi-platform support
-          const platform = process.platform; // 'win32', 'darwin', 'linux'
-          const exiftoolName = platform === 'win32' ? 'exiftool.exe' : 'exiftool';
-          exiftoolPath = path.join(__dirname, '..', 'vendor', platform, exiftoolName);
-          console.log(`Using bundled ExifTool for ${platform}`);
-        }
-
         // Use writeKeywordsToImage to handle keywords array properly
         await writeKeywordsToImage(imagePath, keywords);
-        
-        const totalTime = Date.now() - startTime;
-        console.log(`[PERF] TOTAL KEYWORDS UPDATE TIME: ${totalTime}ms`);
-        console.log(`Successfully updated keywords for ${path.basename(imagePath)}`);
 
       } catch (exiftoolError: any) {
         console.error(`Error updating ${imageExt} metadata with ExifTool:`, exiftoolError.message);
-        console.error(`ExifTool error details:`, {
-          message: exiftoolError.message,
-          code: exiftoolError.code,
-          stderr: exiftoolError.stderr,
-          stdout: exiftoolError.stdout,
-          status: exiftoolError.status,
-          signal: exiftoolError.signal
-        });
-        
+
         // Fallback: create XMP sidecar if writeKeywordsToImage fails
-        console.log(`Fallback: Creating XMP sidecar for ${path.basename(imagePath)}`);
         try {
           await createXmpSidecar(imagePath, keywords);
-          console.log(`Successfully created XMP sidecar as fallback for ${path.basename(imagePath)}`);
         } catch (xmpError) {
-          console.error(`Both writeKeywordsToImage and XMP sidecar failed for ${path.basename(imagePath)}:`, xmpError);
           throw new Error(`Failed to update metadata for ${path.basename(imagePath)}: ${exiftoolError.message}`);
         }
       }
     } else {
       // For unsupported formats, create XMP sidecar
-      console.log(`Format ${imageExt} not supported, creating XMP sidecar for ${path.basename(imagePath)}`);
       await createXmpSidecar(imagePath, keywords);
-      console.log(`Successfully created XMP sidecar for ${path.basename(imagePath)}`);
     }
   } catch (error) {
     console.error('Error in updateImageExif:', error);
@@ -2676,8 +2340,6 @@ async function updateImageExif(
  * Chiede all'utente di selezionare un file RAW, lo converte in JPEG e lo salva nella stessa cartella
  */
 async function handleRawPreviewExtraction(event: IpcMainEvent) {
-  console.log('[Main Process] handleRawPreviewExtraction called.');
-  
   if (!mainWindow) {
     console.error('handleRawPreviewExtraction: mainWindow is null');
     return;
@@ -2698,24 +2360,20 @@ async function handleRawPreviewExtraction(event: IpcMainEvent) {
     });
     
     if (result.canceled || result.filePaths.length === 0) {
-      console.log('RAW file selection canceled');
       mainWindow.webContents.send('raw-preview-status', { status: 'canceled' });
       return;
     }
-    
+
     const rawFilePath = result.filePaths[0];
-    
+
     // Verifica che sia effettivamente un file RAW
     const rawFileExtension = path.extname(rawFilePath).toLowerCase();
     if (!RAW_EXTENSIONS.includes(rawFileExtension)) { // Use global RAW_EXTENSIONS
-      console.error(`Selected file is not a supported RAW format: ${rawFilePath}`);
-      mainWindow.webContents.send('raw-preview-error', { 
+      mainWindow.webContents.send('raw-preview-error', {
         message: 'Il file selezionato non è un formato RAW supportato.'
       });
       return;
     }
-    
-    console.log(`Selected RAW file: ${rawFilePath}`);
     
     // Notifica l'inizio dell'estrazione
     mainWindow.webContents.send('raw-preview-status', { 
@@ -2728,15 +2386,6 @@ async function handleRawPreviewExtraction(event: IpcMainEvent) {
     const previewPath = path.join(path.dirname(rawFilePath), `${baseFilename}_preview.jpg`);
     
     // Convert RAW to DNG using the new converter.
-    // The 'previewPath' variable (intended for a JPEG output) is not directly used by convertToDng for naming.
-    // convertToDng will create a DNG file (e.g., originalName.dng) in the specified outputDir.
-    // This changes the function's behavior: it now produces a DNG file.
-    // Subsequent code expecting a JPEG preview from 'extractedPath' will need adjustment
-    // as it will now handle a DNG file.
-    console.log(`[Main Process] handleRawPreviewExtraction: Using rawConverter for ${rawFilePath}`);
-    // Use the rawConverter singleton to convert the RAW to JPEG
-    console.log(`[Main Process] handleRawPreviewExtraction: Using rawConverter with optimized method for ${rawFilePath}`);
-    
     // Tenta di convertire con il metodo che utilizza dcraw+ImageMagick in alta risoluzione
     let extractedPath;
     try {
@@ -2754,10 +2403,8 @@ async function handleRawPreviewExtraction(event: IpcMainEvent) {
         95,        // Alta qualità JPEG
         1440       // Limita il lato lungo a 1440px (preset dell'app)
       );
-      console.log(`Successfully converted RAW to full-resolution JPEG: ${extractedPath}`);
     } catch (optimizedError: any) {
       console.error(`Optimized full-resolution conversion failed: ${optimizedError.message || 'Unknown error'}`);
-      console.log(`Falling back to standard RAW to JPEG conversion...`);
       extractedPath = await rawConverter.convertRawToJpeg(rawFilePath, previewPath);
     }
     
@@ -2790,10 +2437,8 @@ async function handleRawPreviewExtraction(event: IpcMainEvent) {
 async function handleFeedbackSubmission(event: IpcMainEvent, feedbackData: any) {
   try {
     if (!mainWindow) return;
-    
+
     const { imageId, feedbackType, confidenceScore, source } = feedbackData;
-    
-    console.log(`Ricevuto feedback per l'immagine ${imageId}: ${feedbackType} (confidence: ${confidenceScore})`);
     
     // Ottieni l'ID utente corrente se autenticato
     const authState = authService.getAuthState();
@@ -2847,11 +2492,8 @@ async function checkAndDownloadModels(): Promise<void> {
     const { models, totalSizeMB } = await modelManager.getModelsToDownload();
 
     if (models.length === 0) {
-      console.log('[Main Process] All ONNX models are already cached');
       return;
     }
-
-    console.log(`[Main Process] Need to download ${models.length} models (${totalSizeMB.toFixed(1)} MB)`);
 
     // Notify renderer to show download modal
     safeSend('model-download-start', {
@@ -2863,7 +2505,6 @@ async function checkAndDownloadModels(): Promise<void> {
     let downloadedTotal = 0;
     for (let i = 0; i < models.length; i++) {
       const model = models[i];
-      console.log(`[Main Process] Downloading model ${i + 1}/${models.length}: ${model.code}`);
 
       await modelManager.downloadModel(model.code, (percent, downloadedMB, totalMB) => {
         safeSend('model-download-progress', {
@@ -2880,7 +2521,6 @@ async function checkAndDownloadModels(): Promise<void> {
 
     // Notify renderer that download is complete
     safeSend('model-download-complete');
-    console.log('[Main Process] All ONNX models downloaded successfully');
   } catch (error) {
     console.error('[Main Process] Error downloading models:', error);
     safeSend('model-download-error', {
@@ -2895,12 +2535,13 @@ app.whenReady().then(async () => { // Added async here
   // Set app name for proper dock/taskbar display
   app.setName('RaceTagger');
 
+  if (DEBUG_MODE) console.log('[RaceTagger] App started');
+
   // Initialize @electron/remote now that app is ready
   try {
     const { initialize, enable } = require('@electron/remote/main');
     initialize();
     remoteEnable = enable; // Store enable function for use in createWindow
-    console.log('[Main Process] @electron/remote initialized');
   } catch (error) {
     console.error('[Main Process] Failed to initialize @electron/remote:', error);
   }
@@ -2911,11 +2552,8 @@ app.whenReady().then(async () => { // Added async here
   } catch {
     isDev = true; // Default to dev mode if check fails
   }
-  console.log('[Main Process] Running in', isDev ? 'DEVELOPMENT' : 'PRODUCTION', 'mode');
 
   // Check app version before creating window
-  // Note: checkAppVersion() stores result in context via setVersionCheckResult/setForceUpdateRequired
-  console.log('[Main Process] Checking app version...');
   await checkAppVersion();
 
   // NOTE: These handlers are now in app-handlers.ts
@@ -2924,12 +2562,6 @@ app.whenReady().then(async () => { // Added async here
   // ipcMain.handle('get-max-supported-edge-function-version', ...)
 
   // CRITICAL: Register all IPC handlers BEFORE creating window to avoid race conditions
-  // The renderer will call these handlers immediately on load
-  console.log('[Main Process] Registering IPC handlers before window creation...');
-  // NOTE: These are now handled by modular IPC handlers in src/ipc/
-  // setupAuthHandlers();  // -> auth-handlers.ts
-  // setupWindowControlHandlers();  // -> window-handlers.ts
-
   // Token handlers - these remain in main.ts (will migrate to auth-handlers.ts later)
   ipcMain.handle('submit-token-request', handleTokenRequest);
   ipcMain.handle('get-token-balance', handleGetTokenBalance);
@@ -2938,7 +2570,6 @@ app.whenReady().then(async () => { // Added async here
 
   // Register modular IPC handlers BEFORE window creation
   registerAllHandlers();
-  console.log('[Main Process] Modular IPC handlers registered');
 
   createWindow();
 
@@ -2948,7 +2579,6 @@ app.whenReady().then(async () => { // Added async here
   }
 
   // Cleanup temp files older than 7 days at startup and start periodic cleanup
-  console.log('[Main Process] Cleaning up temporary files at startup...');
   try {
     await rawConverter.cleanupAllTempFiles();
 
@@ -2962,30 +2592,20 @@ app.whenReady().then(async () => { // Added async here
   } catch (cleanupError) {
     console.error('[Main Process] Error during startup cleanup:', cleanupError);
   }
-  // NOTE: setupAuthHandlers() and setupWindowControlHandlers() already called BEFORE createWindow()
-  initializeDatabaseSchema(); // Usa il nome esportato corretto
-  
-  
-  console.log('[Main Process] After initializeDatabaseSchema.');
-  // NOTE: Database IPC handlers are now in database-handlers.ts and supabase-handlers.ts
-  // setupDatabaseIpcHandlers();
-  console.log('[Main Process] Database handlers already registered via registerAllHandlers()');
+
+  initializeDatabaseSchema();
 
   // Initialize Supabase cache after authentication is ready
-  console.log('[Main Process] Caching Supabase data...');
   try {
     await cacheSupabaseData();
-    console.log('[Main Process] Supabase data cached successfully');
   } catch (cacheError) {
     console.error('[Main Process] Error caching Supabase data:', cacheError);
     // Don't fail startup if cache fails, data will be loaded on-demand
   }
 
   // Check and download ONNX models at startup
-  console.log('[Main Process] Checking ONNX models...');
   try {
     await checkAndDownloadModels();
-    console.log('[Main Process] ONNX model check completed');
   } catch (modelError) {
     console.error('[Main Process] Error checking/downloading models:', modelError);
     // Don't fail startup if model download fails
@@ -2997,7 +2617,6 @@ app.whenReady().then(async () => { // Added async here
   // await testConversion();
   // console.log('[Main Process] testConversion finished or failed. Check console above.');
 
-  console.log('[Main Process] main.ts: Setting up remaining IPC .on listeners...');
   ipcMain.on('select-folder', handleFolderSelection);
   
   // NOTE: Version checking IPC handlers moved to version-handlers.ts
@@ -3017,11 +2636,7 @@ app.whenReady().then(async () => { // Added async here
   // - get-full-settings
 
   // FOLDER ORGANIZATION: IPC handlers (available for all authenticated users)
-  // NOTE: check-folder-organization-enabled and get-folder-organization-config are now in app-handlers.ts
   if (APP_CONFIG.features.ENABLE_FOLDER_ORGANIZATION) {
-    console.log('[Main Process] Registering folder organization IPC handlers (organize-only)...');
-    // NOTE: select-organization-destination is now in file-handlers.ts
-
     // Post-analysis folder organization
     ipcMain.handle('organize-results-post-analysis', async (_, data: {
       executionId: string;
@@ -3029,8 +2644,6 @@ app.whenReady().then(async () => { // Added async here
     }) => {
       try {
         const { executionId, folderOrganizationConfig } = data;
-
-        console.log(`[Main Process] Post-analysis organization requested for execution ${executionId}`);
 
         // Verify feature access
         if (!authService.hasFolderOrganizationAccess()) {
@@ -3052,12 +2665,9 @@ app.whenReady().then(async () => { // Added async here
           try {
             return JSON.parse(line);
           } catch (error) {
-            console.warn('[Main Process] Invalid JSON line in log:', line);
             return null;
           }
         }).filter(Boolean);
-
-        console.log(`[Main Process] Parsed ${logEvents.length} log events`);
 
         // Extract image analysis events
         const imageAnalysisEvents = logEvents.filter(event => event.type === 'IMAGE_ANALYSIS');
@@ -3070,9 +2680,6 @@ app.whenReady().then(async () => { // Added async here
             const key = `${event.fileName}_${event.vehicleIndex}`;
             correctionMap.set(key, event.changes);
           });
-
-        console.log(`[Main Process] Found ${imageAnalysisEvents.length} images to organize`);
-        console.log(`[Main Process] Found ${correctionMap.size} manual corrections to apply`);
 
         // Import FolderOrganizer
         const { FolderOrganizer } = await import('./utils/folder-organizer');
@@ -3100,14 +2707,12 @@ app.whenReady().then(async () => { // Added async here
             const originalPath = event.originalPath;
 
             if (!originalPath) {
-              console.warn(`[Main Process] No original path for ${fileName}, skipping`);
               errors.push(`No original path found for ${fileName}`);
               continue;
             }
 
             // Check if file still exists
             if (!fs.existsSync(originalPath)) {
-              console.warn(`[Main Process] File no longer exists: ${originalPath}`);
               errors.push(`File not found: ${fileName} (may have been moved)`);
               continue;
             }
@@ -3123,25 +2728,19 @@ app.whenReady().then(async () => { // Added async here
                 if (correction && correction.number) {
                   // Use manually corrected number
                   raceNumbers.push(correction.number);
-                  console.log(`  - Vehicle ${index}: Using manual correction: ${correction.number}`);
                 } else if (vehicle.finalResult?.raceNumber) {
                   // Use finalResult.raceNumber (after automatic corrections)
                   raceNumbers.push(vehicle.finalResult.raceNumber);
-                  console.log(`  - Vehicle ${index}: Using final result: ${vehicle.finalResult.raceNumber}`);
                 } else if (vehicle.raceNumber) {
                   // Fallback: use initial raceNumber
                   raceNumbers.push(vehicle.raceNumber);
-                  console.log(`  - Vehicle ${index}: Using initial number: ${vehicle.raceNumber}`);
                 }
               });
             }
 
-            console.log(`[Main Process] ${fileName}: Found ${event.aiResponse?.vehicles?.length || 0} vehicles, extracted numbers: [${raceNumbers.join(', ')}]`);
-
             // If no race numbers found, use "unknown"
             if (raceNumbers.length === 0) {
               raceNumbers = ['unknown'];
-              console.log(`[Main Process] ${fileName}: No race numbers found, using 'unknown'`);
             }
 
             // Get CSV match data if available
@@ -3155,7 +2754,6 @@ app.whenReady().then(async () => { // Added async here
                 squadra: match.squadra,
                 metatag: match.metatag
               };
-              console.log(`  - CSV match found: ${match.nome_pilota || match.nome} (${match.numero})`);
             }
 
             // Organize the image
@@ -3166,7 +2764,6 @@ app.whenReady().then(async () => { // Added async here
             );
 
             results.push(result);
-            console.log(`[Main Process] Organized ${fileName}: ${result.success ? '✓' : '✗'}`);
 
           } catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
@@ -3177,13 +2774,6 @@ app.whenReady().then(async () => { // Added async here
 
         // Get summary
         const summary = organizer.getSummary();
-
-        console.log(`[Main Process] Organization complete:`, {
-          totalFiles: summary.totalFiles,
-          organizedFiles: summary.organizedFiles,
-          skippedFiles: summary.skippedFiles,
-          errors: errors.length
-        });
 
         return {
           success: true,
@@ -3199,17 +2789,9 @@ app.whenReady().then(async () => { // Added async here
         };
       }
     });
-
-
-    console.log('[Main Process] Folder organization handlers registered successfully');
-  } else {
-    console.log('[Main Process] Folder organization feature disabled - skipping IPC handlers');
   }
 
-  // dcraw Test Dashboard IPC handlers
-  console.log('[Main Process] Registering dcraw IPC handlers...');
-  
-  
+
   // NOTE: debug-sharp handler is now in app-handlers.ts
 
   // NOTE: Enhanced File Browser IPC handlers are now in file-handlers.ts:
@@ -3228,10 +2810,7 @@ app.whenReady().then(async () => { // Added async here
   // NOTE: download-csv-template is now in csv-handlers.ts
 
   ipcMain.on('analyze-folder', (event: IpcMainEvent, config: BatchProcessConfig) => {
-    console.log('[Main Process] analyze-folder IPC event received with config:', config);
-    
-    // Always use unified processor (simplified routing)
-    console.log('[Main Process] Using UNIFIED PROCESSOR');
+    // Always use unified processor
     handleUnifiedImageProcessing(event, config);
   });
   
@@ -3283,7 +2862,6 @@ app.whenReady().then(async () => { // Added async here
             }
           }
         ];
-        console.log(`[Main Process] Returning mock log data for execution ${executionId}`);
         return { success: true, data: mockLogData };
       }
 
@@ -3291,7 +2869,6 @@ app.whenReady().then(async () => { // Added async here
       const logFilePath = path.join(logsDir, `exec_${executionId}.jsonl`);
 
       if (!fs.existsSync(logFilePath)) {
-        console.warn(`[Main Process] Log file not found: ${logFilePath}`);
         return { success: true, data: [] }; // Return empty array if no log file
       }
 
@@ -3301,12 +2878,10 @@ app.whenReady().then(async () => { // Added async here
         try {
           return JSON.parse(line);
         } catch (error) {
-          console.warn('[Main Process] Invalid JSON line in log:', line);
           return null;
         }
       }).filter(Boolean);
 
-      console.log(`[Main Process] Loaded ${logEvents.length} log events for execution ${executionId}`);
       return { success: true, data: logEvents };
 
     } catch (error) {
@@ -3331,8 +2906,6 @@ app.whenReady().then(async () => { // Added async here
       const logsDir = path.join(app.getPath('userData'), '.analysis-logs');
       const logFilePath = path.join(logsDir, `exec_${executionId}.jsonl`);
 
-      console.log(`[Main Process] Updating analysis log for execution ${executionId} with ${corrections.length} corrections`);
-
       // Read existing log
       let logEvents: any[] = [];
       let executionStartEvent: any = null;
@@ -3342,45 +2915,36 @@ app.whenReady().then(async () => { // Added async here
         const logContent = fs.readFileSync(logFilePath, 'utf-8');
         const logLines = logContent.trim().split('\n').filter(line => line.trim());
 
-        console.log(`[Main Process] Reading ${logLines.length} lines from log file`);
-
         logEvents = logLines.map((line, index) => {
           try {
             const event = JSON.parse(line);
             // Preserve the EXECUTION_START event separately to ensure it's never lost
             if (event.type === 'EXECUTION_START' && index === 0) {
               executionStartEvent = event;
-              console.log('[Main Process] Found and preserved EXECUTION_START event');
             }
             // Preserve the EXECUTION_COMPLETE event separately to ensure it's always last
             else if (event.type === 'EXECUTION_COMPLETE') {
               executionCompleteEvent = event;
-              console.log('[Main Process] Found and preserved EXECUTION_COMPLETE event');
             }
             return event;
           } catch (error) {
-            console.warn(`[Main Process] Invalid JSON line ${index} in log:`, line.substring(0, 100) + '...');
             return null;
           }
         }).filter(Boolean);
 
         // Critical validation: Ensure EXECUTION_START is preserved
         if (!executionStartEvent) {
-          console.error('[Main Process] CRITICAL: EXECUTION_START event not found or corrupted!');
           if (logEvents.length > 0 && logEvents[0].type !== 'EXECUTION_START') {
-            console.error('[Main Process] First event is not EXECUTION_START:', logEvents[0].type);
             // Try to find EXECUTION_START elsewhere in the log
             const foundStart = logEvents.find(event => event.type === 'EXECUTION_START');
             if (foundStart) {
               executionStartEvent = foundStart;
-              console.log('[Main Process] Found EXECUTION_START event at wrong position, will reorder');
             }
           }
         }
 
         // If EXECUTION_START is still missing, create a minimal one to prevent execution disappearance
         if (!executionStartEvent) {
-          console.warn('[Main Process] Creating fallback EXECUTION_START event to prevent execution disappearance');
           executionStartEvent = {
             type: 'EXECUTION_START',
             timestamp: new Date().toISOString(),
@@ -3457,14 +3021,13 @@ app.whenReady().then(async () => { // Added async here
             newValues: correction.changes
           });
 
-          console.log(`[Main Process] Updated IMAGE_ANALYSIS event for ${correction.fileName} vehicle ${correction.vehicleIndex}`);
         }
 
         // Update image metadata using exiftool
         try {
           await updateImageMetadataWithCorrection(correction);
         } catch (metadataError) {
-          console.warn('[Main Process] Failed to update image metadata:', metadataError);
+          if (DEBUG_MODE) console.warn('[Main Process] Failed to update image metadata:', metadataError);
           // Continue with log update even if metadata update fails
         }
       }
@@ -3496,13 +3059,12 @@ app.whenReady().then(async () => { // Added async here
           executionCompleteEvent.manualCorrectionDetails.correctionTimestamps.push(correction.timestamp);
         });
 
-        console.log('[Main Process] ✓ Updated EXECUTION_COMPLETE event with manual correction stats');
+        if (DEBUG_MODE) console.log('[Main Process] Updated EXECUTION_COMPLETE event with manual correction stats');
       } else {
-        console.log('[Main Process] No EXECUTION_COMPLETE event found - execution was not completed yet');
+        if (DEBUG_MODE) console.log('[Main Process] No EXECUTION_COMPLETE event found - execution was not completed yet');
       }
 
       // Ensure proper event ordering: EXECUTION_START first, EXECUTION_COMPLETE last
-      console.log('[Main Process] Preparing to write log file, ensuring proper event ordering');
 
       // Remove any existing EXECUTION_START and EXECUTION_COMPLETE from logEvents array to avoid duplicates
       const middleEvents = logEvents.filter(event =>
@@ -3516,17 +3078,11 @@ app.whenReady().then(async () => { // Added async here
       // Add EXECUTION_COMPLETE as the last event (if it exists)
       if (executionCompleteEvent) {
         finalEvents.push(executionCompleteEvent);
-        console.log('[Main Process] ✓ EXECUTION_COMPLETE positioned as last event to ensure "completed" status');
-      } else {
-        console.log('[Main Process] No EXECUTION_COMPLETE event to position - execution will show as "processing"');
       }
 
-      // Additional validation for proper event ordering
+      // Validation for proper event ordering (only log errors, not success)
       if (finalEvents[0].type !== 'EXECUTION_START') {
         console.error('[Main Process] CRITICAL: EXECUTION_START is not first event! This will cause execution disappearance.');
-        console.log('[Main Process] First event type:', finalEvents[0].type);
-      } else {
-        console.log('[Main Process] ✓ EXECUTION_START correctly positioned as first event');
       }
 
       // Validate EXECUTION_COMPLETE positioning
@@ -3534,9 +3090,6 @@ app.whenReady().then(async () => { // Added async here
         const lastEvent = finalEvents[finalEvents.length - 1];
         if (lastEvent.type !== 'EXECUTION_COMPLETE') {
           console.error('[Main Process] CRITICAL: EXECUTION_COMPLETE is not last event! This will show execution as "processing".');
-          console.log('[Main Process] Last event type:', lastEvent.type);
-        } else {
-          console.log('[Main Process] ✓ EXECUTION_COMPLETE correctly positioned as last event');
         }
       }
 
@@ -3545,7 +3098,6 @@ app.whenReady().then(async () => { // Added async here
       fs.writeFileSync(logFilePath, updatedLogContent, 'utf-8');
 
       // CRITICAL VALIDATION: Verify file integrity after saving
-      console.log('[Main Process] Verifying file integrity after save...');
       try {
         const verificationContent = fs.readFileSync(logFilePath, 'utf-8');
         const verificationLines = verificationContent.trim().split('\n').filter(line => line.trim());
@@ -3558,14 +3110,11 @@ app.whenReady().then(async () => { // Added async here
         const firstEvent = JSON.parse(verificationLines[0]);
         if (firstEvent.type !== 'EXECUTION_START') {
           console.error('[Main Process] CRITICAL ERROR: First event is not EXECUTION_START after save!');
-          console.error('[Main Process] First event type:', firstEvent.type);
-          console.error('[Main Process] First line content:', verificationLines[0].substring(0, 200));
           throw new Error(`First event is ${firstEvent.type}, not EXECUTION_START`);
         }
 
         if (firstEvent.executionId !== executionId) {
           console.error('[Main Process] CRITICAL ERROR: ExecutionId mismatch!');
-          console.error('[Main Process] Expected:', executionId, 'Found:', firstEvent.executionId);
           throw new Error('ExecutionId mismatch in EXECUTION_START event');
         }
 
@@ -3574,32 +3123,20 @@ app.whenReady().then(async () => { // Added async here
           const lastEvent = JSON.parse(verificationLines[verificationLines.length - 1]);
           if (lastEvent.type !== 'EXECUTION_COMPLETE') {
             console.error('[Main Process] CRITICAL ERROR: Last event is not EXECUTION_COMPLETE after save!');
-            console.error('[Main Process] Last event type:', lastEvent.type);
-            console.error('[Main Process] Execution will show as "processing" instead of "completed"');
             throw new Error(`Last event is ${lastEvent.type}, not EXECUTION_COMPLETE`);
-          } else {
-            console.log('[Main Process] ✓ File integrity verified: EXECUTION_COMPLETE is correctly positioned as last event');
           }
         }
-
-        console.log('[Main Process] ✓ File integrity verified: EXECUTION_START is correctly positioned as first event');
-        console.log('[Main Process] ✓ File contains', verificationLines.length, 'events');
-        console.log('[Main Process] ✓ ExecutionId matches:', firstEvent.executionId);
       } catch (verificationError) {
         console.error('[Main Process] CRITICAL: File verification failed!', verificationError);
-        // This is a critical error, but we continue to preserve existing functionality
-        // In the future, we might want to restore from backup or abort the operation
       }
 
-      // Upload updated log to Supabase if possible - direct upload without creating logger instance
+      // Upload updated log to Supabase if possible
       try {
         const { getSupabaseClient } = await import('./database-service');
         const supabase = getSupabaseClient();
         const userId = authService.getAuthState().user?.id || 'unknown';
         const date = new Date().toISOString().split('T')[0];
         const supabaseUploadPath = `${userId}/${date}/exec_${executionId}.jsonl`;
-
-        console.log('[Main Process] Uploading updated log directly to Supabase...');
 
         // Read the file we just saved and upload it
         const fileContent = fs.readFileSync(logFilePath);
@@ -3613,10 +3150,8 @@ app.whenReady().then(async () => { // Added async here
           });
 
         if (error) {
-          console.error('[Main Process] Direct upload failed:', error);
+          if (DEBUG_MODE) console.warn('[Main Process] Direct upload failed:', error);
         } else {
-          console.log('[Main Process] ✓ Updated log uploaded to Supabase:', supabaseUploadPath);
-
           // Also create/update metadata record
           await supabase
             .from('analysis_log_metadata')
@@ -3624,7 +3159,7 @@ app.whenReady().then(async () => { // Added async here
               execution_id: executionId,
               user_id: userId,
               storage_path: supabaseUploadPath,
-              total_images: 0, // We don't have stats from direct upload
+              total_images: 0,
               total_corrections: corrections.length,
               correction_types: { USER_MANUAL: corrections.length },
               category: 'unknown',
@@ -3632,11 +3167,10 @@ app.whenReady().then(async () => { // Added async here
             });
         }
       } catch (uploadError) {
-        console.warn('[Main Process] Failed to upload updated log to Supabase:', uploadError);
-        // Continue anyway, local file is updated
+        if (DEBUG_MODE) console.warn('[Main Process] Failed to upload updated log to Supabase:', uploadError);
       }
 
-      console.log(`[Main Process] Successfully updated analysis log with ${corrections.length} manual corrections`);
+      if (DEBUG_MODE) console.log(`[Main Process] Updated analysis log with ${corrections.length} manual corrections`);
       return { success: true };
 
     } catch (error) {
@@ -3661,7 +3195,7 @@ app.whenReady().then(async () => { // Added async here
     try {
       // Find the image file - this is a simplified version
       // In reality, you'd need to track the full image paths from the processing results
-      console.log(`[Main Process] Would update metadata for ${correction.fileName} with:`, correction.changes);
+      if (DEBUG_MODE) console.log(`[Main Process] Would update metadata for ${correction.fileName} with:`, correction.changes);
 
       // TODO: Implement actual metadata update using exiftool
       // This would require:
@@ -3688,23 +3222,22 @@ app.whenReady().then(async () => { // Added async here
     }
   }
 
-  console.log('[Main Process] main.ts: All IPC .on listeners set up.');
+  if (DEBUG_MODE) console.log('[Main Process] All IPC .on listeners set up');
 
   app.on('activate', () => {
-    console.log('[Main Process] main.ts: app event: activate');
+    if (DEBUG_MODE) console.log('[Main Process] app event: activate');
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
-  console.log('[Main Process] main.ts: app.activate listener set up.');
+  if (DEBUG_MODE) console.log('[Main Process] app.activate listener set up');
 });
 
 app.on('window-all-closed', () => {
-  console.log('[Main Process] main.ts: app event: window-all-closed');
+  if (DEBUG_MODE) console.log('[Main Process] app event: window-all-closed');
   if (process.platform !== 'darwin') app.quit();
 });
-console.log('[Main Process] main.ts: app.window-all-closed listener set up.');
+if (DEBUG_MODE) console.log('[Main Process] window-all-closed listener set up');
 
 function parseCSVLine(line: string): string[] {
-  console.log('[Main Process] parseCSVLine called.');
   const result: string[] = [];
   let current = '';
   let inQuotes = false;
@@ -3733,55 +3266,46 @@ process.on('uncaughtException', (error: Error) => {
 });
 
 // --- Graceful Shutdown Handlers ---
-console.log('[Main Process] main.ts: Setting up graceful shutdown handlers...');
 
 // Handle app termination signals
 process.on('SIGTERM', async () => {
-  console.log('[Main Process] Received SIGTERM, shutting down gracefully...');
+  if (DEBUG_MODE) console.log('[Main Process] Received SIGTERM, shutting down gracefully...');
   await performCleanup();
   app.quit();
 });
 
 process.on('SIGINT', async () => {
-  console.log('[Main Process] Received SIGINT, shutting down gracefully...');
+  if (DEBUG_MODE) console.log('[Main Process] Received SIGINT, shutting down gracefully...');
   await performCleanup();
   app.quit();
 });
 
 // Handle app quit event
 app.on('before-quit', async () => {
-  console.log('[Main Process] App is about to quit, performing cleanup...');
+  if (DEBUG_MODE) console.log('[Main Process] App is about to quit, performing cleanup...');
   await performCleanup();
 });
 
 // Cleanup function
 async function performCleanup(): Promise<void> {
-  console.log('[Main Process] Starting cleanup process...');
-  
+  if (DEBUG_MODE) console.log('[Main Process] Starting cleanup process...');
+
   try {
     // Cancel any running batch processing
     batchProcessingCancelled = true;
-    
+
     // Cleanup auth service resources
-    console.log('[Main Process] Cleaning up auth service...');
     authService.cleanup();
-    
-    // Close database connections (if any are open)
-    console.log('[Main Process] Closing database connections...');
-    // The database cleanup is already handled in database-service.ts on app quit
-    
+
     // Cleanup all temp files at shutdown
-    console.log('[Main Process] Cleaning up temporary files at shutdown...');
     try {
       await rawConverter.cleanupAllTempFiles();
     } catch (cleanupError) {
       console.error('[Main Process] Error during shutdown cleanup:', cleanupError);
     }
-    
-    console.log('[Main Process] Cleanup completed successfully');
+
+    if (DEBUG_MODE) console.log('[Main Process] Cleanup completed successfully');
   } catch (error) {
     console.error('[Main Process] Error during cleanup:', error);
   }
 }
-
-console.log('[Main Process] main.ts: Graceful shutdown handlers set up successfully');

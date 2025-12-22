@@ -10,6 +10,7 @@ import { ipcMain, app } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import { setBatchProcessingCancelled } from './context';
+import { DEBUG_MODE } from '../config';
 
 // ==================== Log Reading Utilities ====================
 
@@ -67,14 +68,14 @@ function getMockLogData(): any[] {
 // ==================== Register Handlers ====================
 
 export function registerAnalysisHandlers(): void {
-  console.log('[IPC] Registering analysis handlers...');
+  if (DEBUG_MODE) console.log('[IPC] Registering analysis handlers...');
 
   // Get analysis log (for Log Visualizer - returns array directly)
   ipcMain.handle('get-analysis-log', async (_, executionId: string) => {
     try {
       // Handle mock execution IDs for testing
       if (executionId.startsWith('mock-exec-')) {
-        console.log(`[Analysis] Returning mock log data for execution ${executionId}`);
+        if (DEBUG_MODE) console.log(`[Analysis] Returning mock log data for execution ${executionId}`);
         return getMockLogData();
       }
 
@@ -82,7 +83,7 @@ export function registerAnalysisHandlers(): void {
       const logFilePath = path.join(logsDir, `exec_${executionId}.jsonl`);
 
       const logEvents = readLogFile(logFilePath);
-      console.log(`[Analysis] Loaded ${logEvents.length} analysis log events for execution ${executionId}`);
+      if (DEBUG_MODE) console.log(`[Analysis] Loaded ${logEvents.length} analysis log events for execution ${executionId}`);
       return logEvents;
 
     } catch (error) {
@@ -96,7 +97,7 @@ export function registerAnalysisHandlers(): void {
     try {
       // Handle mock execution IDs for testing
       if (executionId.startsWith('mock-exec-')) {
-        console.log(`[Analysis] Returning mock log data for execution ${executionId}`);
+        if (DEBUG_MODE) console.log(`[Analysis] Returning mock log data for execution ${executionId}`);
         return { success: true, data: getMockLogData() };
       }
 
@@ -104,12 +105,12 @@ export function registerAnalysisHandlers(): void {
       const logFilePath = path.join(logsDir, `exec_${executionId}.jsonl`);
 
       if (!fs.existsSync(logFilePath)) {
-        console.warn(`[Analysis] Log file not found: ${logFilePath}`);
+        if (DEBUG_MODE) console.warn(`[Analysis] Log file not found: ${logFilePath}`);
         return { success: true, data: [] };
       }
 
       const logEvents = readLogFile(logFilePath);
-      console.log(`[Analysis] Loaded ${logEvents.length} log events for execution ${executionId}`);
+      if (DEBUG_MODE) console.log(`[Analysis] Loaded ${logEvents.length} log events for execution ${executionId}`);
       return { success: true, data: logEvents };
 
     } catch (error) {
@@ -150,5 +151,5 @@ export function registerAnalysisHandlers(): void {
     setBatchProcessingCancelled(true);
   });
 
-  console.log('[IPC] Analysis handlers registered (4 handlers)');
+  if (DEBUG_MODE) console.log('[IPC] Analysis handlers registered (4 handlers)');
 }

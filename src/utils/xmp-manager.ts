@@ -23,7 +23,6 @@ export async function createXmpSidecar(
   const filteredKeywords = keywordArray.filter(k => k && k.trim().length > 0);
   
   if (filteredKeywords.length === 0) {
-    console.warn(`[XmpManager] No valid keywords provided for ${path.basename(rawFilePath)}`);
     throw new Error('No valid keywords provided for XMP sidecar creation');
   }
   
@@ -36,7 +35,6 @@ export async function createXmpSidecar(
   // Check if XMP file already exists
   if (fs.existsSync(xmpFilePath)) {
     try {
-      console.log(`[XmpManager] Preserving existing XMP data: ${path.basename(xmpFilePath)}`);
       
       // Read existing content
       const existingContent = await fsPromises.readFile(xmpFilePath, 'utf8');
@@ -45,7 +43,6 @@ export async function createXmpSidecar(
       xmpContent = await updateXmpContent(existingContent, filteredKeywords, description);
       
     } catch (error) {
-      console.warn(`[XmpManager] Error reading existing XMP file, creating new one: ${error}`);
       // Fallback to creating new content
       xmpContent = createNewXmpContent(filteredKeywords, description);
     }
@@ -56,8 +53,6 @@ export async function createXmpSidecar(
 
   // Write the XMP file
   await fsPromises.writeFile(xmpFilePath, xmpContent, 'utf8');
-  const descriptionInfo = description ? ' and description' : '';
-  console.log(`[XmpManager] XMP sidecar updated/created at: ${xmpFilePath} with ${filteredKeywords.length} keywords${descriptionInfo}`);
 
   return xmpFilePath;
 }
@@ -122,7 +117,6 @@ ${keywordElements}
   
   // Handle self-closing rdf:Description tags (like Photo Mechanic format)
   if (selfClosingPattern.test(updatedContent) && !regularClosingPattern.test(updatedContent)) {
-    console.log('[XmpManager] Converting self-closing rdf:Description to expanded format');
     
     // Convert self-closing tag to expanded format
     updatedContent = updatedContent.replace(selfClosingPattern, (match, attributes) => {
@@ -146,8 +140,7 @@ ${keywordsXml}
 ${descriptionXml}      <xmp:MetadataDate>${currentDate}</xmp:MetadataDate>
     </rdf:Description>`;
     });
-    
-    console.log('[XmpManager] Added dc:subject keywords and xmp:MetadataDate to converted XMP format');
+
     return updatedContent;
   }
   
@@ -156,11 +149,9 @@ ${descriptionXml}      <xmp:MetadataDate>${currentDate}</xmp:MetadataDate>
   if (subjectBagRegex.test(updatedContent)) {
     // Replace existing dc:subject with Bag format
     updatedContent = updatedContent.replace(subjectBagRegex, keywordsXml);
-    console.log('[XmpManager] Updated existing dc:subject Bag in XMP');
   } else if (subjectSimpleRegex.test(updatedContent)) {
     // Replace simple dc:subject with Bag format
     updatedContent = updatedContent.replace(subjectSimpleRegex, keywordsXml);
-    console.log('[XmpManager] Replaced simple dc:subject with Bag format in XMP');
   } else {
     // Add dc:subject to existing rdf:Description
     const rdfDescriptionPattern = /(\s*)<\/rdf:Description>/;
@@ -180,7 +171,6 @@ ${descriptionXml}      <xmp:MetadataDate>${currentDate}</xmp:MetadataDate>
       }
       
       updatedContent = updatedContent.replace(rdfDescriptionPattern, `$1${keywordsXml}\n$1</rdf:Description>`);
-      console.log('[XmpManager] Added dc:subject keywords to existing XMP');
     }
   }
 
@@ -191,7 +181,6 @@ ${descriptionXml}      <xmp:MetadataDate>${currentDate}</xmp:MetadataDate>
     if (descriptionRegex.test(updatedContent)) {
       // Replace existing dc:description
       updatedContent = updatedContent.replace(descriptionRegex, descriptionXml);
-      console.log('[XmpManager] Updated existing dc:description in XMP');
     } else {
       // Add dc:description to existing rdf:Description
       const rdfDescriptionPattern = /(\s*)<\/rdf:Description>/;
@@ -205,7 +194,6 @@ ${descriptionXml}      <xmp:MetadataDate>${currentDate}</xmp:MetadataDate>
         }
 
         updatedContent = updatedContent.replace(rdfDescriptionPattern, `$1${descriptionXml}\n$1</rdf:Description>`);
-        console.log('[XmpManager] Added dc:description to existing XMP');
       }
     }
   }

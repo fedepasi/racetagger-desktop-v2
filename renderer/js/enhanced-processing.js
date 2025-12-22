@@ -76,7 +76,6 @@ class EnhancedProcessor {
     // Handle batch cancellation event from main process
     if (window.api && window.api.receive) {
       window.api.receive('batch-cancelled', (data) => {
-        console.log('[Enhanced Processor] Batch processing cancelled:', data);
         this.handleBatchCancelled();
       });
     }
@@ -100,7 +99,6 @@ class EnhancedProcessor {
 
     if (modal) {
       modal.style.display = 'flex';
-      console.log('[Enhanced Processor] Token info modal opened');
     }
   }
 
@@ -115,7 +113,6 @@ class EnhancedProcessor {
       // Early Bird period has ended - hide urgency banner and update messaging
       if (urgencyBanner) {
         urgencyBanner.style.display = 'none';
-        console.log('[Enhanced Processor] Early Bird period ended - urgency banner hidden');
       }
 
       // Update hero title and subtitle to remove Early Bird messaging
@@ -126,8 +123,6 @@ class EnhancedProcessor {
       if (heroSubtitle) {
         heroSubtitle.innerHTML = '<strong>Flexible Token Packs</strong> - Choose what fits your needs';
       }
-
-      console.log('[Enhanced Processor] Early Bird period ended - hero messaging updated to standard pricing');
     } else {
       // Early Bird is still active - ensure banner is visible
       if (urgencyBanner) {
@@ -152,9 +147,7 @@ class EnhancedProcessor {
     if (window.api && window.api.invoke) {
       window.api.invoke('open-external-url', 'https://www.racetagger.cloud/pricing')
         .then(result => {
-          if (result.success) {
-            console.log('[Enhanced Processor] Pricing page opened successfully');
-          } else {
+          if (!result.success) {
             console.error('[Enhanced Processor] Failed to open pricing page:', result.error);
           }
         })
@@ -163,7 +156,6 @@ class EnhancedProcessor {
         });
     } else {
       // Fallback for development
-      console.warn('[Enhanced Processor] API not available, using window.open fallback');
       window.open('https://www.racetagger.cloud/pricing', '_blank');
     }
 
@@ -190,8 +182,6 @@ class EnhancedProcessor {
 
     // Initialize progress display
     this.updateProgress();
-    
-    console.log(`[Enhanced Processor] Started processing ${totalImages} images`);
   }
 
   updateProgress() {
@@ -290,9 +280,7 @@ class EnhancedProcessor {
     }
     
     this.updateProgress();
-    
-    console.error(`[Enhanced Processor] Failed to process ${imageName}:`, error);
-    
+
     // Check if processing is complete
     if (this.processingStats.completedImages + this.processingStats.failedImages >= this.processingStats.totalImages) {
       this.completeProcessing();
@@ -300,21 +288,6 @@ class EnhancedProcessor {
   }
 
   completeProcessing() {
-    const stats = this.processingStats;
-    const totalTime = Date.now() - stats.startTime;
-    // Use real total time divided by completed images for accurate average in parallel processing
-    const avgTime = stats.completedImages > 0 ? totalTime / stats.completedImages : 0;
-    
-    console.log('[Enhanced Processor] Processing complete:', {
-      totalImages: stats.totalImages,
-      completed: stats.completedImages,
-      failed: stats.failedImages,
-      detections: stats.detectedNumbers,
-      tokensUsed: stats.tokensUsed,
-      totalTime: totalTime,
-      avgTime: avgTime
-    });
-
     // Hide progress container
     if (this.progressElements.container) {
       this.progressElements.container.classList.remove('active');
@@ -324,8 +297,6 @@ class EnhancedProcessor {
 
 
   cancelProcessing() {
-    console.log('[Enhanced Processor] User requested to cancel processing');
-
     // Disable cancel button to prevent multiple clicks
     if (this.progressElements.cancelBtn) {
       this.progressElements.cancelBtn.disabled = true;
@@ -351,8 +322,6 @@ class EnhancedProcessor {
   }
 
   handleBatchCancelled() {
-    console.log('[Enhanced Processor] Handling batch cancellation');
-
     // Reset progress container and hide it
     if (this.progressElements.container) {
       this.progressElements.container.classList.remove('active');
@@ -382,8 +351,6 @@ class EnhancedProcessor {
       uploadButton.disabled = false;
       uploadButton.textContent = 'Analyze Folder';
     }
-
-    console.log('[Enhanced Processor] Processing cancelled and UI reset');
   }
 
   formatTime(seconds) {
@@ -470,7 +437,6 @@ class EnhancedProcessor {
 // Initialize the enhanced processor when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
   window.enhancedProcessor = new EnhancedProcessor();
-  console.log('[Enhanced Processor] Initialized');
 });
 
 // Export for use in other scripts

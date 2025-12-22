@@ -11,7 +11,6 @@ class ResultsPageManager {
     this.cacheManager = null;
     this.logVisualizer = null;
 
-    console.log('[ResultsPage] Initialized');
     this.init();
   }
 
@@ -27,11 +26,6 @@ class ResultsPageManager {
         this.showError('No execution ID provided');
         return;
       }
-
-      console.log(`[ResultsPage] Loading execution: ${this.executionId}`);
-
-      // Forza invalidazione cache per garantire dati aggiornati
-      console.log('[ResultsPage] Forcing cache invalidation for fresh data load');
 
       // Inizializza il cache manager
       this.cacheManager = new SmartCacheManager();
@@ -119,38 +113,27 @@ class ResultsPageManager {
   async loadResults() {
     try {
       // Prima prova a caricare dai log - forza ricarica per evitare cache stale
-      console.log(`[ResultsPage] Loading logs for execution: ${this.executionId}`);
       const logResponse = await window.api.invoke('get-execution-log', this.executionId);
 
       let logData = [];
       if (logResponse && logResponse.success && logResponse.data) {
         logData = logResponse.data;
-        console.log(`[ResultsPage] Successfully loaded ${logData.length} log entries`);
       } else if (logResponse && logResponse.data) {
         logData = logResponse.data;
-        console.log(`[ResultsPage] Loaded ${logData.length} log entries (no success flag)`);
-      } else {
-        console.warn('[ResultsPage] No log data received:', logResponse);
       }
 
       if (logData && logData.length > 0) {
         // Estrai i risultati dai log
-        console.log('[ResultsPage] Extracting results from log data...');
         this.results = await this.extractResultsFromLogs(logData);
-        console.log(`[ResultsPage] Extracted ${this.results.length} results from logs`);
       } else {
         // Fallback: carica dal database o storage
-        console.log('[ResultsPage] No log data available, trying fallback storage');
         this.results = await this.loadResultsFromStorage();
       }
 
       if (this.results.length === 0) {
-        console.warn('[ResultsPage] No results available - showing empty state');
         this.showEmpty();
         return;
       }
-
-      console.log(`[ResultsPage] Successfully loaded ${this.results.length} results with fresh data`);
 
       // Inizializza cache per le immagini
       await this.cacheManager.initializeForExecution(this.executionId, this.results);
@@ -187,11 +170,6 @@ class ResultsPageManager {
 
         // Prima prova ad usare i path delle thumbnail salvati nei log
         if (entry.thumbnailPath || entry.microThumbPath || entry.compressedPath) {
-          console.log(`[ResultsPage] Using saved thumbnail paths from log for ${entry.fileName}:`, {
-            thumbnailPath: entry.thumbnailPath,
-            microThumbPath: entry.microThumbPath,
-            compressedPath: entry.compressedPath
-          });
           localPaths = {
             thumbnailPath: entry.thumbnailPath || null,
             microThumbPath: entry.microThumbPath || null,
@@ -214,8 +192,7 @@ class ResultsPageManager {
               localPaths = thumbnailResponse.data;
             }
           } catch (error) {
-            const searchTerm = entry.originalFileName ? `${entry.originalFileName} (original) / ${entry.fileName}` : entry.fileName;
-            console.warn(`[ResultsPage] Could not find local thumbnails for ${searchTerm}:`, error);
+            // Could not find local thumbnails
           }
         }
 
@@ -234,7 +211,6 @@ class ResultsPageManager {
       }
     }
 
-    console.log(`[ResultsPage] Extracted ${results.length} results from ${logData.length} log entries`);
     return results;
   }
 
@@ -243,7 +219,6 @@ class ResultsPageManager {
    */
   async loadResultsFromStorage() {
     // Implementazione futura: caricamento da database o cache
-    console.log('[ResultsPage] No results found in logs, checking alternative storage...');
     return [];
   }
 
@@ -393,16 +368,12 @@ class SmartCacheManager {
     // Error handling and throttling
     this.loggedErrors = new Set(); // Track logged errors to prevent spam
     this.failedImages = new Set(); // Track failed images to avoid retrying
-
-    console.log('[SmartCacheManager] Initialized');
   }
 
   /**
    * Inizializza cache per una execution
    */
   async initializeForExecution(executionId, results) {
-    console.log(`[SmartCacheManager] Initializing cache for execution ${executionId}`);
-
     // Crea cache per questa execution
     const cache = {
       executionId,
@@ -425,8 +396,6 @@ class SmartCacheManager {
    * Pre-carica micro-thumbnails (32x32) per visualizzazione immediata
    */
   async preloadMicroThumbnails(cache) {
-    console.log(`[SmartCacheManager] Pre-loading micro-thumbnails for ${cache.results.length} images`);
-
     // Pre-carica solo i primi 20 per non bloccare l'UI
     const batchSize = 20;
     for (let i = 0; i < Math.min(batchSize, cache.results.length); i++) {
@@ -441,18 +410,9 @@ class SmartCacheManager {
    * Ottiene URL dell'immagine con strategia di caricamento intelligente
    */
   getImageUrl(result) {
-    console.log(`[SmartCacheManager] getImageUrl for ${result.fileName}:`, {
-      thumbnailPath: !!result.thumbnailPath,
-      compressedPath: !!result.compressedPath,
-      supabaseUrl: !!result.supabaseUrl,
-      imagePath: !!result.imagePath,
-      microThumbPath: !!result.microThumbPath
-    });
-
     // Prima: controlla cache memoria
     const cached = this.getCachedImage(result.fileName);
     if (cached) {
-      console.log(`[SmartCacheManager] Using cached image for ${result.fileName}`);
       return cached.url;
     }
 
@@ -461,12 +421,10 @@ class SmartCacheManager {
       // Se è un percorso locale (inizia con /), controlla se è un file locale o una URL
       if (result.thumbnailPath.startsWith('/')) {
         // Percorso locale - verifica esistenza e carica in background
-        console.log(`[SmartCacheManager] Using local thumbnailPath for ${result.fileName}`);
         this.loadImageToMemory(result.fileName, result.thumbnailPath, 'thumb');
         return result.thumbnailPath;
       } else if (result.thumbnailPath.startsWith('http')) {
         // URL Supabase - usa direttamente
-        console.log(`[SmartCacheManager] Using Supabase thumbnailPath for ${result.fileName}`);
         return result.thumbnailPath;
       }
     }
@@ -474,27 +432,22 @@ class SmartCacheManager {
     // Fallback: usa compressed con stessa logica (priorità alta)
     if (result.compressedPath) {
       if (result.compressedPath.startsWith('/')) {
-        console.log(`[SmartCacheManager] Using compressedPath for ${result.fileName}`);
         return result.compressedPath;
       } else if (result.compressedPath.startsWith('http')) {
-        console.log(`[SmartCacheManager] Using Supabase compressedPath for ${result.fileName}`);
         return result.compressedPath;
       }
     }
 
     // Fallback: Supabase URL originale
     if (result.supabaseUrl) {
-      console.log(`[SmartCacheManager] Using supabaseUrl for ${result.fileName}`);
       return result.supabaseUrl;
     }
 
     // Penultimo fallback: imagePath generico
     if (result.imagePath) {
       if (result.imagePath.startsWith('http')) {
-        console.log(`[SmartCacheManager] Using imagePath URL for ${result.fileName}`);
         return result.imagePath;
       } else {
-        console.log(`[SmartCacheManager] Using local imagePath for ${result.fileName}`);
         return `file://${result.imagePath}`;
       }
     }
@@ -502,15 +455,12 @@ class SmartCacheManager {
     // Ultimo fallback: micro-thumbnail (solo se nient'altro è disponibile)
     if (result.microThumbPath) {
       if (result.microThumbPath.startsWith('/')) {
-        console.log(`[SmartCacheManager] Using microThumbPath as last resort for ${result.fileName}`);
         return result.microThumbPath;
       } else if (result.microThumbPath.startsWith('http')) {
-        console.log(`[SmartCacheManager] Using Supabase microThumbPath as last resort for ${result.fileName}`);
         return result.microThumbPath;
       }
     }
 
-    console.warn(`[SmartCacheManager] No image source found for ${result.fileName}`, result);
     return this.getPlaceholderUrl();
   }
 
@@ -628,7 +578,6 @@ class SmartCacheManager {
 
     if (oldestKey && oldestCache) {
       oldestCache.memoryCache.delete(oldestKey);
-      console.log(`[SmartCacheManager] Evicted ${oldestKey} from memory cache`);
     }
   }
 
@@ -644,7 +593,6 @@ class SmartCacheManager {
       const toRemove = sortedCaches.slice(0, sortedCaches.length - this.maxExecutions);
       for (const [executionId] of toRemove) {
         this.executionCaches.delete(executionId);
-        console.log(`[SmartCacheManager] Removed cache for execution ${executionId}`);
       }
     }
 
@@ -655,7 +603,6 @@ class SmartCacheManager {
     for (const [executionId, cache] of this.executionCaches.entries()) {
       if (now - cache.lastAccess > maxAge) {
         this.executionCaches.delete(executionId);
-        console.log(`[SmartCacheManager] Expired cache for execution ${executionId}`);
       }
     }
   }

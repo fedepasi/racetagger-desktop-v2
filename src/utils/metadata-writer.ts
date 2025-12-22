@@ -19,14 +19,11 @@ async function readExistingKeywords(imagePath: string): Promise<string[]> {
         .map(k => k.trim())
         .filter(k => k.length > 0);
 
-      console.log(`[MetadataWriter] Found ${keywords.length} existing keywords in ${path.basename(imagePath)}: ${keywords.join(', ')}`);
       return keywords;
     }
 
-    console.log(`[MetadataWriter] No existing keywords found in ${path.basename(imagePath)}`);
     return [];
   } catch (error) {
-    console.warn(`[MetadataWriter] Failed to read existing keywords from ${path.basename(imagePath)}:`, error);
     return []; // Return empty array on error, don't fail the entire operation
   }
 }
@@ -42,15 +39,11 @@ async function readExistingSpecialInstructions(imagePath: string): Promise<strin
     const result = await nativeToolManager.executeTool('exiftool', args);
 
     if (result.stdout.trim()) {
-      const instructions = result.stdout.trim();
-      console.log(`[MetadataWriter] Found existing special instructions in ${path.basename(imagePath)}: ${instructions}`);
-      return instructions;
+      return result.stdout.trim();
     }
 
-    console.log(`[MetadataWriter] No existing special instructions found in ${path.basename(imagePath)}`);
     return '';
   } catch (error) {
-    console.warn(`[MetadataWriter] Failed to read existing special instructions from ${path.basename(imagePath)}:`, error);
     return ''; // Return empty string on error, don't fail the entire operation
   }
 }
@@ -67,15 +60,11 @@ async function readExistingExtendedDescription(imagePath: string): Promise<strin
     const result = await nativeToolManager.executeTool('exiftool', args);
 
     if (result.stdout.trim()) {
-      const description = result.stdout.trim();
-      console.log(`[MetadataWriter] Found existing extended description in ${path.basename(imagePath)}: ${description}`);
-      return description;
+      return result.stdout.trim();
     }
 
-    console.log(`[MetadataWriter] No existing extended description found in ${path.basename(imagePath)}`);
     return '';
   } catch (error) {
-    console.warn(`[MetadataWriter] Failed to read existing extended description from ${path.basename(imagePath)}:`, error);
     return ''; // Return empty string on error, don't fail the entire operation
   }
 }
@@ -156,14 +145,12 @@ export async function writeKeywordsToImage(imagePath: string, keywords: string[]
     // Filter empty keywords
     let filteredNewKeywords = newKeywords.filter(k => k && k.trim().length > 0);
     if (filteredNewKeywords.length === 0) {
-      console.warn(`[MetadataWriter] No valid keywords provided for ${path.basename(imagePath)}`);
       return;
     }
 
     // Simplify keywords if requested
     if (useSimplified) {
       filteredNewKeywords = simplifyKeywords(filteredNewKeywords);
-      console.log(`[MetadataWriter] Simplified keywords for ${path.basename(imagePath)}: ${filteredNewKeywords.join(', ')}`);
     }
 
     // Build ExifTool arguments based on mode
@@ -179,8 +166,6 @@ export async function writeKeywordsToImage(imagePath: string, keywords: string[]
 
     if (mode === 'overwrite') {
       // Overwrite mode: replace all existing keywords
-      console.log(`[MetadataWriter] Overwriting existing keywords with ${filteredNewKeywords.length} new keywords in ${path.basename(imagePath)}`);
-
       // First clear existing keywords, then add new ones
       args.push('-IPTC:Keywords=');
       for (const keyword of filteredNewKeywords) {
@@ -200,8 +185,6 @@ export async function writeKeywordsToImage(imagePath: string, keywords: string[]
         }
       }
 
-      console.log(`[MetadataWriter] Appending ${uniqueNewKeywords.length} new keywords to ${existingKeywords.length} existing keywords in ${path.basename(imagePath)}`);
-
       // Add each new unique keyword individually to avoid IPTC:Keywords 64-character limit
       for (const keyword of uniqueNewKeywords) {
         args.push(`-IPTC:Keywords+=${keyword}`);
@@ -210,12 +193,7 @@ export async function writeKeywordsToImage(imagePath: string, keywords: string[]
 
     args.push(imagePath);
 
-    console.log(`[MetadataWriter] Keywords being written (${mode} mode): ${filteredNewKeywords.join(', ')}`);
-
-    const result = await nativeToolManager.executeTool('exiftool', args);
-
-    console.log(`[MetadataWriter] ExifTool stdout: ${result.stdout}`);
-    console.log(`[MetadataWriter] Successfully updated keywords in ${path.basename(imagePath)}`);
+    await nativeToolManager.executeTool('exiftool', args);
   } catch (error) {
     console.error(`[MetadataWriter] Failed to write metadata:`, error);
     throw new Error(`Failed to write metadata with ExifTool: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -232,7 +210,6 @@ export async function writeKeywordsToImage(imagePath: string, keywords: string[]
 export async function writeSpecialInstructions(imagePath: string, raceData: string): Promise<void> {
   try {
     if (!raceData || raceData.trim().length === 0) {
-      console.warn(`[MetadataWriter] No race data provided for ${path.basename(imagePath)}`);
       return;
     }
 
@@ -252,21 +229,17 @@ export async function writeSpecialInstructions(imagePath: string, raceData: stri
       if (existingRaceTaggerMatch) {
         // Update existing RaceTagger data
         finalInstructions = existingInstructions.replace(raceTaggerPattern, raceTaggerData);
-        console.log(`[MetadataWriter] Updated existing RaceTagger data in ${path.basename(imagePath)}`);
       } else {
         // Append to existing instructions
         finalInstructions = `${existingInstructions} | ${raceTaggerData}`;
-        console.log(`[MetadataWriter] Appended RaceTagger data to existing instructions in ${path.basename(imagePath)}`);
       }
     } else {
       // No existing instructions, use only RaceTagger data
       finalInstructions = raceTaggerData;
-      console.log(`[MetadataWriter] Added new RaceTagger data to ${path.basename(imagePath)}`);
     }
 
     // Ensure we don't exceed 256 character limit for IPTC:SpecialInstructions
     if (finalInstructions.length > 256) {
-      console.warn(`[MetadataWriter] Instructions too long (${finalInstructions.length} chars), truncating to 256 chars`);
       finalInstructions = finalInstructions.substring(0, 253) + '...';
     }
 
@@ -279,12 +252,7 @@ export async function writeSpecialInstructions(imagePath: string, raceData: stri
       imagePath
     ];
 
-    console.log(`[MetadataWriter] Writing special instructions to ${path.basename(imagePath)}: ${finalInstructions}`);
-
-    const result = await nativeToolManager.executeTool('exiftool', args);
-
-    console.log(`[MetadataWriter] ExifTool stdout: ${result.stdout}`);
-    console.log(`[MetadataWriter] Successfully wrote special instructions to ${path.basename(imagePath)}`);
+    await nativeToolManager.executeTool('exiftool', args);
   } catch (error) {
     console.error(`[MetadataWriter] Failed to write special instructions:`, error);
     throw new Error(`Failed to write special instructions with ExifTool: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -302,7 +270,6 @@ export async function writeSpecialInstructions(imagePath: string, raceData: stri
 export async function writeExtendedDescription(imagePath: string, raceData: string, mode: 'append' | 'overwrite' = 'append'): Promise<void> {
   try {
     if (!raceData || raceData.trim().length === 0) {
-      console.warn(`[MetadataWriter] No race data provided for extended description in ${path.basename(imagePath)}`);
       return;
     }
 
@@ -311,7 +278,6 @@ export async function writeExtendedDescription(imagePath: string, raceData: stri
     if (mode === 'overwrite') {
       // Overwrite mode: use only the new data
       finalDescription = raceData.trim();
-      console.log(`[MetadataWriter] Overwriting extended description with new data in ${path.basename(imagePath)}`);
     } else {
       // Append mode: add to existing description
       const existingDescription = await readExistingExtendedDescription(imagePath);
@@ -319,11 +285,9 @@ export async function writeExtendedDescription(imagePath: string, raceData: stri
       if (existingDescription) {
         // Append to existing description with separator
         finalDescription = `${existingDescription}\n\n${raceData.trim()}`;
-        console.log(`[MetadataWriter] Appended to existing extended description in ${path.basename(imagePath)}`);
       } else {
         // No existing description, use new data
         finalDescription = raceData.trim();
-        console.log(`[MetadataWriter] Added new extended description to ${path.basename(imagePath)}`);
       }
     }
 
@@ -336,12 +300,7 @@ export async function writeExtendedDescription(imagePath: string, raceData: stri
       imagePath
     ];
 
-    console.log(`[MetadataWriter] Writing extended description to ${path.basename(imagePath)}`);
-
-    const result = await nativeToolManager.executeTool('exiftool', args);
-
-    console.log(`[MetadataWriter] ExifTool stdout: ${result.stdout}`);
-    console.log(`[MetadataWriter] Successfully wrote extended description to ${path.basename(imagePath)}`);
+    await nativeToolManager.executeTool('exiftool', args);
   } catch (error) {
     console.error(`[MetadataWriter] Failed to write extended description:`, error);
     throw new Error(`Failed to write extended description with ExifTool: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -374,7 +333,6 @@ export async function writePersonInImage(
     // Filter empty names
     const filteredNames = names.filter(n => n && n.trim().length > 0);
     if (filteredNames.length === 0) {
-      console.warn(`[MetadataWriter] No valid person names provided for ${path.basename(imagePath)}`);
       return;
     }
 
@@ -393,12 +351,7 @@ export async function writePersonInImage(
 
     args.push(imagePath);
 
-    console.log(`[MetadataWriter] Writing PersonInImage to ${path.basename(imagePath)}: ${filteredNames.join(', ')}`);
-
-    const result = await nativeToolManager.executeTool('exiftool', args);
-
-    console.log(`[MetadataWriter] ExifTool stdout: ${result.stdout}`);
-    console.log(`[MetadataWriter] Successfully wrote PersonInImage to ${path.basename(imagePath)}`);
+    await nativeToolManager.executeTool('exiftool', args);
   } catch (error) {
     console.error(`[MetadataWriter] Failed to write PersonInImage:`, error);
     throw new Error(`Failed to write PersonInImage with ExifTool: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -660,20 +613,12 @@ export async function writeFullMetadata(
 
     // Only proceed if we have metadata to write
     if (args.length <= 3) {
-      console.log(`[MetadataWriter] No metadata to write for ${path.basename(imagePath)}`);
       return;
     }
 
     args.push(imagePath);
 
-    console.log(`[MetadataWriter] Writing full metadata to ${path.basename(imagePath)} (${args.length - 4} fields)`);
-
-    const result = await nativeToolManager.executeTool('exiftool', args);
-
-    if (result.stdout) {
-      console.log(`[MetadataWriter] ExifTool stdout: ${result.stdout}`);
-    }
-    console.log(`[MetadataWriter] Successfully wrote full metadata to ${path.basename(imagePath)}`);
+    await nativeToolManager.executeTool('exiftool', args);
   } catch (error) {
     console.error(`[MetadataWriter] Failed to write full metadata:`, error);
     throw new Error(`Failed to write full metadata with ExifTool: ${error instanceof Error ? error.message : 'Unknown error'}`);

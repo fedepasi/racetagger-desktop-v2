@@ -94,17 +94,15 @@ class Logger {
         console.error(formatted, data);
       } else if (level === LogLevel.WARN) {
         console.warn(formatted, data);
-      } else {
-        console.log(formatted, data);
       }
+      // Other log levels are silenced - use debug tools instead
     } else {
       if (level === LogLevel.ERROR) {
         console.error(formatted);
       } else if (level === LogLevel.WARN) {
         console.warn(formatted);
-      } else {
-        console.log(formatted);
       }
+      // Other log levels are silenced - use debug tools instead
     }
   }
 
@@ -133,34 +131,21 @@ class Logger {
    * Log a milestone (always shown at INFO level) with clear visual separator
    */
   milestone(component: string, message: string): void {
-    const timestamp = new Date().toISOString().substr(11, 12);
-    console.log(`\n${'='.repeat(60)}`);
-    console.log(`\u2B50 [${timestamp}] [${component}] ${message}`);
-    console.log(`${'='.repeat(60)}\n`);
+    // Milestones are silenced - use debug tools for milestone tracking
   }
 
   /**
    * Log processing progress (compact format)
    */
   progress(component: string, current: number, total: number, item?: string): void {
-    if (this.level < LogLevel.INFO) return;
-    const pct = Math.round((current / total) * 100);
-    const bar = '\u2588'.repeat(Math.round(pct / 5)) + '\u2591'.repeat(20 - Math.round(pct / 5));
-    const itemStr = item ? ` - ${item}` : '';
-    console.log(`[${component}] [${bar}] ${current}/${total} (${pct}%)${itemStr}`);
+    // Progress logs are silenced - use debug tools for progress tracking
   }
 
   /**
    * Log a summary table
    */
   summary(component: string, title: string, data: Record<string, any>): void {
-    if (this.level < LogLevel.INFO) return;
-    console.log(`\n[${component}] ${title}:`);
-    console.log('-'.repeat(40));
-    for (const [key, value] of Object.entries(data)) {
-      console.log(`  ${key}: ${JSON.stringify(value)}`);
-    }
-    console.log('-'.repeat(40) + '\n');
+    // Summary logs are silenced - use debug tools for summary tracking
   }
 }
 

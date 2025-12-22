@@ -51,15 +51,11 @@ class FaceDetector {
 
   async _doInitialize() {
     try {
-      console.log('[FaceDetector] Starting initialization...');
-
       // Check if face-api.js is loaded from script tag
       if (!window.faceapi) {
-        console.error('[FaceDetector] face-api.js not loaded. Make sure face-api.min.js is included before face-detector.js');
         throw new Error('face-api.js not available - check script loading order');
       }
 
-      console.log('[FaceDetector] face-api.js found (loaded via script tag)');
       this.faceapi = window.faceapi;
 
       // Get models path - use relative path from renderer HTML
@@ -73,14 +69,11 @@ class FaceDetector {
           const appPath = await window.api.invoke('get-app-path');
           if (appPath) {
             modelsPath = `file://${appPath}/src/assets/models/face-api`;
-            console.log('[FaceDetector] Using app path for models');
           }
         }
       } catch (e) {
-        console.log('[FaceDetector] IPC not ready, using relative models path');
+        // IPC not ready, using relative models path
       }
-
-      console.log(`[FaceDetector] Loading models from: ${modelsPath}`);
 
       // Load all required models
       await Promise.all([
@@ -92,7 +85,6 @@ class FaceDetector {
       this.modelsLoaded = true;
       this.isInitialized = true;
 
-      console.log('[FaceDetector] All models loaded successfully');
       return { success: true };
 
     } catch (error) {
@@ -145,8 +137,6 @@ class FaceDetector {
 
       const inferenceTimeMs = Date.now() - startTime;
 
-      console.log(`[FaceDetector] Detected ${faces.length} face(s) in ${inferenceTimeMs}ms`);
-
       return {
         success: true,
         faces,
@@ -154,7 +144,6 @@ class FaceDetector {
       };
 
     } catch (error) {
-      console.error('[FaceDetector] Detection failed:', error);
       return {
         success: false,
         error: error.message,
@@ -210,7 +199,6 @@ class FaceDetector {
       };
 
       const inferenceTimeMs = Date.now() - startTime;
-      console.log(`[FaceDetector] Single face detected (${(face.confidence * 100).toFixed(1)}%) in ${inferenceTimeMs}ms`);
 
       return {
         success: true,
@@ -219,7 +207,6 @@ class FaceDetector {
       };
 
     } catch (error) {
-      console.error('[FaceDetector] Single face detection failed:', error);
       return {
         success: false,
         error: error.message,
@@ -318,7 +305,6 @@ function getFaceDetector() {
  */
 function setupFaceDetectionIPC() {
   if (!window.api || !window.api.receive) {
-    console.warn('[FaceDetector] IPC API not available');
     return;
   }
 
@@ -326,7 +312,6 @@ function setupFaceDetectionIPC() {
   // Note: receive() callback receives only data, not event object
   window.api.receive('face-detection-request', async (data) => {
     const { requestId, imagePath, options } = data;
-    console.log(`[FaceDetector] Received detection request: ${requestId} for ${imagePath}`);
 
     const detector = getFaceDetector();
     const result = await detector.detectFaces(imagePath, options);
@@ -341,7 +326,6 @@ function setupFaceDetectionIPC() {
   // Listen for single face detection requests
   window.api.receive('face-detection-single-request', async (data) => {
     const { requestId, imagePath, options } = data;
-    console.log(`[FaceDetector] Received single face detection request: ${requestId} for ${imagePath}`);
 
     const detector = getFaceDetector();
     const result = await detector.detectSingleFace(imagePath, options);
@@ -355,7 +339,6 @@ function setupFaceDetectionIPC() {
   // Listen for descriptor generation requests
   window.api.receive('face-descriptor-request', async (data) => {
     const { requestId, imagePath } = data;
-    console.log(`[FaceDetector] Received descriptor generation request: ${requestId}`);
 
     const detector = getFaceDetector();
     const result = await detector.generateDescriptor(imagePath);
@@ -365,8 +348,6 @@ function setupFaceDetectionIPC() {
       ...result
     });
   });
-
-  console.log('[FaceDetector] IPC listeners registered');
 }
 
 // ============================================
@@ -378,13 +359,7 @@ function initFaceDetector() {
   setupFaceDetectionIPC();
 
   // Pre-initialize models in background
-  detector.initialize().then(result => {
-    if (result.success) {
-      console.log('[FaceDetector] Pre-initialized successfully');
-    } else {
-      console.warn('[FaceDetector] Pre-initialization failed:', result.error);
-    }
-  });
+  detector.initialize();
 
   return detector;
 }

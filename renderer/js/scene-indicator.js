@@ -63,9 +63,6 @@ class SceneIndicator {
       if (result.success) {
         this.isModelLoaded = true;
         this.modelInfo = result.modelInfo;
-        console.log('[SceneIndicator] Scene classifier initialized:', this.modelInfo);
-      } else {
-        console.warn('[SceneIndicator] Scene classifier not available:', result.error);
       }
     } catch (error) {
       console.error('[SceneIndicator] Failed to initialize scene classifier:', error);
@@ -221,7 +218,6 @@ class SceneIndicator {
   // Classify a single image (async)
   async classifyImage(imagePath) {
     if (!this.isModelLoaded) {
-      console.warn('[SceneIndicator] Model not loaded, cannot classify');
       return null;
     }
 
@@ -256,11 +252,9 @@ class SceneIndicator {
 
         return result.decision;
       } else {
-        console.error('[SceneIndicator] Routing failed:', result.error);
         return null;
       }
     } catch (error) {
-      console.error('[SceneIndicator] Routing error:', error);
       return null;
     }
   }

@@ -28,7 +28,6 @@ function initVersionTable(): void {
     `;
 
     db.exec(createVersionsTable);
-    console.log('Schema versions table initialized.');
   } catch (error) {
     console.error('Error initializing version table:', error);
   }
@@ -62,7 +61,6 @@ function markVersionApplied(version: DatabaseVersion): void {
       'INSERT INTO SchemaVersions (version, description, applied_at) VALUES (?, ?, ?)'
     );
     stmt.run(version.version, version.description, now);
-    console.log(`Schema version ${version.version} marked as applied.`);
   } catch (error) {
     console.error(`Error marking version ${version.version} as applied:`, error);
   }
@@ -114,7 +112,6 @@ const migration1 = {
     description: 'Add raw_analysis column to TestResults table'
   },
   migrate: () => {
-    console.log('Applying migration 1: Adding raw_analysis column to TestResults');
     try {
       // Prima verifica se la colonna esiste già
       const tableInfo = db.prepare("PRAGMA table_info(TestResults)").all() as any[];
@@ -125,14 +122,11 @@ const migration1 = {
           ALTER TABLE TestResults ADD COLUMN raw_analysis TEXT;
         `;
         db.exec(alterTableSql);
-        console.log('Migration 1 applied successfully');
-      } else {
-        console.log('Migration 1: raw_analysis column already exists, skipping');
       }
     } catch (error: any) {
       // Se la tabella non esiste ancora, è ok, verrà creata dopo
       if (error.code === 'SQLITE_ERROR' && error.message.includes('no such table')) {
-        console.log('Migration 1: TestResults table does not exist yet, skipping');
+        // TestResults table does not exist yet, skipping
       } else {
         console.error('Error applying migration 1:', error);
         throw error;
@@ -158,28 +152,18 @@ const migrations = [
  */
 export function applyDatabaseMigrations(): void {
   try {
-    console.log('Starting database migrations...');
-    
     // Inizializza tabella versioni
     initVersionTable();
-    
+
     // Ottieni versione corrente
     const currentVersion = getCurrentVersion();
-    console.log(`Current database schema version: ${currentVersion}`);
-    
+
     // Applica migrazioni in ordine
-    let migrationsApplied = 0;
-    
     migrations.forEach(migration => {
       if (migration.version.version > currentVersion) {
-        console.log(`Applying migration ${migration.version.version}: ${migration.version.description}`);
-        if (applyMigration(migration)) {
-          migrationsApplied++;
-        }
+        applyMigration(migration);
       }
     });
-    
-    console.log(`Database migrations complete. Applied ${migrationsApplied} migrations.`);
   } catch (error) {
     console.error('Error applying database migrations:', error);
   }

@@ -324,7 +324,6 @@ class EnhancedProgressTracker {
   }
 
   handleTemporalAnalysisStarted(data) {
-    console.log('[Enhanced Progress] Temporal analysis started:', data);
     this.currentPhase = 'temporal';
     this.currentStep = 1;
     this.totalSteps = 2;
@@ -341,8 +340,6 @@ class EnhancedProgressTracker {
   }
 
   handleTemporalBatchProgress(data) {
-    console.log('[Enhanced Progress] Temporal batch progress:', data);
-
     // Update phase progress based on temporal progress
     const phaseProgress = Math.round((data.processed / data.total) * 100);
     const phaseProgressFill = document.getElementById('phase-progress-fill');
@@ -382,8 +379,6 @@ class EnhancedProgressTracker {
   }
 
   handleTemporalAnalysisComplete(data) {
-    console.log('[Enhanced Progress] Temporal analysis complete:', data);
-
     // Complete phase progress
     const phaseProgressFill = document.getElementById('phase-progress-fill');
     const phasePercentage = document.getElementById('phase-percentage');
@@ -413,7 +408,6 @@ class EnhancedProgressTracker {
   }
 
   handleRecognitionPhaseStarted(data) {
-    console.log('[Enhanced Progress] Recognition phase started:', data);
     this.currentPhase = 'recognition';
     this.currentStep = 2;
 

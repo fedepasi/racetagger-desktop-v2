@@ -7,8 +7,6 @@
 let projectModal, projectModalTitle, projectForm, projectNameInput, projectCsvInput, projectCsvInfo, projectIdInput, cancelProjectModalBtn, projectModalError;
 
 document.addEventListener('DOMContentLoaded', () => {
-  console.log('Desktop UI initialized');
-
   const windowClose = document.querySelector('.window-control.window-close');
   const windowMinimize = document.querySelector('.window-control.window-minimize');
   const windowMaximize = document.querySelector('.window-control.window-maximize');
@@ -28,8 +26,6 @@ document.addEventListener('DOMContentLoaded', () => {
     windowClose.addEventListener('click', () => {
       if (window.api) {
         window.api.send('window-close');
-      } else {
-        console.warn('window.api is not available. This might be because you are running the app outside of Electron.');
       }
     });
   }
@@ -37,8 +33,6 @@ document.addEventListener('DOMContentLoaded', () => {
     windowMinimize.addEventListener('click', () => {
       if (window.api) {
         window.api.send('window-minimize');
-      } else {
-        console.warn('window.api is not available. This might be because you are running the app outside of Electron.');
       }
     });
   }
@@ -46,8 +40,6 @@ document.addEventListener('DOMContentLoaded', () => {
     windowMaximize.addEventListener('click', () => {
       if (window.api) {
         window.api.send('window-maximize');
-      } else {
-        console.warn('window.api is not available. This might be because you are running the app outside of Electron.');
       }
     });
   }
@@ -59,7 +51,6 @@ document.addEventListener('DOMContentLoaded', () => {
       
       // Se l'href è un link esterno (.html), consenti il comportamento predefinito
       if (href && (href.endsWith('.html') || href.startsWith('http'))) {
-        console.log(`Navigating to external link: ${href}`);
         // Non blocchiamo il comportamento predefinito, lasciamo che il browser gestisca il link
         sidebarNavItems.forEach(navItem => navItem.classList.remove('active'));
         item.classList.add('active');
@@ -124,8 +115,6 @@ document.addEventListener('DOMContentLoaded', () => {
   if (extractRawPreviewBtn && window.api) {
     // Gestione click sul pulsante di conversione RAW
     extractRawPreviewBtn.addEventListener('click', () => {
-      console.log('Converting RAW to JPEG...');
-      
       // Resetta l'interfaccia
       if (rawPreviewContainer) rawPreviewContainer.style.display = 'none';
       if (rawPreviewError) {
@@ -139,8 +128,6 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Handle status updates
     window.api.receive('raw-preview-status', (status) => {
-      console.log('Raw preview status:', status);
-      
       if (rawPreviewStatus) {
         let statusText = '';
         
@@ -164,8 +151,6 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Gestione risultato dell'estrazione
     window.api.receive('raw-preview-extracted', (result) => {
-      console.log('Raw preview extracted:', result);
-      
       if (rawPreviewContainer && rawPreviewImage && rawOriginalFilename && rawPreviewFilename && rawPreviewPath) {
         // Popola i dettagli
         rawOriginalFilename.textContent = result.originalFilename;
@@ -187,8 +172,6 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Gestione errori
     window.api.receive('raw-preview-error', (error) => {
-      console.error('Raw preview error:', error);
-      
       if (rawPreviewError) {
         rawPreviewError.textContent = error.message || 'An error occurred during preview extraction';
         rawPreviewError.style.display = 'block';
@@ -218,7 +201,6 @@ async function handleProjectFormSubmit(e) {
   }
 
   if (!window.api || !window.api.invoke) {
-    console.warn('window.api is not available. This might be because you are running the app outside of Electron.');
     projectModalError.textContent = 'API non disponibile. Esegui l\'applicazione in Electron per creare progetti.';
     projectModalError.style.display = 'block';
     return;
@@ -230,7 +212,6 @@ async function handleProjectFormSubmit(e) {
 
     if (mode === 'create') {
       const createResult = await window.api.invoke('db-create-project', { name: name });
-      console.log('Create project result:', createResult);
       
       // Controllo di sicurezza per gestire risposte null o undefined
       if (!createResult) {
@@ -266,7 +247,6 @@ async function handleProjectFormSubmit(e) {
     } else if (mode === 'edit' && currentProjectId) {
       const updatePayload = { name: name };
       const updateResult = await window.api.invoke('db-update-project', { id: currentProjectId, projectData: updatePayload });
-      console.log('Update project result:', updateResult);
       
       // Controllo di sicurezza per gestire risposte null o undefined
       if (!updateResult) {
@@ -344,7 +324,6 @@ function openProjectModal(mode, project = null) {
 }
 
 function handleNavigation(sectionName) {
-  console.log(`Navigating to section: ${sectionName}`);
   const contentSections = document.querySelectorAll('.content-section');
   contentSections.forEach(section => section.classList.remove('active-section'));
 
@@ -364,7 +343,6 @@ function handleNavigation(sectionName) {
     else if (sectionName === 'progetti') { loadAllProjects(); }
     // Settings section is handled via the section-changed event in settings.js
   } else {
-    console.warn(`Content section #${targetSectionId} not found.`);
     const homeSection = document.getElementById('section-home');
     if (homeSection) {
         homeSection.classList.add('active-section');
@@ -373,18 +351,15 @@ function handleNavigation(sectionName) {
 }
 
 async function loadRecentPresets() {
-  console.log('Attempting to load recent participant presets...');
   const recentProjectsList = document.getElementById('recent-projects-list');
   if (!recentProjectsList) { return; }
 
   if (window.api && window.api.invoke) {
     try {
       const result = await window.api.invoke('db-get-participant-presets');
-      console.log('Recent presets result:', result);
 
       // Controllo di sicurezza per gestire risposte null o undefined
       if (!result) {
-        console.error('Received null or undefined result from db-get-participant-presets');
         recentProjectsList.innerHTML = '<li>Errore nel caricamento dei preset partecipanti: risposta non valida.</li>';
         return;
       }
@@ -400,17 +375,14 @@ async function loadRecentPresets() {
         recentProjectsList.innerHTML = '<li>Nessun preset di partecipanti trovato.</li>';
       }
     } catch (error) {
-      console.error('Error loading recent presets:', error);
       recentProjectsList.innerHTML = '<li>Errore nel caricamento dei preset.</li>';
     }
   } else {
-    console.warn('window.api is not available. This might be because you are running the app outside of Electron.');
     recentProjectsList.innerHTML = '<li>API non disponibile. Esegui l\'applicazione in Electron per accedere ai preset.</li>';
   }
 }
 
 async function loadAllProjects() {
-  console.log('Attempting to load all projects for UI...');
   const projectsListContainer = document.getElementById('projects-list-container');
   if (!projectsListContainer) { return; }
 
@@ -418,11 +390,9 @@ async function loadAllProjects() {
     try {
       projectsListContainer.innerHTML = '<p>Caricamento progetti...</p>';
       const result = await window.api.invoke('db-get-all-projects');
-      console.log('All projects result:', result);
       
       // Controllo di sicurezza per gestire risposte null o undefined
       if (!result) {
-        console.error('Received null or undefined result from db-get-all-projects');
         projectsListContainer.innerHTML = '<p>Errore nel caricamento dei progetti: risposta non valida.</p>';
         return;
       }
@@ -449,11 +419,9 @@ async function loadAllProjects() {
         projectsListContainer.innerHTML = `<p>Error loading projects: ${result && result.error ? result.error : 'Unknown error'}</p>`;
       }
     } catch (error) {
-      console.error('Error loading all projects:', error);
       projectsListContainer.innerHTML = `<p>Critical error loading projects: ${error.message}</p>`;
     }
   } else {
-    console.warn('window.api is not available. This might be because you are running the app outside of Electron.');
     projectsListContainer.innerHTML = '<p>API non disponibile. Esegui l\'applicazione in Electron per accedere ai progetti.</p>';
   }
 }
@@ -463,7 +431,6 @@ function addProjectActionListeners() {
     button.addEventListener('click', (event) => {
       const projectId = event.currentTarget.dataset.projectId;
       if (projectId) {
-        console.log(`View project: ${projectId}`);
         alert(`TODO: Open project ${projectId}`);
       }
     });
@@ -491,7 +458,6 @@ function addProjectActionListeners() {
           if (window.api && window.api.invoke) {
             try {
               const result = await window.api.invoke('db-delete-project', projectId);
-              console.log('Delete project result:', result);
               
               // Controllo di sicurezza per gestire risposte null o undefined
               if (!result) {
@@ -509,7 +475,6 @@ function addProjectActionListeners() {
               alert(`Critical error during deletion: ${error.message}`);
             }
           } else {
-            console.warn('window.api is not available. This might be because you are running the app outside of Electron.');
             alert('API not available. Run the application in Electron to delete projects.');
           }
         }
@@ -545,7 +510,6 @@ function initializeResizeControls() {
   const presetRadios = document.querySelectorAll('input[name="resize-preset"]');
 
   if (!resizeEnabledToggle || !resizePresetsContainer || !resizeEstimate) {
-    console.warn('Resize controls not found in DOM');
     return;
   }
 
@@ -636,8 +600,6 @@ function initializeResizeControls() {
     
     // Save preference
     localStorage.setItem('resize-enabled', isEnabled.toString());
-    
-    console.log(`Resize optimization ${isEnabled ? 'enabled' : 'disabled'}`);
   });
 
   // Preset change events with visual feedback
@@ -658,11 +620,9 @@ function initializeResizeControls() {
         
         // Save preference
         localStorage.setItem('resize-preset', this.value);
-        
+
         // Update size estimate
         updateSizeEstimate(this.value);
-        
-        console.log(`Resize preset changed to: ${this.value}`);
       }
     });
   });
@@ -710,7 +670,6 @@ document.addEventListener('DOMContentLoaded', () => {
  */
 function setupModelDownloadListeners() {
   if (!window.api) {
-    console.warn('[ModelDownload] window.api not available');
     return;
   }
 
@@ -722,7 +681,6 @@ function setupModelDownloadListeners() {
   const funFact = document.getElementById('download-fun-fact');
 
   if (!modal) {
-    console.warn('[ModelDownload] Modal elements not found');
     return;
   }
 
@@ -738,7 +696,6 @@ function setupModelDownloadListeners() {
   let factInterval = null;
 
   window.api.receive('model-download-start', (data) => {
-    console.log('[ModelDownload] Download started:', data);
     modal.style.display = 'flex';
     document.body.classList.add('modal-open');
     if (totalText) totalText.textContent = `${data.totalSizeMB.toFixed(1)} MB`;
@@ -761,7 +718,6 @@ function setupModelDownloadListeners() {
   });
 
   window.api.receive('model-download-complete', () => {
-    console.log('[ModelDownload] Download complete');
     if (factInterval) {
       clearInterval(factInterval);
       factInterval = null;
@@ -771,7 +727,6 @@ function setupModelDownloadListeners() {
   });
 
   window.api.receive('model-download-error', (data) => {
-    console.error('[ModelDownload] Download error:', data);
     if (factInterval) {
       clearInterval(factInterval);
       factInterval = null;
@@ -782,8 +737,6 @@ function setupModelDownloadListeners() {
       funFact.style.color = 'var(--accent-danger, #ef4444)';
     }
   });
-
-  console.log('[ModelDownload] Listeners setup complete');
 }
 
 window.desktopUI = {

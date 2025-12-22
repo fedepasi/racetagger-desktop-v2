@@ -22,13 +22,10 @@ const SettingsManager = {
       return;
     }
 
-    console.log('[Settings] Initializing settings page...');
-
     try {
       await this.loadSettings();
       this.setupEventListeners();
       this.isInitialized = true;
-      console.log('[Settings] Settings page initialized successfully');
     } catch (error) {
       console.error('[Settings] Error initializing settings:', error);
     }
@@ -39,9 +36,7 @@ const SettingsManager = {
    */
   async loadSettings() {
     try {
-      console.log('[Settings] Loading settings data...');
       this.settings = await window.api.invoke('get-full-settings');
-      console.log('[Settings] Settings loaded:', this.settings);
       this.renderSettings();
     } catch (error) {
       console.error('[Settings] Error loading settings:', error);
@@ -103,7 +98,6 @@ const SettingsManager = {
       const version = await window.api.invoke('get-app-version');
       this.updateElement('settings-app-version', `v${version}`);
     } catch (error) {
-      console.warn('[Settings] Could not load app version:', error);
       this.updateElement('settings-app-version', 'Unknown');
     }
   },
@@ -127,8 +121,6 @@ const SettingsManager = {
         this.handleBuyTokens();
       });
     }
-
-    console.log('[Settings] Event listeners set up');
   },
 
   /**
@@ -138,7 +130,6 @@ const SettingsManager = {
     const toggle = document.getElementById('settings-training-consent');
 
     try {
-      console.log('[Settings] Updating training consent to:', newConsent);
       const result = await window.api.invoke('set-training-consent', newConsent);
 
       if (result) {
@@ -175,7 +166,6 @@ const SettingsManager = {
    * Handle buy tokens button click
    */
   handleBuyTokens() {
-    console.log('[Settings] Opening subscription page...');
     // Try to open the token info modal first
     const tokenModal = document.getElementById('token-info-modal');
     if (tokenModal) {
@@ -195,9 +185,6 @@ const SettingsManager = {
       showNotification(title, message, type);
     } else if (typeof showToast === 'function') {
       showToast(message, type);
-    } else {
-      // Fallback to console
-      console.log(`[${type.toUpperCase()}] ${title}: ${message}`);
     }
   },
 

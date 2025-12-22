@@ -108,7 +108,7 @@ export class FaceRecognitionProcessor {
   private personDescriptors: Map<string, number[][]> = new Map(); // personId -> array of descriptors
 
   constructor() {
-    console.log('[FaceRecognition] Initialized (matching-only mode, no canvas required)');
+    // Matching-only mode, no canvas required
   }
 
   /**
@@ -116,7 +116,6 @@ export class FaceRecognitionProcessor {
    */
   async initialize(): Promise<{ success: boolean; error?: string }> {
     this.isReady = true;
-    console.log('[FaceRecognition] Ready for matching (face detection is done in renderer)');
     return { success: true };
   }
 
@@ -135,27 +134,12 @@ export class FaceRecognitionProcessor {
     this.storedFaces.clear();
     this.personDescriptors.clear();
 
-    console.log(`[FaceRecognition] Loading ${faces.length} faces from database...`);
-
-    // Debug: Check first face to see descriptor format
-    if (faces.length > 0) {
-      const first = faces[0];
-      console.log(`[FaceRecognition] First face: personId=${first.personId}, personName=${first.personName}, descriptor type=${typeof first.descriptor}, isArray=${Array.isArray(first.descriptor)}, length=${first.descriptor?.length}`);
-      if (first.descriptor && first.descriptor.length > 0) {
-        console.log(`[FaceRecognition] Descriptor sample (first 5 values): [${first.descriptor.slice(0, 5).join(', ')}]`);
-      }
-    }
-
     const validFaces = faces.filter(f => {
       const isValid = f.descriptor && Array.isArray(f.descriptor) && f.descriptor.length === 128;
-      if (!isValid) {
-        console.log(`[FaceRecognition] Invalid descriptor for ${f.personName}: isArray=${Array.isArray(f.descriptor)}, length=${f.descriptor?.length}`);
-      }
       return isValid;
     });
 
     if (validFaces.length === 0) {
-      console.log('[FaceRecognition] No valid face descriptors to load');
       return;
     }
 
@@ -175,10 +159,6 @@ export class FaceRecognitionProcessor {
       }
       this.personDescriptors.get(key)!.push(face.descriptor);
     }
-
-    const totalDescriptors = validFaces.length;
-    const uniquePersons = this.personDescriptors.size;
-    console.log(`[FaceRecognition] Loaded ${totalDescriptors} face descriptors for ${uniquePersons} persons`);
   }
 
   /**
@@ -203,16 +183,11 @@ export class FaceRecognitionProcessor {
     descriptor: number[],
     threshold: number = 0.6
   ): { personId: string; distance: number } | null {
-    // Debug: Check descriptor validity
-    console.log(`[FaceRecognition] findBestMatch: descriptor length=${descriptor?.length}, stored persons=${this.personDescriptors.size}, threshold=${threshold}`);
-
     if (!descriptor || descriptor.length !== 128) {
-      console.log(`[FaceRecognition] Invalid descriptor length: ${descriptor?.length}`);
       return null;
     }
 
     if (this.personDescriptors.size === 0) {
-      console.log('[FaceRecognition] No stored descriptors to match against');
       return null;
     }
 
@@ -236,9 +211,6 @@ export class FaceRecognitionProcessor {
         }
       }
     }
-
-    // Debug: Log closest match info
-    console.log(`[FaceRecognition] Closest match: person=${closestPersonId}, distance=${closestDistance.toFixed(4)}, threshold=${threshold}, matched=${bestMatch !== null}`);
 
     return bestMatch;
   }
@@ -281,7 +253,6 @@ export class FaceRecognitionProcessor {
     }
 
     const inferenceTimeMs = Date.now() - startTime;
-    console.log(`[FaceRecognition] Matched ${matchedPersons.length} of ${facesToProcess.length} faces in ${inferenceTimeMs}ms`);
 
     return {
       success: true,
@@ -300,7 +271,6 @@ export class FaceRecognitionProcessor {
     _imagePath: string,
     _context: FaceContext = 'auto'
   ): Promise<FaceRecognitionResult> {
-    console.warn('[FaceRecognition] detectAndRecognize called - face detection should be done in renderer');
     return {
       success: false,
       faces: [],
@@ -321,7 +291,6 @@ export class FaceRecognitionProcessor {
     boundingBox?: { x: number; y: number; width: number; height: number };
     error?: string;
   }> {
-    console.warn('[FaceRecognition] generateDescriptor called - must be done in renderer or Management Portal');
     return {
       success: false,
       error: 'Descriptor generation must be done in renderer process (browser Canvas API) or Management Portal'
@@ -348,7 +317,6 @@ export class FaceRecognitionProcessor {
   clearDescriptors(): void {
     this.storedFaces.clear();
     this.personDescriptors.clear();
-    console.log('[FaceRecognition] Cleared all face descriptors');
   }
 
   /**
@@ -424,7 +392,6 @@ export class FaceRecognitionProcessor {
         .single();
 
       if (catError || !category) {
-        console.warn(`[FaceRecognition] Sport category not found: ${categoryCode}`);
         return 0;
       }
 
@@ -441,11 +408,8 @@ export class FaceRecognitionProcessor {
       }
 
       if (!persons || persons.length === 0) {
-        console.log(`[FaceRecognition] No persons found for category: ${categoryCode}`);
         return 0;
       }
-
-      console.log(`[FaceRecognition] Found ${persons.length} persons for category ${categoryCode}`);
 
       // Query multi-photo descriptors from sport_category_face_photos
       const personIds = persons.map(p => p.id);
@@ -455,18 +419,7 @@ export class FaceRecognitionProcessor {
         .in('face_id', personIds);
 
       if (photosError) {
-        console.warn('[FaceRecognition] Error loading face photos, falling back to main table:', photosError);
-      }
-
-      // Debug: Log query results
-      console.log(`[FaceRecognition] Found ${photos?.length || 0} photos in sport_category_face_photos`);
-      if (persons.length > 0) {
-        const first = persons[0];
-        console.log(`[FaceRecognition] First person: name=${first.person_name}, face_descriptor type=${typeof first.face_descriptor}, isArray=${Array.isArray(first.face_descriptor)}, length=${first.face_descriptor?.length || 0}`);
-      }
-      if (photos && photos.length > 0) {
-        const firstPhoto = photos[0];
-        console.log(`[FaceRecognition] First photo: face_descriptor type=${typeof firstPhoto.face_descriptor}, isArray=${Array.isArray(firstPhoto.face_descriptor)}, length=${firstPhoto.face_descriptor?.length || 0}`);
+        // Error loading face photos, falling back to main table
       }
 
       // Build descriptors array - prefer multi-photo table, fallback to main table
@@ -520,8 +473,6 @@ export class FaceRecognitionProcessor {
       // Load into processor
       this.loadFaceDescriptors(descriptors);
 
-      const personsWithDescriptors = new Set(descriptors.map(d => d.personId)).size;
-      console.log(`[FaceRecognition] Loaded ${descriptors.length} face descriptors for ${personsWithDescriptors} persons in ${categoryCode}`);
       return descriptors.length;
 
     } catch (error) {
@@ -548,7 +499,6 @@ export class FaceRecognitionProcessor {
         return null;
       }
     }
-    console.warn(`[FaceRecognition] Unknown descriptor type for ${personName}: ${typeof descriptor}`);
     return null;
   }
 }

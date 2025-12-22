@@ -7,7 +7,7 @@
 
 import { BrowserWindow } from 'electron';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { SUPABASE_CONFIG } from '../config';
+import { SUPABASE_CONFIG, DEBUG_MODE } from '../config';
 import { CsvEntry, BatchProcessConfig, VersionCheckResult } from './types';
 
 // ==================== State ====================
@@ -91,9 +91,8 @@ export function getSupabaseImageUrlCache(): Map<string, string> {
  */
 export function safeSend(channel: string, ...args: any[]): void {
   if (_mainWindow && !_mainWindow.isDestroyed()) {
-    console.log(`[IPC] Sending: ${channel}`);
     _mainWindow.webContents.send(channel, ...args);
-  } else {
+  } else if (DEBUG_MODE) {
     console.warn(`[IPC] Cannot send ${channel} - mainWindow unavailable`);
   }
 }

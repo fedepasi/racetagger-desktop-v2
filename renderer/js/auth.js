@@ -39,8 +39,6 @@ let authState = {
 
 // Initialize auth UI
 function initializeAuth() {
-  console.log('Initializing auth UI components');
-  
   // Setup refresh button event listener
   const refreshBtn = document.getElementById('refresh-tokens-btn');
   if (refreshBtn) {
@@ -301,9 +299,6 @@ function handleLogout() {
 
 // Handle auth status response
 function handleAuthStatus(status) {
-  console.log('Received auth status:', status);
-  console.log('Frontend - userRole received:', status.userRole);
-  
   authState = {
     ...authState,
     isAuthenticated: status.isAuthenticated,
@@ -441,8 +436,6 @@ function handleLogoutResult(result) {
 
 // Update token balance display - now includes pending tokens if available
 function updateTokenBalance(tokenInfo) {
-  console.log('[Auth] Updating token balance display:', tokenInfo);
-  
   // Update the token balance but preserve existing pending count
   const existingPending = authState.tokens.pending || 0;
   authState.tokens = { ...tokenInfo, pending: existingPending };
@@ -471,14 +464,12 @@ function updateTokenBalance(tokenInfo) {
   // Reset refresh button state if it was in loading state
   const existingRefreshBtn = document.getElementById('refresh-tokens-btn');
   if (existingRefreshBtn && existingRefreshBtn.disabled) {
-    console.log('[Auth] Resetting refresh button after successful token update');
     existingRefreshBtn.innerHTML = '🔄';
     existingRefreshBtn.disabled = false;
     existingRefreshBtn.classList.remove('spinning');
-    
+
     // Show success feedback
     showNotification('Saldo Token Aggiornato', 'Il tuo saldo token è stato aggiornato con successo.');
-    console.log('Token refresh completed, button restored');
   }
 }
 
@@ -493,9 +484,8 @@ function updateSubscriptionInfo(subscriptionInfo) {
 
 // Update pending tokens display
 function updatePendingTokens(pendingTokensCount) {
-  console.log('[Auth] Updating pending tokens display:', pendingTokensCount);
   authState.tokens.pending = pendingTokensCount || 0;
-  
+
   // Update the display to show pending tokens if any exist
   updateTokenDisplayWithPending();
 }
@@ -511,7 +501,6 @@ function updateTokenDisplayWithPending() {
     if (authState.tokens.pending > 0) {
       displayText += ` <span class="token-pending">(+${authState.tokens.pending} pending)</span>`;
       tooltip += `\nPending approval: ${authState.tokens.pending} images`;
-      console.log('[Auth] Displaying tokens with pending:', displayText);
     }
 
     tokenAmountElement.innerHTML = displayText;
@@ -536,8 +525,6 @@ function updateTokenDisplayWithPending() {
 
 // Handle token used event
 function handleTokenUsed(tokenInfo) {
-  console.log('[Auth] handleTokenUsed called with:', tokenInfo);
-  
   // Update token balance
   updateTokenBalance(tokenInfo);
   
@@ -550,8 +537,6 @@ function handleTokenUsed(tokenInfo) {
 
 // Handle auth refresh completed event
 function handleAuthRefreshCompleted() {
-  console.log('[Auth] Auth refresh completed - reloading categories and analytics...');
-
   // Reload categories
   if (typeof loadDynamicCategories === 'function') {
     loadDynamicCategories(true); // Force refresh
@@ -570,8 +555,6 @@ function handleAuthRefreshCompleted() {
 
 // Handle token refresh button click
 function handleTokenRefresh() {
-  console.log('[Auth] Token refresh requested by user');
-  
   // Show loading state on button
   const refreshBtn = document.getElementById('refresh-tokens-btn');
   if (refreshBtn) {
@@ -586,17 +569,14 @@ function handleTokenRefresh() {
         refreshBtn.innerHTML = originalText;
         refreshBtn.disabled = false;
         refreshBtn.classList.remove('spinning');
-        console.log('[Auth] Token refresh button reset after timeout');
       }
     }, 3000);
   }
   
   // Request token refresh from main process
   if (window.api && authState.isAuthenticated) {
-    console.log('[Auth] Sending force-token-refresh request');
     window.api.send('force-token-refresh');
   } else if (!authState.isAuthenticated) {
-    console.log('[Auth] Cannot refresh tokens - user not authenticated');
     showNotification('Aggiornamento Fallito', 'Effettua il login per aggiornare il saldo token.');
     // Reset button immediately if not authenticated
     if (refreshBtn) {
@@ -798,14 +778,12 @@ function updateUIForAuthState() {
 // Update token balance from server (async version for manual calls)
 async function updateTokenBalanceAsync() {
   if (!authState.isAuthenticated) {
-    console.log('[Auth] Cannot update token balance - user not authenticated');
     return; // Demo mode, no need to update
   }
-  
+
   try {
-    console.log('[Auth] Fetching token balance from server...');
     const balance = await window.api.invoke('get-token-balance');
-    
+
     // Update the display with the received balance
     if (typeof balance === 'object' && balance.remaining !== undefined) {
       updateTokenBalance(balance);
@@ -817,8 +795,6 @@ async function updateTokenBalanceAsync() {
         remaining: balance
       });
     }
-    
-    console.log(`[Auth] Token balance updated: ${balance}`);
   } catch (error) {
     console.error('[Auth] Error updating token balance:', error);
     throw error;
@@ -850,9 +826,8 @@ async function loadPendingTokens() {
   if (!authState.isAuthenticated || !window.api) {
     return;
   }
-  
+
   try {
-    console.log('[Auth] Loading initial pending tokens...');
     const pendingTokens = await window.api.invoke('get-pending-tokens');
     updatePendingTokens(pendingTokens);
   } catch (error) {
@@ -865,9 +840,8 @@ async function loadCompleteTokenInfo() {
   if (!authState.isAuthenticated || !window.api) {
     return;
   }
-  
+
   try {
-    console.log('[Auth] Loading complete token info...');
     const tokenInfo = await window.api.invoke('get-token-info');
     updateTokenBalance(tokenInfo.balance);
     updatePendingTokens(tokenInfo.pending);
@@ -890,8 +864,6 @@ function submitFeedback(imageId, rating, comment) {
 
 // Aggiorna la visibilità delle sezioni sidebar in base al ruolo utente
 function updateSidebarVisibility() {
-  console.log('Updating sidebar visibility for user role:', authState.userRole);
-  
   // Trova tutte le voci di navigazione
   const navItems = document.querySelectorAll('.sidebar-nav .nav-item');
   
@@ -915,15 +887,12 @@ function updateSidebarVisibility() {
       // Mostra solo agli admin
       if (authState.userRole === 'admin') {
         navItem.style.display = 'block';
-        console.log(`Showing admin section: ${linkText} (${iconText})`);
       } else {
         navItem.style.display = 'none';
-        console.log(`Hiding admin section: ${linkText} (${iconText}) - user role: ${authState.userRole}`);
       }
     } else {
       // Analisi e Impostazioni sempre visibili
       navItem.style.display = 'block';
-      console.log(`Showing regular section: ${linkText} (${iconText})`);
     }
   });
   
@@ -953,8 +922,6 @@ function updateSidebarVisibility() {
         if (analysisNavItem && analysisNavItem.textContent.trim() === '🔍') {
           analysisNavItem.closest('.nav-item').classList.add('active');
         }
-        
-        console.log(`Redirected non-admin user from ${sectionId} to section-analysis`);
       }
     }
   }
@@ -974,7 +941,6 @@ window.authUtils = {
 
 // Funzione per ricontrollare l'auth status
 function recheckAuthStatus() {
-  console.log('Rechecking auth status...');
   if (window.api && window.api.send) {
     window.api.send('check-auth-status');
   }
@@ -1004,7 +970,6 @@ async function loadTrainingConsentStatus() {
 
   // Early return if neither toggle exists
   if (!headerToggle && !settingsToggle) {
-    console.log('[Auth] No training consent toggles found in DOM');
     return;
   }
 
@@ -1015,7 +980,6 @@ async function loadTrainingConsentStatus() {
   try {
     // Load current consent status from backend
     const consent = await window.api.invoke('get-training-consent');
-    console.log('[Auth] Training consent loaded:', consent);
 
     // Update both toggles if they exist
     if (headerToggle) {
@@ -1042,7 +1006,6 @@ async function loadTrainingConsentStatus() {
 // Handle training consent toggle change
 async function handleTrainingConsentChange(event) {
   const newConsent = event.target.checked;
-  console.log('[Auth] Training consent changed to:', newConsent);
 
   try {
     const result = await window.api.invoke('set-training-consent', newConsent);
@@ -1068,10 +1031,9 @@ async function handleTrainingConsentChange(event) {
 // Inizializza quando il documento è pronto
 document.addEventListener('DOMContentLoaded', () => {
   initializeAuth();
-  
+
   // Ricontrolla auth status dopo 2 secondi per assicurarsi che il userRole sia determinato
   setTimeout(() => {
-    console.log('Auto-rechecking auth status after 2 seconds...');
     recheckAuthStatus();
   }, 2000);
 });

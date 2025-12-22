@@ -110,7 +110,6 @@ export class SceneClassifierONNX {
 
     try {
       ort = require('onnxruntime-node');
-      console.log('[SceneClassifierONNX] ONNX Runtime initialized');
       return true;
     } catch (error) {
       console.error('[SceneClassifierONNX] Failed to load ONNX Runtime:', error);
@@ -185,14 +184,12 @@ export class SceneClassifierONNX {
 
       // Get model path
       const modelPath = this.getModelPath();
-      console.log(`[SceneClassifierONNX] Loading model from: ${modelPath}`);
 
       // Load model info
       const modelInfoPath = path.join(path.dirname(modelPath), 'model_info.json');
       if (fs.existsSync(modelInfoPath)) {
         const modelInfoJson = fs.readFileSync(modelInfoPath, 'utf-8');
         this.modelInfo = JSON.parse(modelInfoJson);
-        console.log(`[SceneClassifierONNX] Model info loaded: ${this.modelInfo?.model_type}, accuracy: ${(this.modelInfo?.final_val_accuracy || 0) * 100}%`);
       }
 
       // Create ONNX inference session
@@ -208,13 +205,9 @@ export class SceneClassifierONNX {
 
       this.session = await ort.InferenceSession.create(modelPath, sessionOptions);
 
-      const loadTime = Date.now() - startTime;
-      console.log(`[SceneClassifierONNX] Model loaded in ${loadTime}ms`);
-
       // Get input/output names
       this.inputName = this.session.inputNames[0];
       this.outputName = this.session.outputNames[0];
-      console.log(`[SceneClassifierONNX] Input: ${this.inputName}, Output: ${this.outputName}`);
 
       // Warm up the model with a dummy prediction
       await this.warmUp();
@@ -244,10 +237,8 @@ export class SceneClassifierONNX {
       const feeds: Record<string, any> = {};
       feeds[this.inputName] = dummyTensor;
       await this.session.run(feeds);
-
-      console.log('[SceneClassifierONNX] Model warmed up');
     } catch (error) {
-      console.warn('[SceneClassifierONNX] Warmup failed:', error);
+      // Warmup failed - non-critical
     }
   }
 
@@ -339,8 +330,6 @@ export class SceneClassifierONNX {
 
       const inferenceTimeMs = Date.now() - startTime;
 
-      console.log(`[SceneClassifierONNX] Classified as ${topPrediction.category} (${(topPrediction.confidence * 100).toFixed(1)}%) in ${inferenceTimeMs}ms`);
-
       return {
         category: topPrediction.category,
         confidence: topPrediction.confidence,
@@ -386,7 +375,6 @@ export class SceneClassifierONNX {
     this.modelInfo = null;
     this.loadError = null;
     SceneClassifierONNX.instance = null;
-    console.log('[SceneClassifierONNX] Model disposed');
   }
 }
 

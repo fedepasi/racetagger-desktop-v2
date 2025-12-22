@@ -33,7 +33,6 @@ import {
 } from '../database-service';
 
 export function registerSupabaseHandlers(): void {
-  console.log('[IPC] Registering Supabase handlers...');
 
   // ==================== SPORT CATEGORIES ====================
 
@@ -58,7 +57,6 @@ export function registerSupabaseHandlers(): void {
   ipcMain.handle('supabase-get-cached-sport-categories', async () => {
     try {
       const categories = getCachedSportCategories();
-      console.log('[Supabase] Returning', categories.length, 'cached categories');
       return { success: true, data: categories };
     } catch (e: any) {
       console.error('[Supabase] Error getting cached categories:', e.message);
@@ -166,7 +164,6 @@ export function registerSupabaseHandlers(): void {
         return { success: false, error: 'Unauthorized: Admin access required' };
       }
 
-      console.log('[Supabase] Admin requesting all presets');
       const presets = await getUserParticipantPresetsSupabase(true);
       return { success: true, data: presets };
     } catch (e: any) {
@@ -177,7 +174,6 @@ export function registerSupabaseHandlers(): void {
 
   ipcMain.handle('supabase-duplicate-official-preset', async (_, presetId: string) => {
     try {
-      console.log('[Supabase] Duplicating preset:', presetId);
       const newPreset = await duplicateOfficialPresetSupabase(presetId);
       return { success: true, data: newPreset };
     } catch (e: any) {
@@ -211,11 +207,9 @@ export function registerSupabaseHandlers(): void {
   // ==================== HOME STATISTICS ====================
 
   ipcMain.handle('get-home-statistics', async () => {
-    console.log('[Home Stats] Starting home statistics calculation...');
     try {
       const userId = authService.getAuthState().user?.id;
       if (!userId) {
-        console.log('[Home Stats] No user ID available, returning default stats');
         return {
           success: true,
           data: {
@@ -265,7 +259,6 @@ export function registerSupabaseHandlers(): void {
         console.error('[Home Stats] Error querying stats:', queryError);
       }
 
-      console.log(`[Home Stats] Result: ${monthlyPhotos} photos, ${completedEvents} events`);
       return {
         success: true,
         data: {
@@ -285,7 +278,6 @@ export function registerSupabaseHandlers(): void {
   // ==================== ANNOUNCEMENTS ====================
 
   ipcMain.handle('get-announcements', async () => {
-    console.log('[Announcements] Fetching desktop announcements...');
     try {
       const supabase = getSupabaseClient();
       const { data, error } = await supabase
@@ -300,13 +292,10 @@ export function registerSupabaseHandlers(): void {
         return { success: false, data: [] };
       }
 
-      console.log(`[Announcements] Retrieved ${data?.length || 0} announcements`);
       return { success: true, data: data || [] };
     } catch (error) {
       console.error('[Announcements] Error fetching announcements:', error);
       return { success: false, data: [] };
     }
   });
-
-  console.log('[IPC] Supabase handlers registered (19 handlers)');
 }

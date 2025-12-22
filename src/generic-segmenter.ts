@@ -135,8 +135,6 @@ export class GenericSegmenter {
    * Update configuration (e.g., from sport_categories.segmentation_config)
    */
   public updateConfig(segConfig: SegmentationConfig): void {
-    console.log(`[GenericSegmenter] Updating config: modelId=${segConfig.model_id}, classes=${segConfig.relevant_classes.join(',')}`);
-
     this.config.modelId = segConfig.model_id;
     this.config.relevantClassNames = segConfig.relevant_classes;
     this.config.confidenceThreshold = segConfig.confidence_threshold;
@@ -165,7 +163,6 @@ export class GenericSegmenter {
 
     try {
       ort = require('onnxruntime-node');
-      console.log('[GenericSegmenter] ONNX Runtime initialized');
       return true;
     } catch (error) {
       console.error('[GenericSegmenter] Failed to load ONNX Runtime:', error);
@@ -180,13 +177,11 @@ export class GenericSegmenter {
   public async loadModel(modelPath?: string): Promise<boolean> {
     // If model is already loaded, return immediately
     if (this.session && this.currentModelPath) {
-      console.log('[GenericSegmenter] Model already loaded');
       return true;
     }
 
     // If loading is in progress, wait for it
     if (this.loadingPromise) {
-      console.log('[GenericSegmenter] Model loading in progress, waiting...');
       return this.loadingPromise;
     }
 
@@ -223,8 +218,6 @@ export class GenericSegmenter {
       this.NUM_MASK_COEFFS = this.currentModelConfig.numMaskCoeffs;
       this.PROTO_SIZE = this.currentModelConfig.protoSize;
 
-      console.log(`[GenericSegmenter] Model config: ${this.config.modelId}, ${this.NUM_CLASSES} classes, ${this.NUM_MASK_COEFFS} mask coeffs`);
-
       // Get model path - either provided or download from Supabase
       let finalModelPath = modelPath;
 
@@ -239,12 +232,9 @@ export class GenericSegmenter {
 
       // Skip if same model already loaded
       if (this.session && this.currentModelPath === finalModelPath) {
-        console.log('[GenericSegmenter] Model already loaded');
         this.isLoading = false;
         return true;
       }
-
-      console.log(`[GenericSegmenter] Loading model: ${finalModelPath}`);
 
       // Create inference session
       const sessionOptions: import('onnxruntime-node').InferenceSession.SessionOptions = {
@@ -257,11 +247,6 @@ export class GenericSegmenter {
 
       // Update relevant class IDs now that model config is loaded
       this.updateRelevantClassIds();
-
-      console.log('[GenericSegmenter] Model loaded successfully');
-      console.log(`[GenericSegmenter] Input names: ${this.session.inputNames}`);
-      console.log(`[GenericSegmenter] Output names: ${this.session.outputNames}`);
-      console.log(`[GenericSegmenter] Relevant classes: ${this.config.relevantClassNames.join(', ')} -> IDs: [${this.config.relevantClassIds.join(', ')}]`);
 
       return true;
     } catch (error) {
@@ -418,10 +403,6 @@ export class GenericSegmenter {
         }));
 
       const inferenceTimeMs = Date.now() - startTime;
-      console.log(
-        `[GenericSegmenter] Inference completed in ${inferenceTimeMs}ms, ` +
-        `${finalDetections.length} detections (${detections.length} before NMS/filter)`
-      );
 
       return {
         detections: finalDetections,
@@ -457,7 +438,6 @@ export class GenericSegmenter {
 
     // Get output tensors
     const outputNames = Object.keys(results);
-    console.log(`[GenericSegmenter] Output names: ${outputNames.join(', ')}, expecting ${expectedChannels} channels`);
 
     // Find detection and prototype outputs
     let detectionsOutput: Float32Array | null = null;
@@ -473,18 +453,15 @@ export class GenericSegmenter {
       if (dims.length === 3 && dims[1] === expectedChannels) {
         detectionsOutput = tensor.data as Float32Array;
         detectionsShape = dims;
-        console.log(`[GenericSegmenter] Found detections: ${name}, dims=[${dims}]`);
       }
       // Prototype output: [1, 32, 160, 160]
       else if (dims.length === 4 && dims[1] === this.NUM_MASK_COEFFS) {
         prototypesOutput = tensor.data as Float32Array;
         prototypesShape = dims;
-        console.log(`[GenericSegmenter] Found prototypes: ${name}, dims=[${dims}]`);
       }
     }
 
     if (!detectionsOutput) {
-      console.warn(`[GenericSegmenter] No detections output found with ${expectedChannels} channels`);
       return detections;
     }
 
@@ -493,8 +470,6 @@ export class GenericSegmenter {
     // channels = 4 (bbox) + NUM_CLASSES + NUM_MASK_COEFFS
     const numAnchors = Number(detectionsShape[2]); // 8400
     const numChannels = Number(detectionsShape[1]);
-
-    console.log(`[GenericSegmenter] Parsing ${numAnchors} anchors, ${numChannels} channels, ${this.NUM_CLASSES} classes`);
 
     for (let a = 0; a < numAnchors; a++) {
       // Get class scores and find best class
@@ -576,7 +551,6 @@ export class GenericSegmenter {
       });
     }
 
-    console.log(`[GenericSegmenter] Parsed ${detections.length} raw detections`);
     return detections;
   }
 
@@ -712,7 +686,6 @@ export class GenericSegmenter {
       }
     }
 
-    console.log(`[GenericSegmenter] NMS: ${detections.length} -> ${keep.length} detections`);
     return keep;
   }
 
@@ -753,7 +726,6 @@ export class GenericSegmenter {
     this.session = null;
     this.currentModelPath = null;
     this.currentModelConfig = null;
-    console.log('[GenericSegmenter] Resources disposed');
   }
 
   /**

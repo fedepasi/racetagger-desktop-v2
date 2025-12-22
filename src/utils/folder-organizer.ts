@@ -1,6 +1,6 @@
 /**
  * ADMIN FEATURE: Folder Organization Module
- * 
+ *
  * This module handles organizing race photos into folders based on race numbers.
  * ISOLATION: All folder organization logic is contained in this single file.
  * TO REMOVE: Simply delete this file and remove imports from other files.
@@ -117,14 +117,12 @@ export class FolderOrganizer {
     operation: 'copy' | 'move' | 'skip'
   ): Promise<boolean> {
     if (operation === 'skip' || !this.isRawFile(originalImagePath) || !this.config.includeXmpFiles) {
-      console.log(`[XMP] Skipping XMP handling for ${path.basename(originalImagePath)} (operation: ${operation}, isRAW: ${this.isRawFile(originalImagePath)}, includeXMP: ${this.config.includeXmpFiles})`);
       return false; // No XMP handling needed
     }
 
     const originalXmpPath = this.getXmpSidecarPath(originalImagePath);
 
     if (!fs.existsSync(originalXmpPath)) {
-      console.log(`[XMP] No XMP sidecar found for ${path.basename(originalImagePath)} at ${path.basename(originalXmpPath)}`);
       return false; // No XMP file to handle
     }
 
@@ -137,14 +135,12 @@ export class FolderOrganizer {
     try {
       if (this.config.mode === 'copy') {
         await fsPromises.copyFile(originalXmpPath, targetXmpPath);
-        console.log(`[XMP] ✓ Copied XMP sidecar: ${path.basename(originalXmpPath)} → ${path.basename(targetXmpPath)}`);
       } else {
         await fsPromises.rename(originalXmpPath, targetXmpPath);
-        console.log(`[XMP] ✓ Moved XMP sidecar: ${path.basename(originalXmpPath)} → ${path.basename(targetXmpPath)}`);
       }
       return true;
     } catch (error) {
-      console.error(`[XMP] ✗ Error handling XMP sidecar file ${originalXmpPath}:`, error);
+      console.error(`[FolderOrganizer] Error handling XMP sidecar file ${originalXmpPath}:`, error);
       return false;
     }
   }
@@ -169,18 +165,6 @@ export class FolderOrganizer {
       ? (Array.isArray(csvDataList) ? csvDataList : [csvDataList])
       : [];
 
-    // ====== DEBUG LOGGING: Trace folder data ======
-    console.log('\n[FolderOrg] 🔍 DEBUG - organizeImage() called for:', fileName);
-    console.log('[FolderOrg] 🔍 DEBUG - csvDataArray received:', csvDataArray.length > 0 ? JSON.stringify(csvDataArray, null, 2) : 'empty array');
-    csvDataArray.forEach((csvData, index) => {
-      console.log(`[FolderOrg] 🔍 DEBUG - Vehicle ${index + 1} (#${csvData.numero}):`, {
-        folder_1: csvData.folder_1 || '(empty)',
-        folder_2: csvData.folder_2 || '(empty)',
-        folder_3: csvData.folder_3 || '(empty)'
-      });
-    });
-    // =============================================
-
     try {
       const numbers = Array.isArray(raceNumbers) ? raceNumbers : [raceNumbers];
 
@@ -191,7 +175,7 @@ export class FolderOrganizer {
         // Iterate through ALL participant matches
         csvDataArray.forEach(csvData => {
           if (csvData?.folder_1?.trim()) {
-            // Parse folder name with placeholders (e.g., "{number}-{name}" → "51-Calado")
+            // Parse folder name with placeholders (e.g., "{number}-{name}" -> "51-Calado")
             const parsedFolder1 = this.parseFolderName(csvData.folder_1.trim(), csvData);
             customFolders.push(parsedFolder1);
           }
@@ -209,22 +193,12 @@ export class FolderOrganizer {
       // Remove duplicates (e.g., if 2 vehicles share the same folder)
       const uniqueCustomFolders = [...new Set(customFolders)];
 
-      // ====== DEBUG LOGGING: Folder collection result ======
-      console.log('[FolderOrg] 🔍 DEBUG - customFolders collected:', customFolders);
-      console.log('[FolderOrg] 🔍 DEBUG - uniqueCustomFolders (duplicates removed):', uniqueCustomFolders);
-      // =====================================================
-
       // DECISION TREE:
-      // - If NO custom folders → use race numbers (default behavior for ALL numbers)
-      // - If AT LEAST ONE custom folder → use ONLY custom folders (copy to all)
+      // - If NO custom folders -> use race numbers (default behavior for ALL numbers)
+      // - If AT LEAST ONE custom folder -> use ONLY custom folders (copy to all)
       const foldersToCreate = uniqueCustomFolders.length > 0
         ? uniqueCustomFolders
         : numbers.map(num => this.generateFolderName(num));
-
-      // ====== DEBUG LOGGING: Final decision ======
-      console.log('[FolderOrg] 🔍 DEBUG - foldersToCreate:', foldersToCreate);
-      console.log('[FolderOrg] 🔍 DEBUG - Decision: Using', uniqueCustomFolders.length > 0 ? 'CUSTOM folders' : 'DEFAULT (race number)', '\n');
-      // ==========================================
 
       const baseDir = this.config.destinationPath || sourceDir || path.dirname(imagePath);
 
@@ -256,14 +230,10 @@ export class FolderOrganizer {
         // Handle file name conflicts
         if (fs.existsSync(targetPath)) {
           if (conflictStrategy === 'skip') {
-            console.log(`⏭️ Skipping ${fileName} in ${folderName}/ (already exists)`);
             operation = 'skip';
           } else if (conflictStrategy === 'rename') {
             finalTargetPath = await this.resolveFileNameConflict(targetPath);
-            const renamedFileName = path.basename(finalTargetPath);
-            console.log(`🔄 Renaming ${fileName} → ${renamedFileName} in ${folderName}/`);
           } else if (conflictStrategy === 'overwrite') {
-            console.log(`⚠️ Overwriting ${fileName} in ${folderName}/`);
             finalTargetPath = targetPath;
           }
         }
@@ -272,11 +242,9 @@ export class FolderOrganizer {
         if (operation !== 'skip') {
           if (operation === 'copy') {
             await fsPromises.copyFile(imagePath, finalTargetPath);
-            console.log(`✓ Copied: ${fileName} → ${folderName}/`);
           } else {
             // Move (only for first folder when mode = 'move')
             await fsPromises.rename(imagePath, finalTargetPath);
-            console.log(`✓ Moved: ${fileName} → ${folderName}/`);
             imagePath = finalTargetPath; // Update source path for subsequent copies
           }
 
@@ -306,15 +274,11 @@ export class FolderOrganizer {
 
       this.operationLog.push(result);
 
-      if (copiedPaths.length > 1) {
-        console.log(`📁 Photo copied to ${copiedPaths.length} folders: ${foldersToCreate.join(', ')}`);
-      }
-
       return result;
 
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
-      console.error(`Error organizing ${fileName}:`, errorMsg);
+      console.error(`[FolderOrganizer] Error organizing ${fileName}:`, errorMsg);
 
       const result: FolderOrganizationResult = {
         success: false,
@@ -377,13 +341,10 @@ export class FolderOrganizer {
       // Handle conflicts based on strategy
       if (fs.existsSync(targetPath)) {
         if (conflictStrategy === 'skip') {
-          console.log(`⏭️ Skipping ${fileName} - already exists in Unknown_Numbers/`);
           operation = 'skip';
         } else if (conflictStrategy === 'rename') {
           finalTargetPath = await this.resolveFileNameConflict(targetPath);
-          console.log(`🔄 Renaming ${fileName} → ${path.basename(finalTargetPath)}`);
         } else if (conflictStrategy === 'overwrite') {
-          console.log(`⚠️ Overwriting ${fileName} in Unknown_Numbers/`);
           finalTargetPath = targetPath;
         }
       }
@@ -409,7 +370,6 @@ export class FolderOrganizer {
           } else {
             await fsPromises.rename(xmpPath, targetXmpPath);
           }
-          console.log(`${this.config.mode === 'copy' ? 'Copied' : 'Moved'} XMP sidecar: ${xmpFileName} to ${folderName}`);
         }
       }
 
@@ -423,7 +383,6 @@ export class FolderOrganizer {
       };
 
       this.operationLog.push(result);
-      console.log(`${this.config.mode === 'copy' ? 'Copied' : 'Moved'} ${fileName} to ${folderName} (number not in preset)`);
 
       return result;
 
@@ -438,7 +397,7 @@ export class FolderOrganizer {
       };
 
       this.operationLog.push(result);
-      console.error(`Failed to organize ${path.basename(imagePath)} to Unknown_Numbers:`, error);
+      console.error(`[FolderOrganizer] Failed to organize ${path.basename(imagePath)} to Unknown_Numbers:`, error);
 
       return result;
     }
@@ -507,7 +466,6 @@ export class FolderOrganizer {
     if (!fs.existsSync(folderPath)) {
       await fsPromises.mkdir(folderPath, { recursive: true });
       this.createdFolders.add(folderPath);
-      console.log(`Created folder: ${path.basename(folderPath)}`);
     }
   }
 
@@ -546,7 +504,6 @@ export class FolderOrganizer {
     fileName: string
   ): Promise<void> {
     // DEPRECATED - Logic moved to organizeImage() with folder_1, folder_2, folder_3 support
-    console.warn('[DEPRECATED] handleMultipleNumbers() called - this method is obsolete');
   }
 
   /**
@@ -626,7 +583,7 @@ export function isFolderOrganizationEnabled(): boolean {
     const { APP_CONFIG } = require('../config');
     return APP_CONFIG.features.ENABLE_FOLDER_ORGANIZATION;
   } catch (error) {
-    console.error('Error checking folder organization feature flag:', error);
+    console.error('[FolderOrganizer] Error checking folder organization feature flag:', error);
     return false;
   }
 }

@@ -12,8 +12,6 @@ class StreamingView {
     this.currentImageElement = null;
     this.recentResultsContainer = null;
     this.statsContainer = null;
-
-    console.log('[StreamingView] Initialized');
   }
 
   /**
@@ -22,7 +20,6 @@ class StreamingView {
   activate() {
     if (this.isActive) return;
 
-    console.log('[StreamingView] Activating streaming mode');
     this.isActive = true;
 
     // Nascondi la tabella risultati normale
@@ -44,7 +41,6 @@ class StreamingView {
   deactivate() {
     if (!this.isActive) return;
 
-    console.log('[StreamingView] Deactivating streaming mode');
     this.isActive = false;
 
     // Rimuovi interfaccia streaming
@@ -120,8 +116,6 @@ class StreamingView {
     this.currentImageElement = document.getElementById('current-image-display');
     this.recentResultsContainer = document.getElementById('recent-results-list');
     this.statsContainer = document.getElementById('streaming-stats');
-
-    console.log('[StreamingView] Streaming interface created');
   }
 
   /**
@@ -144,7 +138,6 @@ class StreamingView {
    */
   showInfoMessage() {
     // Potrebbero essere già stati mostrati toast, aggiungiamo uno specifico per lo streaming
-    console.log('[StreamingView] Large batch detected - switching to streaming mode for optimal performance');
   }
 
   /**
@@ -170,7 +163,6 @@ class StreamingView {
     }
 
     this.currentImageElement.innerHTML = imageHtml;
-    console.log('[StreamingView] Updated current image:', fileName);
   }
 
   /**
@@ -200,8 +192,6 @@ class StreamingView {
     // Aggiorna UI
     this.updateRecentResultsList();
     this.updateStats();
-
-    console.log('[StreamingView] Added result:', result.fileName, '- Total results:', this.allResults.length);
   }
 
   /**
@@ -282,7 +272,6 @@ class StreamingView {
     }
 
     this.updateStats();
-    console.log('[StreamingView] Reset completed');
   }
 
   /**
@@ -319,16 +308,12 @@ class StreamingView {
         });
       }
     }
-
-    console.log('[StreamingView] Review button shown for', this.allResults.length, 'results');
   }
 
   /**
    * Apre la galleria di review (placeholder per ora)
    */
   openReviewGallery() {
-    console.log('[StreamingView] Opening review gallery for', this.allResults.length, 'results');
-
     // TODO: Implementare galleria review
     // Per ora mostra alert
     alert(`Review Gallery coming soon!\\n\\nProcessed: ${this.allResults.length} images\\nMatches found: ${this.allResults.filter(r => r.success).length}\\n\\nThis will open a gallery to review all results with navigation and editing capabilities.`);
@@ -337,5 +322,3 @@ class StreamingView {
 
 // Istanza globale
 window.streamingView = new StreamingView();
-
-console.log('[StreamingView] Module loaded');

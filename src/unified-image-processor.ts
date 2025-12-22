@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as fsPromises from 'fs/promises';
 import { EventEmitter } from 'events';
 import { createClient } from '@supabase/supabase-js';
-import { SUPABASE_CONFIG, APP_CONFIG, RESIZE_PRESETS, ResizePreset } from './config';
+import { SUPABASE_CONFIG, APP_CONFIG, RESIZE_PRESETS, ResizePreset, DEBUG_MODE } from './config';
 import { getSupabaseClient } from './database-service';
 import { authService } from './auth-service';
 import { getSharp, createImageProcessor } from './utils/native-modules';
@@ -177,7 +177,6 @@ class UnifiedImageWorker extends EventEmitter {
     // TEMPORARY: Force V3 bounding box detection to be enabled by default for testing
     if (config.enableAdvancedAnnotations === undefined) {
       config.enableAdvancedAnnotations = true;
-      console.log('[UnifiedProcessor] ✅ V3 Bounding Box Detection ENABLED by default');
     }
     this.config = config;
     this.csvData = config.csvData || []; // Legacy support
@@ -188,14 +187,6 @@ class UnifiedImageWorker extends EventEmitter {
     this.supabase = getSupabaseClient();
     this.analysisLogger = analysisLogger;
     this.networkMonitor = networkMonitor;
-
-    // DEBUG: Log the full config to trace participant preset data
-    console.log(`[UnifiedWorker] Constructor called with config:`, {
-      participantPresetDataLength: config.participantPresetData?.length || 0,
-      csvDataLength: config.csvData?.length || 0,
-      category: config.category,
-      executionId: config.executionId
-    });
 
     // Initialize intelligent matching system
     this.smartMatcher = new SmartMatcher(this.category);
@@ -1258,30 +1249,12 @@ class UnifiedImageWorker extends EventEmitter {
    * Initialize participants data from preset
    */
   private async initializeParticipantsData() {
-    console.log(`[UnifiedWorker] initializeParticipantsData called with participantPresetData length: ${this.config.participantPresetData?.length || 0}`);
-
     if (this.config.participantPresetData && this.config.participantPresetData.length > 0) {
       // Use participant data passed directly from frontend
       this.participantsData = this.config.participantPresetData;
-      console.log(`[UnifiedWorker] Using participant data passed from frontend: ${this.participantsData.length} participants`);
-      console.log(`[UnifiedWorker] Sample participant:`, this.participantsData[0]);
-      // DEBUG: Verifica specificamente il campo metatag per tutti i partecipanti
-      const participantsWithMetatag = this.participantsData.filter(p => p.metatag && p.metatag.trim() !== '');
-      console.log(`[DEBUG-METATAG] Participants with metatag: ${participantsWithMetatag.length}/${this.participantsData.length}`);
-      if (participantsWithMetatag.length > 0) {
-        console.log(`[DEBUG-METATAG] First participant with metatag:`, {
-          numero: participantsWithMetatag[0].numero,
-          metatag: participantsWithMetatag[0].metatag
-        });
-      } else {
-        console.log(`[DEBUG-METATAG] WARNING: No participants have metatag field populated!`);
-      }
     } else if (this.config.csvData && this.config.csvData.length > 0) {
       // Fallback to legacy CSV data
       this.participantsData = this.config.csvData;
-      console.log(`[UnifiedWorker] Using legacy CSV data: ${this.participantsData.length} participants`);
-    } else {
-      console.log(`[UnifiedWorker] No participant data provided, skipping participant loading`);
     }
   }
 
@@ -1289,8 +1262,6 @@ class UnifiedImageWorker extends EventEmitter {
    * Initialize sport configurations from Supabase sport categories
    */
   private async initializeSportConfigurations() {
-    console.log(`[UnifiedWorker] Initializing sport configurations from Supabase...`);
-
     try {
       // Get sport categories from Supabase
       const { data: sportCategories, error } = await this.supabase
@@ -1298,19 +1269,9 @@ class UnifiedImageWorker extends EventEmitter {
         .select('*')
         .eq('is_active', true);
 
-      if (error) {
-        console.warn(`[UnifiedWorker] Failed to load sport categories from Supabase:`, error);
-        console.log(`[UnifiedWorker] Using default hardcoded configurations`);
+      if (error || !sportCategories || sportCategories.length === 0) {
         return;
       }
-
-      if (!sportCategories || sportCategories.length === 0) {
-        console.warn(`[UnifiedWorker] No sport categories found in Supabase`);
-        console.log(`[UnifiedWorker] Using default hardcoded configurations`);
-        return;
-      }
-
-      console.log(`[UnifiedWorker] Loaded ${sportCategories.length} sport categories from Supabase`);
 
       // Store categories for later use
       this.sportCategories = sportCategories;
@@ -1320,26 +1281,12 @@ class UnifiedImageWorker extends EventEmitter {
         (cat: any) => cat.code.toLowerCase() === this.category.toLowerCase()
       );
 
-      // Determine smart default based on category
-      const smartDefault = ['running', 'cycling', 'triathlon'].includes(this.category.toLowerCase()) ? true : false;
-
-      console.log(`[UnifiedWorker] Current sport category config:`, {
-        category: this.category,
-        individual_competition: this.currentSportCategory?.individual_competition ?? smartDefault,
-        categoryFound: !!this.currentSportCategory,
-        smartDefault: smartDefault
-      });
-
       // Initialize SmartMatcher configurations from Supabase data
       if (this.smartMatcher) {
         this.smartMatcher.initializeFromSportCategories(sportCategories);
-        console.log(`[UnifiedWorker] SmartMatcher configurations updated from Supabase`);
       }
-
-      console.log(`[UnifiedWorker] Sport configurations initialization completed`);
     } catch (error) {
       console.error(`[UnifiedWorker] Error initializing sport configurations:`, error);
-      console.log(`[UnifiedWorker] Falling back to default hardcoded configurations`);
     }
   }
 
@@ -1363,14 +1310,10 @@ class UnifiedImageWorker extends EventEmitter {
       prioritizeForeground: true
     };
 
-    console.log(`[UnifiedWorker] Using recognition config for ${this.category}:`, recognitionConfig);
-
     // 1. Filter out low confidence results using dynamic threshold
     let validResults = analysis.filter(r =>
       (r.confidence || 0) >= recognitionConfig.minConfidence
     );
-
-    console.log(`[UnifiedWorker] After confidence filter (>=${recognitionConfig.minConfidence}): ${validResults.length} results`);
 
     if (validResults.length === 0) return [];
 
@@ -1380,7 +1323,6 @@ class UnifiedImageWorker extends EventEmitter {
     // 3. Apply confidence decay and relative gap filtering for multiple results
     if (validResults.length > 1 && !isIndividual) {
       const bestConfidence = validResults[0].confidence || 0;
-      console.log(`[UnifiedWorker] Best confidence: ${bestConfidence}, applying decay and gap filtering`);
 
       validResults = validResults.filter((r, index) => {
         if (index === 0) return true; // Always keep the best
@@ -1392,28 +1334,20 @@ class UnifiedImageWorker extends EventEmitter {
         const confidenceGap = bestConfidence - (r.confidence || 0);
         const withinGap = confidenceGap <= recognitionConfig.relativeConfidenceGap;
 
-        console.log(`[UnifiedWorker] Result ${index}: confidence=${r.confidence}, decayed=${decayedConfidence.toFixed(3)}, gap=${confidenceGap.toFixed(3)}, withinGap=${withinGap}`);
-
         return withinGap && decayedConfidence >= recognitionConfig.minConfidence;
       });
-
-      console.log(`[UnifiedWorker] After decay and gap filtering: ${validResults.length} results`);
     }
 
     // 4. Apply individual competition rule (overrides maxResults)
     if (isIndividual && validResults.length > 1) {
-      console.log(`[UnifiedWorker] Individual competition mode: keeping only the best result`);
       validResults = [validResults[0]]; // Take only the best
     }
 
     // 5. Apply maximum results limit based on category configuration
     const maxResults = isIndividual ? 1 : recognitionConfig.maxResults;
     if (validResults.length > maxResults) {
-      console.log(`[UnifiedWorker] Limiting results to ${maxResults} (was ${validResults.length})`);
       validResults = validResults.slice(0, maxResults);
     }
-
-    console.log(`[UnifiedWorker] Final filtering result: ${validResults.length} valid results for ${this.category} (individual: ${isIndividual})`);
 
     return validResults;
   }
@@ -1423,7 +1357,6 @@ class UnifiedImageWorker extends EventEmitter {
    */
   private checkCancellation(): boolean {
     if (this.config.isCancelled && this.config.isCancelled()) {
-      console.log(`[UnifiedWorker] Processing cancellation detected`);
       return true;
     }
     return false;
@@ -1438,8 +1371,6 @@ class UnifiedImageWorker extends EventEmitter {
     // let compressedFileId: string | null = null; // Not used anymore - compressed files are preserved
     let thumbnailFileId: string | null = null;
     let microThumbFileId: string | null = null;
-
-    console.log(`[UnifiedWorker] Starting unified processing of ${imageFile.fileName}`);
 
     // Check for cancellation before starting
     if (this.checkCancellation()) {
@@ -1477,7 +1408,6 @@ class UnifiedImageWorker extends EventEmitter {
       // Track the temporary file created during preparation
       if (uploadReadyPath !== imageFile.originalPath) {
         uploadReadyFileId = await this.cleanupManager.trackTempFile(uploadReadyPath, 'jpeg');
-        console.log(`[UnifiedWorker] Tracking upload-ready file: ${uploadReadyPath} (ID: ${uploadReadyFileId})`);
       }
       
       // Fase 2: Compressione per garantire <500KB
@@ -1497,10 +1427,6 @@ class UnifiedImageWorker extends EventEmitter {
 
       // DON'T track the compressed file so it persists for gallery viewing
       // The compressed file (1080-1920px) is needed for high-quality gallery display
-      if (compressedPath !== uploadReadyPath) {
-        // compressedFileId = await this.cleanupManager.trackTempFile(compressedPath, 'jpeg');
-        console.log(`[UnifiedWorker] NOT tracking compressed file for preservation: ${compressedPath}`);
-      }
 
       // Fase 2.5: Genera thumbnail multi-livello per performance ottimizzata
       // PERFORMANCE OPTIMIZATION: Pass compressed buffer to avoid re-reading from disk
@@ -1509,11 +1435,9 @@ class UnifiedImageWorker extends EventEmitter {
       // Track thumbnail files
       if (thumbnailPath) {
         thumbnailFileId = await this.cleanupManager.trackTempFile(thumbnailPath, 'other');
-        console.log(`[UnifiedWorker] Tracking thumbnail file: ${thumbnailPath} (ID: ${thumbnailFileId})`);
       }
       if (microThumbPath) {
         microThumbFileId = await this.cleanupManager.trackTempFile(microThumbPath, 'other');
-        console.log(`[UnifiedWorker] Tracking micro-thumbnail file: ${microThumbPath} (ID: ${microThumbFileId})`);
       }
 
       // ============================================
@@ -1933,8 +1857,6 @@ class UnifiedImageWorker extends EventEmitter {
           if (!this.recognitionMethod) {
             this.recognitionMethod = 'rf-detr';
           }
-
-          console.log(`[UnifiedWorker] RF-DETR metrics - Detections: ${analysisResult.rfDetrUsage.detectionsCount}, Cost: $${analysisResult.rfDetrUsage.estimatedCostUSD.toFixed(4)}`);
         } else if (!this.recognitionMethod && analysisResult.success) {
           // If no RF-DETR usage but analysis succeeded, it's Gemini
           this.recognitionMethod = 'gemini';
@@ -1987,16 +1909,6 @@ class UnifiedImageWorker extends EventEmitter {
             temporalBonus = csvMatch.matchResult.bestMatch.temporalBonus || 0;
             temporalClusterSize = csvMatch.matchResult.bestMatch.temporalClusterSize || 0;
             isBurstModeCandidate = csvMatch.matchResult.bestMatch.isBurstModeCandidate || false;
-
-            // Debug only for the first image to verify fix
-            if (index === 0) {
-              console.log(`🎯 [TEMPORAL FIX] Vehicle ${index} extracted temporal data:`, {
-                temporalBonus,
-                temporalClusterSize,
-                isBurstModeCandidate,
-                source: 'csvMatch.matchResult.bestMatch'
-              });
-            }
           }
 
           // Preserve original box_2d from Gemini if present (standard 2025: keep raw data)
@@ -2103,19 +2015,9 @@ class UnifiedImageWorker extends EventEmitter {
           // Backward compatibility - use first vehicle as primary
           primaryVehicle: vehicles.length > 0 ? vehicles[0] : undefined
         });
+      }
 
-        console.log(`[UnifiedWorker] Logged filtered analysis for ${imageFile.fileName}: ${vehicles.length} vehicles (filtered from ${(analysisResult.analysis || []).length} original)`);
-      }
-      
       // Fase 5: Scrittura dei metadata (XMP per RAW, IPTC per JPEG) con dual-mode system
-      // DEBUG: Log pre-writeMetadata per diagnosi metatag
-      console.log(`[DEBUG-METATAG] Before writeMetadata for ${imageFile.fileName}`);
-      console.log(`[DEBUG-METATAG] processedAnalysis.csvMatch type: ${typeof processedAnalysis.csvMatch}`);
-      console.log(`[DEBUG-METATAG] processedAnalysis.csvMatch isArray: ${Array.isArray(processedAnalysis.csvMatch)}`);
-      if (processedAnalysis.csvMatch) {
-        const firstMatch = Array.isArray(processedAnalysis.csvMatch) ? processedAnalysis.csvMatch[0] : processedAnalysis.csvMatch;
-        console.log(`[DEBUG-METATAG] firstMatch?.entry?.metatag: ${firstMatch?.entry?.metatag || 'UNDEFINED'}`);
-      }
       await this.writeMetadata(imageFile, processedAnalysis.keywords, uploadReadyPath, processedAnalysis.analysis, processedAnalysis.csvMatch);
       
       // ADMIN FEATURE: Fase 6 - Organizzazione in cartelle (condizionale)
@@ -2146,10 +2048,9 @@ class UnifiedImageWorker extends EventEmitter {
         sceneCategory: sceneClassification?.category,
         sceneConfidence: sceneClassification?.confidence
       };
-      
-      console.log(`[UnifiedWorker] Successfully processed ${imageFile.fileName} in ${result.processingTimeMs}ms`);
+
       return result;
-      
+
     } catch (error: any) {
       console.error(`[UnifiedWorker] Failed to process ${imageFile.fileName}:`, error);
       
@@ -2163,19 +2064,12 @@ class UnifiedImageWorker extends EventEmitter {
       };
     } finally {
       // CRITICAL FIX: Always cleanup temporary files, even on errors
-      console.log(`[UnifiedWorker] Cleaning up temporary files for ${imageFile.fileName}`);
-      
       try {
-        // 🖼️ PRESERVE THUMBNAILS: Don't cleanup thumbnails immediately to allow viewing in results page
-        // They will be cleaned up later by the periodic cleanup or on app exit
-        console.log(`[UnifiedWorker] 🖼️ PRESERVING thumbnails for ${imageFile.fileName} - not cleaning up immediately`);
-
+        // PRESERVE THUMBNAILS: Don't cleanup thumbnails immediately to allow viewing in results page
         // Only cleanup upload-ready files (compressed files are preserved for gallery viewing)
         if (uploadReadyFileId) {
           await this.cleanupManager.cleanupFile(uploadReadyFileId);
         }
-
-        console.log(`[UnifiedWorker] Cleanup completed for ${imageFile.fileName}`);
       } catch (cleanupError) {
         console.error(`[UnifiedWorker] Cleanup error for ${imageFile.fileName}:`, cleanupError);
         // Don't throw cleanup errors, just log them
@@ -2188,8 +2082,6 @@ class UnifiedImageWorker extends EventEmitter {
    */
   private async prepareImageForUpload(imageFile: UnifiedImageFile): Promise<string> {
     if (imageFile.isRaw) {
-      console.log(`[UnifiedWorker] Extracting preview from RAW file ${imageFile.fileName} using raw-preview-extractor`);
-      
       // Use centralized temp directory instead of original image directory
       const tempJpegPath = this.cleanupManager.generateTempPath(
         imageFile.originalPath,
@@ -2197,7 +2089,7 @@ class UnifiedImageWorker extends EventEmitter {
         '.jpg',
         'jpeg-processing'
       );
-      
+
       try {
         // Estrazione preview veloce con raw-preview-extractor
         const previewResult = await rawPreviewExtractor.extractPreview(imageFile.originalPath, {
@@ -2208,13 +2100,10 @@ class UnifiedImageWorker extends EventEmitter {
           includeMetadata: true,           // Include metadata EXIF
           useNativeLibrary: true          // Priorità a libreria nativa
         });
-        
+
         if (!previewResult.success || !previewResult.data) {
           throw new Error(previewResult.error || 'Preview extraction failed');
         }
-        
-        console.log(`[UnifiedWorker] ✅ RAW preview extracted successfully: ${previewResult.data.length} bytes via ${previewResult.method}`);
-        console.log(`[UnifiedWorker] Extraction time: ${previewResult.extractionTimeMs}ms`);
 
         // Salva la preview estratta come file temporaneo JPEG
         await fsPromises.writeFile(tempJpegPath, previewResult.data);
@@ -2222,55 +2111,45 @@ class UnifiedImageWorker extends EventEmitter {
         // MEMORY FIX: Rilascia esplicitamente il Buffer della preview per evitare accumulo memoria
         const previewBufferSize = previewResult.data.length;
         previewResult.data = null as any; // Nullifica reference per permettere GC
-        console.log(`[UnifiedWorker] 🧹 Released preview buffer (${previewBufferSize} bytes)`);
 
         // Forza garbage collection per Buffer grandi (>1MB)
         if (previewBufferSize > 1024 * 1024 && global.gc) {
           global.gc();
-          const memoryMB = process.memoryUsage().heapUsed / 1024 / 1024;
-          console.log(`[UnifiedWorker] 🔄 Forced GC after ${(previewBufferSize/1024/1024).toFixed(1)}MB buffer release, heap: ${memoryMB.toFixed(0)}MB`);
         }
-        
+
         // Applica rotazione automatica basata sui metadata EXIF se disponibili
         if (previewResult.metadata?.orientation && previewResult.metadata.orientation !== 1) {
-          console.log(`[UnifiedWorker] Applying EXIF rotation (orientation: ${previewResult.metadata.orientation}) to RAW preview`);
           try {
             const processor = await createImageProcessor(tempJpegPath);
             let rotatedBuffer = await processor
               .rotate()  // Auto-rotate based on EXIF orientation data
               .jpeg({ quality: 90 })  // Maintain good quality
               .toBuffer();
-            
+
             // Scrivi l'immagine ruotata sovrascrivendo il file temporaneo
             await fsPromises.writeFile(tempJpegPath, rotatedBuffer);
 
             // MEMORY FIX: Rilascia esplicitamente il Buffer di rotazione
             const rotatedBufferSize = rotatedBuffer.length;
             rotatedBuffer = null as any; // Nullifica reference per permettere GC
-            console.log(`[UnifiedWorker] ✅ RAW preview rotated successfully, released rotation buffer (${rotatedBufferSize} bytes)`);
 
             // Forza garbage collection per Buffer grandi (>1MB)
             if (rotatedBufferSize > 1024 * 1024 && global.gc) {
               global.gc();
-              const memoryMB = process.memoryUsage().heapUsed / 1024 / 1024;
-              console.log(`[UnifiedWorker] 🔄 Forced GC after ${(rotatedBufferSize/1024/1024).toFixed(1)}MB rotation buffer release, heap: ${memoryMB.toFixed(0)}MB`);
             }
           } catch (rotationError) {
-            console.warn(`[UnifiedWorker] ⚠️ Failed to apply rotation to RAW preview: ${rotationError}`);
             // Non bloccare il processo se la rotazione fallisce
           }
         }
-        
+
         return tempJpegPath;
-        
+
       } catch (error) {
         console.error(`[UnifiedWorker] RAW preview extraction failed for ${imageFile.fileName}:`, error);
         throw error;
       }
     } else {
       // PERFORMANCE OPTIMIZATION: Use JPEG directly without creating unnecessary temporary copy
-      // Sharp can read the original file safely without modifying it
-      console.log(`[UnifiedWorker] Using JPEG file directly for processing: ${imageFile.fileName}`);
       return imageFile.originalPath;
     }
   }
@@ -2284,8 +2163,6 @@ class UnifiedImageWorker extends EventEmitter {
     buffer: Buffer;
     mimeType: string;
   }> {
-    console.log(`[UnifiedWorker] Compressing ${fileName} to ensure <${this.config.maxImageSizeKB}KB`);
-
     if (!sharp) {
       throw new Error('Sharp module not available for compression');
     }
@@ -2326,15 +2203,8 @@ class UnifiedImageWorker extends EventEmitter {
 
     // PREDICTIVE FORMULA: Calculate optimal quality based on target size
     const megapixels = (targetWidth * targetHeight) / 1_000_000;
-    // Empirical formula: fileSize ≈ (megapixels * quality * 12000) bytes
-    // With mozjpeg optimization, this factor can be reduced to ~10000
     const estimatedQuality = Math.round((maxSizeBytes / (megapixels * 10000)) * 100);
     const initialQuality = Math.max(30, Math.min(95, estimatedQuality));
-
-    console.log(`[UnifiedWorker] Predictive compression for ${fileName}:`);
-    console.log(`  - Original: ${originalWidth}x${originalHeight}px (${(originalWidth * originalHeight / 1_000_000).toFixed(1)}MP)`);
-    console.log(`  - Target: ${targetWidth}x${targetHeight}px (${megapixels.toFixed(1)}MP)`);
-    console.log(`  - Calculated quality: ${initialQuality} (target: <${this.config.maxImageSizeKB}KB)`);
 
     let compressedBuffer: Buffer;
     let compressionAttempts = 0;
@@ -2355,14 +2225,9 @@ class UnifiedImageWorker extends EventEmitter {
         .toBuffer();
 
       compressionAttempts++;
-      console.log(`[UnifiedWorker] Predictive compression result: ${compressedBuffer.length} bytes (${(compressedBuffer.length / 1024).toFixed(1)}KB)`);
 
-      // If predictive compression succeeded within target, we're done!
-      if (compressedBuffer.length <= maxSizeBytes) {
-        console.log(`[UnifiedWorker] ✅ Predictive compression succeeded on first attempt!`);
-      } else {
-        // Fallback to binary search if prediction overshot
-        console.log(`[UnifiedWorker] Predictive compression overshot target, using binary search fallback...`);
+      // If predictive compression overshot, fallback to binary search
+      if (compressedBuffer.length > maxSizeBytes) {
         compressedBuffer = await this.compressWithBinarySearch(
           imageBuffer,
           maxSizeBytes,
@@ -2391,8 +2256,6 @@ class UnifiedImageWorker extends EventEmitter {
       throw new Error(`Failed to save compressed image: ${error}`);
     }
 
-    console.log(`[UnifiedWorker] ✅ Compressed ${fileName}: ${compressedBuffer.length} bytes (${(compressedBuffer.length / 1024).toFixed(1)}KB, attempts: ${compressionAttempts})`);
-
     return {
       compressedPath,
       buffer: compressedBuffer,
@@ -2416,8 +2279,6 @@ class UnifiedImageWorker extends EventEmitter {
     let attempts = initialAttempts;
     const maxAttempts = 4; // Max 4 binary search iterations
 
-    console.log(`[UnifiedWorker] Starting binary search compression (quality range: ${minQuality}-${maxQuality})`);
-
     while (maxQuality - minQuality > 5 && attempts < maxAttempts) {
       const quality = Math.round((minQuality + maxQuality) / 2);
       attempts++;
@@ -2435,8 +2296,6 @@ class UnifiedImageWorker extends EventEmitter {
         })
         .toBuffer();
 
-      console.log(`[UnifiedWorker] Binary search attempt ${attempts}: quality=${quality}, size=${buffer.length} bytes (${(buffer.length / 1024).toFixed(1)}KB)`);
-
       if (buffer.length <= maxSizeBytes) {
         bestBuffer = buffer;
         minQuality = quality; // File small enough, try higher quality
@@ -2447,7 +2306,6 @@ class UnifiedImageWorker extends EventEmitter {
 
     if (!bestBuffer) {
       // Last resort: use minimum quality
-      console.log(`[UnifiedWorker] Binary search failed, using minimum quality ${minQuality}`);
       const processor = await createImageProcessor(imageBuffer);
       bestBuffer = await processor
         .rotate()
@@ -2462,7 +2320,6 @@ class UnifiedImageWorker extends EventEmitter {
         .toBuffer();
     }
 
-    console.log(`[UnifiedWorker] Binary search completed: final size=${bestBuffer.length} bytes (${(bestBuffer.length / 1024).toFixed(1)}KB, total attempts: ${attempts})`);
     return bestBuffer;
   }
 
@@ -2478,20 +2335,12 @@ class UnifiedImageWorker extends EventEmitter {
     thumbnailPath: string | null;
     microThumbPath: string | null;
   }> {
-    console.log(`[UnifiedWorker] Generating multi-level thumbnails for ${fileName}`);
-
     let thumbnailPath: string | null = null;
     let microThumbPath: string | null = null;
 
     try {
       // Use provided buffer or read from disk as fallback
       const imageBuffer = compressedBuffer || await fsPromises.readFile(compressedPath);
-
-      if (compressedBuffer) {
-        console.log(`[UnifiedWorker] ✅ Using in-memory buffer for thumbnail generation (${(compressedBuffer.length / 1024).toFixed(1)}KB)`);
-      } else {
-        console.log(`[UnifiedWorker] ⚠️ Reading compressed file from disk for thumbnail generation`);
-      }
 
       // PERFORMANCE OPTIMIZATION: Generate both thumbnails in parallel using Promise.all
       const [thumbnailResult, microResult] = await Promise.all([
@@ -2515,7 +2364,6 @@ class UnifiedImageWorker extends EventEmitter {
             );
 
             await fsPromises.writeFile(thumbPath, thumbnailBuffer);
-            console.log(`[UnifiedWorker] ✅ Thumbnail created: ${(thumbnailBuffer.length / 1024).toFixed(1)}KB`);
             return thumbPath;
           } catch (thumbError) {
             console.error(`[UnifiedWorker] Failed to create thumbnail for ${fileName}:`, thumbError);
@@ -2544,7 +2392,6 @@ class UnifiedImageWorker extends EventEmitter {
             );
 
             await fsPromises.writeFile(microPath, microBuffer);
-            console.log(`[UnifiedWorker] ✅ Micro-thumbnail created: ${(microBuffer.length / 1024).toFixed(1)}KB`);
             return microPath;
           } catch (microError) {
             console.error(`[UnifiedWorker] Failed to create micro-thumbnail for ${fileName}:`, microError);
@@ -2555,8 +2402,6 @@ class UnifiedImageWorker extends EventEmitter {
 
       thumbnailPath = thumbnailResult;
       microThumbPath = microResult;
-
-      console.log(`[UnifiedWorker] Thumbnail generation completed for ${fileName}`);
 
     } catch (error) {
       console.error(`[UnifiedWorker] Failed to generate thumbnails for ${fileName}:`, error);
@@ -2588,18 +2433,9 @@ class UnifiedImageWorker extends EventEmitter {
       default:
         // Solo come fallback estremo usa l'estensione originale
         fileExt = fileName.split('.').pop()?.toLowerCase() || 'jpg';
-        console.warn(`[UnifiedWorker] Unknown mimeType ${mimeType}, using extension: ${fileExt}`);
     }
 
     const storageFileName = `${Date.now()}_${Math.random().toString(36).substring(2, 15)}.${fileExt}`;
-
-    // Log quando l'estensione viene cambiata per tracciabilità
-    const originalExt = fileName.split('.').pop()?.toLowerCase();
-    if (originalExt !== fileExt) {
-      console.log(`[UnifiedWorker] Extension conversion: ${fileName} (${originalExt}) → storage as .${fileExt} (${mimeType})`);
-    }
-    
-    console.log(`[UnifiedWorker] Uploading ${fileName} to storage (${(buffer.length / 1024).toFixed(1)}KB)...`);
 
     // Track upload time and size for network monitoring
     const uploadStartTime = Date.now();
@@ -2632,9 +2468,7 @@ class UnifiedImageWorker extends EventEmitter {
       originalFileName: fileName,
       publicUrl: publicUrl
     });
-    
-    console.log(`[UnifiedWorker] Upload completed: ${fileName} -> ${storageFileName}`);
-    console.log(`[UnifiedWorker] Public URL: ${publicUrl}`);
+
     return storageFileName;
   }
 
@@ -2642,13 +2476,11 @@ class UnifiedImageWorker extends EventEmitter {
    * Fase 4: Analisi AI (riuso da parallel-analyzer)
    */
   private async analyzeImage(fileName: string, storagePath: string, sizeBytes: number, mimeType: string): Promise<any> {
-    console.log(`[UnifiedWorker] Analyzing ${fileName}...`);
-    
     // Ottieni l'ID utente corrente se autenticato
     const authState = authService.getAuthState();
     const userId = authState.isAuthenticated ? authState.user?.id : null;
     const userEmail = authState.isAuthenticated ? authState.user?.email : null;
-    
+
     // Prepara il corpo della richiesta
     const invokeBody: any = {
       imagePath: storagePath,
@@ -2658,11 +2490,11 @@ class UnifiedImageWorker extends EventEmitter {
       modelName: APP_CONFIG.defaultModel,
       category: this.category
     };
-    
+
     if (userId) {
       invokeBody.userId = userId;
     }
-    
+
     if (userEmail) {
       invokeBody.userEmail = userEmail;
     }
@@ -2678,23 +2510,15 @@ class UnifiedImageWorker extends EventEmitter {
         name: `Preset Dynamic`,
         participants: this.participantsData
       };
-      console.log(`[UnifiedWorker] Sending participant preset with ${this.participantsData.length} participants to edge function`);
     }
 
     // Determine which Edge Function to use based on sport category edge_function_version or fallback to settings
     let functionName: string;
 
     if (this.currentSportCategory?.edge_function_version) {
-      // Use sport category's edge_function_version if available
       const version = this.currentSportCategory.edge_function_version;
       if (version === 6) {
-        // V6 is handled by analyzeWithCropContext() when crop_config is enabled
-        // If we reach here, it means either:
-        // 1. crop_config is disabled in sport_categories, OR
-        // 2. analyzeWithCropContext() returned null (no subjects detected)
-        // Either way, fallback to V5 for standard cloud analysis
         functionName = 'analyzeImageDesktopV5';
-        console.log(`[UnifiedProcessor] V6 category: using V5 fallback (crop-context not available or no subjects detected)`);
       } else if (version === 5) {
         functionName = 'analyzeImageDesktopV5';
       } else if (version === 4) {
@@ -2704,20 +2528,13 @@ class UnifiedImageWorker extends EventEmitter {
       } else if (version === 2) {
         functionName = 'analyzeImageDesktopV2';
       } else {
-        // Version 1 or unknown - fallback to V2
         functionName = 'analyzeImageDesktopV2';
-        console.warn(`[UnifiedProcessor] Unknown edge_function_version ${version} for category ${this.category}, using V2`);
       }
-      console.log(`[UnifiedProcessor] Using Edge Function ${functionName} based on sport category version ${version}`);
     } else {
-      // Fallback to config setting if no version specified in category
       functionName = this.config.enableAdvancedAnnotations
         ? 'analyzeImageDesktopV3'
         : 'analyzeImageDesktopV2';
-      console.log(`[UnifiedProcessor] Using Edge Function ${functionName} based on enableAdvancedAnnotations setting`);
     }
-
-    console.log(`🔥 [UnifiedProcessor] About to call ${functionName} for ${fileName} with userId: ${userId}, executionId: ${this.config.executionId || 'none'}`);
 
     let response: any;
     try {
@@ -2728,73 +2545,24 @@ class UnifiedImageWorker extends EventEmitter {
         )
       ]) as any;
 
-      console.log(`🔥 [UnifiedProcessor] ${functionName} response for ${fileName}:`, {
-        hasError: !!response.error,
-        hasData: !!response.data,
-        dataSuccess: response.data?.success,
-        dataImageId: response.data?.imageId,
-        dataKeys: response.data ? Object.keys(response.data) : []
-      });
-
       if (response.error) {
-        console.error(`🔥 [UnifiedProcessor] ${functionName} function error for ${fileName}:`, response.error);
-        console.error(`🔥 [UnifiedProcessor] Full response data for debugging:`, response.data);
-        console.error(`🔥 [UnifiedProcessor] Error details - name:`, response.error.name);
-        console.error(`🔥 [UnifiedProcessor] Error details - message:`, response.error.message);
-        console.error(`🔥 [UnifiedProcessor] Error details - status:`, response.error.status);
-        console.error(`🔥 [UnifiedProcessor] Error details - statusText:`, response.error.statusText);
-        console.error(`🔥 [UnifiedProcessor] Error details - details:`, response.error.details);
+        console.error(`[UnifiedProcessor] Edge Function error for ${fileName}:`, response.error.message || response.error.statusText);
         throw new Error(`Function error: ${response.error.message || response.error.statusText || 'Unknown error'}`);
       }
     } catch (edgeFunctionError: any) {
-      console.error(`🔥 [UnifiedProcessor] Edge Function call failed for ${fileName} with catch error:`, edgeFunctionError);
-      console.error(`🔥 [UnifiedProcessor] Catch error type:`, typeof edgeFunctionError);
-      console.error(`🔥 [UnifiedProcessor] Catch error name:`, edgeFunctionError.name);
-      console.error(`🔥 [UnifiedProcessor] Catch error message:`, edgeFunctionError.message);
-      console.error(`🔥 [UnifiedProcessor] Catch error stack:`, edgeFunctionError.stack);
-
-      // Check if this is a FunctionsHttpError with more details
-      if (edgeFunctionError.context) {
-        console.error(`🔥 [UnifiedProcessor] FunctionsHttpError context:`, edgeFunctionError.context);
-      }
-      if (edgeFunctionError.details) {
-        console.error(`🔥 [UnifiedProcessor] FunctionsHttpError details:`, edgeFunctionError.details);
-      }
-      if (edgeFunctionError.status) {
-        console.error(`🔥 [UnifiedProcessor] HTTP status:`, edgeFunctionError.status);
-      }
-
+      console.error(`[UnifiedProcessor] Edge Function call failed for ${fileName}:`, edgeFunctionError.message);
       throw new Error(`Edge Function failed: ${edgeFunctionError.message || 'Network or server error'}`);
     }
-    
+
     if (!response.data.success) {
-      console.error(`🔥 [UnifiedProcessor] Analysis failed for ${fileName}:`, response.data.error);
+      console.error(`[UnifiedProcessor] Analysis failed for ${fileName}:`, response.data.error);
       throw new Error(`Analysis failed: ${response.data.error || 'Unknown function error'}`);
     }
-    
-    // Registra l'utilizzo del token
-    console.log(`🔥 [UnifiedProcessor] About to call useTokens for ${fileName} - userId: ${userId}, imageId: ${response.data.imageId}`);
-    if (userId) {
-      if (!response.data.imageId) {
-        console.warn(`🔥 [UnifiedProcessor] WARNING: No imageId in response for ${fileName}, but still calling useTokens`);
-      }
-      await authService.useTokens(1, response.data.imageId, this.config.onTokenUsed);
-      console.log(`🔥 [UnifiedProcessor] useTokens call completed for ${fileName}`);
-    } else {
-      console.warn(`🔥 [UnifiedProcessor] WARNING: No userId available, skipping useTokens for ${fileName}`);
-    }
-    
-    console.log(`[UnifiedWorker] Analysis completed: ${fileName}`);
 
-    // DEBUG: Log the response data structure to identify analysis field issues
-    console.log(`🔥 [UnifiedWorker] DEBUG response.data structure for ${fileName}:`, {
-      hasData: !!response.data,
-      dataKeys: response.data ? Object.keys(response.data) : [],
-      hasAnalysis: !!response.data?.analysis,
-      analysisType: typeof response.data?.analysis,
-      analysisLength: Array.isArray(response.data?.analysis) ? response.data.analysis.length : 'not array',
-      analysisContent: response.data?.analysis ? JSON.stringify(response.data.analysis) : 'undefined/null'
-    });
+    // Registra l'utilizzo del token
+    if (userId) {
+      await authService.useTokens(1, response.data.imageId, this.config.onTokenUsed);
+    }
 
     return response.data;
   }
@@ -2815,23 +2583,6 @@ class UnifiedImageWorker extends EventEmitter {
     description: string | null;
     keywords: string[] | null;
   }> {
-    console.log(`[UnifiedWorker] Processing AI results for ${imageFile.fileName} at convergence point`);
-    console.log(`[UnifiedWorker] Analysis result:`, JSON.stringify(analysisResult, null, 2));
-    console.log(`[UnifiedWorker] analysisResult.analysis type:`, typeof analysisResult.analysis);
-    console.log(`[UnifiedWorker] analysisResult.analysis length:`, analysisResult.analysis?.length);
-    console.log(`[UnifiedWorker] Available CSV data: ${this.csvData.length} rows`);
-    console.log(`[UnifiedWorker] Available participants data: ${this.participantsData.length} participants`);
-
-    // DEBUG: More detailed analysis data structure logging
-    console.log(`🔥 [UnifiedWorker] DEBUG analysisResult structure for ${imageFile.fileName}:`, {
-      hasAnalysisResult: !!analysisResult,
-      analysisResultKeys: analysisResult ? Object.keys(analysisResult) : [],
-      hasAnalysisField: !!analysisResult.analysis,
-      analysisFieldType: typeof analysisResult.analysis,
-      analysisIsArray: Array.isArray(analysisResult.analysis),
-      analysisFieldContent: analysisResult.analysis ? JSON.stringify(analysisResult.analysis) : 'undefined/null'
-    });
-
     let csvMatch: any = null;
     let description: string | null = null;
 
@@ -2847,18 +2598,12 @@ class UnifiedImageWorker extends EventEmitter {
         isIndividual
       );
 
-      if (originalCount !== analysisResult.analysis.length) {
-        console.log(`[UnifiedWorker] Filtered recognitions from ${originalCount} to ${analysisResult.analysis.length} for ${this.category} (individual=${isIndividual})`);
-      }
-
       // Enhanced intelligent matching using SmartMatcher with temporal context for ALL vehicles
       const csvMatches = await this.findIntelligentMatches(analysisResult.analysis, imageFile, processor, temporalContext);
 
       // Costruisci i keywords usando la logica esistente (utilizzeremo tutti i matches)
       const keywords = this.buildMetatag(analysisResult.analysis, csvMatches);
       description = keywords && keywords.length > 0 ? keywords.join(', ') : null; // Backward compatibility
-
-      console.log(`[UnifiedWorker] Generated keywords at convergence point for ${analysisResult.analysis.length} vehicles: ${keywords}`);
 
       // Store all matches for further processing
       csvMatch = csvMatches;
@@ -2891,16 +2636,8 @@ class UnifiedImageWorker extends EventEmitter {
           // If no match and using preset, vehicle was filtered out - don't include in csvMatch
         }
 
-        console.log(`[UnifiedWorker] Filtered csvMatch array from ${csvMatch.length} to ${filteredCsvMatch.length} entries (preset mode)`);
       }
     }
-
-    // DEBUG: Log data flow for N/A issue investigation
-    console.log(`[UnifiedWorker] Data flow debug for ${imageFile.fileName}:`);
-    console.log(`[UnifiedWorker] - Original analysis:`, analysisResult.analysis);
-    console.log(`[UnifiedWorker] - CSV matches:`, csvMatch);
-    console.log(`[UnifiedWorker] - Filtered CSV matches:`, filteredCsvMatch);
-    console.log(`[UnifiedWorker] - Corrected analysis:`, correctedAnalysis);
 
     return {
       analysis: correctedAnalysis,
@@ -2915,51 +2652,33 @@ class UnifiedImageWorker extends EventEmitter {
    */
   private async writeMetadata(imageFile: UnifiedImageFile, keywords: string[] | null, processedImagePath: string, analysis?: any[], csvMatch?: any): Promise<void> {
     if (!keywords || keywords.length === 0) {
-      console.log(`[UnifiedWorker] No keywords to write for ${imageFile.fileName}`);
       return;
     }
 
-    console.log(`[UnifiedWorker] Writing metadata for ${imageFile.fileName}: ${keywords.length} keywords - ${keywords.join(', ')}`);
-
     // Generate formatted data for ExtendedDescription
     const extendedDescriptionData = this.buildExtendedDescription(analysis || [], csvMatch);
-    console.log(`[UnifiedWorker] DEBUG - extendedDescriptionData result: ${extendedDescriptionData ? `"${extendedDescriptionData}"` : 'NULL'}`);
-    console.log(`[UnifiedWorker] DEBUG - csvMatch type: ${Array.isArray(csvMatch) ? 'Array' : typeof csvMatch}, isRaw: ${imageFile.isRaw}`);
 
     // Build Person Shown strings from matched participants
     const personShownStrings = this.buildPersonShownStrings(csvMatch);
 
     if (imageFile.isRaw) {
       // Per i file RAW, crea un file XMP sidecar con keywords e descrizione
-      console.log(`[UnifiedWorker] Creating XMP sidecar for RAW file: ${imageFile.originalPath}`);
       await createXmpSidecar(imageFile.originalPath, keywords, extendedDescriptionData || undefined);
       // TODO: Add PersonInImage support to XMP sidecar in future iteration
     } else {
       // Per i file non-RAW, scrivi sia Keywords semplificati che ExtendedDescription
-      console.log(`[UnifiedWorker] Writing dual metadata to JPEG file: ${imageFile.originalPath}`);
-
-      // Write complete keywords (same as XMP format)
-      console.log(`[UnifiedWorker] Writing complete keywords to IPTC:Keywords`);
       const keywordsMode = this.config.keywordsMode || 'append';
-      await writeKeywordsToImage(imageFile.originalPath, keywords, false, keywordsMode); // false = use complete format like XMP
+      await writeKeywordsToImage(imageFile.originalPath, keywords, false, keywordsMode);
 
       // Write formatted data to ExtendedDescription (only if participant preset provided data)
       if (extendedDescriptionData) {
-        console.log(`[UnifiedWorker] ✅ CALLING writeExtendedDescription with: "${extendedDescriptionData}"`);
         const descriptionMode = this.config.descriptionMode || 'append';
         await writeExtendedDescription(imageFile.originalPath, extendedDescriptionData, descriptionMode);
-        console.log(`[UnifiedWorker] ✅ writeExtendedDescription COMPLETED for ${imageFile.fileName}`);
-      } else {
-        console.log(`[UnifiedWorker] ❌ SKIPPING writeExtendedDescription - extendedDescriptionData is NULL`);
       }
 
       // Write Person Shown (IPTC PersonInImage) if template is configured and we have matches
       if (personShownStrings.length > 0) {
-        console.log(`[UnifiedWorker] ✅ CALLING writePersonInImage with: ${personShownStrings.join(', ')}`);
         await writePersonInImage(imageFile.originalPath, personShownStrings);
-        console.log(`[UnifiedWorker] ✅ writePersonInImage COMPLETED for ${imageFile.fileName}`);
-      } else {
-        console.log(`[UnifiedWorker] ❌ SKIPPING writePersonInImage - no person shown data available`);
       }
     }
   }
@@ -2972,12 +2691,10 @@ class UnifiedImageWorker extends EventEmitter {
     // Check if personShownTemplate is configured
     const template = this.config.personShownTemplate;
     if (!template) {
-      console.log(`[UnifiedWorker] No personShownTemplate configured, skipping Person Shown generation`);
       return [];
     }
 
     if (!csvMatch) {
-      console.log(`[UnifiedWorker] No CSV match data for Person Shown`);
       return [];
     }
 
@@ -3026,7 +2743,6 @@ class UnifiedImageWorker extends EventEmitter {
 
     // Remove duplicates
     const uniquePersons = [...new Set(personStrings)];
-    console.log(`[UnifiedWorker] Built ${uniquePersons.length} Person Shown strings: ${uniquePersons.join(' | ')}`);
     return uniquePersons;
   }
 
@@ -3037,18 +2753,12 @@ class UnifiedImageWorker extends EventEmitter {
    */
   private applyCorrectionsToAnalysis(originalAnalysis: any[], csvMatches: any[]): any[] {
     if (!originalAnalysis || originalAnalysis.length === 0) {
-      console.log(`[UnifiedWorker] No analysis data to correct`);
       return originalAnalysis;
     }
 
     if (!csvMatches || csvMatches.length === 0) {
-      console.log(`[UnifiedWorker] No SmartMatcher corrections available, returning original analysis`);
-      console.log(`[UnifiedWorker] DEBUG - Original analysis being returned:`, originalAnalysis);
       return originalAnalysis;
     }
-
-    console.log(`[UnifiedWorker] Applying SmartMatcher corrections to analysis data for UI display`);
-    console.log(`[UnifiedWorker] Processing ${originalAnalysis.length} vehicles with ${csvMatches.length} matches available`);
 
     // Create corrected copy of analysis array
     const correctedAnalysis = originalAnalysis.map((vehicle, index) => {
@@ -3059,11 +2769,9 @@ class UnifiedImageWorker extends EventEmitter {
 
         if (isUsingParticipantPreset) {
           // When using a preset and no match found, filter out this vehicle
-          console.log(`[UnifiedWorker] No match found for vehicle ${index} (preset mode), filtering out result`);
           return null; // Return null to filter out this vehicle when using preset
         } else {
           // When not using preset, keep original behavior (show all AI recognitions)
-          console.log(`[UnifiedWorker] No match found for vehicle ${index} (free mode), returning original data`);
           return vehicle; // Return unchanged if no match and no preset
         }
       }
@@ -3090,7 +2798,6 @@ class UnifiedImageWorker extends EventEmitter {
       if (participant.numero || participant.number) {
         const correctedNumber = String(participant.numero || participant.number);
         if (correctedVehicle.raceNumber !== correctedNumber) {
-          console.log(`[UnifiedWorker] Vehicle ${index}: Correcting race number: ${correctedVehicle.raceNumber} → ${correctedNumber}`);
           correctedVehicle.raceNumber = correctedNumber;
           corrections.raceNumber = true;
         }
@@ -3112,7 +2819,6 @@ class UnifiedImageWorker extends EventEmitter {
         const originalDrivers = vehicle.drivers || [];
         const driversChanged = JSON.stringify(originalDrivers.sort()) !== JSON.stringify(correctedDrivers.sort());
         if (driversChanged) {
-          console.log(`[UnifiedWorker] Vehicle ${index}: Correcting drivers: [${originalDrivers.join(', ')}] → [${correctedDrivers.join(', ')}]`);
           correctedVehicle.drivers = correctedDrivers;
           corrections.drivers = true;
         }
@@ -3122,7 +2828,6 @@ class UnifiedImageWorker extends EventEmitter {
       if (participant.squadra) {
         const originalTeam = vehicle.teamName || '';
         if (originalTeam !== participant.squadra) {
-          console.log(`[UnifiedWorker] Vehicle ${index}: Correcting team: "${originalTeam}" → "${participant.squadra}"`);
           correctedVehicle.teamName = participant.squadra;
           corrections.team = true;
         }
@@ -3137,18 +2842,6 @@ class UnifiedImageWorker extends EventEmitter {
     // Filter out null entries (unmatched vehicles when using preset)
     const filteredAnalysis = correctedAnalysis.filter(vehicle => vehicle !== null);
 
-    // Log filtering statistics
-    const filteredCount = correctedAnalysis.length - filteredAnalysis.length;
-    if (filteredCount > 0) {
-      console.log(`[UnifiedWorker] Filtered out ${filteredCount} unmatched vehicles when using participant preset`);
-    }
-
-    const totalCorrections = filteredAnalysis.reduce((sum, vehicle) => {
-      const corrections = vehicle._corrections || {};
-      return sum + (corrections.raceNumber ? 1 : 0) + (corrections.drivers ? 1 : 0) + (corrections.team ? 1 : 0);
-    }, 0);
-
-    console.log(`[UnifiedWorker] Applied corrections to ${filteredAnalysis.length} vehicles (${totalCorrections} total corrections)`);
     return filteredAnalysis;
   }
 
@@ -3170,15 +2863,12 @@ class UnifiedImageWorker extends EventEmitter {
       return [];
     }
 
-    console.log(`[UnifiedWorker] Starting intelligent matching for ${analysis.length} vehicles with ${participantData.length} participants`);
-
     const matches: any[] = [];
 
     try {
       // Process each vehicle in the analysis
       for (let vehicleIndex = 0; vehicleIndex < analysis.length; vehicleIndex++) {
         const vehicle = analysis[vehicleIndex];
-        console.log(`[UnifiedWorker] Processing vehicle ${vehicleIndex}/${analysis.length}: ${vehicle.raceNumber || 'unknown'}`);
 
         // Convert analysis to SmartMatcher format
         const smartMatcherAnalysis: SmartMatcherAnalysisResult = {
@@ -3200,20 +2890,17 @@ class UnifiedImageWorker extends EventEmitter {
         // Try to get cached result first
         const cachedResult = await this.cacheManager.getMatch(cacheKey, participantHash, this.category);
         if (cachedResult && cachedResult.bestMatch) {
-          console.log(`[UnifiedWorker] Found cached match for vehicle ${vehicleIndex}`);
           matches.push(this.convertMatchResultToLegacyFormat(cachedResult));
           continue;
         }
 
         // Set temporal context if available (same for all vehicles in the image)
         if (temporalContext) {
-          console.log(`[UnifiedWorker] Adding temporal context to vehicle ${vehicleIndex}: ${temporalContext.temporalNeighbors.length} neighbors`);
           smartMatcherAnalysis.imageTimestamp = temporalContext.imageTimestamp;
           smartMatcherAnalysis.temporalNeighbors = temporalContext.temporalNeighbors;
         }
 
         // Perform intelligent matching for this vehicle
-        console.log(`[UnifiedWorker] Performing intelligent matching for vehicle ${vehicleIndex} with SmartMatcher`);
         const isUsingParticipantPreset = this.participantsData.length > 0;
         const matchResult = await this.smartMatcher.findMatches(smartMatcherAnalysis, participantData, isUsingParticipantPreset, vehicleIndex);
 
@@ -3238,25 +2925,11 @@ class UnifiedImageWorker extends EventEmitter {
             );
           }
 
-          // Add detailed logging for transparency
-          console.log(`[UnifiedWorker] Vehicle ${vehicleIndex}: Best match found:`, {
-            participant: legacyMatch.entry.numero || legacyMatch.entry.number,
-            matchType: legacyMatch.matchType,
-            score: matchResult.bestMatch.score.toFixed(1),
-            confidence: (matchResult.bestMatch.confidence * 100).toFixed(1) + '%',
-            evidence: matchResult.bestMatch.evidence.length,
-            reasoning: matchResult.bestMatch.reasoning.slice(0, 3) // First 3 reasons
-          });
-
           matches.push(legacyMatch);
         } else {
-          console.log(`[UnifiedWorker] Vehicle ${vehicleIndex}: No suitable match found through intelligent matching`);
-
           // Try fallback simple matching for this vehicle
           const fallbackMatch = this.fallbackSimpleMatch(vehicle, participantData);
           if (fallbackMatch) {
-            console.log(`[UnifiedWorker] Vehicle ${vehicleIndex}: Found fallback match: ${fallbackMatch.entry.numero || fallbackMatch.entry.number}`);
-
             // Store fallback result in temporal cache with lower confidence
             if (imageFile && smartMatcherAnalysis.imageTimestamp?.timestamp) {
               const participantNumber = String(fallbackMatch.entry.numero || fallbackMatch.entry.number || '');
@@ -3270,14 +2943,10 @@ class UnifiedImageWorker extends EventEmitter {
 
             matches.push(fallbackMatch);
           } else {
-            console.log(`[UnifiedWorker] Vehicle ${vehicleIndex}: No match found`);
             matches.push(null); // Maintain array alignment
           }
         }
       }
-
-      const successfulMatches = matches.filter(match => match !== null).length;
-      console.log(`[UnifiedWorker] Intelligent matching completed: ${successfulMatches}/${analysis.length} vehicles matched`);
 
       return matches;
 
@@ -3285,7 +2954,6 @@ class UnifiedImageWorker extends EventEmitter {
       console.error(`[UnifiedWorker] Error during intelligent matching:`, error);
 
       // Fallback to simple legacy matching for all vehicles on error
-      console.log(`[UnifiedWorker] Falling back to simple race number matching for all vehicles`);
       const fallbackMatches = analysis.map(vehicle =>
         this.fallbackSimpleMatch(vehicle, participantData)
       );
@@ -3370,14 +3038,6 @@ class UnifiedImageWorker extends EventEmitter {
         isBurstMode: candidate.isBurstModeCandidate || false
       }));
 
-    // DEBUG: Verifica metatag nel participant prima di restituirlo
-    console.log(`[DEBUG-METATAG] convertMatchResultToLegacyFormat - participant metatag:`, {
-      numero: bestMatch.participant.numero || bestMatch.participant.number,
-      hasMetatag: !!bestMatch.participant.metatag,
-      metatagValue: bestMatch.participant.metatag || 'UNDEFINED',
-      participantKeys: Object.keys(bestMatch.participant)
-    });
-
     return {
       matchType,
       matchedValue,
@@ -3427,30 +3087,7 @@ class UnifiedImageWorker extends EventEmitter {
    * Now includes vehicle index for multi-vehicle scenarios
    */
   private logMatchResults(matchResult: MatchResult, vehicleIndex?: number): void {
-    const vehiclePrefix = vehicleIndex !== undefined ? `Vehicle ${vehicleIndex}: ` : '';
-
-    console.log(`[UnifiedWorker] ${vehiclePrefix}SmartMatcher Results:`, {
-      bestMatch: matchResult.bestMatch ? {
-        score: matchResult.bestMatch.score.toFixed(1),
-        confidence: (matchResult.bestMatch.confidence * 100).toFixed(1) + '%',
-        evidenceTypes: matchResult.bestMatch.evidence.map(e => e.type),
-        participant: matchResult.bestMatch.participant.numero || matchResult.bestMatch.participant.number
-      } : null,
-      totalCandidates: matchResult.allCandidates.length,
-      multipleHighScores: matchResult.multipleHighScores,
-      resolvedByOverride: matchResult.resolvedByOverride,
-      debugInfo: matchResult.debugInfo
-    });
-
-    // Log top 3 candidates for analysis
-    console.log(`[UnifiedWorker] ${vehiclePrefix}Top candidates:`,
-      matchResult.allCandidates.slice(0, 3).map(candidate => ({
-        participant: candidate.participant.numero || candidate.participant.number,
-        score: candidate.score.toFixed(1),
-        confidence: (candidate.confidence * 100).toFixed(1) + '%',
-        evidence: candidate.evidence.length
-      }))
-    );
+    // Logging disabled for production - uncomment for debugging
   }
 
   /**
@@ -3465,7 +3102,6 @@ class UnifiedImageWorker extends EventEmitter {
     );
 
     if (match) {
-      console.log(`[UnifiedWorker] Fallback match found for number: ${analysis.raceNumber}`);
       return {
         matchType: 'raceNumber',
         matchedValue: analysis.raceNumber,
@@ -3490,7 +3126,6 @@ class UnifiedImageWorker extends EventEmitter {
     const hasNoValidMatches = validMatches.length === 0;
 
     if (isUsingParticipantPreset && hasNoValidMatches) {
-      console.log(`[UnifiedWorker] Using participant preset but no matches found - skipping metadata generation`);
       return null; // Don't write any metadata when using preset but no matches found
     }
 
@@ -3536,19 +3171,12 @@ class UnifiedImageWorker extends EventEmitter {
         allKeywords.push(...vehicleKeywords);
       });
 
-      console.log(`[UnifiedWorker] Built enhanced metadata for ${validMatches.length} vehicles: ${allKeywords.join(' | ')}`);
       return allKeywords.length > 0 ? allKeywords : null;
     }
 
     // Fallback to original metadata formatting if no match and not using preset
     if (!isUsingParticipantPreset) {
       const keywords = this.formatMetadataByCategory(analysis, this.category);
-
-      // Generate keywords without NO-MATCH tag
-      if (!csvMatches && keywords.length > 0) {
-        console.log(`[UnifiedWorker] No participant match - generated keywords: ${keywords.join(' | ')}`);
-      }
-
       return keywords.length > 0 ? keywords : null;
     }
 
@@ -3593,7 +3221,6 @@ class UnifiedImageWorker extends EventEmitter {
         parts.push(`Driver: ${participant.nome}`);
       }
 
-      console.log(`[UnifiedWorker] Built special instructions from CSV match: ${parts.join(' | ')}`);
       return parts.join(' | ');
     }
 
@@ -3629,7 +3256,6 @@ class UnifiedImageWorker extends EventEmitter {
       return 'NO-MATCH';
     }
 
-    console.log(`[UnifiedWorker] Built special instructions from analysis: ${parts.join(' | ')}`);
     return parts.length > 0 ? parts.join(' | ') : null;
   }
 
@@ -3638,33 +3264,19 @@ class UnifiedImageWorker extends EventEmitter {
    * Gestisce sia oggetti singoli che array di csvMatch per immagini multi-veicolo
    */
   private buildExtendedDescription(analysis: any[], csvMatch?: any): string | null {
-    // DEBUG: Log dettagliato per diagnosi metatag
-    console.log(`[DEBUG-METATAG] buildExtendedDescription called`);
-    console.log(`[DEBUG-METATAG] csvMatch type: ${typeof csvMatch}, isArray: ${Array.isArray(csvMatch)}`);
-    console.log(`[DEBUG-METATAG] csvMatch value:`, csvMatch ? JSON.stringify(csvMatch, null, 2).substring(0, 500) : 'NULL');
-
     // Handle both single match (legacy) and array of matches (multi-vehicle)
     if (!csvMatch) {
-      console.log(`[UnifiedWorker] No participant preset match - skipping extended description`);
       return null;
     }
 
     const matches = Array.isArray(csvMatch) ? csvMatch : [csvMatch];
-    console.log(`[DEBUG-METATAG] matches count: ${matches.length}`);
     const descriptions: string[] = [];
 
     // Process each match to collect metatag content
     for (let i = 0; i < matches.length; i++) {
       const match = matches[i];
-      console.log(`[DEBUG-METATAG] match[${i}]:`, {
-        hasMatch: !!match,
-        hasEntry: !!match?.entry,
-        entryKeys: match?.entry ? Object.keys(match.entry) : [],
-        metatag: match?.entry?.metatag || 'UNDEFINED'
-      });
 
       if (!match || !match.entry) {
-        console.log(`[UnifiedWorker] Match ${i} has no entry - skipping`);
         continue;
       }
 
@@ -3672,26 +3284,21 @@ class UnifiedImageWorker extends EventEmitter {
 
       // Only use the metatag field from the participant preset
       if (!participant.metatag || participant.metatag.trim() === '') {
-        console.log(`[UnifiedWorker] Match ${i} participant preset has empty metatag field - skipping`);
-        console.log(`[DEBUG-METATAG] participant keys:`, Object.keys(participant));
         continue;
       }
 
       // Add metatag content for this vehicle
       const vehicleDescription = participant.metatag.trim();
       descriptions.push(vehicleDescription);
-      console.log(`[UnifiedWorker] Added metatag for vehicle ${i}: ${vehicleDescription.substring(0, 50)}${vehicleDescription.length > 50 ? '...' : ''}`);
     }
 
     // If no valid descriptions found, return null
     if (descriptions.length === 0) {
-      console.log(`[UnifiedWorker] No valid metatag content found in any participant match`);
       return null;
     }
 
     // Combine all descriptions with separator for multi-vehicle images
     const finalDescription = descriptions.join(' | ');
-    console.log(`[UnifiedWorker] Built extended description from ${descriptions.length} participant metatag(s): ${finalDescription.substring(0, 100)}${finalDescription.length > 100 ? '...' : ''}`);
     return finalDescription;
   }
 
@@ -3705,14 +3312,12 @@ class UnifiedImageWorker extends EventEmitter {
   ): string[] {
     // Priorità 1: Se c'è un metatag dal CSV, usa quello
     if (csvMetatag) {
-      console.log(`[UnifiedWorker] Using CSV metatag: ${csvMetatag}`);
       return [csvMetatag];
     }
-    
+
     // Priorità 2: Se non ci sono dati AI, usa un messaggio generico
     if (!analysisData) {
       const fallback = `Processed by Racetagger - Category: ${category}`;
-      console.log(`[UnifiedWorker] Using fallback: ${fallback}`);
       return [fallback];
     }
 
@@ -3724,22 +3329,19 @@ class UnifiedImageWorker extends EventEmitter {
     for (let i = 0; i < analysisArray.length; i++) {
       const analysis = analysisArray[i];
       const vehicleKeywords: string[] = [];
-      
-      console.log(`[UnifiedWorker] Processing analysis result ${i + 1}/${analysisArray.length}:`, analysis);
-      
+
       // Numero (universale per tutti gli sport)
       const raceNumber = analysis.raceNumber || analysis.race_number || analysis.number;
       if (raceNumber) {
         const keyword = `Number: ${raceNumber}`;
         vehicleKeywords.push(keyword);
-        console.log(`[UnifiedWorker] Added number keyword: ${keyword}`);
       }
-      
+
       // Gestione piloti/atleti in base alla categoria
       const drivers = analysis.drivers || (analysis.driver ? [analysis.driver] : []);
       if (drivers && drivers.length > 0) {
         const driversText = Array.isArray(drivers) ? drivers.join(', ') : String(drivers);
-        
+
         let driverLabel: string;
         switch (category.toLowerCase()) {
           case 'motorsport':
@@ -3752,26 +3354,23 @@ class UnifiedImageWorker extends EventEmitter {
             driverLabel = drivers.length === 1 ? 'Participant' : 'Participants';
             break;
         }
-        
+
         const keyword = `${driverLabel}: ${driversText}`;
         vehicleKeywords.push(keyword);
-        console.log(`[UnifiedWorker] Added driver keyword: ${keyword}`);
       }
-      
+
       // Categoria/Disciplina
       const vehicleCategory = analysis.category || analysis.class || analysis.vehicleClass;
       if (vehicleCategory) {
         const keyword = `Category: ${vehicleCategory}`;
         vehicleKeywords.push(keyword);
-        console.log(`[UnifiedWorker] Added category keyword: ${keyword}`);
       }
-      
+
       // Team/Squadra (più rilevante per motorsport)
       if (analysis.teamName && category.toLowerCase() === 'motorsport') {
         vehicleKeywords.push(analysis.teamName);
-        console.log(`[UnifiedWorker] Added team keyword: ${analysis.teamName}`);
       }
-      
+
       // Altri testi rilevati (se presenti e non ridondanti) - aggiunti come keywords separati
       if (analysis.otherText && analysis.otherText.length > 0) {
         const relevantTexts = analysis.otherText
@@ -3782,27 +3381,24 @@ class UnifiedImageWorker extends EventEmitter {
           for (const text of relevantTexts) {
             vehicleKeywords.push(text);
           }
-          console.log(`[UnifiedWorker] Added ${relevantTexts.length} sponsor keywords: ${relevantTexts.join(', ')}`);
         }
       }
-      
+
       // Aggiungi le keywords del veicolo corrente
       allKeywords.push(...vehicleKeywords);
-      
+
       // Aggiungi divider se ci sono più veicoli e non è l'ultimo
       if (analysisArray.length > 1 && i < analysisArray.length - 1) {
-        allKeywords.push('•••');
+        allKeywords.push('...');
       }
     }
-    
+
     // Se non abbiamo dati utili, usa un fallback
     if (allKeywords.length === 0) {
       const fallback = `Analyzed by Racetagger - Category: ${category}`;
-      console.log(`[UnifiedWorker] Using analysis fallback: ${fallback}`);
       return [fallback];
     }
-    
-    console.log(`[UnifiedWorker] Generated ${allKeywords.length} keywords:`, allKeywords);
+
     return allKeywords;
   }
 
@@ -3810,23 +3406,20 @@ class UnifiedImageWorker extends EventEmitter {
    * ADMIN FEATURE: Organizza l'immagine in cartelle basate sul numero di gara
    */
   private async organizeToFolders(
-    imageFile: UnifiedImageFile, 
-    processedAnalysis: any, 
+    imageFile: UnifiedImageFile,
+    processedAnalysis: any,
     processedImagePath: string
   ): Promise<void> {
     // Verifica se la funzionalità è abilitata
     const { APP_CONFIG } = await import('./config');
     if (!APP_CONFIG.features.ENABLE_FOLDER_ORGANIZATION || !this.config.folderOrganization?.enabled) {
-      console.log(`[UnifiedWorker] Folder organization disabled or not configured for ${imageFile.fileName}`);
       return;
     }
 
     try {
-      console.log(`[UnifiedWorker] Starting folder organization for ${imageFile.fileName}`);
-
       // Import dinamico del modulo organizer per mantenere la modularità
       const { FolderOrganizer } = await import('./utils/folder-organizer');
-      
+
       // Crea configurazione organizer da config del processor
       const organizerConfig = {
         enabled: this.config.folderOrganization.enabled,
@@ -3850,18 +3443,14 @@ class UnifiedImageWorker extends EventEmitter {
 
       // Extract numbers that have valid matches in the preset
       const numbersWithMatches = this.extractNumbersWithMatches(processedAnalysis.csvMatch);
-      const numbersWithoutMatches = allDetectedNumbers.filter(num => !numbersWithMatches.includes(num));
 
       if (!allDetectedNumbers || allDetectedNumbers.length === 0) {
-        console.log(`[UnifiedWorker] No race numbers found for ${imageFile.fileName}, organizing as unknown`);
         await organizer.organizeUnknownImage(
           imageFile.originalPath,
           path.dirname(imageFile.originalPath)
         );
       } else if (isUsingParticipantPreset && numbersWithMatches.length === 0) {
         // Numbers detected but NONE found in preset - use Unknown_Numbers folder
-        console.log(`[UnifiedWorker] Race numbers [${allDetectedNumbers.join(', ')}] found but NONE in participant preset for ${imageFile.fileName}, organizing to Unknown_Numbers`);
-
         // Log unknown number event
         if (this.analysisLogger) {
           this.analysisLogger.logUnknownNumber({
@@ -3883,13 +3472,7 @@ class UnifiedImageWorker extends EventEmitter {
         // At least some numbers have matches - organize by matched numbers only
         const numbersToOrganize = isUsingParticipantPreset ? numbersWithMatches : allDetectedNumbers;
 
-        if (isUsingParticipantPreset && numbersWithoutMatches.length > 0) {
-          console.log(`[UnifiedWorker] Found race numbers [${allDetectedNumbers.join(', ')}] for ${imageFile.fileName} - organizing by matched numbers [${numbersWithMatches.join(', ')}], ignoring [${numbersWithoutMatches.join(', ')}]`);
-        } else {
-          console.log(`[UnifiedWorker] Found race numbers [${numbersToOrganize.join(', ')}] for ${imageFile.fileName}`);
-        }
-
-        // ====== COLLECT ALL csvData entries for matched numbers ======
+        // COLLECT ALL csvData entries for matched numbers
         const csvDataList: any[] = [];
 
         if (processedAnalysis.csvMatch && Array.isArray(processedAnalysis.csvMatch)) {
@@ -3902,37 +3485,17 @@ class UnifiedImageWorker extends EventEmitter {
           });
         }
 
-        // ====== DEBUG LOGGING: Trace csvDataList before passing to organizer ======
-        console.log('[Processor] 🔍 DEBUG - csvDataList length:', csvDataList.length);
-        console.log('[Processor] 🔍 DEBUG - csvDataList:', csvDataList.length > 0 ? JSON.stringify(csvDataList, null, 2) : 'empty array');
-        csvDataList.forEach((data, index) => {
-          console.log(`[Processor] 🔍 DEBUG - Vehicle ${index + 1} (#${data.numero}):`, {
-            folder_1: data.folder_1 || '(empty)',
-            folder_2: data.folder_2 || '(empty)',
-            folder_3: data.folder_3 || '(empty)'
-          });
-        });
-        // ===========================================================================
-
         // Organizza l'immagine solo con i numeri che hanno match
         const result = await organizer.organizeImage(
           imageFile.originalPath,
-          numbersToOrganize, // Only numbers with matches in preset
-          csvDataList, // ← ARRAY of csvData instead of single object
+          numbersToOrganize,
+          csvDataList,
           path.dirname(imageFile.originalPath)
         );
 
-        if (result.success) {
-          console.log(`[UnifiedWorker] Successfully organized ${imageFile.fileName} to folder: ${result.folderName}`);
-        } else {
+        if (!result.success) {
           console.error(`[UnifiedWorker] Failed to organize ${imageFile.fileName}:`, result.error);
         }
-      }
-
-      // Log delle statistiche finali di organizzazione
-      const summary = organizer.getOrganizationSummary();
-      if (summary.totalFiles > 0) {
-        console.log(`[UnifiedWorker] Organization summary: ${summary.organizedFiles}/${summary.totalFiles} files organized, ${summary.foldersCreated} folders created`);
       }
 
     } catch (error: any) {
@@ -4149,15 +3712,13 @@ export class UnifiedImageProcessor extends EventEmitter {
     // Initialize filesystem timestamp extractor for cross-platform temporal sorting
     this.filesystemTimestampExtractor = new FilesystemTimestampExtractor();
 
-    console.log(`[UnifiedProcessor] Initialized with ${this.config.maxConcurrentWorkers} workers (auto-configured from ${optimalWorkers} optimal), max size: ${this.config.maxImageSizeKB}KB`);
+    if (DEBUG_MODE) if (DEBUG_MODE) console.log(`[UnifiedProcessor] Initialized with ${this.config.maxConcurrentWorkers} workers`);
   }
 
   /**
    * Initialize temporal clustering configurations from Supabase sport categories
    */
   private async initializeTemporalConfigurations() {
-    console.log(`[UnifiedProcessor] Initializing temporal configurations from Supabase...`);
-
     try {
       // Create temporary Supabase client
       const supabase = createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.key);
@@ -4169,23 +3730,20 @@ export class UnifiedImageProcessor extends EventEmitter {
         .eq('is_active', true);
 
       if (error) {
-        console.warn(`[UnifiedProcessor] Failed to load sport categories from Supabase:`, error);
-        console.log(`[UnifiedProcessor] Using default hardcoded temporal configurations`);
+        if (DEBUG_MODE) if (DEBUG_MODE) console.warn(`[UnifiedProcessor] Failed to load sport categories from Supabase:`, error);
         return;
       }
 
       if (!sportCategories || sportCategories.length === 0) {
-        console.warn(`[UnifiedProcessor] No sport categories found in Supabase`);
-        console.log(`[UnifiedProcessor] Using default hardcoded temporal configurations`);
+        if (DEBUG_MODE) if (DEBUG_MODE) console.warn(`[UnifiedProcessor] No sport categories found in Supabase`);
         return;
       }
 
-      console.log(`[UnifiedProcessor] Loaded ${sportCategories.length} sport categories from Supabase`);
+      if (DEBUG_MODE) if (DEBUG_MODE) console.log(`[UnifiedProcessor] Loaded ${sportCategories.length} sport categories from Supabase`);
 
       // Initialize TemporalClusterManager configurations from Supabase data
       if (this.temporalManager) {
         this.temporalManager.initializeFromSportCategories(sportCategories);
-        console.log(`[UnifiedProcessor] TemporalClusterManager configurations updated from Supabase`);
       }
 
       // Find and store current sport category for RF-DETR tracking
@@ -4193,16 +3751,11 @@ export class UnifiedImageProcessor extends EventEmitter {
         (cat: any) => cat.code.toLowerCase() === (this.config.category || 'motorsport').toLowerCase()
       );
 
-      if (this.currentSportCategory) {
-        console.log(`[UnifiedProcessor] Current sport category loaded: ${this.currentSportCategory.name} (recognition: ${this.currentSportCategory.recognition_method || 'gemini'})`);
-      } else {
-        console.warn(`[UnifiedProcessor] Sport category '${this.config.category}' not found in Supabase`);
+      if (!this.currentSportCategory && DEBUG_MODE) {
+        if (DEBUG_MODE) console.warn(`[UnifiedProcessor] Sport category '${this.config.category}' not found in Supabase`);
       }
-
-      console.log(`[UnifiedProcessor] Temporal configurations initialization completed`);
     } catch (error) {
       console.error(`[UnifiedProcessor] Error initializing temporal configurations:`, error);
-      console.log(`[UnifiedProcessor] Falling back to default hardcoded temporal configurations`);
     }
   }
 
@@ -4210,8 +3763,6 @@ export class UnifiedImageProcessor extends EventEmitter {
    * Extract timestamps from all images using batch processing for temporal clustering
    */
   private async extractTimestampsFromImagesBatch(imageFiles: UnifiedImageFile[]): Promise<ImageTimestamp[]> {
-    console.log(`[UnifiedProcessor] Extracting timestamps from ${imageFiles.length} images using batch processing`);
-
     const filePaths = imageFiles.map(file => file.originalPath);
     const imageTimestamps = await this.temporalManager.extractTimestampsBatch(filePaths);
 
@@ -4221,11 +3772,6 @@ export class UnifiedImageProcessor extends EventEmitter {
       this.imageTimestamps.set(timestamp.filePath, timestamp);
     }
 
-    const successCount = imageTimestamps.filter(t => t.timestamp !== null).length;
-    const excludedCount = imageTimestamps.length - successCount;
-
-    console.log(`[UnifiedProcessor] Batch timestamp extraction completed: ${successCount}/${imageTimestamps.length} successful, ${excludedCount} excluded`);
-
     return imageTimestamps;
   }
 
@@ -4233,8 +3779,6 @@ export class UnifiedImageProcessor extends EventEmitter {
    * Extract timestamps from all images for temporal clustering (legacy single-file method)
    */
   private async extractTimestampsFromImages(imageFiles: UnifiedImageFile[]): Promise<ImageTimestamp[]> {
-    console.log(`[UnifiedProcessor] Extracting timestamps from ${imageFiles.length} images for temporal clustering`);
-
     const imageTimestamps: ImageTimestamp[] = [];
 
     // Process images in parallel for faster timestamp extraction
@@ -4243,7 +3787,7 @@ export class UnifiedImageProcessor extends EventEmitter {
         const timestamp = await this.temporalManager.extractTimestamp(imageFile.originalPath);
         return timestamp;
       } catch (error) {
-        console.warn(`[UnifiedProcessor] Failed to extract timestamp from ${imageFile.fileName}:`, error);
+        if (DEBUG_MODE) if (DEBUG_MODE) console.warn(`[UnifiedProcessor] Failed to extract timestamp from ${imageFile.fileName}`);
         return null;
       }
     });
@@ -4258,7 +3802,6 @@ export class UnifiedImageProcessor extends EventEmitter {
       }
     }
 
-    console.log(`[UnifiedProcessor] Successfully extracted ${imageTimestamps.length}/${imageFiles.length} timestamps`);
     return imageTimestamps;
   }
 
@@ -4304,7 +3847,7 @@ export class UnifiedImageProcessor extends EventEmitter {
     // Ensure minimum of 3 workers for good performance
     workers = Math.max(3, workers);
 
-    console.log(`[UnifiedProcessor] System: ${cpuCount} CPUs, ${totalMemoryGB.toFixed(1)}GB RAM → ${workers} workers (optimized)`);
+    if (DEBUG_MODE) if (DEBUG_MODE) console.log(`[UnifiedProcessor] System: ${cpuCount} CPUs, ${totalMemoryGB.toFixed(1)}GB RAM → ${workers} workers`);
     return workers;
   }
 
@@ -4315,21 +3858,12 @@ export class UnifiedImageProcessor extends EventEmitter {
     // FILTRO: Rimuovi file metadata di macOS (iniziano con ._) che causano loop infiniti
     const filteredFiles = imageFiles.filter(file => {
       const basename = path.basename(file.fileName);
-      if (basename.startsWith('._')) {
-        console.log(`[UnifiedProcessor] ⚠️ Skipping macOS metadata file: ${basename}`);
-        return false;
-      }
-      return true;
+      return !basename.startsWith('._');
     });
-
-    const filteredCount = imageFiles.length - filteredFiles.length;
-    if (filteredCount > 0) {
-      console.log(`[UnifiedProcessor] Filtered out ${filteredCount} macOS metadata files (._*)`);
-    }
 
     // Per batch grandi, dividi in chunk per prevenire crash di memoria
     if (filteredFiles.length > 1500) {
-      console.log(`[UnifiedProcessor] Large batch (${filteredFiles.length} images), processing in chunks to prevent memory issues`);
+      if (DEBUG_MODE) if (DEBUG_MODE) console.log(`[UnifiedProcessor] Large batch (${filteredFiles.length} images), processing in chunks`);
       return this.processBatchInChunks(filteredFiles);
     }
 
@@ -4340,15 +3874,13 @@ export class UnifiedImageProcessor extends EventEmitter {
    * Processa un batch molto grande in chunk più piccoli
    */
   private async processBatchInChunks(imageFiles: UnifiedImageFile[]): Promise<UnifiedProcessingResult[]> {
-    const chunkSize = 500; // Processa max 500 immagini alla volta per evitare OOM
+    const chunkSize = 500;
     const allResults: UnifiedProcessingResult[] = [];
-
-    console.log(`[UnifiedProcessor] Processing ${imageFiles.length} images in chunks of ${chunkSize}`);
 
     for (let i = 0; i < imageFiles.length; i += chunkSize) {
       // Check for cancellation before each chunk
       if (this.config.isCancelled && this.config.isCancelled()) {
-        console.log(`[UnifiedProcessor] Processing cancelled at chunk ${Math.floor(i / chunkSize) + 1}`);
+        if (DEBUG_MODE) if (DEBUG_MODE) console.log(`[UnifiedProcessor] Processing cancelled at chunk ${Math.floor(i / chunkSize) + 1}`);
         break;
       }
 
@@ -4356,13 +3888,9 @@ export class UnifiedImageProcessor extends EventEmitter {
       const chunkNumber = Math.floor(i / chunkSize) + 1;
       const totalChunks = Math.ceil(imageFiles.length / chunkSize);
 
-      console.log(`[UnifiedProcessor] Processing chunk ${chunkNumber}/${totalChunks} (${chunk.length} images)`);
-
       // Forza garbage collection prima di ogni chunk
       if (global.gc) {
         global.gc();
-        const memoryMB = process.memoryUsage().heapUsed / 1024 / 1024;
-        console.log(`[UnifiedProcessor] Memory before chunk ${chunkNumber}: ${memoryMB.toFixed(0)}MB`);
       }
 
       // Aggiorna i contatori totali per il progress reporting
@@ -4394,12 +3922,10 @@ export class UnifiedImageProcessor extends EventEmitter {
 
       // Pausa più lunga tra chunk per permettere alla memoria di stabilizzarsi
       if (chunkNumber < totalChunks) {
-        console.log(`[UnifiedProcessor] Chunk ${chunkNumber} completed. Pausing 3 seconds before next chunk...`);
         await new Promise(resolve => setTimeout(resolve, 3000));
       }
     }
 
-    console.log(`[UnifiedProcessor] All chunks completed. Total results: ${allResults.length}`);
     return allResults;
   }
 
@@ -4407,22 +3933,16 @@ export class UnifiedImageProcessor extends EventEmitter {
    * Processa un batch di immagini (implementazione interna)
    */
   private async processBatchInternal(imageFiles: UnifiedImageFile[]): Promise<UnifiedProcessingResult[]> {
-    console.log(`[UnifiedProcessor] Starting batch processing of ${imageFiles.length} images`);
-
     // Controllo memoria preventivo
     const memoryMB = process.memoryUsage().heapUsed / 1024 / 1024;
     const totalMemoryMB = require('os').totalmem() / 1024 / 1024;
     const memoryUsagePercent = (memoryMB / totalMemoryMB) * 100;
 
-    console.log(`[UnifiedProcessor] Memory check: ${memoryMB.toFixed(0)}MB used (${memoryUsagePercent.toFixed(1)}% of ${totalMemoryMB.toFixed(0)}MB total)`);
-
     // Se l'uso memoria è già alto, forza garbage collection
     if (memoryUsagePercent > 70) {
-      console.warn(`[UnifiedProcessor] High memory usage detected (${memoryUsagePercent.toFixed(1)}%), forcing garbage collection`);
+      if (DEBUG_MODE) if (DEBUG_MODE) console.warn(`[UnifiedProcessor] High memory usage detected (${memoryUsagePercent.toFixed(1)}%), forcing GC`);
       if (global.gc) {
         global.gc();
-        const afterGC = process.memoryUsage().heapUsed / 1024 / 1024;
-        console.log(`[UnifiedProcessor] After GC: ${afterGC.toFixed(0)}MB (freed ${(memoryMB - afterGC).toFixed(0)}MB)`);
       }
     }
 
@@ -4441,7 +3961,7 @@ export class UnifiedImageProcessor extends EventEmitter {
     await this.initializeTemporalConfigurations();
 
     // Initialize analysis logger if execution ID is available
-    console.log(`[UnifiedProcessor] Checking for executionId in config:`, {
+    if (DEBUG_MODE) console.log(`[UnifiedProcessor] Checking for executionId in config:`, {
       executionId: this.config.executionId,
       hasExecutionId: !!this.config.executionId,
       configKeys: Object.keys(this.config)
@@ -4495,7 +4015,7 @@ export class UnifiedImageProcessor extends EventEmitter {
           }
         };
 
-        console.log('[UnifiedProcessor] ✅ Enhanced telemetry collected');
+        if (DEBUG_MODE) console.log('[UnifiedProcessor] ✅ Enhanced telemetry collected');
       } catch (telemetryError) {
         console.warn('[UnifiedProcessor] ⚠️ Failed to collect telemetry (non-critical):', telemetryError);
         // Continue processing even if telemetry fails
@@ -4508,7 +4028,7 @@ export class UnifiedImageProcessor extends EventEmitter {
         this.systemEnvironment // Optional enhanced telemetry
       );
 
-      console.log(`[UnifiedProcessor] Analysis logging enabled for execution ${this.config.executionId}`);
+      if (DEBUG_MODE) console.log(`[UnifiedProcessor] Analysis logging enabled for execution ${this.config.executionId}`);
 
       // CREATE EXECUTION RECORD IN DATABASE
       // This ensures the execution is tracked in Supabase for later correlation with analysis logs
@@ -4520,7 +4040,7 @@ export class UnifiedImageProcessor extends EventEmitter {
         const currentUserId = authState.isAuthenticated ? authState.user?.id : null;
 
         if (!currentUserId) {
-          console.warn(`[UnifiedProcessor] ⚠️ User not authenticated, skipping execution record creation`);
+          if (DEBUG_MODE) console.warn(`[UnifiedProcessor] ⚠️ User not authenticated, skipping execution record creation`);
         } else {
           const executionData = {
             id: this.config.executionId, // Use existing execution ID
@@ -4561,7 +4081,7 @@ export class UnifiedImageProcessor extends EventEmitter {
             console.error(`[UnifiedProcessor] ❌ Failed to create execution record:`, JSON.stringify(error, null, 2));
             console.error(`[UnifiedProcessor] Error details - code: ${error.code}, message: ${error.message}, details: ${error.details}, hint: ${error.hint}`);
           } else {
-            console.log(`[UnifiedProcessor] ✅ Execution record created in database: ${data.id}`);
+            if (DEBUG_MODE) console.log(`[UnifiedProcessor] ✅ Execution record created in database: ${data.id}`);
           }
         }
       } catch (executionError) {
@@ -4569,7 +4089,7 @@ export class UnifiedImageProcessor extends EventEmitter {
         // Don't fail the entire processing - continue anyway
       }
     } else {
-      console.log(`[UnifiedProcessor] Analysis logging DISABLED - no execution ID provided`);
+      if (DEBUG_MODE) console.log(`[UnifiedProcessor] Analysis logging DISABLED - no execution ID provided`);
     }
 
     // Emit temporal analysis started event
@@ -4596,7 +4116,7 @@ export class UnifiedImageProcessor extends EventEmitter {
 
     // 🎯 PRECISION APPROACH: Use EXIF DateTimeOriginal with SubSecTimeOriginal for accurate temporal clustering
     // This provides millisecond-precision needed for burst mode detection in racing photography
-    console.log(`[UnifiedProcessor] 🎯 Extracting EXIF timestamps with subsecond precision for ${imageFiles.length} files...`);
+    if (DEBUG_MODE) console.log(`[UnifiedProcessor] 🎯 Extracting EXIF timestamps with subsecond precision for ${imageFiles.length} files...`);
     const filePaths = imageFiles.map(f => f.originalPath);
 
     // Use EXIF extraction for precise temporal clustering (burst mode detection requires millisecond precision)
@@ -4611,7 +4131,7 @@ export class UnifiedImageProcessor extends EventEmitter {
     }
 
     // 🚀 FALLBACK: Use filesystem timestamps for processing queue ordering only (keeps speed benefit)
-    console.log(`[UnifiedProcessor] 🎯 Extracting filesystem timestamps for processing order optimization...`);
+    if (DEBUG_MODE) console.log(`[UnifiedProcessor] 🎯 Extracting filesystem timestamps for processing order optimization...`);
     const filesystemTimestamps = await this.filesystemTimestampExtractor.extractCreationTimes(filePaths);
 
     // 🎯 MULTI-CAMERA FIX: Riordina la processing queue per filesystem timestamp invece che per nome file
@@ -4632,10 +4152,10 @@ export class UnifiedImageProcessor extends EventEmitter {
     });
     const temporalOrder = this.processingQueue.map(f => f.fileName).slice(0, 10); // Sample first 10 for logging
 
-    console.log(`[UnifiedProcessor] 🚀 Reordered processing queue by filesystem timestamp for optimal multi-camera temporal clustering`);
-    console.log(`[UnifiedProcessor] Original order (sample): ${originalOrder.join(', ')}`);
-    console.log(`[UnifiedProcessor] Temporal order (sample): ${temporalOrder.join(', ')}`);
-    console.log(`[UnifiedProcessor] Successfully processed ${filesystemTimestamps.filter((f: FileTimestamp) => f.creationTime).length}/${filesystemTimestamps.length} filesystem timestamps`);
+    if (DEBUG_MODE) console.log(`[UnifiedProcessor] 🚀 Reordered processing queue by filesystem timestamp for optimal multi-camera temporal clustering`);
+    if (DEBUG_MODE) console.log(`[UnifiedProcessor] Original order (sample): ${originalOrder.join(', ')}`);
+    if (DEBUG_MODE) console.log(`[UnifiedProcessor] Temporal order (sample): ${temporalOrder.join(', ')}`);
+    if (DEBUG_MODE) console.log(`[UnifiedProcessor] Successfully processed ${filesystemTimestamps.filter((f: FileTimestamp) => f.creationTime).length}/${filesystemTimestamps.length} filesystem timestamps`);
 
     // Emit temporal analysis completed event
     this.emit('temporal-analysis-complete', {
@@ -4653,7 +4173,7 @@ export class UnifiedImageProcessor extends EventEmitter {
       this.temporalManager.setAnalysisLogger(this.analysisLogger);
     }
 
-    console.log(`[UnifiedProcessor] Created ${temporalClusters.length} temporal clusters from ${imageTimestamps.length} filesystem timestamps`);
+    if (DEBUG_MODE) console.log(`[UnifiedProcessor] Created ${temporalClusters.length} temporal clusters from ${imageTimestamps.length} filesystem timestamps`);
 
     // Emit recognition phase started event
     this.emit('recognition-phase-started', {
@@ -4694,14 +4214,14 @@ export class UnifiedImageProcessor extends EventEmitter {
         startTime: Date.now()
       });
       
-      console.log(`[UnifiedProcessor] Started worker ${workerId} for ${imageFile.fileName} (${activeWorkers.size}/${this.config.maxConcurrentWorkers} active)`);
+      if (DEBUG_MODE) console.log(`[UnifiedProcessor] Started worker ${workerId} for ${imageFile.fileName} (${activeWorkers.size}/${this.config.maxConcurrentWorkers} active)`);
     }
     
     // Processa immagini fino al completamento
     while (activeWorkers.size > 0) {
       // Check for cancellation before processing next batch
       if (this.config.isCancelled && this.config.isCancelled()) {
-        console.log(`[UnifiedProcessor] Processing cancelled, stopping workers`);
+        if (DEBUG_MODE) console.log(`[UnifiedProcessor] Processing cancelled, stopping workers`);
         break;
       }
 
@@ -4723,10 +4243,10 @@ export class UnifiedImageProcessor extends EventEmitter {
         // Check for ghost vehicle warning and increment counter
         if (result.csvMatch?.ghostVehicleWarning) {
           this.ghostVehicleCount++;
-          console.warn(`[UnifiedProcessor] 🚨 Ghost vehicle detected in ${fileName} (${this.ghostVehicleCount} total ghost vehicles so far)`);
+          if (DEBUG_MODE) console.warn(`[UnifiedProcessor] 🚨 Ghost vehicle detected in ${fileName} (${this.ghostVehicleCount} total ghost vehicles so far)`);
         }
 
-        console.log(`[UnifiedProcessor] Worker ${workerId} completed for ${fileName} (${activeWorkers.size} remaining, ${this.processedImages}/${this.totalImages} total)`);
+        if (DEBUG_MODE) console.log(`[UnifiedProcessor] Worker ${workerId} completed for ${fileName} (${activeWorkers.size} remaining, ${this.processedImages}/${this.totalImages} total)`);
 
         // Emetti progress
         this.emit('imageProcessed', {
@@ -4748,7 +4268,7 @@ export class UnifiedImageProcessor extends EventEmitter {
 
           // Se la memoria è troppo alta, aspetta prima di avviare nuovi worker
           if (memoryUsagePercent > 75) {
-            console.warn(`[UnifiedProcessor] High memory usage (${memoryUsagePercent.toFixed(1)}%), pausing new workers and forcing GC`);
+            if (DEBUG_MODE) console.warn(`[UnifiedProcessor] High memory usage (${memoryUsagePercent.toFixed(1)}%), pausing new workers and forcing GC`);
             if (global.gc) {
               global.gc();
               await new Promise(resolve => setTimeout(resolve, 100)); // Breve pausa per consentire il GC
@@ -4759,7 +4279,7 @@ export class UnifiedImageProcessor extends EventEmitter {
             const afterGCPercent = (afterGCMemoryMB / (require('os').totalmem() / 1024 / 1024)) * 100;
 
             if (afterGCPercent > 70) {
-              console.warn(`[UnifiedProcessor] Memory still high after GC (${afterGCPercent.toFixed(1)}%), reducing active workers`);
+              if (DEBUG_MODE) console.warn(`[UnifiedProcessor] Memory still high after GC (${afterGCPercent.toFixed(1)}%), reducing active workers`);
               // Non avviare nuovi worker se la memoria è ancora alta
             } else {
               // Avvia nuovo worker solo se la memoria è ora sotto controllo
@@ -4774,7 +4294,7 @@ export class UnifiedImageProcessor extends EventEmitter {
                 startTime: Date.now()
               });
 
-              console.log(`[UnifiedProcessor] Started new worker ${newWorkerId} for ${nextImageFile.fileName} (${activeWorkers.size}/${this.config.maxConcurrentWorkers} active, memory: ${afterGCPercent.toFixed(1)}%)`);
+              if (DEBUG_MODE) console.log(`[UnifiedProcessor] Started new worker ${newWorkerId} for ${nextImageFile.fileName} (${activeWorkers.size}/${this.config.maxConcurrentWorkers} active, memory: ${afterGCPercent.toFixed(1)}%)`);
             }
           } else {
             // Memoria normale, procedi normalmente
@@ -4789,7 +4309,7 @@ export class UnifiedImageProcessor extends EventEmitter {
               startTime: Date.now()
             });
 
-            console.log(`[UnifiedProcessor] Started new worker ${newWorkerId} for ${nextImageFile.fileName} (${activeWorkers.size}/${this.config.maxConcurrentWorkers} active, memory: ${memoryUsagePercent.toFixed(1)}%)`);
+            if (DEBUG_MODE) console.log(`[UnifiedProcessor] Started new worker ${newWorkerId} for ${nextImageFile.fileName} (${activeWorkers.size}/${this.config.maxConcurrentWorkers} active, memory: ${memoryUsagePercent.toFixed(1)}%)`);
           }
         }
         
@@ -4799,7 +4319,7 @@ export class UnifiedImageProcessor extends EventEmitter {
         if (this.processedImages % gcInterval === 0) {
           if (global.gc) {
             global.gc();
-            console.log(`[UnifiedProcessor] Forced garbage collection after ${this.processedImages} images (interval: ${gcInterval})`);
+            if (DEBUG_MODE) console.log(`[UnifiedProcessor] Forced garbage collection after ${this.processedImages} images (interval: ${gcInterval})`);
           }
         }
         
@@ -4811,7 +4331,7 @@ export class UnifiedImageProcessor extends EventEmitter {
       }
     }
     
-    console.log(`[UnifiedProcessor] Batch completed: ${results.length} images processed successfully`);
+    if (DEBUG_MODE) console.log(`[UnifiedProcessor] Batch completed: ${results.length} images processed successfully`);
 
     // Aggregate RF-DETR metrics from all worker results
     for (const result of results) {
@@ -4827,7 +4347,7 @@ export class UnifiedImageProcessor extends EventEmitter {
     }
 
     if (this.totalRfDetrDetections > 0) {
-      console.log(`[UnifiedProcessor] RF-DETR Total Metrics - Detections: ${this.totalRfDetrDetections}, Total Cost: $${this.totalRfDetrCost.toFixed(4)}`);
+      if (DEBUG_MODE) console.log(`[UnifiedProcessor] RF-DETR Total Metrics - Detections: ${this.totalRfDetrDetections}, Total Cost: $${this.totalRfDetrCost.toFixed(4)}`);
     }
 
     // Finalize analysis logging
@@ -4851,7 +4371,7 @@ export class UnifiedImageProcessor extends EventEmitter {
           // Update systemEnvironment.network with final upload speed for backward compatibility
           if (this.systemEnvironment && this.systemEnvironment.network && networkStats.upload_speed_mbps !== undefined) {
             this.systemEnvironment.network.upload_speed_mbps = networkStats.upload_speed_mbps;
-            console.log(`[UnifiedProcessor] ✅ Updated system_environment.network with final upload speed: ${networkStats.upload_speed_mbps} Mbps`);
+            if (DEBUG_MODE) console.log(`[UnifiedProcessor] ✅ Updated system_environment.network with final upload speed: ${networkStats.upload_speed_mbps} Mbps`);
           }
         }
 
@@ -4867,7 +4387,7 @@ export class UnifiedImageProcessor extends EventEmitter {
           baseline_mb: currentMemoryMB
         };
 
-        console.log('[UnifiedProcessor] ✅ Final telemetry collected');
+        if (DEBUG_MODE) console.log('[UnifiedProcessor] ✅ Final telemetry collected');
       } catch (telemetryError) {
         console.warn('[UnifiedProcessor] ⚠️ Failed to collect final telemetry:', telemetryError);
       }
@@ -4892,7 +4412,7 @@ export class UnifiedImageProcessor extends EventEmitter {
 
       try {
         const logUrl = await this.analysisLogger.finalize();
-        console.log(`[ADMIN] Analysis log available at: ${logUrl || 'upload failed - local only'}`);
+        if (DEBUG_MODE) console.log(`[ADMIN] Analysis log available at: ${logUrl || 'upload failed - local only'}`);
       } catch (error) {
         console.error('[ADMIN] Failed to finalize analysis log:', error);
       }
@@ -4945,7 +4465,7 @@ export class UnifiedImageProcessor extends EventEmitter {
           if (error) {
             console.error(`[UnifiedProcessor] ❌ Failed to update execution record:`, error);
           } else {
-            console.log(`[UnifiedProcessor] ✅ Execution record updated: ${successful}/${results.length} successful`);
+            if (DEBUG_MODE) console.log(`[UnifiedProcessor] ✅ Execution record updated: ${successful}/${results.length} successful`);
           }
         }
       } catch (updateError) {
@@ -4986,7 +4506,7 @@ export class UnifiedImageProcessor extends EventEmitter {
    */
   updateConfig(newConfig: Partial<UnifiedProcessorConfig>): void {
     this.config = { ...this.config, ...newConfig };
-    console.log(`[UnifiedProcessor] Configuration updated with participantPresetData length: ${this.config.participantPresetData?.length || 0}`);
+    if (DEBUG_MODE) console.log(`[UnifiedProcessor] Configuration updated with participantPresetData length: ${this.config.participantPresetData?.length || 0}`);
   }
 
   /**

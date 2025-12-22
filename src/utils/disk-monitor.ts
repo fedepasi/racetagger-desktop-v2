@@ -39,9 +39,6 @@ export class DiskSpaceMonitor extends EventEmitter {
 
     // Usa la directory temporanea del sistema per monitorare lo spazio
     this.tempDirectory = os.tmpdir();
-    console.log(`[DiskMonitor] Monitoring disk space for: ${this.tempDirectory}`);
-    console.log(`[DiskMonitor] Min free space threshold: ${this.config.minFreeSpaceGB}GB`);
-    console.log(`[DiskMonitor] Alert threshold: ${this.config.alertThresholdGB}GB`);
   }
 
   /**
@@ -111,12 +108,10 @@ export class DiskSpaceMonitor extends EventEmitter {
    */
   startMonitoring(): void {
     if (this.isMonitoring) {
-      console.warn('[DiskMonitor] Monitoring already started');
       return;
     }
 
     this.isMonitoring = true;
-    console.log(`[DiskMonitor] Starting disk space monitoring (interval: ${this.config.checkIntervalMs}ms)`);
 
     // Check iniziale
     this.performCheck();
@@ -141,8 +136,6 @@ export class DiskSpaceMonitor extends EventEmitter {
       clearInterval(this.monitorInterval);
       this.monitorInterval = undefined;
     }
-
-    console.log('[DiskMonitor] Disk space monitoring stopped');
   }
 
   /**
@@ -202,7 +195,6 @@ export class DiskSpaceMonitor extends EventEmitter {
       this.config.alertThresholdGB = newConfig.alertThresholdGB;
     }
 
-    console.log('[DiskMonitor] Configuration updated:', this.config);
 
     // Riavvia il monitoring se era attivo
     if (this.isMonitoring) {
@@ -217,7 +209,6 @@ export class DiskSpaceMonitor extends EventEmitter {
   async shutdown(): Promise<void> {
     this.stopMonitoring();
     this.removeAllListeners();
-    console.log('[DiskMonitor] Shutdown completed');
   }
 }
 

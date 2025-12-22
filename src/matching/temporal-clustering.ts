@@ -112,10 +112,6 @@ export class TemporalClusterManager {
     this.exiftoolPath = exiftoolPath || this.getExiftoolPath();
     this.config = this.getDefaultConfig();
     this.exiftoolSemaphore = new SimpleSemaphore(15); // Max 15 processi ExifTool concorrenti
-
-    console.log('[TemporalClustering] Initialized with default config:', this.config);
-    console.log('[TemporalClustering] Using exiftool path:', this.exiftoolPath);
-    console.log('[TemporalClustering] ExifTool concurrency limit: 15 processes');
   }
 
   /**
@@ -204,8 +200,6 @@ export class TemporalClusterManager {
    * Initialize configuration from SportCategory data from Supabase
    */
   initializeFromSportCategories(sportCategories: any[]): void {
-    console.log('[TemporalClustering] Initializing from Supabase sport categories...');
-
     for (const category of sportCategories) {
       if (category.temporal_config && category.code) {
         const temporalConfig = {
@@ -215,11 +209,8 @@ export class TemporalClusterManager {
         };
 
         this.config[category.code as keyof TemporalConfig] = temporalConfig;
-        console.log(`[TemporalClustering] Updated config for ${category.code}:`, temporalConfig);
       }
     }
-
-    console.log('[TemporalClustering] Configuration updated from Supabase:', this.config);
   }
 
   /**
@@ -241,8 +232,6 @@ export class TemporalClusterManager {
       burstThreshold: temporalConfig.burstThreshold ?? existingConfig.burstThreshold,
       proximityBonus: temporalConfig.proximityBonus ?? existingConfig.proximityBonus
     };
-
-    console.log(`[TemporalClustering] Updated ${sportCode} config:`, this.config[sportCode as keyof TemporalConfig]);
   }
 
   /**
@@ -287,7 +276,6 @@ export class TemporalClusterManager {
       batchSize = totalImages;
     }
 
-    console.log(`[TemporalClustering] Calculated optimal batch size: ${batchSize} (RAM: ${totalMemoryGB.toFixed(1)}GB, OS: ${process.platform})`);
     return batchSize;
   }
 
@@ -296,20 +284,14 @@ export class TemporalClusterManager {
    * ONLY uses DateTimeOriginal for accuracy - Images without DateTimeOriginal are excluded
    */
   async extractTimestampsBatch(filePaths: string[]): Promise<ImageTimestamp[]> {
-    console.log(`[TemporalClustering] Starting batch timestamp extraction for ${filePaths.length} images`);
-
     const batchSize = this.calculateOptimalBatchSize(filePaths.length);
     const totalBatches = Math.ceil(filePaths.length / batchSize);
     const results: ImageTimestamp[] = [];
-
-    console.log(`[TemporalClustering] Processing ${filePaths.length} images in ${totalBatches} batches of ${batchSize}`);
 
     for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
       const startIndex = batchIndex * batchSize;
       const endIndex = Math.min(startIndex + batchSize, filePaths.length);
       const batchPaths = filePaths.slice(startIndex, endIndex);
-
-      console.log(`[TemporalClustering] Processing batch ${batchIndex + 1}/${totalBatches} (${batchPaths.length} files)`);
 
       try {
         const batchResults = await this.extractExifTimestampsBatch(batchPaths);
@@ -349,8 +331,6 @@ export class TemporalClusterManager {
         // Explicit memory cleanup after each batch
         if (global.gc) {
           global.gc();
-          const memoryMB = process.memoryUsage().heapUsed / 1024 / 1024;
-          console.log(`[TemporalClustering] Memory after batch ${batchIndex + 1}: ${memoryMB.toFixed(0)}MB`);
         }
 
       } catch (error) {
@@ -374,11 +354,6 @@ export class TemporalClusterManager {
         }
       }
     }
-
-    const successCount = results.filter(r => r.timestamp !== null).length;
-    const excludedCount = results.length - successCount;
-
-    console.log(`[TemporalClustering] Batch extraction completed: ${successCount}/${results.length} successful, ${excludedCount} excluded`);
 
     return results;
   }
@@ -404,11 +379,10 @@ export class TemporalClusterManager {
         };
       }
     } catch (error) {
-      console.warn(`[TemporalClustering] EXIF extraction failed for ${fileName}:`, error);
+      // Silently handle EXIF extraction errors
     }
 
     // No valid DateTimeOriginal found - exclude from temporal clustering
-    console.warn(`[TemporalClustering] No DateTimeOriginal found for ${fileName}, excluding from temporal clustering`);
     return {
       filePath,
       fileName,
@@ -441,20 +415,13 @@ export class TemporalClusterManager {
       // Non quotare exiftoolPath perché potrebbe già contenere spazi gestiti internamente
       const command = `${this.exiftoolPath} -DateTimeOriginal -CreateDate -ModifyDate -SubSecTimeOriginal -json -@ "${tmpFile}"`;
 
-      console.log(`[TemporalClustering] Executing batch command for ${filePaths.length} files using temp file`);
-
       const { stdout, stderr } = await execAsync(command, {
         maxBuffer: 50 * 1024 * 1024, // 50MB buffer per batch grandi
         timeout: 10000 // 10 secondi timeout
       });
 
-      if (stderr) {
-        console.warn(`[TemporalClustering] ExifTool batch stderr:`, stderr);
-      }
-
       const jsonData = JSON.parse(stdout);
       if (!jsonData || !Array.isArray(jsonData)) {
-        console.warn(`[TemporalClustering] No valid EXIF data returned for batch`);
         filePaths.forEach(path => results.set(path, null));
         return results;
       }
@@ -466,7 +433,6 @@ export class TemporalClusterManager {
         const exifData = jsonData[i];
 
         if (!exifData) {
-          console.warn(`[TemporalClustering] No EXIF data for ${fileName}`);
           results.set(filePath, null);
           continue;
         }
@@ -498,7 +464,6 @@ export class TemporalClusterManager {
                 // 3 digits = already milliseconds
 
                 timestamp = new Date(timestamp.getTime() + milliseconds);
-                console.log(`[TemporalClustering] Added subsec precision: ${subsec} (${subsecStr.length} digits) = ${milliseconds}ms`);
               }
             }
 
@@ -512,17 +477,13 @@ export class TemporalClusterManager {
                   subsecTimeOriginal: exifData.SubSecTimeOriginal
                 }
               });
-              console.log(`[TemporalClustering] ✅ Batch extracted timestamp for ${fileName}: ${dateStr} -> ${timestamp.toISOString()}`);
             } else {
-              console.warn(`[TemporalClustering] Invalid date parsed for ${fileName}: ${dateStr}`);
               results.set(filePath, null);
             }
           } catch (parseError) {
-            console.warn(`[TemporalClustering] Failed to parse DateTimeOriginal for ${fileName}: ${dateStr}`, parseError);
             results.set(filePath, null);
           }
         } else {
-          console.warn(`[TemporalClustering] No DateTimeOriginal found for ${fileName}`);
           results.set(filePath, null);
         }
       }
@@ -538,7 +499,7 @@ export class TemporalClusterManager {
       try {
         await fs.unlink(tmpFile);
       } catch (unlinkError) {
-        console.warn(`[TemporalClustering] Failed to cleanup temp file ${tmpFile}:`, unlinkError);
+        // Silently ignore cleanup errors
       }
 
       // Rilascia sempre il semaforo, anche in caso di errore
@@ -553,36 +514,20 @@ export class TemporalClusterManager {
     timestamp: Date;
     exifData: any;
   } | null> {
-    const fileName = require('path').basename(filePath);
-
     // Acquisisci il semaforo per limitare processi concorrenti
     await this.exiftoolSemaphore.acquire();
 
     try {
       const command = `${this.exiftoolPath} -DateTimeOriginal -CreateDate -ModifyDate -SubSecTimeOriginal -json "${filePath}"`;
-      console.log(`[TemporalClustering] Executing: ${command}`);
 
       const { stdout, stderr } = await execAsync(command);
 
-      if (stderr) {
-        console.warn(`[TemporalClustering] ExifTool stderr for ${fileName}:`, stderr);
-      }
-
-      console.log(`[TemporalClustering] Raw exiftool stdout for ${fileName}:`, stdout);
-
       const jsonData = JSON.parse(stdout);
       if (!jsonData || jsonData.length === 0) {
-        console.warn(`[TemporalClustering] No EXIF data returned for ${fileName}`);
         return null;
       }
 
       const exifData = jsonData[0];
-      console.log(`[TemporalClustering] Parsed EXIF data for ${fileName}:`, {
-        dateTimeOriginal: exifData.DateTimeOriginal,
-        createDate: exifData.CreateDate,
-        modifyDate: exifData.ModifyDate,
-        fullObject: exifData
-      });
 
       // Only use DateTimeOriginal for accurate temporal clustering
       // CreateDate and ModifyDate can be misleading for copied/edited files
@@ -612,12 +557,10 @@ export class TemporalClusterManager {
               // 3 digits = already milliseconds
 
               timestamp = new Date(timestamp.getTime() + milliseconds);
-              console.log(`[TemporalClustering] Added subsec precision: ${subsec} (${subsecStr.length} digits) = ${milliseconds}ms`);
             }
           }
 
           if (!isNaN(timestamp.getTime())) {
-            console.log(`[TemporalClustering] ✅ Successfully extracted timestamp for ${fileName}: ${dateStr} -> ${timestamp.toISOString()}`);
             return {
               timestamp,
               exifData: {
@@ -629,15 +572,13 @@ export class TemporalClusterManager {
             };
           }
         } catch (parseError) {
-          console.warn(`[TemporalClustering] Failed to parse DateTimeOriginal: ${dateStr}`, parseError);
+          // Silently handle parse errors
         }
-      } else {
-        console.warn(`[TemporalClustering] No DateTimeOriginal found for ${fileName}`);
       }
 
       return null;
     } catch (error) {
-      console.error(`[TemporalClustering] ExifTool execution failed for ${fileName}:`, error);
+      console.error(`[TemporalClustering] ExifTool execution failed:`, error);
       return null;
     } finally {
       // Rilascia sempre il semaforo, anche in caso di errore
@@ -678,7 +619,7 @@ export class TemporalClusterManager {
             return timestamp;
           }
         } catch (error) {
-          console.warn(`[TemporalClustering] Failed to parse filename timestamp: ${fileName}`, error);
+          // Silently handle parse errors
         }
       }
     }
@@ -698,19 +639,14 @@ export class TemporalClusterManager {
     // Filter out images without valid DateTimeOriginal timestamp
     const validImages = images.filter(img => {
       if (img.timestamp === null || img.timestampSource === 'excluded') {
-        console.log(`[TemporalClustering] Excluding ${img.fileName} from clustering: ${img.excludedReason || 'No valid timestamp'}`);
         return false;
       }
       return true;
     });
 
     const excludedCount = images.length - validImages.length;
-    if (excludedCount > 0) {
-      console.warn(`[TemporalClustering] Excluded ${excludedCount}/${images.length} images from temporal clustering (no DateTimeOriginal)`);
-    }
 
     if (validImages.length === 0) {
-      console.warn(`[TemporalClustering] No images with valid DateTimeOriginal - cannot create temporal clusters`);
       return [];
     }
 
@@ -719,8 +655,6 @@ export class TemporalClusterManager {
 
     const clusters: TemporalCluster[] = [];
     let currentCluster: ImageTimestamp[] = [sortedImages[0]];
-
-    console.log(`[TemporalClustering] Creating clusters for ${validImages.length} valid images (${excludedCount} excluded) with ${config.clusterWindow}ms window`);
 
     for (let i = 1; i < sortedImages.length; i++) {
       const currentImage = sortedImages[i];
@@ -744,9 +678,6 @@ export class TemporalClusterManager {
     if (currentCluster.length > 0) {
       clusters.push(this.createClusterFromImages(currentCluster, sport, config));
     }
-
-    console.log(`[TemporalClustering] Created ${clusters.length} temporal clusters from ${validImages.length} valid images`);
-    this.logClusterSummary(clusters, excludedCount);
 
     // Log temporal cluster creation if logger is available
     if (this.analysisLogger) {
@@ -863,7 +794,6 @@ export class TemporalClusterManager {
         ...this.config[sport as keyof TemporalConfig],
         ...updates
       };
-      console.log(`[TemporalClustering] Updated config for ${sport}:`, this.config[sport as keyof TemporalConfig]);
     }
   }
 
@@ -874,25 +804,6 @@ export class TemporalClusterManager {
     // This would need integration with analysis results
     // For now, return undefined as this requires cross-module data
     return undefined;
-  }
-
-  /**
-   * Log cluster analysis summary
-   */
-  private logClusterSummary(clusters: TemporalCluster[], excludedCount: number = 0): void {
-    const totalImages = clusters.reduce((sum, cluster) => sum + cluster.images.length, 0);
-    const burstClusters = clusters.filter(c => c.isBurstMode).length;
-    const avgClusterSize = clusters.length > 0 ? totalImages / clusters.length : 0;
-
-    console.log(`[TemporalClustering] Cluster Summary:`, {
-      totalClusters: clusters.length,
-      totalValidImages: totalImages,
-      excludedImages: excludedCount,
-      burstModeDetected: burstClusters,
-      averageClusterSize: avgClusterSize.toFixed(1),
-      sampleClusterDurations: clusters.slice(0, 3).map(c => `${c.duration}ms`),
-      exclusionReason: excludedCount > 0 ? 'No DateTimeOriginal EXIF data' : 'None'
-    });
   }
 }
 

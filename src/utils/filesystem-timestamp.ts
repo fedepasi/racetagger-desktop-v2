@@ -26,7 +26,6 @@ export class FilesystemTimestampExtractor {
   async extractCreationTimes(filePaths: string[]): Promise<FileTimestamp[]> {
     if (filePaths.length === 0) return [];
 
-    console.log(`[FilesystemTimestamp] Extracting creation times for ${filePaths.length} files on ${this.platform}`);
 
     try {
       switch (this.platform) {
@@ -99,7 +98,6 @@ export class FilesystemTimestampExtractor {
       }
     }
 
-    console.log(`[FilesystemTimestamp] macOS: Processed ${results.length} files, ${results.filter(r => r.creationTime).length} successful`);
     return results;
   }
 
@@ -175,7 +173,6 @@ export class FilesystemTimestampExtractor {
       }
     }
 
-    console.log(`[FilesystemTimestamp] Windows: Processed ${results.length} files`);
     return results;
   }
 
@@ -233,7 +230,6 @@ export class FilesystemTimestampExtractor {
       }
     }
 
-    console.log(`[FilesystemTimestamp] Linux: Processed ${results.length} files, ${results.filter(r => r.creationTime).length} successful`);
     return results;
   }
 
@@ -242,7 +238,6 @@ export class FilesystemTimestampExtractor {
    * Less accurate but works on all platforms
    */
   private async extractCreationTimesFallback(filePaths: string[]): Promise<FileTimestamp[]> {
-    console.log(`[FilesystemTimestamp] Using Node.js fs.stat fallback`);
 
     const results: FileTimestamp[] = [];
 
@@ -265,7 +260,6 @@ export class FilesystemTimestampExtractor {
       }
     }
 
-    console.log(`[FilesystemTimestamp] Fallback: Processed ${results.length} files, ${results.filter(r => r.creationTime).length} successful`);
     return results;
   }
 

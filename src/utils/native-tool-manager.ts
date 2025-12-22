@@ -81,9 +81,6 @@ export class NativeToolManager {
   constructor() {
     this.systemInfo = ArchitectureDetector.getSystemInfo();
     this.basePath = this.getBasePath();
-
-    console.log(`[NativeToolManager] System info:`, this.systemInfo);
-    console.log(`[NativeToolManager] Base path: ${this.basePath}`);
   }
 
   private getBasePath(): string {
@@ -150,16 +147,15 @@ export class NativeToolManager {
 
   private getWindowsToolPath(executable: string): ToolInfo {
     const arch = this.systemInfo.processArch;
-    
+
     // Special handling for ImageMagick
     if (executable === 'magick.exe') {
       return this.getImageMagickWindowsPath(arch);
     }
-    
+
     // Try architecture-specific path first
     const archPath = path.join(this.basePath, 'win32', arch, executable);
     if (fs.existsSync(archPath)) {
-      console.log(`[NativeToolManager] Using native ${arch} binary: ${archPath}`);
       return { path: archPath, native: true };
     }
 
@@ -167,13 +163,11 @@ export class NativeToolManager {
     if (this.systemInfo.isARM64) {
       const x64Path = path.join(this.basePath, 'win32', 'x64', executable);
       if (fs.existsSync(x64Path)) {
-        console.log(`[NativeToolManager] Using x64 binary under emulation: ${x64Path}`);
         return { path: x64Path, native: false, emulated: true };
       }
     }
 
     // Fallback to system-installed tool
-    console.log(`[NativeToolManager] No bundled binary found, trying system ${executable}`);
     return { path: executable, native: false };
   }
 
@@ -181,7 +175,6 @@ export class NativeToolManager {
     // Try bundled ImageMagick first
     const imageMagickPath = path.join(this.basePath, 'win32', arch, 'imagemagick', 'magick.exe');
     if (fs.existsSync(imageMagickPath)) {
-      console.log(`[NativeToolManager] Using bundled ImageMagick ${arch}: ${imageMagickPath}`);
       return { path: imageMagickPath, native: true };
     }
 
@@ -189,13 +182,11 @@ export class NativeToolManager {
     if (this.systemInfo.isARM64) {
       const x64ImageMagickPath = path.join(this.basePath, 'win32', 'x64', 'imagemagick', 'magick.exe');
       if (fs.existsSync(x64ImageMagickPath)) {
-        console.log(`[NativeToolManager] Using x64 ImageMagick under emulation: ${x64ImageMagickPath}`);
         return { path: x64ImageMagickPath, native: false, emulated: true };
       }
     }
 
     // Fallback to system ImageMagick
-    console.log(`[NativeToolManager] No bundled ImageMagick found, trying system magick`);
     return { path: 'magick', native: false };
   }
 
@@ -214,7 +205,6 @@ export class NativeToolManager {
 
     for (const systemPath of systemPaths) {
       if (fs.existsSync(systemPath)) {
-        console.log(`[NativeToolManager] Using system tool: ${systemPath}`);
         return { path: systemPath, native: false };
       }
     }
@@ -253,11 +243,6 @@ export class NativeToolManager {
       const toolInfo = this.getToolPath(toolName);
       const toolPath = toolInfo.path;
 
-      console.log(`[NativeToolManager] Executing ${toolName}:`);
-      console.log(`[NativeToolManager] Path: ${toolPath}`);
-      console.log(`[NativeToolManager] Args: ${JSON.stringify(args)}`);
-      console.log(`[NativeToolManager] Native: ${toolInfo.native}, Emulated: ${toolInfo.emulated || false}`);
-
       const child = execFile(toolPath, args, {
         cwd: options.cwd,
         env: { ...process.env, ...options.env, ...this.getToolEnvironment() },
@@ -267,18 +252,8 @@ export class NativeToolManager {
       }, (error, stdout, stderr) => {
         if (error) {
           console.error(`[NativeToolManager] ${toolName} error:`, error);
-          console.error(`[NativeToolManager] ${toolName} stderr:`, stderr);
-          
-          // Enhanced Windows debugging
-          if (process.platform === 'win32') {
-            console.error(`[NativeToolManager] Error code: ${error.code}`);
-            console.error(`[NativeToolManager] Error signal: ${error.signal}`);
-            console.error(`[NativeToolManager] Tool info:`, toolInfo);
-          }
-          
           reject(new Error(`${toolName} execution failed: ${error.message}`));
         } else {
-          console.log(`[NativeToolManager] ${toolName} completed successfully`);
           // Ensure stdout and stderr are strings
           const stdoutStr = stdout?.toString() || '';
           const stderrStr = stderr?.toString() || '';
@@ -303,27 +278,25 @@ export class NativeToolManager {
       // ImageMagick specific environment
       const arch = this.systemInfo.processArch;
       let imageMagickPath = path.join(this.basePath, 'win32', arch, 'imagemagick');
-      
+
       // Fallback to x64 for ARM64 if native version doesn't exist
       if (!fs.existsSync(imageMagickPath) && this.systemInfo.isARM64) {
         imageMagickPath = path.join(this.basePath, 'win32', 'x64', 'imagemagick');
       }
-      
+
       if (fs.existsSync(imageMagickPath)) {
         env.MAGICK_HOME = imageMagickPath;
         env.MAGICK_CONFIGURE_PATH = path.join(imageMagickPath, 'config');
         env.MAGICK_CODER_MODULE_PATH = path.join(imageMagickPath, 'modules-Q8', 'coders');
         env.MAGICK_FILTER_MODULE_PATH = path.join(imageMagickPath, 'modules-Q8', 'filters');
-        
+
         // Prevent ImageMagick from using system config that might conflict
         env.MAGICK_DEBUG = '';
         env.MAGICK_TEMPORARY_PATH = path.join(require('os').tmpdir(), 'racetagger-imagemagick');
-        
+
         // Ensure proper DLL loading for Windows
         const oldPath = env.PATH || process.env.PATH || '';
         env.PATH = `${imageMagickPath};${oldPath}`;
-        
-        console.log(`[NativeToolManager] ImageMagick environment configured for ${imageMagickPath}`);
       }
 
       // Node-gyp for rebuilds
@@ -354,7 +327,6 @@ export class NativeToolManager {
       }
 
       await this.executeTool(toolName, args, { timeout: 10000 });
-      console.log(`[NativeToolManager] Tool ${toolName} verification successful`);
       return true;
     } catch (error) {
       console.error(`[NativeToolManager] Tool ${toolName} verification failed:`, error);
@@ -374,12 +346,12 @@ export class NativeToolManager {
     };
 
     const tools = ['exiftool', 'dcraw', 'imagemagick'];
-    
+
     for (const tool of tools) {
       try {
         const toolInfo = this.getToolPath(tool);
         const isWorking = await this.verifyTool(tool);
-        
+
         diagnostics.tools[tool] = {
           ...toolInfo,
           exists: fs.existsSync(toolInfo.path),

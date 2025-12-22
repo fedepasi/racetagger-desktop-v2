@@ -43,8 +43,6 @@ export class CleanupManager extends EventEmitter {
     this.tempDirectory = path.join(os.homedir(), '.racetagger-temp');
     this.ensureTempDirectory();
 
-    console.log(`[CleanupManager] Initialized with temp directory: ${this.tempDirectory}`);
-
     // Cleanup automatico su exit del processo
     process.on('exit', () => this.emergencyCleanup());
     process.on('SIGINT', () => this.emergencyCleanup());
@@ -86,7 +84,6 @@ export class CleanupManager extends EventEmitter {
           fs.mkdirSync(subdirPath, { recursive: true });
         }
       } catch (error) {
-        console.warn(`[CleanupManager] Cannot create subdir ${subdir}, using main temp directory`);
         return path.join(this.tempDirectory, tempFileName);
       }
       return path.join(subdirPath, tempFileName);
@@ -99,19 +96,18 @@ export class CleanupManager extends EventEmitter {
    * Registra un file temporaneo per il tracking
    */
   async trackTempFile(
-    filePath: string, 
+    filePath: string,
     type: TempFile['type'] = 'other',
     associatedFiles: string[] = []
   ): Promise<string> {
     const fileId = `temp_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-    
+
     let sizeBytes: number | undefined;
     try {
       const stat = await fsPromises.stat(filePath);
       sizeBytes = stat.size;
     } catch (error) {
       // File potrebbe non esistere ancora, non è un errore critico
-      console.warn(`[CleanupManager] Could not get size for ${filePath}`);
     }
 
     const tempFile: TempFile = {
@@ -126,8 +122,6 @@ export class CleanupManager extends EventEmitter {
     this.tempFiles.set(fileId, tempFile);
     this.stats.filesTracked++;
 
-    console.log(`[CleanupManager] Tracking temp file: ${path.basename(filePath)} (${type}, ID: ${fileId})`);
-    
     this.emit('file-tracked', tempFile);
     return fileId;
   }
@@ -138,11 +132,8 @@ export class CleanupManager extends EventEmitter {
   async cleanupFile(fileId: string): Promise<void> {
     const tempFile = this.tempFiles.get(fileId);
     if (!tempFile) {
-      console.warn(`[CleanupManager] File ID ${fileId} not found for cleanup`);
       return;
     }
-
-    console.log(`[CleanupManager] Cleaning up file: ${path.basename(tempFile.path)} (${tempFile.type})`);
 
     let totalBytesFreed = 0;
     let filesDeleted = 0;
@@ -156,7 +147,6 @@ export class CleanupManager extends EventEmitter {
         // Verifica che il file esista prima di tentare l'eliminazione
         const exists = await this.fileExists(filePath);
         if (!exists) {
-          console.log(`[CleanupManager] File already deleted: ${path.basename(filePath)}`);
           continue;
         }
 
@@ -166,12 +156,10 @@ export class CleanupManager extends EventEmitter {
 
         // Elimina il file
         await fsPromises.unlink(filePath);
-        
+
         totalBytesFreed += fileSize;
         filesDeleted++;
-        
-        console.log(`[CleanupManager] Deleted: ${path.basename(filePath)} (${Math.round(fileSize / 1024 / 1024 * 100) / 100}MB)`);
-        
+
       } catch (error: any) {
         const errorMsg = `Failed to delete ${path.basename(filePath)}: ${error.message}`;
         errors.push(errorMsg);
@@ -200,16 +188,12 @@ export class CleanupManager extends EventEmitter {
     if (errors.length > 0) {
       this.emit('cleanup-errors', { fileId, errors });
     }
-
-    console.log(`[CleanupManager] Cleanup completed for ${fileId}: ${filesDeleted} files, ${Math.round(totalBytesFreed / 1024 / 1024 * 100) / 100}MB freed`);
   }
 
   /**
    * Pulisce tutti i file temporanei tracciati
    */
   async cleanupAll(): Promise<void> {
-    console.log(`[CleanupManager] Starting cleanup of ${this.tempFiles.size} tracked files`);
-
     const fileIds = Array.from(this.tempFiles.keys());
     let totalCleaned = 0;
 
@@ -226,7 +210,6 @@ export class CleanupManager extends EventEmitter {
       }
     }
 
-    console.log(`[CleanupManager] Bulk cleanup completed: ${totalCleaned}/${fileIds.length} files processed`);
     this.emit('bulk-cleanup-complete', { totalCleaned, totalFiles: fileIds.length });
   }
 
@@ -235,8 +218,6 @@ export class CleanupManager extends EventEmitter {
    * @param olderThanMinutes Pulisce file più vecchi di X minuti (default: 60)
    */
   async cleanupOrphans(olderThanMinutes: number = 60): Promise<void> {
-    console.log(`[CleanupManager] Cleaning up orphan files older than ${olderThanMinutes} minutes (${Math.round(olderThanMinutes / 60 / 24 * 10) / 10} days)`);
-
     try {
       const cutoffTime = Date.now() - (olderThanMinutes * 60 * 1000);
 
@@ -268,7 +249,6 @@ export class CleanupManager extends EventEmitter {
                 const remainingFiles = await fsPromises.readdir(entryPath);
                 if (remainingFiles.length === 0) {
                   await fsPromises.rmdir(entryPath);
-                  console.log(`[CleanupManager] Removed empty directory: ${entryName}`);
                 }
               } catch {
                 // Directory non vuota o errore, ignora
@@ -305,9 +285,6 @@ export class CleanupManager extends EventEmitter {
 
       // Pulisci ricorsivamente dalla directory principale
       await cleanDirectory(this.tempDirectory);
-
-      const mbFreed = Math.round(bytesFreed / 1024 / 1024 * 100) / 100;
-      console.log(`[CleanupManager] Orphan cleanup completed: ${orphansDeleted}/${orphansFound} deleted, ${mbFreed}MB freed`);
 
       this.emit('orphan-cleanup-complete', {
         orphansFound,
@@ -363,7 +340,6 @@ export class CleanupManager extends EventEmitter {
     }
 
     this.isShuttingDown = true;
-    console.log('[CleanupManager] Emergency cleanup starting...');
 
     // Cleanup sincrono per velocità
     const trackedFiles = Array.from(this.tempFiles.values());
@@ -371,41 +347,34 @@ export class CleanupManager extends EventEmitter {
 
     for (const tempFile of trackedFiles) {
       const allFiles = [tempFile.path, ...(tempFile.associatedFiles || [])];
-      
+
       for (const filePath of allFiles) {
         try {
           if (fs.existsSync(filePath)) {
             fs.unlinkSync(filePath);
             emergencyDeleted++;
-            console.log(`[CleanupManager] Emergency deleted: ${path.basename(filePath)}`);
           }
         } catch (error) {
           console.error(`[CleanupManager] Emergency cleanup failed for ${path.basename(filePath)}`);
         }
       }
     }
-
-    console.log(`[CleanupManager] Emergency cleanup completed: ${emergencyDeleted} files deleted`);
   }
 
   /**
    * Shutdown pulito del cleanup manager
    */
   async shutdown(): Promise<void> {
-    console.log('[CleanupManager] Starting shutdown...');
-    
     this.isShuttingDown = true;
-    
+
     // Pulisci tutti i file tracciati
     await this.cleanupAll();
-    
+
     // Pulisci file orfani
     await this.cleanupOrphans(0); // Pulisci tutto
-    
+
     // Rimuovi tutti gli event listeners
     this.removeAllListeners();
-    
-    console.log('[CleanupManager] Shutdown completed');
   }
 
   /**
@@ -419,8 +388,6 @@ export class CleanupManager extends EventEmitter {
    * Startup cleanup - remove temp files older than 7 days
    */
   async startupCleanup(): Promise<void> {
-    console.log('[CleanupManager] Performing startup cleanup of temporary files...');
-
     try {
       // Clean up all tracked files (should be empty at startup)
       await this.cleanupAll();
@@ -428,8 +395,6 @@ export class CleanupManager extends EventEmitter {
       // Clean up orphan files older than 7 days (7 * 24 * 60 = 10080 minutes)
       const SEVEN_DAYS_IN_MINUTES = 7 * 24 * 60;
       await this.cleanupOrphans(SEVEN_DAYS_IN_MINUTES);
-
-      console.log('[CleanupManager] Startup cleanup completed');
     } catch (error) {
       console.error('[CleanupManager] Error during startup cleanup:', error);
     }
@@ -450,10 +415,7 @@ export class CleanupManager extends EventEmitter {
     const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
     const SEVEN_DAYS_IN_MINUTES = 7 * 24 * 60;
 
-    console.log('[CleanupManager] Starting periodic cleanup (every 24h, files older than 7 days)');
-
     this.periodicCleanupTimer = setInterval(async () => {
-      console.log('[CleanupManager] Running scheduled periodic cleanup...');
       try {
         await this.cleanupOrphans(SEVEN_DAYS_IN_MINUTES);
       } catch (error) {
@@ -472,7 +434,6 @@ export class CleanupManager extends EventEmitter {
     if (this.periodicCleanupTimer) {
       clearInterval(this.periodicCleanupTimer);
       this.periodicCleanupTimer = null;
-      console.log('[CleanupManager] Periodic cleanup stopped');
     }
   }
 }

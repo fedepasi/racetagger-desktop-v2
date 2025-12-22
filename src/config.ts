@@ -8,15 +8,17 @@ import { PRODUCTION_CONFIG } from './config.production';
 // Detect if we're running in a packaged app
 const isPackaged = app?.isPackaged || false;
 
+// =============================================================================
+// DEBUG MODE - Set to true for verbose logging during development
+// In production (packaged app), this is always false
+// =============================================================================
+export const DEBUG_MODE = !isPackaged && process.env.DEBUG_MODE === 'true';
+
 // Function to get configuration values
 function getConfigValue(envVar: string, productionKey: keyof typeof PRODUCTION_CONFIG): string {
   if (isPackaged) {
-    // Use embedded production config in packaged app
-    console.log(`Using embedded production config for ${envVar}`);
     return PRODUCTION_CONFIG[productionKey];
   }
-  
-  // Use environment variables in development
   return process.env[envVar] || '';
 }
 
@@ -24,11 +26,9 @@ function getConfigValue(envVar: string, productionKey: keyof typeof PRODUCTION_C
 if (!isPackaged) {
   const envPath = path.join(process.cwd(), '.env');
   if (fs.existsSync(envPath)) {
-    console.log(`Loading environment variables from ${envPath}`);
     dotenv.config({ path: envPath });
   } else {
-    console.warn(`No .env file found at ${envPath}`);
-    dotenv.config(); // Try to load from default locations
+    dotenv.config();
   }
 }
 
@@ -72,7 +72,6 @@ function validateConfiguration(url: string, key: string): void {
     throw new Error(errorMessage);
   }
 
-  console.log('✓ Configuration validation passed');
 }
 
 // Validate configuration on startup
@@ -384,12 +383,8 @@ export function validateRoboflowConfig(): { valid: boolean; warnings: string[] }
   };
 }
 
-// Log warnings on config load
+// Validate Roboflow config on load (warnings suppressed)
 const roboflowValidation = validateRoboflowConfig();
-if (!roboflowValidation.valid) {
-  console.warn('[Config] ⚠️ Roboflow Configuration Issues:');
-  roboflowValidation.warnings.forEach(warning => console.warn(`  - ${warning}`));
-}
 
 // ============================================================================
 // CROP-CONTEXT CONFIGURATION (V6 Edge Function)
@@ -557,8 +552,6 @@ export class ConfigManager {
     const preset = OPTIMIZATION_PRESETS[level];
     Object.assign(PERFORMANCE_CONFIG, preset);
     this.saveUserConfig();
-    
-    console.log(`🔧 Optimization level changed to: ${level}`);
   }
   
   /**
@@ -567,8 +560,6 @@ export class ConfigManager {
   static disableAllOptimizations(): void {
     PERFORMANCE_CONFIG.enabled = false;
     this.saveUserConfig();
-    
-    console.log('🚨 All optimizations disabled (emergency rollback)');
   }
   
   /**
@@ -636,18 +627,6 @@ if (app && typeof app.getPath === 'function') {
   ConfigManager.loadUserConfig();
 }
 
-// Log configuration status (without sensitive keys)
-console.log(`Supabase URL configured: ${SUPABASE_CONFIG.url ? 'Yes' : 'No'}`);
-console.log(`Supabase API key configured: ${SUPABASE_CONFIG.key ? 'Yes' : 'No'}`);
-console.log(`Environment: ${APP_CONFIG.isDevelopment ? 'Development' : 'Production'}`);
-
-// Log performance optimization status
-const optimizationStatus = ConfigManager.getOptimizationStatus();
-console.log(`🚀 Performance optimizations: ${optimizationStatus.enabled ? 'ENABLED' : 'DISABLED'}`);
-console.log(`📊 Optimization level: ${optimizationStatus.level.toUpperCase()}`);
-if (optimizationStatus.enabled && optimizationStatus.activeOptimizations.length > 0) {
-  console.log(`⚡ Active optimizations: ${optimizationStatus.activeOptimizations.join(', ')}`);
-}
 
 // Email service configuration
 export function getBREVO_API_KEY(): string {
@@ -727,10 +706,3 @@ function createPipelineConfig(): StreamingPipelineConfig {
 
 // Export della configurazione pipeline
 export const PIPELINE_CONFIG: StreamingPipelineConfig = createPipelineConfig();
-
-// Log configurazione pipeline
-console.log(`🔄 Streaming Pipeline: ${PIPELINE_CONFIG.enabled ? 'ENABLED' : 'DISABLED'}`);
-if (PIPELINE_CONFIG.enabled) {
-  console.log(`👷 Workers - RAW:${PIPELINE_CONFIG.workers.rawConverter}, JPEG:${PIPELINE_CONFIG.workers.dngToJpeg}, Upload:${PIPELINE_CONFIG.workers.upload}, Recognition:${PIPELINE_CONFIG.workers.recognition}`);
-  console.log(`💾 Disk Management - Min:${PIPELINE_CONFIG.diskManagement.minFreeSpaceGB}GB, Alert:${PIPELINE_CONFIG.diskManagement.alertThresholdGB}GB`);
-}

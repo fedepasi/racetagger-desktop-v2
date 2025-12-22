@@ -20,7 +20,6 @@ class RacetaggerDelightIntegration {
       this.interceptOriginalFunctions();
       this.setupEventListeners();
       this.enhanceUI();
-      console.log('🎆 Racetagger Delight Integration activated!');
     });
   }
   
@@ -215,8 +214,6 @@ class RacetaggerDelightIntegration {
   }
   
   processDroppedFiles(files, mode = 'batch') {
-    console.log(`Processing ${files.length} dropped files in ${mode} mode`);
-    
     if (mode === 'batch' && files.length > 0) {
       // Use real batch processing with parallel optimization
       this.startRealBatchProcessing(files);
@@ -242,15 +239,13 @@ class RacetaggerDelightIntegration {
       
       // Build configuration for batch processing
       const config = {
-        folderPath: 'dropped-files', // Temporary identifier for dropped files  
+        folderPath: 'dropped-files', // Temporary identifier for dropped files
         filePaths: filePaths,
         tempFiles: tempFiles, // Include actual File objects for processing
         selectedModel: 'gemini-2.5-flash-preview-04-17',
         selectedCategory: window.selectedCategory || 'motorsport',
         resize: { enabled: true, preset: 'balanced' }
       };
-      
-      console.log(`Drag & Drop: Using unified processing for ${files.length} files`);
       
       // Show enhanced loading UI
       window.delightSystem.showEnhancedLoading({
@@ -261,7 +256,6 @@ class RacetaggerDelightIntegration {
       
       // Send to main process for real analysis
       if (window.api) {
-        console.log('Sending drag & drop batch request with config:', config);
         window.api.send('analyze-folder', config);
       } else {
         // Fallback to simulation if API not available
@@ -676,33 +670,23 @@ class RacetaggerDelightIntegration {
       // Call original function
       return this.originalFunctions.handleAnalysisResults.call(this, results);
     } catch (error) {
-      console.error('Error in delightful analysis results:', error);
       return this.originalFunctions.handleAnalysisResults.call(this, results);
     }
   }
   
   delightfulBatchResults(results) {
-    console.log('🌈 [DEBUG] DELIGHT-INTEGRATION INTERCEPT: delightfulBatchResults called with:', results.length, 'results');
-    console.log('🌈 [DEBUG] First result structure:', results[0]);
-    console.log('🌈 [DEBUG] originalFunctions.handleBatchResults exists:', !!this.originalFunctions.handleBatchResults);
-    
     try {
       this.isProcessing = false;
       
       // Hide loading
       window.delightSystem.hideEnhancedLoading();
-      
+
       // Explicit UI reset to ensure button returns to normal state
-      console.log('🌈 [DEBUG] FORCING setUploading(false) in delight-integration...');
       if (window.setUploading) {
         window.setUploading(false);
-        console.log('🌈 [DEBUG] setUploading(false) called successfully');
-      } else {
-        console.log('🌈 [DEBUG] setUploading function not found on window!');
       }
-      
+
       // Explicit vehicle counter update to ensure it shows correct count
-      console.log('🌈 [DEBUG] FORCING vehicle count update in delight-integration...');
       const vehicleCountEl = document.getElementById('vehicle-count');
       if (vehicleCountEl) {
         let totalVehicles = 0;
@@ -712,9 +696,6 @@ class RacetaggerDelightIntegration {
           }
         }
         vehicleCountEl.textContent = totalVehicles;
-        console.log(`🌈 [DEBUG] Vehicle count explicitly set to: ${totalVehicles}`);
-      } else {
-        console.log('🌈 [DEBUG] vehicle-count element not found!');
       }
       
       // Calculate comprehensive stats
@@ -743,20 +724,13 @@ class RacetaggerDelightIntegration {
       };
       
       // Quick wins removed - keeping professional interface
-      
+
       // Call original function
-      console.log('🌈 [DEBUG] DELIGHT-INTEGRATION calling originalFunctions.handleBatchResults...');
       if (this.originalFunctions.handleBatchResults) {
-        console.log('🌈 [DEBUG] Calling originalFunctions.handleBatchResults with:', results.length, 'results');
         const result = this.originalFunctions.handleBatchResults.call(this, results);
-        console.log('🌈 [DEBUG] originalFunctions.handleBatchResults call completed');
         return result;
-      } else {
-        console.log('🌈 [DEBUG] originalFunctions.handleBatchResults NOT FOUND!');
       }
     } catch (error) {
-      console.error('🌈 [DEBUG] Error in delightful batch results:', error);
-      console.log('🌈 [DEBUG] DELIGHT-INTEGRATION calling originalFunctions.handleBatchResults in catch...');
       return this.originalFunctions.handleBatchResults.call(this, results);
     }
   }
@@ -792,7 +766,6 @@ class RacetaggerDelightIntegration {
       // Call original function
       return this.originalFunctions.handleImageProcessed.call(this, result);
     } catch (error) {
-      console.error('Error in delightful image processed:', error);
       return this.originalFunctions.handleImageProcessed.call(this, result);
     }
   }

@@ -6,10 +6,10 @@
 
 import { app, ipcMain, shell } from 'electron';
 import { authService } from '../auth-service';
-import { APP_CONFIG } from '../config';
+import { APP_CONFIG, DEBUG_MODE } from '../config';
 
 export function registerAppHandlers(): void {
-  console.log('[IPC] Registering app handlers...');
+  if (DEBUG_MODE) console.log('[IPC] Registering app handlers...');
 
   // ==================== APP INFO ====================
 
@@ -48,12 +48,12 @@ export function registerAppHandlers(): void {
   ipcMain.handle('check-adobe-dng-converter', async () => {
     try {
       if (process.env.FORCE_ADOBE_DNG_FALLBACK !== 'true') {
-        console.log('[IPC] FORCE_ADOBE_DNG_FALLBACK is false, Adobe DNG Converter not required');
+        if (DEBUG_MODE) console.log('[IPC] FORCE_ADOBE_DNG_FALLBACK is false, Adobe DNG Converter not required');
         return { required: false, installed: true };
       }
 
       const { rawConverter } = await import('../utils/raw-converter');
-      console.log('[IPC] Checking Adobe DNG Converter installation...');
+      if (DEBUG_MODE) console.log('[IPC] Checking Adobe DNG Converter installation...');
       const isInstalled = await rawConverter.isDngConverterInstalled();
       console.log(`[IPC] Adobe DNG Converter installed: ${isInstalled}`);
 
@@ -116,7 +116,7 @@ export function registerAppHandlers(): void {
   // ==================== FOLDER ORGANIZATION ====================
 
   if (APP_CONFIG.features.ENABLE_FOLDER_ORGANIZATION) {
-    console.log('[IPC] Registering folder organization handlers...');
+    if (DEBUG_MODE) console.log('[IPC] Registering folder organization handlers...');
 
     ipcMain.handle('check-folder-organization-enabled', async () => {
       const isFeatureEnabled = APP_CONFIG.features.ENABLE_FOLDER_ORGANIZATION;
@@ -136,7 +136,7 @@ export function registerAppHandlers(): void {
   // ==================== DEBUG ====================
 
   ipcMain.handle('debug-sharp', async () => {
-    console.log('[IPC] debug-sharp handler called');
+    if (DEBUG_MODE) console.log('[IPC] debug-sharp handler called');
     try {
       const { debugSharp } = await import('../utils/native-modules');
       debugSharp();
@@ -147,5 +147,5 @@ export function registerAppHandlers(): void {
     }
   });
 
-  console.log('[IPC] App handlers registered (11 handlers)');
+  if (DEBUG_MODE) console.log('[IPC] App handlers registered (11 handlers)');
 }

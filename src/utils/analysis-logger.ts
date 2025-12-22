@@ -304,35 +304,26 @@ export class AnalysisLogger {
     // Initialize file stream based on options
     if (options.readOnly) {
       // Read-only mode: don't create or modify file stream
-      console.log(`[AnalysisLogger] Initialized in READ-ONLY mode for execution ${executionId}`);
       this.fileStream = null as any; // Will not write to file
     } else if (options.appendMode && fs.existsSync(this.localFilePath)) {
       // Append mode: don't overwrite existing file
-      console.log(`[AnalysisLogger] Initialized in APPEND mode for existing execution ${executionId}`);
       this.fileStream = fs.createWriteStream(this.localFilePath, { flags: 'a' });
     } else {
       // Default mode: create new file (original behavior)
-      console.log(`[AnalysisLogger] Initialized in WRITE mode for new execution ${executionId}`);
       this.fileStream = fs.createWriteStream(this.localFilePath, { flags: 'w' });
     }
 
     // NOTE: Incremental uploads disabled to avoid RLS policy conflicts
     // Upload will only happen once at the end via finalize() method
-    // this.uploadInterval = setInterval(() => {
-    //   this.uploadToSupabase(false);
-    // }, 30000);
 
     // Start database dual-write interval (non-blocking best-effort)
     if (!options.readOnly) {
       this.dbWriteInterval = setInterval(() => {
-        this.flushDatabaseWrites().catch(err => {
-          console.warn('[AnalysisLogger] DB flush error (non-blocking):', err.message);
+        this.flushDatabaseWrites().catch(() => {
+          // Silently ignore DB flush errors - JSONL is primary backup
         });
       }, this.DB_FLUSH_INTERVAL_MS);
     }
-
-    console.log(`[AnalysisLogger] Local file: ${this.localFilePath}`);
-    console.log(`[AnalysisLogger] Supabase path: ${this.supabaseUploadPath}`);
   }
 
   /**
@@ -357,8 +348,6 @@ export class AnalysisLogger {
 
     this.stats.totalImages = totalImages;
     this.writeLine(event);
-
-    console.log(`[AnalysisLogger] Started execution ${this.executionId} with ${totalImages} images`);
   }
 
   /**
@@ -383,8 +372,6 @@ export class AnalysisLogger {
     }
 
     this.writeLine(event);
-
-    console.log(`[AnalysisLogger] Logged analysis for ${data.fileName} with ${data.aiResponse.totalVehicles || 1} vehicles`);
   }
 
   /**
@@ -425,8 +412,6 @@ export class AnalysisLogger {
         details: data.details || null
       }
     });
-
-    console.log(`[AnalysisLogger] Correction: ${message}`);
   }
 
   /**
@@ -459,11 +444,6 @@ export class AnalysisLogger {
         organization_folder: data.organizationFolder
       }
     });
-
-    const fuzzyInfo = data.appliedFuzzyCorrection ?
-      ` (attempted fuzzy correction on ${data.fuzzyAttempts?.length || 0} candidates)` : '';
-
-    console.log(`[AnalysisLogger] Unknown number: ${data.detectedNumbers.join(', ')} not found in preset with ${data.participantCount} participants${fuzzyInfo} → ${data.organizationFolder}`);
   }
 
   /**
@@ -562,8 +542,6 @@ export class AnalysisLogger {
       // Log to console based on severity
       if (errorData.severity === 'fatal') {
         console.error(`[AnalysisLogger] FATAL ERROR:`, errorData.message);
-      } else if (errorData.severity === 'recoverable') {
-        console.warn(`[AnalysisLogger] Recoverable error:`, errorData.message);
       }
     } catch (error) {
       // Error logging should never throw
@@ -605,13 +583,6 @@ export class AnalysisLogger {
     };
 
     this.writeLine(event);
-
-    console.log(`[AnalysisLogger] Execution completed:`, {
-      processed: totalProcessed,
-      successful,
-      corrections: this.stats.corrections,
-      timeMs: processingTimeMs
-    });
   }
 
   /**
@@ -695,7 +666,6 @@ export class AnalysisLogger {
         } catch (syncError) {
           // fsync may fail if fd is not available, continue anyway
         }
-        console.log(`[AnalysisLogger] Flushed ${this.writeCount} entries to disk`);
       }
 
       if (canContinue) {
@@ -703,7 +673,6 @@ export class AnalysisLogger {
         setImmediate(writeNext);
       } else {
         // Buffer is full, wait for drain event
-        console.log(`[AnalysisLogger] Buffer full, waiting for drain (${this.writeQueue.length} entries queued)`);
         this.fileStream.once('drain', () => {
           writeNext();
         });
@@ -741,11 +710,9 @@ export class AnalysisLogger {
           fs.fsyncSync(fd);
         }
       } catch (syncError) {
-        console.warn('[AnalysisLogger] fsync warning:', syncError);
+        // Silently ignore fsync errors
       }
     }
-
-    console.log(`[AnalysisLogger] All ${this.writeCount} writes flushed to disk`);
   }
 
   /**
@@ -772,8 +739,7 @@ export class AnalysisLogger {
         promises.push(
           (async () => {
             const { error } = await this.supabase.from('image_corrections').insert(corrections);
-            if (error) console.warn('[AnalysisLogger] DB corrections insert error:', error.message);
-            else console.log(`[AnalysisLogger] DB: ${corrections.length} corrections saved`);
+            // Silently ignore errors - JSONL is primary backup
           })()
         );
       }
@@ -782,8 +748,7 @@ export class AnalysisLogger {
         promises.push(
           (async () => {
             const { error } = await this.supabase.from('temporal_clusters').insert(clusters);
-            if (error) console.warn('[AnalysisLogger] DB clusters insert error:', error.message);
-            else console.log(`[AnalysisLogger] DB: ${clusters.length} clusters saved`);
+            // Silently ignore errors - JSONL is primary backup
           })()
         );
       }
@@ -792,22 +757,18 @@ export class AnalysisLogger {
         promises.push(
           (async () => {
             const { error } = await this.supabase.from('unknown_numbers').insert(unknowns);
-            if (error) console.warn('[AnalysisLogger] DB unknown_numbers insert error:', error.message);
-            else console.log(`[AnalysisLogger] DB: ${unknowns.length} unknown numbers saved`);
+            // Silently ignore errors - JSONL is primary backup
           })()
         );
       }
 
       await Promise.allSettled(promises);
-      console.log(`[AnalysisLogger] DB batch flush complete: ${batch.length} records`);
 
     } catch (error: any) {
       console.error('[AnalysisLogger] DB flush failed:', error.message);
       // Put failed items back in queue for retry (up to a limit to prevent memory bloat)
       if (this.dbWriteQueue.length < 1000) {
         this.dbWriteQueue = [...batch, ...this.dbWriteQueue];
-      } else {
-        console.warn('[AnalysisLogger] DB write queue full, discarding failed batch');
       }
     }
   }
@@ -834,7 +795,6 @@ export class AnalysisLogger {
         }
 
         if (!fs.existsSync(this.localFilePath)) {
-          console.warn('[ADMIN] ⚠️ Local JSONL file does not exist for upload:', this.localFilePath);
           return false;
         }
 
@@ -849,15 +809,7 @@ export class AnalysisLogger {
           });
 
         if (error) {
-          console.error(`[ADMIN] ❌ JSONL upload attempt ${attempt}/${maxRetries} failed:`, {
-            message: error.message,
-            path: this.supabaseUploadPath,
-            fileSize: fileContent.length,
-            localPath: this.localFilePath
-          });
-
           if (attempt === maxRetries) {
-            console.error(`[ADMIN] ❌ All JSONL upload attempts failed. File available locally at: ${this.localFilePath}`);
             return false;
           }
 
@@ -865,24 +817,16 @@ export class AnalysisLogger {
           await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
           continue;
         } else {
-          console.log(`[ADMIN] ✅ JSONL upload successful (attempt ${attempt}): ${this.supabaseUploadPath}`);
-
           // If final upload, create metadata record
           if (final) {
-            const metadataSuccess = await this.createLogMetadata();
-            if (!metadataSuccess) {
-              console.warn(`[ADMIN] ⚠️ JSONL uploaded but metadata creation failed`);
-            }
+            await this.createLogMetadata();
           }
 
           return true; // Success
         }
 
       } catch (error) {
-        console.error(`[ADMIN] ❌ JSONL upload attempt ${attempt}/${maxRetries} exception:`, error);
-
         if (attempt === maxRetries) {
-          console.error(`[ADMIN] ❌ All JSONL upload attempts failed due to exceptions. File available locally at: ${this.localFilePath}`);
           return false;
         }
 
@@ -919,10 +863,7 @@ export class AnalysisLogger {
           });
 
         if (error) {
-          console.error(`[ADMIN] ❌ Metadata creation attempt ${attempt}/${maxRetries} failed:`, error);
-
           if (attempt === maxRetries) {
-            console.error('[ADMIN] ❌ All metadata creation attempts failed');
             return false;
           }
 
@@ -930,15 +871,11 @@ export class AnalysisLogger {
           await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
           continue;
         } else {
-          console.log(`[ADMIN] ✅ Metadata record created successfully (attempt ${attempt})`);
           return true; // Success
         }
 
       } catch (error) {
-        console.error(`[ADMIN] ❌ Metadata creation attempt ${attempt}/${maxRetries} exception:`, error);
-
         if (attempt === maxRetries) {
-          console.error('[ADMIN] ❌ All metadata creation attempts failed due to exceptions');
           return false;
         }
 
@@ -974,7 +911,6 @@ export class AnalysisLogger {
 
       // CRITICAL: Flush all pending writes before closing stream
       // This ensures all queued data is written to disk, preventing data loss
-      console.log(`[AnalysisLogger] Flushing ${this.writeQueue.length} pending writes before finalize...`);
       await this.flushWrites();
 
       // Stop database write interval
@@ -985,7 +921,6 @@ export class AnalysisLogger {
 
       // Flush all pending database writes (best-effort, non-blocking for finalize)
       if (this.dbWriteQueue.length > 0) {
-        console.log(`[AnalysisLogger] Flushing ${this.dbWriteQueue.length} pending DB writes before finalize...`);
         await this.flushDatabaseWrites();
       }
 
@@ -1000,18 +935,15 @@ export class AnalysisLogger {
       const uploadSuccess = await this.uploadToSupabase(true);
 
       if (!uploadSuccess) {
-        console.warn(`[ADMIN] ⚠️ JSONL upload failed - log only available locally at: ${this.localFilePath}`);
         return null;
       }
 
       const publicUrl = this.getPublicUrl();
-      console.log(`[ADMIN] ✅ Analysis log finalized and available at: ${publicUrl}`);
 
       return publicUrl;
 
     } catch (error) {
-      console.error('[ADMIN] ❌ Error finalizing JSONL:', error);
-      console.warn(`[ADMIN] ⚠️ Log file available locally at: ${this.localFilePath}`);
+      console.error('[AnalysisLogger] Error finalizing JSONL:', error);
       return null;
     }
   }
@@ -1037,14 +969,6 @@ export class AnalysisLogger {
     if (this.dbWriteInterval) {
       clearInterval(this.dbWriteInterval);
       this.dbWriteInterval = null;
-    }
-
-    // Log warning if there are pending writes that will be lost
-    if (this.writeQueue.length > 0) {
-      console.warn(`[AnalysisLogger] WARNING: Cleanup called with ${this.writeQueue.length} pending JSONL writes that will be lost!`);
-    }
-    if (this.dbWriteQueue.length > 0) {
-      console.warn(`[AnalysisLogger] WARNING: Cleanup called with ${this.dbWriteQueue.length} pending DB writes that will be lost!`);
     }
 
     // Clear write queues

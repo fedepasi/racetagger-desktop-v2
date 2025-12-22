@@ -140,7 +140,6 @@ export class ModelManager {
   private ensureCacheDir(): void {
     if (!fs.existsSync(this.cacheDir)) {
       fs.mkdirSync(this.cacheDir, { recursive: true });
-      console.log(`[ModelManager] Created cache directory: ${this.cacheDir}`);
     }
   }
 
@@ -154,10 +153,9 @@ export class ModelManager {
       try {
         const content = fs.readFileSync(manifestPath, 'utf-8');
         const manifest = JSON.parse(content) as LocalManifest;
-        console.log(`[ModelManager] Loaded manifest with ${Object.keys(manifest.models).length} models`);
         return manifest;
       } catch (error) {
-        console.warn('[ModelManager] Failed to load manifest, creating new one:', error);
+        // Failed to load manifest, will create new one
       }
     }
 
@@ -177,7 +175,6 @@ export class ModelManager {
 
     try {
       fs.writeFileSync(manifestPath, JSON.stringify(this.manifest, null, 2));
-      console.log('[ModelManager] Manifest saved');
     } catch (error) {
       console.error('[ModelManager] Failed to save manifest:', error);
     }
@@ -189,7 +186,6 @@ export class ModelManager {
   public async getModelFromRegistry(categoryCode: string): Promise<ModelRegistryEntry | null> {
     try {
       const supabase = this.getSupabase();
-      console.log(`[ModelManager] Looking up category: ${categoryCode}`);
 
       // First get the category ID and use_local_onnx flag
       const { data: categoryData, error: categoryError } = await supabase
@@ -203,16 +199,8 @@ export class ModelManager {
         return null;
       }
 
-      console.log(`[ModelManager] Category found:`, {
-        id: categoryData.id,
-        active_model_id: categoryData.active_model_id,
-        use_local_onnx: categoryData.use_local_onnx,
-        recognition_method: categoryData.recognition_method
-      });
-
       // If category has an active_model_id set, use that directly
       if (categoryData.active_model_id) {
-        console.log(`[ModelManager] Using active_model_id: ${categoryData.active_model_id}`);
         const { data, error } = await supabase
           .from('model_registry')
           .select('*')
@@ -224,15 +212,8 @@ export class ModelManager {
           return null;
         }
 
-        console.log(`[ModelManager] Found active model:`, {
-          version: data.version,
-          onnx_storage_path: data.onnx_storage_path,
-          is_active: data.is_active
-        });
         return data as ModelRegistryEntry;
       }
-
-      console.log(`[ModelManager] No active_model_id set, searching for any active model...`);
 
       // Otherwise, get any active model for this category
       const { data, error } = await supabase
@@ -246,15 +227,9 @@ export class ModelManager {
 
       if (error) {
         console.error(`[ModelManager] Error fetching model for ${categoryCode}:`, error);
-        console.log(`[ModelManager] Query was for sport_category_id: ${categoryData.id}`);
         return null;
       }
 
-      console.log(`[ModelManager] Found fallback model:`, {
-        version: data.version,
-        onnx_storage_path: data.onnx_storage_path,
-        is_active: data.is_active
-      });
       return data as ModelRegistryEntry;
     } catch (error) {
       console.error('[ModelManager] Registry lookup failed:', error);
@@ -287,9 +262,6 @@ export class ModelManager {
     const classesChanged = localModel && JSON.stringify(localModel.classes) !== JSON.stringify(remoteModel.classes);
     const needsUpdate = versionChanged || classesChanged;
 
-    if (classesChanged && !versionChanged) {
-      console.log(`[ModelManager] Classes changed online for ${categoryCode}, will update manifest`);
-    }
     const sizeMB = remoteModel.size_bytes / (1024 * 1024);
 
     return {
@@ -310,8 +282,6 @@ export class ModelManager {
     categoryCode: string,
     onProgress?: DownloadProgressCallback
   ): Promise<string> {
-    console.log(`[ModelManager] Downloading model for: ${categoryCode}`);
-
     // Get model info from registry
     const modelInfo = await this.getModelFromRegistry(categoryCode);
     if (!modelInfo) {
@@ -338,8 +308,6 @@ export class ModelManager {
     );
 
     // Download with progress
-    console.log(`[ModelManager] Downloading from: ${signedUrlData.signedUrl.substring(0, 50)}...`);
-
     const response = await fetch(signedUrlData.signedUrl);
     if (!response.ok) {
       throw new Error(`Download failed: ${response.statusText}`);
@@ -371,16 +339,12 @@ export class ModelManager {
     const fileBuffer = Buffer.concat(chunks.map(chunk => Buffer.from(chunk)));
     fs.writeFileSync(localPath, fileBuffer);
 
-    console.log(`[ModelManager] Downloaded ${fileBuffer.length} bytes to ${localPath}`);
-
     // Validate checksum
     const isValid = await this.validateChecksum(localPath, modelInfo.checksum_sha256);
     if (!isValid) {
       fs.unlinkSync(localPath);
       throw new Error('Model checksum validation failed - file may be corrupted');
     }
-
-    console.log('[ModelManager] Checksum validated successfully');
 
     // Update manifest
     this.manifest.models[categoryCode] = {
@@ -429,7 +393,6 @@ export class ModelManager {
 
     // Verify file still exists
     if (!fs.existsSync(localModel.localPath)) {
-      console.warn(`[ModelManager] Cached model file missing: ${localModel.localPath}`);
       delete this.manifest.models[categoryCode];
       this.saveManifest();
       return null;
@@ -467,23 +430,18 @@ export class ModelManager {
    * Clear all cached models
    */
   public async clearCache(): Promise<void> {
-    console.log('[ModelManager] Clearing model cache...');
-
     for (const [categoryCode, entry] of Object.entries(this.manifest.models)) {
       try {
         if (fs.existsSync(entry.localPath)) {
           fs.unlinkSync(entry.localPath);
-          console.log(`[ModelManager] Deleted: ${entry.localPath}`);
         }
       } catch (error) {
-        console.warn(`[ModelManager] Failed to delete ${categoryCode}:`, error);
+        // Failed to delete, continue with others
       }
     }
 
     this.manifest.models = {};
     this.saveManifest();
-
-    console.log('[ModelManager] Cache cleared');
   }
 
   /**
@@ -499,7 +457,6 @@ export class ModelManager {
       }
       delete this.manifest.models[categoryCode];
       this.saveManifest();
-      console.log(`[ModelManager] Deleted model: ${categoryCode}`);
       return true;
     } catch (error) {
       console.error(`[ModelManager] Failed to delete ${categoryCode}:`, error);
@@ -524,9 +481,6 @@ export class ModelManager {
       const remoteClasses = JSON.stringify(remoteModel.classes);
 
       if (localClasses !== remoteClasses) {
-        console.log(`[ModelManager] Updating classes for ${categoryCode} without re-downloading model`);
-        console.log(`[ModelManager] Old classes: ${localModel.classes.length}, New classes: ${remoteModel.classes.length}`);
-
         localModel.classes = remoteModel.classes;
         localModel.confidenceThreshold = remoteModel.confidence_threshold;
         localModel.iouThreshold = remoteModel.iou_threshold;
@@ -549,7 +503,6 @@ export class ModelManager {
 
     if (!remoteModel) {
       if (localModel?.localPath && fs.existsSync(localModel.localPath)) {
-        console.log(`[ModelManager] Using cached model (remote unavailable): ${localModel.localPath}`);
         return localModel.localPath;
       }
       throw new Error(`Model for ${categoryCode} not available and not in registry`);
@@ -557,30 +510,25 @@ export class ModelManager {
 
     // Case 1: No local model - need full download
     if (!localModel) {
-      console.log(`[ModelManager] Model not found locally, downloading...`);
       return this.downloadModel(categoryCode, onProgress);
     }
 
     // Case 2: Version changed - need full download
     if (localModel.version !== remoteModel.version) {
-      console.log(`[ModelManager] Model version changed (${localModel.version} → ${remoteModel.version}), downloading...`);
       return this.downloadModel(categoryCode, onProgress);
     }
 
     // Case 3: Only classes changed - update manifest only (no download!)
     const classesChanged = JSON.stringify(localModel.classes) !== JSON.stringify(remoteModel.classes);
     if (classesChanged) {
-      console.log(`[ModelManager] Classes changed online, updating manifest without re-download`);
       await this.updateClassesFromRemote(categoryCode);
     }
 
     // Verify local file exists
     if (!fs.existsSync(localModel.localPath)) {
-      console.log(`[ModelManager] Cached model file missing, re-downloading...`);
       return this.downloadModel(categoryCode, onProgress);
     }
 
-    console.log(`[ModelManager] Using cached model: ${localModel.localPath}`);
     return localModel.localPath;
   }
 
@@ -597,11 +545,9 @@ export class ModelManager {
         .eq('use_local_onnx', true);
 
       if (error || !data) {
-        console.warn('[ModelManager] Failed to fetch active ONNX categories:', error);
         return [];
       }
 
-      console.log(`[ModelManager] Found ${data.length} categories with local ONNX enabled`);
       return data.map(c => c.code);
     } catch (error) {
       console.error('[ModelManager] Error fetching active ONNX categories:', error);
@@ -629,7 +575,6 @@ export class ModelManager {
 
     const totalSizeMB = modelsToDownload.reduce((sum, m) => sum + m.sizeMB, 0);
 
-    console.log(`[ModelManager] ${modelsToDownload.length} models need download, total size: ${totalSizeMB.toFixed(1)} MB`);
     return { models: modelsToDownload, totalSizeMB };
   }
 }
@@ -676,14 +621,11 @@ ModelManager.prototype.ensureGenericModelAvailable = async function(
     throw new Error(`Unknown model: ${modelId}. Available models: ${Object.keys(YOLO_MODEL_REGISTRY).join(', ')}`);
   }
 
-  console.log(`[ModelManager] Looking for model: ${modelId} (${modelConfig.storagePath})`);
-
   // Check 1: Look for bundled model in project directory (development or packaged app)
   const bundledPaths = getModelPaths(modelConfig);
 
   for (const bundledPath of bundledPaths) {
     if (fs.existsSync(bundledPath)) {
-      console.log(`[ModelManager] Using bundled model: ${bundledPath}`);
       return bundledPath;
     }
   }
@@ -701,11 +643,8 @@ ModelManager.prototype.ensureGenericModelAvailable = async function(
 
   // Check if already cached
   if (fs.existsSync(localPath)) {
-    console.log(`[ModelManager] Model already cached: ${localPath}`);
     return localPath;
   }
-
-  console.log(`[ModelManager] Downloading model: ${modelId}`);
 
   // Get signed URL from Supabase Storage
   const supabase = (this as any).getSupabase();
@@ -722,8 +661,6 @@ ModelManager.prototype.ensureGenericModelAvailable = async function(
   // Download with progress
   const totalBytes = modelConfig.sizeBytes;
   const totalMB = totalBytes / (1024 * 1024);
-
-  console.log(`[ModelManager] Downloading from: ${signedUrlData.signedUrl.substring(0, 50)}...`);
 
   const response = await fetch(signedUrlData.signedUrl);
   if (!response.ok) {
@@ -755,8 +692,6 @@ ModelManager.prototype.ensureGenericModelAvailable = async function(
   // Combine chunks and write to file
   const fileBuffer = Buffer.concat(chunks.map(chunk => Buffer.from(chunk)));
   fs.writeFileSync(localPath, fileBuffer);
-
-  console.log(`[ModelManager] Downloaded model: ${fileBuffer.length} bytes to ${localPath}`);
 
   return localPath;
 };

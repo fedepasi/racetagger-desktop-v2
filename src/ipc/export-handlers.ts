@@ -23,13 +23,11 @@ import {
 import { getMainWindow } from './context';
 
 export function registerExportHandlers(): void {
-  console.log('[IPC] Registering export handlers...');
 
   // ==================== EXPORT DESTINATION CRUD ====================
 
   ipcMain.handle('export-destinations-create', async (_, destinationData: Omit<ExportDestination, 'id' | 'user_id' | 'created_at' | 'updated_at'>) => {
     try {
-      console.log('[IPC] Creating export destination:', destinationData.name);
       const destination = await createExportDestination(destinationData);
       return { success: true, data: destination };
     } catch (e: any) {
@@ -80,7 +78,6 @@ export function registerExportHandlers(): void {
 
   ipcMain.handle('export-destinations-update', async (_, { destinationId, updateData }: { destinationId: string, updateData: Partial<ExportDestination> }) => {
     try {
-      console.log('[IPC] Updating export destination:', destinationId);
       const destination = await updateExportDestination(destinationId, updateData);
       return { success: true, data: destination };
     } catch (e: any) {
@@ -91,7 +88,6 @@ export function registerExportHandlers(): void {
 
   ipcMain.handle('export-destinations-delete', async (_, destinationId: string) => {
     try {
-      console.log('[IPC] Deleting export destination:', destinationId);
       await deleteExportDestination(destinationId);
       return { success: true };
     } catch (e: any) {
@@ -102,7 +98,6 @@ export function registerExportHandlers(): void {
 
   ipcMain.handle('export-destinations-set-default', async (_, destinationId: string) => {
     try {
-      console.log('[IPC] Setting default export destination:', destinationId);
       await setDefaultExportDestination(destinationId);
       return { success: true };
     } catch (e: any) {
@@ -113,7 +108,6 @@ export function registerExportHandlers(): void {
 
   ipcMain.handle('export-destinations-duplicate', async (_, { destinationId, newName }: { destinationId: string, newName?: string }) => {
     try {
-      console.log('[IPC] Duplicating export destination:', destinationId);
       const destination = await duplicateExportDestination(destinationId, newName);
       return { success: true, data: destination };
     } catch (e: any) {
@@ -124,7 +118,6 @@ export function registerExportHandlers(): void {
 
   ipcMain.handle('export-destinations-update-order', async (_, destinationOrders: Array<{ id: string; display_order: number }>) => {
     try {
-      console.log('[IPC] Updating export destinations order');
       await updateExportDestinationsOrder(destinationOrders);
       return { success: true };
     } catch (e: any) {
@@ -135,7 +128,6 @@ export function registerExportHandlers(): void {
 
   ipcMain.handle('export-destinations-toggle-active', async (_, destinationId: string) => {
     try {
-      console.log('[IPC] Toggling export destination active:', destinationId);
       const newStatus = await toggleExportDestinationActive(destinationId);
       return { success: true, data: newStatus };
     } catch (e: any) {
@@ -184,8 +176,6 @@ export function registerExportHandlers(): void {
       const { exportDestinationProcessor } = exportModule;
       const mainWindow = getMainWindow();
 
-      console.log(`[IPC] Export to destinations requested: ${data.images.length} images`);
-
       // Get destinations to export to
       let destinations: ExportDestination[];
       if (data.destinationIds && data.destinationIds.length > 0) {
@@ -205,8 +195,6 @@ export function registerExportHandlers(): void {
           failed: 0
         };
       }
-
-      console.log(`[IPC] Exporting to ${destinations.length} destination(s)`);
 
       // Convert event date string to Date object
       const eventInfo = data.event ? {
@@ -255,7 +243,6 @@ export function registerExportHandlers(): void {
       }
 
       const stats = exportDestinationProcessor.getStats();
-      console.log(`[IPC] Export complete: ${stats.totalExports} successful, ${stats.failedExports} failed`);
 
       return {
         success: true,
@@ -269,6 +256,4 @@ export function registerExportHandlers(): void {
       return { success: false, error: e.message, exported: 0, failed: 0 };
     }
   });
-
-  console.log('[IPC] Export handlers registered (13 handlers)');
 }

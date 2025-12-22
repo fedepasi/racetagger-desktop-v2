@@ -96,7 +96,6 @@ export class OnnxDetector {
 
     try {
       ort = require('onnxruntime-node');
-      console.log('[OnnxDetector] ONNX Runtime initialized');
       return true;
     } catch (error) {
       console.error('[OnnxDetector] Failed to load ONNX Runtime:', error);
@@ -114,14 +113,12 @@ export class OnnxDetector {
     if (this.session && this.modelConfig) {
       const currentModelCategoryPath = this.modelManager.getLocalModelPath(categoryCode);
       if (currentModelCategoryPath && this.currentModelPath === currentModelCategoryPath) {
-        console.log('[OnnxDetector] Model already loaded for this category');
         return true;
       }
     }
 
     // If loading is in progress, wait for it to complete instead of returning false
     if (this.loadingPromise) {
-      console.log('[OnnxDetector] Model loading in progress, waiting for completion...');
       return this.loadingPromise;
     }
 
@@ -154,15 +151,8 @@ export class OnnxDetector {
 
       // Skip if same model already loaded
       if (this.session && this.currentModelPath === modelPath) {
-        console.log('[OnnxDetector] Model already loaded');
         this.isLoading = false;
         return true;
-      }
-
-      // Dispose previous session
-      if (this.session) {
-        console.log('[OnnxDetector] Disposing previous session');
-        // Note: ort session doesn't have dispose in all versions
       }
 
       // Load model configuration
@@ -178,10 +168,6 @@ export class OnnxDetector {
         classes: config.classes,
       };
 
-      console.log(`[OnnxDetector] Loading model: ${modelPath}`);
-      console.log(`[OnnxDetector] Classes: ${this.modelConfig.classes.length}`);
-      console.log(`[OnnxDetector] Input size: ${this.modelConfig.inputSize}`);
-
       // Create inference session
       const sessionOptions: import('onnxruntime-node').InferenceSession.SessionOptions = {
         executionProviders: ['cpu'],
@@ -190,10 +176,6 @@ export class OnnxDetector {
 
       this.session = await ort!.InferenceSession.create(modelPath, sessionOptions);
       this.currentModelPath = modelPath;
-
-      console.log('[OnnxDetector] Model loaded successfully');
-      console.log(`[OnnxDetector] Input names: ${this.session.inputNames}`);
-      console.log(`[OnnxDetector] Output names: ${this.session.outputNames}`);
 
       return true;
     } catch (error) {
@@ -321,9 +303,6 @@ export class OnnxDetector {
         }))
         .filter(r => r.raceNumber !== 'unknown');
 
-      const inferenceTime = Date.now() - startTime;
-      console.log(`[OnnxDetector] Inference completed in ${inferenceTime}ms, ${analysisResults.length} detections`);
-
       return {
         results: analysisResults,
         imageSize: this.lastImageDimensions!
@@ -345,13 +324,6 @@ export class OnnxDetector {
 
     // Get output tensors
     const outputNames = Object.keys(results);
-    console.log(`[OnnxDetector] Output names: ${outputNames.join(', ')}`);
-
-    // DEBUG: Log all output tensor details to understand model format
-    for (const name of outputNames) {
-      const tensor = results[name];
-      console.log(`[OnnxDetector] Output "${name}": dims=[${tensor.dims}], type=${tensor.type}, size=${tensor.data.length}`);
-    }
 
     // Try different output formats
 
@@ -369,14 +341,8 @@ export class OnnxDetector {
         if (results[name]) {
           labels = results[name].data as BigInt64Array | Int32Array | Float32Array;
           labelsFoundName = name;
-          console.log(`[OnnxDetector] Found labels tensor: "${name}" with ${labels.length} values`);
           break;
         }
-      }
-
-      if (!labels) {
-        console.warn(`[OnnxDetector] WARNING: No labels tensor found! Tried: ${labelsNames.join(', ')}`);
-        console.warn(`[OnnxDetector] Available outputs: ${outputNames.join(', ')}`);
       }
 
       // Get dimensions from scores tensor to detect multi-class format
@@ -392,7 +358,6 @@ export class OnnxDetector {
       // So actual class indices are offset by 1 from our manifest
       // scoresPerDetection = numClasses + 1 (background) or numClasses + 2 (background + padding)
       const hasBackgroundClass = scoresPerDetection > numClasses;
-      console.log(`[OnnxDetector] Scores format: dims=[${scoresDims}], isMultiClass=${isMultiClassFormat}, numDetections=${numDetections}, scoresPerDetection=${scoresPerDetection}, modelClasses=${numClasses}, hasBackground=${hasBackgroundClass}`);
 
       for (let i = 0; i < numDetections; i++) {
         let confidence: number;
@@ -437,11 +402,6 @@ export class OnnxDetector {
 
         const [inputW, inputH] = this.modelConfig.inputSize;
 
-        // Log raw box values for first few detections (debugging)
-        if (i < 3) {
-          console.log(`[OnnxDetector] Detection ${i}: classIndex=${classIndex}, className=${className}, confidence=${confidence.toFixed(3)}, rawBox=[${x.toFixed(2)}, ${y.toFixed(2)}, ${width.toFixed(2)}, ${height.toFixed(2)}]`);
-        }
-
         // Determine if coordinates are in pixel space (>1) or already normalized (0-1)
         const maxCoord = Math.max(x, y, width, height);
         const isPixelSpace = maxCoord > 1;
@@ -482,11 +442,6 @@ export class OnnxDetector {
         // Convert from center-based to corner-based (top-left) for frontend display
         const cornerX = centerX - boxWidth / 2;
         const cornerY = centerY - boxHeight / 2;
-
-        // Log converted values for debugging
-        if (i < 3) {
-          console.log(`[OnnxDetector] Detection ${i}: isPixelSpace=${isPixelSpace}, corner=[${cornerX.toFixed(4)}, ${cornerY.toFixed(4)}], size=[${boxWidth.toFixed(4)}, ${boxHeight.toFixed(4)}]`);
-        }
 
         detections.push({
           x: cornerX,      // Top-left X (normalized 0-1)
@@ -553,7 +508,6 @@ export class OnnxDetector {
       }
     }
 
-    console.log(`[OnnxDetector] Parsed ${detections.length} raw detections`);
     return detections;
   }
 
@@ -625,7 +579,6 @@ export class OnnxDetector {
       }
     }
 
-    console.log(`[OnnxDetector] NMS: ${detections.length} -> ${keep.length} detections`);
     return keep;
   }
 
@@ -669,7 +622,6 @@ export class OnnxDetector {
     this.session = null;
     this.modelConfig = null;
     this.currentModelPath = null;
-    console.log('[OnnxDetector] Resources disposed');
   }
 }
 

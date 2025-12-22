@@ -16,14 +16,11 @@ import {
 // ==================== Register Handlers ====================
 
 export function registerFaceRecognitionHandlers(): void {
-  console.log('[IPC] Registering face recognition handlers...');
 
   // Initialize face recognition processor
   ipcMain.handle('face-recognition-initialize', async () => {
     try {
-      console.log('[FaceRecognition IPC] Initializing face recognition...');
       const result = await faceRecognitionProcessor.initialize();
-      console.log('[FaceRecognition IPC] Initialization result:', result);
       return result;
     } catch (error) {
       console.error('[FaceRecognition IPC] Initialization error:', error);
@@ -34,10 +31,8 @@ export function registerFaceRecognitionHandlers(): void {
   // Load face descriptors for matching
   ipcMain.handle('face-recognition-load-descriptors', async (_, descriptors: StoredFaceDescriptor[]) => {
     try {
-      console.log(`[FaceRecognition IPC] Loading ${descriptors.length} face descriptors...`);
       faceRecognitionProcessor.loadFaceDescriptors(descriptors);
       const count = faceRecognitionProcessor.getDescriptorCount();
-      console.log(`[FaceRecognition IPC] Loaded ${count} unique drivers`);
       return { success: true, count };
     } catch (error) {
       console.error('[FaceRecognition IPC] Error loading descriptors:', error);
@@ -48,9 +43,7 @@ export function registerFaceRecognitionHandlers(): void {
   // Match detected faces against loaded descriptors
   ipcMain.handle('face-recognition-match', async (_, faces: DetectedFace[], context: FaceContext = 'auto') => {
     try {
-      console.log(`[FaceRecognition IPC] Matching ${faces.length} faces with context: ${context}`);
       const result = faceRecognitionProcessor.matchFaces(faces, context);
-      console.log(`[FaceRecognition IPC] Matched ${result.matchedDrivers.length} drivers`);
       return result;
     } catch (error) {
       console.error('[FaceRecognition IPC] Match error:', error);
@@ -76,7 +69,6 @@ export function registerFaceRecognitionHandlers(): void {
   ipcMain.handle('face-recognition-clear', async () => {
     try {
       faceRecognitionProcessor.clearDescriptors();
-      console.log('[FaceRecognition IPC] Descriptors cleared');
       return { success: true };
     } catch (error) {
       console.error('[FaceRecognition IPC] Clear error:', error);
@@ -87,8 +79,6 @@ export function registerFaceRecognitionHandlers(): void {
   // Load face descriptors from Supabase sport_category_faces table
   ipcMain.handle('face-recognition-load-from-database', async (_, categoryCode?: string) => {
     try {
-      console.log(`[FaceRecognition IPC] Loading face descriptors from database${categoryCode ? ` for category: ${categoryCode}` : ''}...`);
-
       const supabase = getSupabase();
 
       // Query sport_category_faces table
@@ -108,7 +98,6 @@ export function registerFaceRecognitionHandlers(): void {
       }
 
       if (!faces || faces.length === 0) {
-        console.log('[FaceRecognition IPC] No face descriptors found in database');
         return { success: true, count: 0, message: 'No faces found' };
       }
 
@@ -133,7 +122,6 @@ export function registerFaceRecognitionHandlers(): void {
       faceRecognitionProcessor.loadFaceDescriptors(descriptors);
       const count = faceRecognitionProcessor.getDescriptorCount();
 
-      console.log(`[FaceRecognition IPC] Loaded ${count} persons from database (${descriptors.length} valid descriptors)`);
       return { success: true, count, totalInDb: faces.length, validDescriptors: descriptors.length };
 
     } catch (error) {
@@ -141,6 +129,4 @@ export function registerFaceRecognitionHandlers(): void {
       return { success: false, error: (error as Error).message };
     }
   });
-
-  console.log('[IPC] Face recognition handlers registered (6 handlers)');
 }

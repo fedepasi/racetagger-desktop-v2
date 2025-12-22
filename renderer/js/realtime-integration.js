@@ -15,7 +15,6 @@ class RealtimeIntegration {
     this.waitForComponents().then(() => {
       this.setupIntegration();
       this.isInitialized = true;
-      console.log('[RealtimeIntegration] Initialized successfully');
     });
   }
   
@@ -29,8 +28,6 @@ class RealtimeIntegration {
     while (!window.enhancedProcessor) {
       await this.sleep(100);
     }
-    
-    console.log('[RealtimeIntegration] All components ready');
   }
   
   sleep(ms) {
@@ -80,14 +77,10 @@ class RealtimeIntegration {
           window.realtimeResults.updateImageProcessing(imageId, currentFile.name);
         }
       }
-      
-      console.log(`[RealtimeIntegration] Batch progress: ${current}/${total}`);
     };
     
     // Override batch complete handler
     window.handleBatchResults = (results) => {
-      console.log('[RealtimeIntegration] Batch processing complete:', results.length, 'results');
-      
       // Call original handler
       if (originalHandleBatchResults) {
         originalHandleBatchResults(results);
@@ -123,9 +116,8 @@ class RealtimeIntegration {
     
     // Listen for processing start
     window.api.receive('batch-processing-start', (data) => {
-      console.log('[RealtimeIntegration] Batch processing started:', data);
       this.processingStarted = true;
-      
+
       if (window.realtimeResults) {
         window.realtimeResults.startProcessing(data.totalImages || data.imageCount || 0);
       }
@@ -133,8 +125,6 @@ class RealtimeIntegration {
     
     // Listen for individual image processing events
     window.api.receive('image-processing-start', (data) => {
-      console.log('[RealtimeIntegration] Image processing start:', data);
-      
       if (window.realtimeResults) {
         const imageId = data.imageId || data.imagePath || data.filename;
         window.realtimeResults.addImageToQueue(imageId, data.filename, data.imagePath);
@@ -144,9 +134,8 @@ class RealtimeIntegration {
     
     // Listen for processing cancellation
     window.api.receive('batch-processing-cancelled', () => {
-      console.log('[RealtimeIntegration] Batch processing cancelled');
       this.processingStarted = false;
-      
+
       if (window.realtimeResults) {
         window.realtimeResults.isActive = false;
       }
@@ -154,18 +143,14 @@ class RealtimeIntegration {
     
     // Listen for pipeline stats updates (includes hasRawFiles info)
     window.api.receive('pipeline-stats-update', (data) => {
-      console.log('[RealtimeIntegration] Pipeline stats update:', data);
-      
       // Update telemetry visibility based on hasRawFiles
       if (typeof data.hasRawFiles !== 'undefined') {
         const rawConversionTelemetry = document.getElementById('raw-conversion-telemetry');
         if (rawConversionTelemetry) {
           if (data.hasRawFiles) {
             rawConversionTelemetry.style.display = 'block';
-            console.log('[RealtimeIntegration] Showing Raw Conversion telemetry (RAW files detected)');
           } else {
             rawConversionTelemetry.style.display = 'none';
-            console.log('[RealtimeIntegration] Hiding Raw Conversion telemetry (JPEG-only batch)');
           }
         }
       }
@@ -184,8 +169,6 @@ class RealtimeIntegration {
     
     // Listen for processing errors
     window.api.receive('image-processing-error', (data) => {
-      console.log('[RealtimeIntegration] Image processing error:', data);
-      
       if (window.realtimeResults) {
         const imageId = data.imageId || data.imagePath || data.filename;
         window.realtimeResults.completeImageProcessing({
@@ -212,7 +195,6 @@ class RealtimeIntegration {
       // Reset real-time viewer state
       if (window.realtimeResults && data.success) {
         window.realtimeResults.reset();
-        console.log(`[RealtimeIntegration] Prepared for ${data.imageCount} images`);
       }
     };
     
@@ -284,8 +266,6 @@ class RealtimeIntegration {
       if (realtimeContainer) realtimeContainer.style.display = 'none';
       if (originalContainer) originalContainer.style.display = 'block';
     }
-    
-    console.log(`[RealtimeIntegration] Switched to ${view} view`);
   }
   
   setupErrorHandling() {
@@ -373,8 +353,6 @@ class RealtimeIntegration {
       window.realtimeResults.startProcessing(totalImages);
       this.switchResultsView('realtime'); // Default to real-time view
     }
-    
-    console.log(`[RealtimeIntegration] Started processing coordination for ${totalImages} images`);
   }
   
   completeProcessing() {
@@ -384,8 +362,6 @@ class RealtimeIntegration {
     setTimeout(() => {
       this.switchResultsView('final');
     }, 2000);
-    
-    console.log('[RealtimeIntegration] Processing coordination complete');
   }
   
   reset() {
@@ -395,8 +371,6 @@ class RealtimeIntegration {
     if (window.realtimeResults) {
       window.realtimeResults.hide();
     }
-    
-    console.log('[RealtimeIntegration] Reset');
   }
 }
 
@@ -478,7 +452,6 @@ document.addEventListener('DOMContentLoaded', () => {
   setTimeout(() => {
     if (!window.realtimeIntegration) {
       window.realtimeIntegration = new RealtimeIntegration();
-      console.log('[RealtimeIntegration] Initialized');
     }
   }, 1000);
 });

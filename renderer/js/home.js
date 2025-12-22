@@ -19,8 +19,6 @@ let announcementCarouselInterval = null;
  * Initialize home page functionality
  */
 function initializeHomePage() {
-  console.log('[Home] Initializing home page...');
-
   // Load user data
   loadHomePageData();
 
@@ -38,8 +36,6 @@ function initializeHomePage() {
 
   // Check if we need to navigate to a specific section from results page
   checkNavigationIntent();
-
-  console.log('[Home] Home page initialized');
 }
 
 /**
@@ -49,18 +45,14 @@ function checkNavigationIntent() {
   const targetSection = sessionStorage.getItem('navigateToSection');
 
   if (targetSection) {
-    console.log(`[Home] Navigation intent detected: ${targetSection}`);
-
     // Clear the flag
     sessionStorage.removeItem('navigateToSection');
 
     // Navigate to the section after a small delay to ensure DOM is ready
     setTimeout(() => {
       if (window.navigateToSection) {
-        console.log(`[Home] Navigating to section: ${targetSection}`);
         window.navigateToSection(targetSection);
       } else if (window.navigateToAnalysis && targetSection === 'analysis') {
-        console.log(`[Home] Navigating to analysis via navigateToAnalysis`);
         window.navigateToAnalysis();
       }
     }, 100);
@@ -148,7 +140,6 @@ async function loadAnnouncements() {
       // If no announcements, section stays hidden (display: none)
     }
   } catch (error) {
-    console.log('[Home] Announcements unavailable:', error);
     // No fallback, section stays hidden
   }
 }
@@ -257,8 +248,6 @@ window.openAnnouncementLink = function(url) {
 function setupNavigationFunctions() {
   // Make navigation function globally available
   window.navigateToAnalysis = function() {
-    console.log('[Home] Navigating to analysis section...');
-
     // Use existing navigation system
     if (window.navigateToSection) {
       window.navigateToSection('analysis');
@@ -280,13 +269,11 @@ function setupNavigationFunctions() {
 
   // Execution interaction functions
   window.viewExecutionResults = function(executionId) {
-    console.log('[Home] Viewing execution results:', executionId);
     // Navigate to results page with execution ID
     window.location.href = `results.html?executionId=${encodeURIComponent(executionId)}`;
   };
 
   window.rerunExecution = function(executionId) {
-    console.log('[Home] Re-running execution:', executionId);
     // Navigate to analysis section to start a new analysis
     window.navigateToAnalysis();
     // Could potentially pre-populate settings from previous execution
@@ -294,14 +281,11 @@ function setupNavigationFunctions() {
 
   // Participants navigation
   window.navigateToParticipants = function() {
-    console.log('[Home] Navigating to participants section...');
-
     // Use existing navigation system
     if (window.navigateToSection) {
       window.navigateToSection('participants');
     } else {
       // Fallback navigation
-      console.log('[Home] Direct navigation to participants');
       showParticipantsSection();
     }
   };
@@ -357,7 +341,7 @@ async function updateUserName() {
       }
     }
   } catch (error) {
-    console.log('[Home] Could not load user name, using default');
+    // Using default user name
   }
 }
 
@@ -365,7 +349,6 @@ async function updateUserName() {
  * Refresh home page data
  */
 async function refreshHomePageData() {
-  console.log('[Home] Refreshing home page data...');
   await loadHomePageData();
 }
 

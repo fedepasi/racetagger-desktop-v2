@@ -3,8 +3,6 @@
  * Handles participant preset creation, editing, and management
  */
 
-console.log('🔧 [DEBUG] participants-manager.js is loading...');
-
 var currentPreset = null;
 var participantsData = [];
 var isEditingPreset = false;
@@ -13,14 +11,10 @@ var editingRowIndex = -1; // -1 = new participant, >=0 = editing existing
 var currentSortColumn = 0; // Colonna corrente di ordinamento (0 = numero)
 var currentSortDirection = 'asc'; // Direzione: 'asc' o 'desc'
 
-console.log('🔧 [DEBUG] Variables declared:', { currentPreset, participantsData, isEditingPreset, customFolders });
-
 /**
  * Initialize participants manager
  */
 async function initParticipantsManager() {
-  console.log('[Participants] Initializing participants manager...');
-
   // Setup event listeners
   setupEventListeners();
 
@@ -103,7 +97,6 @@ function setupKeywordAutocomplete() {
   const dropdown = document.getElementById('keyword-dropdown');
 
   if (!input || !dropdown) {
-    console.warn('[Autocomplete] Input or dropdown element not found');
     return;
   }
 
@@ -261,22 +254,16 @@ function insertKeywordAtCursor(keyword) {
  */
 async function loadParticipantPresets() {
   try {
-    console.log('[Participants] Loading participant presets...');
-
     // Check if user is admin
     const isAdmin = await window.api.invoke('auth-is-admin');
-    console.log('[Participants] User is admin:', isAdmin);
 
     // Use appropriate endpoint based on admin status
     const channelName = isAdmin
       ? 'supabase-get-all-participant-presets-admin'
       : 'supabase-get-participant-presets';
 
-    console.log('[Participants] Using channel:', channelName);
-
     const response = await window.api.invoke(channelName);
     if (response.success && response.data) {
-      console.log('[Participants] Loaded', response.data.length, 'presets');
       displayParticipantPresets(response.data);
     } else {
       console.error('[Participants] Error loading presets:', response.error);
@@ -372,7 +359,6 @@ function displayParticipantPresets(presets) {
  * Create a preset card element
  */
 function createPresetCard(preset) {
-  console.log('[DEBUG] 🎴 Creating preset card for ID:', preset.id, 'Name:', preset.name, 'isOfficial:', preset.is_official);
   const card = document.createElement('div');
   const isOfficial = preset.is_official === true;
   card.className = `preset-card${isOfficial ? ' official-preset-card' : ''}`;
@@ -410,7 +396,7 @@ function createPresetCard(preset) {
           </button>
         </div>
       </div>
-      <button class="btn btn-sm btn-secondary" onclick="console.log('[DEBUG] ✏️ Edit button CLICKED for preset:', '${preset.id}'); editPreset('${preset.id}')" title="Edit">
+      <button class="btn btn-sm btn-secondary" onclick="editPreset('${preset.id}')" title="Edit">
         <span class="btn-icon">✏️</span>
       </button>
       <button class="btn btn-sm btn-danger" onclick="deletePreset('${preset.id}')" title="Delete">
@@ -529,8 +515,6 @@ function showEmptyPresetsState() {
  * Create new preset
  */
 function createNewPreset() {
-  console.log('[Participants] Creating new preset...');
-
   currentPreset = null;
   isEditingPreset = false;
   participantsData = [];
@@ -1028,11 +1012,7 @@ function updateFolderSelects() {
  * Edit existing preset
  */
 async function editPreset(presetId) {
-  console.log('[DEBUG] 🔍 editPreset CALLED! presetId:', presetId);
-  console.log('[DEBUG] 🔍 window.editPreset type:', typeof window.editPreset);
   try {
-    console.log('[Participants] Editing preset:', presetId);
-
     const response = await window.api.invoke('supabase-get-participant-preset-by-id', presetId);
     if (!response.success || !response.data) {
       showNotification('Error loading preset: ' + (response.error || 'Unknown error'), 'error');
@@ -1061,9 +1041,8 @@ async function editPreset(presetId) {
 
     // Show modal
     const modal = document.getElementById('preset-editor-modal');
-    console.log('[DEBUG] 🎭 Modal element found:', modal ? 'YES' : 'NO');
     if (!modal) {
-      console.error('[DEBUG] ❌ Modal element not found in DOM!');
+      console.error('[Participants] Modal element not found in DOM');
       return;
     }
     modal.classList.add('show');
@@ -1079,8 +1058,6 @@ async function editPreset(presetId) {
  */
 async function duplicateOfficialPreset(presetId) {
   try {
-    console.log('[Participants] Duplicating official preset:', presetId);
-
     // Show confirmation
     const confirmed = await showConfirmDialog(
       'Duplicate Official Preset',
@@ -1118,8 +1095,6 @@ async function deletePreset(presetId) {
   if (!confirmed) return;
 
   try {
-    console.log('[Participants] Deleting preset:', presetId);
-
     const response = await window.api.invoke('supabase-delete-participant-preset', presetId);
     if (response.success) {
       showNotification('Preset deleted successfully', 'success');
@@ -1138,8 +1113,6 @@ async function deletePreset(presetId) {
  */
 async function exportPresetJSON(presetId) {
   try {
-    console.log('[Participants] Exporting preset as JSON:', presetId);
-
     // Fetch the complete preset data
     const response = await window.api.invoke('supabase-get-participant-preset-by-id', presetId);
     if (!response.success || !response.data) {
@@ -1189,7 +1162,6 @@ async function exportPresetJSON(presetId) {
     });
 
     if (saveResult.canceled || !saveResult.filePath) {
-      console.log('[Participants] Export canceled by user');
       return;
     }
 
@@ -1216,8 +1188,6 @@ async function exportPresetJSON(presetId) {
  */
 async function exportPresetCSV(presetId) {
   try {
-    console.log('[Participants] Exporting preset as CSV:', presetId);
-
     // Fetch the complete preset data
     const response = await window.api.invoke('supabase-get-participant-preset-by-id', presetId);
     if (!response.success || !response.data) {
@@ -1281,7 +1251,6 @@ async function exportPresetCSV(presetId) {
     });
 
     if (saveResult.canceled || !saveResult.filePath) {
-      console.log('[Participants] Export canceled by user');
       return;
     }
 
@@ -1365,7 +1334,6 @@ function clearParticipantsTable() {
 function addParticipantRow(participant, rowIndex) {
   const tbody = document.getElementById('participants-tbody');
   if (!tbody) {
-    console.error('Cannot find participants-tbody element');
     return;
   }
 
@@ -1458,7 +1426,6 @@ function duplicateParticipantFromRow(button) {
  */
 function duplicateParticipant(rowIndex) {
   if (rowIndex < 0 || rowIndex >= participantsData.length) {
-    console.error('[Participants] Invalid row index for duplication:', rowIndex);
     return;
   }
 
@@ -1506,8 +1473,6 @@ function duplicateParticipant(rowIndex) {
       }
     }, 150);
   }, 100);
-
-  console.log('[Participants] Duplicated participant at index', rowIndex, '-> new index', newIndex);
 }
 
 /**
@@ -1571,7 +1536,6 @@ async function savePreset() {
       folder_2: p.folder_2 || '',
       folder_3: p.folder_3 || ''
     }));
-    console.log('[Participants] Collected participants:', participants.length, participants);
 
     // Disable save button during operation
     const saveBtn = document.getElementById('save-preset-btn');
@@ -1583,7 +1547,6 @@ async function savePreset() {
     if (isEditingPreset && currentPreset) {
       // Update existing preset
       presetId = currentPreset.id;
-      console.log('[Participants] Updating existing preset:', presetId);
 
       const updateData = {
         name: presetName,
@@ -1602,8 +1565,6 @@ async function savePreset() {
       }
     } else {
       // Create new preset
-      console.log('[Participants] Creating new preset...');
-
       const presetData = {
         name: presetName,
         description: presetDescription,
@@ -1658,8 +1619,6 @@ function collectParticipantsFromTable() {
   const rows = tbody.querySelectorAll('tr');
   const participants = [];
 
-  console.log('[Participants] Collecting participants from', rows.length, 'rows');
-
   rows.forEach((row, index) => {
     const inputs = row.querySelectorAll('input[data-field]');
     const selects = row.querySelectorAll('select[data-field]');
@@ -1691,20 +1650,14 @@ function collectParticipantsFromTable() {
       // Folder values are optional, don't count as "hasData"
     });
 
-    console.log('[Participants] Row', index, ':', participant, 'hasData:', hasData);
-
     // Only add participant if has at least a number or name
     if (hasData && (participant.numero || participant.nome)) {
       participants.push(participant);
-      console.log('[Participants] Added participant:', participant);
     }
   });
 
-  console.log('[Participants] Total collected participants:', participants.length);
-
   // Sort participants by number before returning
   const sortedParticipants = sortParticipantsByNumber(participants);
-  console.log('[Participants] Sorted participants by number');
 
   return sortedParticipants;
 }
@@ -1789,7 +1742,6 @@ async function previewCsvFile() {
     window.csvImportData = csvData;
 
   } catch (error) {
-    console.error('[Participants] Error previewing CSV:', error);
     showNotification('Error reading CSV file: ' + error.message, 'error');
     previewDiv.style.display = 'none';
     importBtn.disabled = true;
@@ -1859,8 +1811,6 @@ async function importCsvPreset() {
     importBtn.disabled = true;
     importBtn.innerHTML = '<span class="btn-icon">⏳</span>Importing...';
 
-    console.log('[Participants] Importing CSV preset:', presetName, 'with', window.csvImportData.length, 'participants');
-
     const response = await window.api.invoke('supabase-import-participants-from-csv', {
       csvData: window.csvImportData,
       presetName: presetName
@@ -1875,7 +1825,6 @@ async function importCsvPreset() {
     }
 
   } catch (error) {
-    console.error('[Participants] Error importing CSV:', error);
     showNotification('Error importing CSV: ' + error.message, 'error');
   } finally {
     // Re-enable import button
@@ -1947,7 +1896,6 @@ async function previewJsonFile() {
     importBtn.disabled = false;
 
   } catch (error) {
-    console.error('[Participants] Error previewing JSON:', error);
     showNotification('Error reading JSON file: ' + error.message, 'error');
     previewDiv.style.display = 'none';
     importBtn.disabled = true;
@@ -1970,8 +1918,6 @@ async function importJsonPreset() {
     const importBtn = document.getElementById('import-json-btn');
     importBtn.disabled = true;
     importBtn.innerHTML = '<span class="btn-icon">⏳</span>Importing...';
-
-    console.log('[Participants] Importing JSON preset:', presetData.name, 'with', presetData.participants.length, 'participants');
 
     // Map English field names to Italian (database format)
     const participants = presetData.participants.map(p => ({
@@ -2018,7 +1964,6 @@ async function importJsonPreset() {
     await loadParticipantPresets(); // Refresh list
 
   } catch (error) {
-    console.error('[Participants] Error importing JSON:', error);
     showNotification('Error importing JSON: ' + error.message, 'error');
   } finally {
     // Re-enable import button
@@ -2062,7 +2007,6 @@ async function usePreset(presetId) {
     }));
 
   } catch (error) {
-    console.error('[Participants] Error using preset:', error);
     showNotification('Error selecting preset', 'error');
   }
 }
@@ -2090,7 +2034,6 @@ function clearSelectedPreset() {
  */
 function navigateToParticipants() {
   // Simulate navigation (this would be handled by main navigation system)
-  console.log('[Participants] Navigate to participants section');
   showNotification('Participants management opened!', 'info');
 }
 
@@ -2204,7 +2147,6 @@ function formatDate(dateString) {
  * Show notification (placeholder - should use existing notification system)
  */
 function showNotification(message, type = 'info') {
-  console.log(`[Notification ${type.toUpperCase()}]`, message);
   // TODO: Integrate with existing notification system
   alert(`${type.toUpperCase()}: ${message}`);
 }
@@ -2305,15 +2247,8 @@ window.duplicateParticipantFromRow = duplicateParticipantFromRow;
 window.getSelectedPreset = getSelectedPreset;
 window.clearSelectedPreset = clearSelectedPreset;
 
-console.log('🔧 [DEBUG] Functions exported to window:', {
-  createNewPreset: window.createNewPreset,
-  openCsvImportModal: window.openCsvImportModal
-});
-
 // Initialize participants manager when DOM is ready
 document.addEventListener('DOMContentLoaded', function() {
-  console.log('[Participants] DOM loaded, initializing participants manager...');
-
   // Always initialize the participants manager so functions are available
   // even when accessed from other sections (like home page buttons)
   initParticipantsManager();
@@ -2322,7 +2257,6 @@ document.addEventListener('DOMContentLoaded', function() {
 // Initialize when navigating to participants section
 document.addEventListener('section-changed', function(event) {
   if (event.detail && event.detail.section === 'participants') {
-    console.log('[Participants] Section changed to participants, initializing...');
     initParticipantsManager();
   }
 });
@@ -2333,7 +2267,6 @@ const participantsSectionObserver = new MutationObserver(function(mutations) {
     if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
       const participantsSection = document.getElementById('section-participants');
       if (participantsSection && participantsSection.classList.contains('active-section')) {
-        console.log('[Participants] Participants section became active, initializing...');
         // Small delay to ensure DOM is ready
         setTimeout(() => {
           initParticipantsManager();
@@ -2347,7 +2280,6 @@ const participantsSectionObserver = new MutationObserver(function(mutations) {
 document.addEventListener('DOMContentLoaded', function() {
   const participantsSection = document.getElementById('section-participants');
   if (participantsSection) {
-    console.log('[Participants] Setting up section observer...');
     participantsSectionObserver.observe(participantsSection, {
       attributes: true,
       attributeFilter: ['class']
@@ -2356,7 +2288,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
   // Listen for CSV template saved event
   window.api.receive('csv-template-saved', (filePath) => {
-    console.log('[Participants] CSV template saved to:', filePath);
     showNotification('CSV template saved successfully', 'success');
   });
 });

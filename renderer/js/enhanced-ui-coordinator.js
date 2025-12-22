@@ -20,11 +20,9 @@ class EnhancedUICoordinator {
   }
   
   init() {
-    console.log('🚀 Enhanced UI Coordinator: Starting initialization...');
-    
     // Set up component loading monitoring
     this.monitorComponentLoading();
-    
+
     // Start coordinated initialization
     this.coordinateInitialization();
   }
@@ -41,8 +39,6 @@ class EnhancedUICoordinator {
   }
   
   startEnhancedUI() {
-    console.log('🎨 Enhanced UI Coordinator: Starting enhanced components...');
-    
     // Mark body as enhanced UI ready
     document.body.classList.add('enhanced-ui-loading');
     
@@ -62,7 +58,6 @@ class EnhancedUICoordinator {
           window.smartPresets = new SmartPresets();
         }
         this.components.smartPresets = true;
-        console.log('✅ Smart Presets initialized');
       }
     }, 150);
   }
@@ -77,18 +72,15 @@ class EnhancedUICoordinator {
           try {
             window.enhancedFileBrowser = new EnhancedFileBrowser();
             this.components.enhancedFileBrowser = true;
-            console.log('✅ Enhanced File Browser initialized');
           } catch (error) {
-            console.error('❌ Enhanced File Browser initialization failed:', error);
+            console.error('Enhanced File Browser initialization failed:', error);
             // Component failed to load, but app should continue working
             this.components.enhancedFileBrowser = false;
           }
         } else if (!analysisSection) {
-          console.log('⚠️ Enhanced File Browser skipped - analysis section not found');
           this.components.enhancedFileBrowser = false;
         }
       } else {
-        console.log('⚠️ Enhanced File Browser class not available');
         this.components.enhancedFileBrowser = false;
       }
     }, 500); // Increased timeout to avoid conflicts
@@ -102,7 +94,6 @@ class EnhancedUICoordinator {
           window.enhancedProgress = new EnhancedProgressTracker();
         }
         this.components.enhancedProgress = true;
-        console.log('✅ Enhanced Progress initialized');
       }
     }, 300);
   }
@@ -120,7 +111,6 @@ class EnhancedUICoordinator {
       // Timeout after 10 seconds
       if (Date.now() - this.initStartTime > 10000) {
         clearInterval(checkInterval);
-        console.warn('⚠️ Enhanced UI initialization timeout, proceeding anyway');
         this.completeInitialization();
       }
     }, 100);
@@ -129,9 +119,7 @@ class EnhancedUICoordinator {
   completeInitialization() {
     this.initialized = true;
     const initTime = Date.now() - this.initStartTime;
-    
-    console.log(`🎉 Enhanced UI Coordinator: All components initialized in ${initTime}ms`);
-    
+
     // Mark body as fully ready
     document.body.classList.remove('enhanced-ui-loading');
     document.body.classList.add('enhanced-ui-ready');
@@ -154,19 +142,12 @@ class EnhancedUICoordinator {
       mutations.forEach((mutation) => {
         mutation.addedNodes.forEach((node) => {
           if (node.nodeType === Node.ELEMENT_NODE && node.tagName === 'SCRIPT') {
-            const src = node.src || '';
-            if (src.includes('onboarding-wizard.js') ||
-                src.includes('smart-presets.js') ||
-                src.includes('enhanced-progress.js') ||
-                src.includes('modern-results.js') ||
-                src.includes('enhanced-file-browser.js')) {
-              console.log(`📦 Enhanced UI script loaded: ${src.split('/').pop()}`);
-            }
+            // Script loading monitoring - no logging needed
           }
         });
       });
     });
-    
+
     observer.observe(document.head, { childList: true });
   }
   

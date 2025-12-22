@@ -35,13 +35,8 @@ async function syncUserProjects(): Promise<void> {
   const authState = authService.getAuthState();
   if (authState.isAuthenticated && authState.user?.id) {
     try {
-      console.log('[Auth] Syncing user projects from Supabase...');
       await getProjectsOnline();
-      console.log('[Auth] Projects synced.');
-
-      console.log('[Auth] Caching categories and analytics data...');
       await cacheSupabaseData();
-      console.log('[Auth] Data cached.');
     } catch (error) {
       console.error('[Auth] Error syncing projects:', error);
     }
@@ -49,7 +44,6 @@ async function syncUserProjects(): Promise<void> {
 }
 
 export function registerAuthHandlers(): void {
-  console.log('[IPC] Registering auth handlers...');
 
   // ==================== App State ====================
 
@@ -58,19 +52,13 @@ export function registerAuthHandlers(): void {
   });
 
   ipcMain.handle('auth-is-admin', () => {
-    const isAdmin = authService.isAdmin();
-    console.log('[IPC] auth-is-admin:', isAdmin);
-    return isAdmin;
+    return authService.isAdmin();
   });
 
   // ==================== Auth Status ====================
 
   ipcMain.on('check-auth-status', async (event: IpcMainEvent) => {
     const authState = authService.getAuthState();
-    console.log('[Auth] Sending auth-status:', {
-      isAuthenticated: authState.isAuthenticated,
-      userEmail: authState.user?.email
-    });
     event.sender.send('auth-status', authState);
     await syncUserProjects();
   });
@@ -83,9 +71,7 @@ export function registerAuthHandlers(): void {
 
       // Wait for data sync BEFORE sending login-result
       if (result.success) {
-        console.log('[Auth] Syncing projects before completing login...');
         await syncUserProjects();
-        console.log('[Auth] Projects synced');
       }
 
       event.sender.send('login-result', result);
@@ -114,25 +100,19 @@ export function registerAuthHandlers(): void {
     try {
       userId = authService.getCurrentUserId();
       if (!userId) {
-        console.log('[Auth] No user ID, basic logout');
         const result = await authService.logout();
         event.sender.send('logout-result', result);
         return;
       }
 
-      console.log(`[Auth] Starting logout for user: ${userId}`);
-
       // Get data stats
       const stats = await getUserDataStats(userId);
-      console.log(`[Auth] Data to sync: ${stats.projectsCount} projects, ${stats.executionsCount} executions`);
 
       // Save current CSV to Supabase
       const currentCsvData = getGlobalCsvData();
       if (currentCsvData && currentCsvData.length > 0) {
         try {
-          console.log(`[Auth] Saving CSV (${currentCsvData.length} entries)...`);
           await saveCsvToSupabase(currentCsvData, `logout_backup_${Date.now()}.csv`);
-          console.log('[Auth] CSV saved');
         } catch (csvError) {
           console.error('[Auth] Error saving CSV:', csvError);
         }
@@ -141,9 +121,7 @@ export function registerAuthHandlers(): void {
       // Sync all user data
       if (authService.isAuthenticated() && authService.isOnline()) {
         try {
-          console.log('[Auth] Syncing data to Supabase...');
           await syncAllUserDataToSupabase(userId);
-          console.log('[Auth] Data synced');
         } catch (syncError) {
           console.error('[Auth] Sync error:', syncError);
 
@@ -160,7 +138,6 @@ export function registerAuthHandlers(): void {
             });
 
             if (response.response === 0) {
-              console.log('[Auth] Logout cancelled by user');
               event.sender.send('logout-result', { success: false, error: 'Logout cancelled by user' });
               return;
             }
@@ -173,14 +150,12 @@ export function registerAuthHandlers(): void {
 
       // Clear local data
       if (userId) {
-        console.log('[Auth] Clearing local data...');
         await clearAllUserData(userId);
       }
 
       // Clear global variables
       csvData = [];
       setGlobalCsvData([]);
-      console.log('[Auth] Global variables cleared');
 
       // Cleanup temp files
       try {
@@ -191,7 +166,6 @@ export function registerAuthHandlers(): void {
           await Promise.all(
             files.map(file => fsPromises.unlink(path.join(thumbnailDir, file)).catch(() => {}))
           );
-          console.log('[Auth] Temp files cleaned');
         } catch {
           // Directory doesn't exist
         }
@@ -199,7 +173,6 @@ export function registerAuthHandlers(): void {
         console.error('[Auth] Error cleaning temp files:', tempError);
       }
 
-      console.log('[Auth] Logout completed');
       event.sender.send('logout-result', result);
 
     } catch (error: any) {
@@ -219,8 +192,6 @@ export function registerAuthHandlers(): void {
 
   ipcMain.on('restore-csv-data', (event: IpcMainEvent, data: any) => {
     try {
-      console.log(`[Auth] Restoring CSV: ${data.csvData.length} entries`);
-
       csvData = data.csvData;
       setGlobalCsvData(data.csvData);
 
@@ -229,8 +200,6 @@ export function registerAuthHandlers(): void {
         entries: data.csvData.length,
         message: `CSV ripristinato (${data.csvData.length} entries)`
       });
-
-      console.log('[Auth] CSV restored');
     } catch (error) {
       console.error('[Auth] Error restoring CSV:', error);
     }
@@ -249,17 +218,13 @@ export function registerAuthHandlers(): void {
 
   ipcMain.on('force-token-refresh', async (event: IpcMainEvent) => {
     try {
-      console.log('[Auth] Force token refresh...');
       const tokenInfo = await authService.forceTokenInfoRefresh();
 
       event.sender.send('token-balance', tokenInfo.balance);
       event.sender.send('pending-tokens', tokenInfo.pending);
 
-      console.log('[Auth] Refreshing sport categories...');
       await getSportCategories();
       event.sender.send('categories-updated');
-
-      console.log('[Auth] Token refresh completed');
     } catch (error: any) {
       console.error('[Auth] Token refresh failed:', error);
       event.sender.send('auth-error', { message: 'Failed to refresh tokens' });
@@ -296,7 +261,6 @@ export function registerAuthHandlers(): void {
   // ==================== Auth Refresh ====================
 
   ipcMain.on('auth-refresh-completed-from-renderer', async () => {
-    console.log('[Auth] Refresh completed - reloading data...');
     await syncUserProjects();
   });
 
@@ -317,8 +281,6 @@ export function registerAuthHandlers(): void {
       return { success: false, name: 'Photographer' };
     }
   });
-
-  console.log('[IPC] Auth handlers registered (18 handlers)');
 }
 
 // Export for use in other modules

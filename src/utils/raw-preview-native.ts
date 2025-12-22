@@ -82,11 +82,10 @@ export class RawPreviewExtractor {
       // Tenta di importare la libreria nativa
       const nativeLib = await import('raw-preview-extractor');
       this.nativeLibraryAvailable = true;
-      console.log('[RawPreviewExtractor] ✅ Native library available and enabled');
+      // Native library available
     } catch (error: any) {
       this.nativeLibraryAvailable = false;
-      console.log('[RawPreviewExtractor] ⚠️ Native library not available, using dcraw fallback only');
-      console.log(`[RawPreviewExtractor] Native library error: ${error.message}`);
+      // Native library not available, using dcraw fallback only
     }
   }
 
@@ -109,8 +108,6 @@ export class RawPreviewExtractor {
       useNativeLibrary: options.useNativeLibrary !== false       // default true
     };
 
-    console.log(`[RawPreviewExtractor] Extracting preview: ${path.basename(filePath)}`);
-    console.log(`[RawPreviewExtractor] Native available: ${this.nativeLibraryAvailable}, Enabled: ${opts.useNativeLibrary}`);
 
     try {
       // Strategia 1: Libreria nativa (se disponibile e abilitata)
@@ -128,8 +125,7 @@ export class RawPreviewExtractor {
             };
           }
         } catch (nativeError: any) {
-          console.log(`[RawPreviewExtractor] Native library failed: ${nativeError.message}`);
-          console.log('[RawPreviewExtractor] Falling back to dcraw...');
+          // Native library failed, falling back to dcraw
         }
       }
 
@@ -164,7 +160,6 @@ export class RawPreviewExtractor {
    */
   private async extractWithNativeLibrary(filePath: string, options: Required<NativePreviewOptions>): Promise<NativePreviewResult> {
     try {
-      console.log('[RawPreviewExtractor] Attempting native library extraction...');
 
       const nativeLib = await import('raw-preview-extractor');
 
@@ -183,8 +178,6 @@ export class RawPreviewExtractor {
       const result = await nativeLib.extractPreview(filePath, extractOptions);
 
       if (result.success && result.preview) {
-        console.log(`[RawPreviewExtractor] ✅ Native extraction successful: ${result.preview.data.length} bytes`);
-
         return {
           success: true,
           data: result.preview.data,
@@ -201,7 +194,6 @@ export class RawPreviewExtractor {
         };
       }
 
-      console.log(`[RawPreviewExtractor] ❌ Native extraction failed: ${result.error || 'Unknown error'}`);
       return {
         success: false,
         error: result.error || 'Native preview extraction failed'
@@ -221,7 +213,6 @@ export class RawPreviewExtractor {
    */
   private async extractWithDcrawFallback(filePath: string, options: Required<NativePreviewOptions>): Promise<NativePreviewResult> {
     try {
-      console.log('[RawPreviewExtractor] Using ExifTool fallback for:', path.basename(filePath));
 
       // Verifica che il file esista
       if (!fs.existsSync(filePath)) {
@@ -278,7 +269,6 @@ export class RawPreviewExtractor {
 
         // Usa ExifTool per estrarre la preview JPEG embedded
         const command = `${exiftoolPath} -b -PreviewImage "${filePath}" > "${tempOutputPath}"`;
-        console.log(`[RawPreviewExtractor] Executing ExifTool command`);
 
         const timeoutPromise = new Promise<never>((_, reject) => {
           setTimeout(() => reject(new Error('ExifTool timeout after 30 seconds')), 30000);
@@ -313,10 +303,8 @@ export class RawPreviewExtractor {
         try {
           await fsPromises.unlink(tempOutputPath);
         } catch (cleanupError) {
-          console.log('[RawPreviewExtractor] Warning: Could not cleanup temp file:', tempOutputPath);
+          // Could not cleanup temp file - non-critical
         }
-
-        console.log(`[RawPreviewExtractor] ✅ ExifTool extraction successful: ${thumbnailData.length} bytes`);
 
         return {
           success: true,
@@ -422,11 +410,9 @@ export class RawPreviewExtractor {
     const nativeResults: number[] = [];
     const dcrawResults: number[] = [];
 
-    console.log(`[RawPreviewExtractor] Running benchmark with ${testFiles.length} files, ${iterations} iterations each`);
 
     for (const file of testFiles) {
       if (!fs.existsSync(file)) {
-        console.log(`[RawPreviewExtractor] Skipping missing file: ${file}`);
         continue;
       }
 
@@ -454,11 +440,6 @@ export class RawPreviewExtractor {
       dcrawResults.reduce((a, b) => a + b, 0) / dcrawResults.length : 0;
 
     const speedup = nativeAverage > 0 ? dcrawAverage / nativeAverage : 0;
-
-    console.log(`[RawPreviewExtractor] Benchmark results:`);
-    console.log(`  Native average: ${nativeAverage.toFixed(1)}ms`);
-    console.log(`  Dcraw average: ${dcrawAverage.toFixed(1)}ms`);
-    console.log(`  Speedup: ${speedup.toFixed(1)}x`);
 
     return {
       nativeResults,

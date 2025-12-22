@@ -18,20 +18,17 @@ class FolderOrganizationManager {
    */
   async initialize() {
     if (this.initialized) return;
-    
-    console.log('[Folder Organization] Initializing folder organization system...');
-    
+
     // Check if user has access and feature is available
     await this.checkAccessStatus();
-    
+
     // Setup UI elements
     this.setupUI();
-    
+
     // Setup event listeners
     this.setupEventListeners();
-    
+
     this.initialized = true;
-    console.log('[Folder Organization] Folder organization system initialized');
   }
 
   /**
@@ -42,9 +39,7 @@ class FolderOrganizationManager {
       // Folder organization is now always available as a main feature
       this.folderOrgEnabled = true;
       this.hasAccess = true;
-      
-      console.log(`[Folder Organization] Folder organization available: ${this.folderOrgEnabled}`);
-      
+
       document.body.classList.add('folder-org-user');
       this.showFolderOrgFeatures();
       
@@ -52,7 +47,6 @@ class FolderOrganizationManager {
       try {
         this.folderOrgConfig = await window.api.invoke('get-folder-organization-config');
       } catch (configError) {
-        console.log('[Folder Organization] Using default config');
         this.folderOrgConfig = {
           enabled: false,
           mode: 'copy',
@@ -63,8 +57,6 @@ class FolderOrganizationManager {
           includeXmpFiles: true
         };
       }
-      
-      console.log('[Folder Organization] Loaded folder organization config:', this.folderOrgConfig);
     } catch (error) {
       console.error('[Folder Organization] Error checking access status:', error);
       // Even if there's an error, make folder organization available as it's now a main feature
@@ -81,7 +73,6 @@ class FolderOrganizationManager {
     const folderOrgSection = document.getElementById('folder-organization-section');
     if (folderOrgSection) {
       folderOrgSection.style.display = 'block';
-      console.log('[Folder Organization] Showing folder organization section');
     }
   }
 
@@ -157,16 +148,12 @@ class FolderOrganizationManager {
         this.handleConflictStrategyChange(e.target.value);
       });
     });
-
-    console.log('[Folder Organization] Event listeners setup complete');
   }
 
   /**
    * Toggle folder organization feature
    */
   toggleFolderOrganization(enabled) {
-    console.log(`[Folder Organization] Folder organization ${enabled ? 'enabled' : 'disabled'}`);
-    
     const folderOrgOptions = document.getElementById('folder-organization-options');
     if (folderOrgOptions) {
       folderOrgOptions.style.display = enabled ? 'block' : 'none';
@@ -182,8 +169,6 @@ class FolderOrganizationManager {
    * Handle folder naming pattern changes
    */
   handlePatternChange(pattern) {
-    console.log(`[Folder Organization] Pattern changed to: ${pattern}`);
-    
     const customPatternContainer = document.getElementById('custom-pattern-container');
     if (customPatternContainer) {
       customPatternContainer.style.display = pattern === 'custom' ? 'block' : 'none';
@@ -199,8 +184,6 @@ class FolderOrganizationManager {
    * Update custom pattern
    */
   updateCustomPattern(pattern) {
-    console.log(`[Folder Organization] Custom pattern updated: ${pattern}`);
-    
     if (this.folderOrgConfig) {
       this.folderOrgConfig.customPattern = pattern || '{number}';
     }
@@ -210,8 +193,6 @@ class FolderOrganizationManager {
    * Handle operation mode changes (copy/move)
    */
   handleModeChange(mode) {
-    console.log(`[Folder Organization] Operation mode changed to: ${mode}`);
-    
     // Show warning for move mode
     if (mode === 'move') {
       this.showMoveWarning();
@@ -249,8 +230,6 @@ class FolderOrganizationManager {
    * Handle conflict strategy changes
    */
   handleConflictStrategyChange(strategy) {
-    console.log(`[Folder Organization] Conflict strategy changed to: ${strategy}`);
-
     // Show warning for overwrite mode
     if (strategy === 'overwrite') {
       const confirmed = confirm(
@@ -275,8 +254,6 @@ class FolderOrganizationManager {
    * Toggle custom destination folder controls
    */
   toggleCustomDestination(enabled) {
-    console.log(`[Folder Organization] Custom destination ${enabled ? 'enabled' : 'disabled'}`);
-
     const customDestControls = document.getElementById('custom-destination-controls');
     if (customDestControls) {
       customDestControls.style.display = enabled ? 'block' : 'none';
@@ -303,10 +280,7 @@ class FolderOrganizationManager {
         const pathInput = document.getElementById('custom-destination-path');
         if (pathInput) {
           pathInput.value = selectedPath;
-          console.log(`[Folder Organization] Destination folder selected: ${selectedPath}`);
         }
-      } else {
-        console.log('[Folder Organization] Folder selection cancelled');
       }
     } catch (error) {
       console.error('[Folder Organization] Error selecting destination folder:', error);
@@ -372,11 +346,7 @@ class FolderOrganizationManager {
    * Show access status in console (for debugging)
    */
   logAccessStatus() {
-    console.log('[Folder Organization] Access Status:', {
-      hasAccess: this.hasAccess,
-      folderOrgEnabled: this.folderOrgEnabled,
-      config: this.folderOrgConfig
-    });
+    // Intentionally empty - for debugging only
   }
 }
 
@@ -396,7 +366,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Integration with auth system - reinitialize when auth state changes
 document.addEventListener('auth-state-changed', () => {
-  console.log('[Folder Organization] Auth state changed, reinitializing folder organization...');
   window.folderOrganization.initialized = false;
   window.folderOrganization.initialize();
 });

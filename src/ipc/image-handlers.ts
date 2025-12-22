@@ -22,7 +22,6 @@ const RAW_EXTENSIONS = ['.nef', '.arw', '.cr2', '.cr3', '.orf', '.raw', '.rw2', 
 const STANDARD_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp'];
 
 export function registerImageHandlers(): void {
-  console.log('[IPC] Registering image handlers...');
 
   // ==================== THUMBNAIL GENERATION ====================
 
@@ -36,8 +35,6 @@ export function registerImageHandlers(): void {
       const isRaw = RAW_EXTENSIONS.includes(ext);
 
       if (isRaw) {
-        console.log(`[IPC] Generating thumbnail for RAW file: ${path.basename(filePath)}`);
-
         try {
           const baseFileName = path.basename(filePath, path.extname(filePath));
           const thumbnailDir = path.join(os.tmpdir(), 'racetagger-thumbnails');
@@ -50,7 +47,6 @@ export function registerImageHandlers(): void {
 
           // Check cache
           if (fs.existsSync(thumbnailPath)) {
-            console.log(`[IPC] Using cached thumbnail: ${thumbnailPath}`);
             return `file://${thumbnailPath}`;
           }
 
@@ -59,7 +55,6 @@ export function registerImageHandlers(): void {
           const generatedThumbPath = await rawConverter.extractThumbnailFromRaw(filePath, thumbnailPath);
 
           if (fs.existsSync(generatedThumbPath)) {
-            console.log(`[IPC] Generated RAW thumbnail: ${generatedThumbPath}`);
             return `file://${generatedThumbPath}`;
           }
 
@@ -83,8 +78,6 @@ export function registerImageHandlers(): void {
 
   ipcMain.handle('get-halfsize-image', async (_, imagePath: string) => {
     try {
-      console.log(`[IPC] get-halfsize-image called with: ${imagePath}`);
-
       if (!imagePath) {
         return null;
       }
@@ -111,9 +104,6 @@ export function registerImageHandlers(): void {
 
       // For RAW files: Generate halfsize thumbnail using dcraw -h
       if (isRaw && fs.existsSync(imagePath)) {
-        const fileName = path.basename(imagePath);
-        console.log(`[IPC] Generating halfsize RAW preview for: ${fileName}`);
-
         try {
           const dcrawCommand = `dcraw -h -w -c "${imagePath}"`;
           const result = await execPromise(dcrawCommand, { maxBuffer: 10 * 1024 * 1024, encoding: 'buffer' });
@@ -125,7 +115,7 @@ export function registerImageHandlers(): void {
           }
           return null;
         } catch (dcrawError) {
-          console.error(`[IPC] dcraw halfsize generation failed for ${fileName}:`, dcrawError);
+          console.error(`[IPC] dcraw halfsize generation failed for ${path.basename(imagePath)}:`, dcrawError);
           return null;
         }
       }
@@ -141,8 +131,6 @@ export function registerImageHandlers(): void {
 
   ipcMain.handle('get-supabase-image-url', async (_, fileName: string) => {
     try {
-      console.log(`[IPC] Looking for Supabase URL for: ${fileName}`);
-
       const supabaseImageUrlCache = getSupabaseImageUrlCache();
 
       // Check cache first
@@ -239,7 +227,6 @@ export function registerImageHandlers(): void {
 
       // Fallback to Supabase if local file not found
       const fileName = path.basename(imagePath);
-      console.log(`[IPC] Local file not found, checking Supabase for: ${fileName}`);
 
       const authState = authService.getAuthState();
       if (!authState.isAuthenticated) {
@@ -314,6 +301,4 @@ export function registerImageHandlers(): void {
       return null;
     }
   });
-
-  console.log('[IPC] Image handlers registered (5 handlers)');
 }

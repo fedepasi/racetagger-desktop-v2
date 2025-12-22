@@ -15,10 +15,9 @@ try {
       options.maxMemoryUsageInMB = 1024;
       return originalDecode(jpegData, options);
     };
-    console.log('[ImageProcessor] Configured global jpeg-js memory limit to 1024MB');
   }
 } catch (error) {
-  console.warn('[ImageProcessor] Could not configure global jpeg-js memory limit:', error);
+  // Silently ignore - jpeg-js configuration is optional
 }
 
 // Interfaccia unificata per entrambi i sistemi
@@ -55,17 +54,14 @@ class JimpProcessor implements ImageProcessor {
       if (!this.jimp.read && this.jimp.Jimp) {
         this.jimp = this.jimp.Jimp;
       }
-      
+
       // Configura il limite di memoria per jpeg-js (libreria sottostante usata da Jimp)
       this.configureJpegJsMemoryLimit();
-      
+
       // Aumenta il limite di memoria globalmente per tutte le operazioni Jimp
       if (this.jimp.limit) {
         this.jimp.limit.maxMemoryUsageInMB = 1024;
-        console.log('[JimpProcessor] Set global Jimp memory limit to 1024MB');
       }
-      
-      console.log('[JimpProcessor] Jimp module loaded, methods available:', Object.getOwnPropertyNames(this.jimp));
     } catch (error) {
       console.error('[JimpProcessor] Jimp import failed:', error);
       throw new Error('Jimp not available');
@@ -89,20 +85,16 @@ class JimpProcessor implements ImageProcessor {
           options.maxMemoryUsageInMB = options.maxMemoryUsageInMB || 1024;
           return originalDecode(jpegData, options);
         };
-        console.log('[JimpProcessor] Configured jpeg-js memory limit to 1024MB');
       }
     } catch (error) {
-      console.warn('[JimpProcessor] Could not configure jpeg-js memory limit:', error);
+      // Silently ignore - jpeg-js configuration is optional
     }
   }
 
   private async initializeJimp(input: string | Buffer) {
     try {
-      console.log('[JimpProcessor] Initializing Jimp with new API...');
-      
       // Nuova API di Jimp: usare Jimp.read() per file/buffer
       if (typeof input === 'string') {
-        console.log(`[JimpProcessor] Reading image from file: ${input}`);
         // Check if it's a file path or buffer
         if (input.startsWith('/') || input.startsWith('C:\\') || input.includes(':\\')) {
           this.jimpInstance = await this.jimp.read(input);
@@ -111,7 +103,6 @@ class JimpProcessor implements ImageProcessor {
           this.jimpInstance = await this.jimp.read(Buffer.from(input));
         }
       } else if (Buffer.isBuffer(input)) {
-        console.log('[JimpProcessor] Reading image from buffer');
         // Try both methods for compatibility
         if (this.jimp.fromBuffer) {
           this.jimpInstance = await this.jimp.fromBuffer(input);
@@ -121,15 +112,12 @@ class JimpProcessor implements ImageProcessor {
       } else {
         throw new Error('Invalid input type for Jimp');
       }
-      
-      console.log(`[JimpProcessor] Successfully initialized Jimp instance (${this.jimpInstance.width}x${this.jimpInstance.height})`);
-      
+
     } catch (error) {
       console.error('[JimpProcessor] Failed to initialize:', error);
-      
+
       // Se fallisce con errore di memoria, prova con una strategia alternativa
       if (error instanceof Error && error.message && error.message.includes('maxMemoryUsageInMB limit exceeded')) {
-        console.log('[JimpProcessor] Memory limit exceeded, increasing limit and retrying...');
         // Try to increase the limit even more
         try {
           const jpegJs = require('jpeg-js');
@@ -146,14 +134,13 @@ class JimpProcessor implements ImageProcessor {
           } else if (Buffer.isBuffer(input)) {
             this.jimpInstance = await this.jimp.read(input);
           }
-          console.log('[JimpProcessor] Retry with increased memory limit successful');
           return;
         } catch (retryError) {
           console.error('[JimpProcessor] Retry also failed:', retryError);
           throw new Error('Image too large for processing - consider using a smaller image or different format');
         }
       }
-      
+
       throw error;
     }
   }
@@ -188,44 +175,32 @@ class JimpProcessor implements ImageProcessor {
     if (!this.jimpInstance) {
       await this.initializeJimp(this.input);
     }
-    
+
     // Applica rotazione se specificata o automatica basata su EXIF
     if (this.rotationAngle !== undefined) {
-      if (this.rotationAngle === undefined || this.rotationAngle === 0) {
-        // Auto-rotazione basata su EXIF quando nessun angolo è specificato
-        // Jimp non ha auto-rotate EXIF built-in, ma legge l'orientamento automaticamente
-        console.log('[JimpProcessor] Auto-rotation based on EXIF (handled by Jimp automatically)');
-      } else {
+      if (this.rotationAngle !== undefined && this.rotationAngle !== 0) {
         // Rotazione manuale
         this.jimpInstance.rotate(this.rotationAngle);
-        console.log(`[JimpProcessor] Applied manual rotation: ${this.rotationAngle} degrees`);
       }
     }
-    
+
     // Applica resize se specificato
     if (this.resizeOptions) {
       const { width, height, options } = this.resizeOptions;
       if (options?.fit === 'inside' || options?.withoutEnlargement) {
         // Nuova API: usa scaleToFit con oggetto parametri
         this.jimpInstance.scaleToFit({ w: width, h: height });
-        console.log(`[JimpProcessor] Applied scaleToFit to ${width}x${height}`);
       } else {
         // Nuova API: resize con oggetto parametri
         this.jimpInstance.resize({ w: width, h: height });
-        console.log(`[JimpProcessor] Applied resize to ${width}x${height}`);
       }
     }
-    
+
     // Nuova API di Jimp: getBuffer con mime type e opzioni per qualità
     try {
-      console.log('[JimpProcessor] Converting to buffer...');
-      
       const options = this.jpegOptions?.quality ? { quality: this.jpegOptions.quality } : {};
       const buffer = await this.jimpInstance.getBuffer("image/jpeg", options);
-      
-      console.log(`[JimpProcessor] Buffer created successfully: ${buffer.length} bytes`);
       return buffer;
-      
     } catch (error) {
       console.error('[JimpProcessor] Failed to get buffer:', error);
       throw error;
@@ -236,7 +211,7 @@ class JimpProcessor implements ImageProcessor {
     if (!this.jimpInstance) {
       await this.initializeJimp(this.input);
     }
-    
+
     // Nuova API di Jimp: usa proprietà width e height direttamente
     return {
       width: this.jimpInstance.width || 0,
@@ -296,7 +271,6 @@ class SharpProcessor implements ImageProcessor {
  */
 async function testSharp(sharp: any): Promise<boolean> {
   try {
-    safeLog('info', '[ImageProcessor] Testing Sharp functionality...');
     // Minimal valid JPEG buffer (1x1 pixel)
     const testBuffer = Buffer.from([
       0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01,
@@ -329,37 +303,14 @@ async function testSharp(sharp: any): Promise<boolean> {
       0xFF, 0xDA, 0x00, 0x0C, 0x03, 0x01, 0x00, 0x02, 0x11, 0x03, 0x11, 0x00,
       0x3F, 0x00, 0xAA, 0xFF, 0xD9
     ]);
-    
+
     const instance = sharp(testBuffer);
-    safeLog('info', '[ImageProcessor] Sharp instance created, testing metadata...');
     await instance.metadata();
-    safeLog('info', '[ImageProcessor] Metadata test passed, testing resize...');
     await instance.resize(10, 10).jpeg({ quality: 80 }).toBuffer();
-    
-    safeLog('success', '[ImageProcessor] Sharp test passed - Sharp is working!');
+
     return true;
   } catch (error) {
-    safeLog('error', `[ImageProcessor] Sharp test failed: ${(error as Error).message}`);
-    safeLog('error', `[ImageProcessor] Sharp test error stack: ${(error as Error).stack}`);
     return false;
-  }
-}
-
-/**
- * Safe logging function that works in both main and renderer processes
- */
-function safeLog(level: string, message: string) {
-  // Standard console logging
-  console.log(message);
-  
-  // Try to send to renderer via IPC if available
-  try {
-    const global = (globalThis as any);
-    if (global.sendSharpLogToRenderer && typeof global.sendSharpLogToRenderer === 'function') {
-      global.sendSharpLogToRenderer(level, message);
-    }
-  } catch (error) {
-    // Silently ignore IPC errors - we still have console logging
   }
 }
 
@@ -369,69 +320,20 @@ function safeLog(level: string, message: string) {
 export function debugSharp(): void {
   try {
     const { app } = require('electron');
-    
-    console.log('=== SHARP DEBUG INFO ===');
-    console.log('App path:', app.getAppPath());
-    console.log('Is packaged:', app.isPackaged);
-    console.log('Platform:', process.platform);
-    console.log('Architecture:', process.arch);
-    console.log('__dirname:', __dirname);
-    console.log('process.resourcesPath:', process.resourcesPath);
-    
-    // Verifica percorsi
     const path = require('path');
     const fs = require('fs');
+
     const unpackedPath = app.getAppPath().replace('app.asar', 'app.asar.unpacked');
     const sharpPath = path.join(unpackedPath, 'node_modules', 'sharp');
-    
-    console.log('Unpacked path:', unpackedPath);
-    console.log('Sharp path:', sharpPath);
-    console.log('Sharp path exists:', fs.existsSync(sharpPath));
-    
-    if (fs.existsSync(sharpPath)) {
-      const buildPath = path.join(sharpPath, 'build', 'Release');
-      const vendorPath = path.join(sharpPath, 'vendor');
-      
-      console.log('Build path exists:', fs.existsSync(buildPath));
-      if (fs.existsSync(buildPath)) {
-        console.log('Build files:', fs.readdirSync(buildPath));
-      }
-      
-      console.log('Vendor path exists:', fs.existsSync(vendorPath));
-      if (fs.existsSync(vendorPath)) {
-        console.log('Vendor files:', fs.readdirSync(vendorPath));
-      }
-      
-      // Controlla i binari @img
-      const imgPath = path.join(unpackedPath, 'node_modules', '@img');
-      if (fs.existsSync(imgPath)) {
-        console.log('IMG modules:', fs.readdirSync(imgPath));
-        
-        const darwinArm64Path = path.join(imgPath, 'sharp-darwin-arm64');
-        if (fs.existsSync(darwinArm64Path)) {
-          console.log('Darwin ARM64 contents:', fs.readdirSync(darwinArm64Path));
-          
-          const libPath = path.join(darwinArm64Path, 'lib');
-          if (fs.existsSync(libPath)) {
-            console.log('Lib contents:', fs.readdirSync(libPath));
-          }
-        }
-      }
-    }
-    
+
     // Test caricamento
     try {
       const sharp = require(sharpPath);
-      console.log('✅ Sharp loaded successfully');
-      if (sharp.versions) {
-        console.log('Sharp versions:', sharp.versions);
-      }
     } catch (error) {
-      console.error('❌ Sharp loading failed:', (error as Error).message);
-      console.error('Stack:', (error as Error).stack);
+      console.error('[ImageProcessor] Sharp loading failed:', (error as Error).message);
     }
   } catch (error) {
-    console.error('Debug function failed:', (error as Error).message);
+    console.error('[ImageProcessor] Debug function failed:', (error as Error).message);
   }
 }
 
@@ -441,36 +343,28 @@ export function debugSharp(): void {
 export async function createImageProcessor(input: string | Buffer): Promise<ImageProcessor> {
   // Check if we should force Jimp for stability
   const forceJimp = process.env.FORCE_JIMP_FALLBACK === 'true';
-  
-  if (forceJimp) {
-    safeLog('info', '[ImageProcessor] FORCE_JIMP_FALLBACK enabled, skipping Sharp');
-  } else {
+
+  if (!forceJimp) {
     // Prova prima Sharp
     try {
-      safeLog('info', '[ImageProcessor] Starting Sharp loading process...');
-      
       // Determina se siamo in un'app pacchettizzata
       const { app } = require('electron');
       const isPackaged = app?.isPackaged || false;
-      safeLog('info', `[ImageProcessor] App is packaged: ${isPackaged}`);
-      
+
       let sharp: any;
       if (isPackaged) {
       // In produzione, Sharp è in app.asar.unpacked
       const path = require('path');
       const fs = require('fs');
-      
+
       const unpackedPath = path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules');
       const sharpPath = path.join(unpackedPath, 'sharp');
-      
-      safeLog('info', `[ImageProcessor] Loading Sharp from packaged path: ${sharpPath}`);
-      safeLog('info', `[ImageProcessor] Unpacked modules path: ${unpackedPath}`);
-      
+
       // Verifica che Sharp esista
       if (!fs.existsSync(sharpPath)) {
         throw new Error(`Sharp not found at ${sharpPath}`);
       }
-      
+
       // Verifica che i binari nativi esistano
       const darwinArm64Path = path.join(unpackedPath, '@img', 'sharp-darwin-arm64');
       const binaryPath = path.join(darwinArm64Path, 'lib', 'sharp-darwin-arm64.node');
@@ -484,12 +378,8 @@ export async function createImageProcessor(input: string | Buffer): Promise<Imag
         const libvipsFile = files.find((f: string) => f.startsWith('libvips-cpp.') && f.endsWith('.dylib'));
         if (libvipsFile) {
           libvipsPath = path.join(libvipsDir, libvipsFile);
-          safeLog('info', `[ImageProcessor] Found libvips: ${libvipsFile}`);
         }
       }
-
-      safeLog('info', `[ImageProcessor] Checking for native binary at: ${binaryPath}`);
-      safeLog('info', `[ImageProcessor] Checking for libvips at: ${libvipsPath || 'NOT FOUND'}`);
 
       if (!fs.existsSync(binaryPath)) {
         throw new Error(`Sharp native binary not found at ${binaryPath}`);
@@ -498,140 +388,92 @@ export async function createImageProcessor(input: string | Buffer): Promise<Imag
       if (!libvipsPath || !fs.existsSync(libvipsPath)) {
         throw new Error(`Sharp libvips not found in: ${libvipsDir}`);
       }
-      
+
       // Crea il symlink mancante per sharp.node se non esiste
       const symlinkPath = path.join(darwinArm64Path, 'sharp.node');
       if (!fs.existsSync(symlinkPath)) {
         try {
-          safeLog('info', `[ImageProcessor] Creating symlink from ${binaryPath} to ${symlinkPath}`);
           fs.symlinkSync('./lib/sharp-darwin-arm64.node', symlinkPath);
-          safeLog('success', '[ImageProcessor] Symlink created successfully');
         } catch (symlinkError: any) {
-          safeLog('warn', `[ImageProcessor] Could not create symlink: ${symlinkError.message}, trying copy instead`);
           try {
             fs.copyFileSync(binaryPath, symlinkPath);
-            safeLog('success', '[ImageProcessor] Binary copied successfully');
           } catch (copyError: any) {
-            safeLog('error', `[ImageProcessor] Could not copy binary: ${copyError.message}`);
+            // Silently continue - may still work
           }
         }
       }
-      
-      // Verifica se esiste un file di configurazione creato dallo script post-build
-      const configPath = path.join(process.resourcesPath, 'app.asar.unpacked', 'sharp-config.json');
-      if (fs.existsSync(configPath)) {
-        try {
-          const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-          safeLog('info', `[ImageProcessor] Found Sharp config: verified=${config.verified}, timestamp=${config.timestamp}`);
-          if (!config.verified) {
-            safeLog('warn', '[ImageProcessor] Sharp config indicates potential issues');
-          }
-        } catch (configError) {
-          safeLog('warn', `[ImageProcessor] Could not read Sharp config: ${configError}`);
-        }
-      }
-      
+
       // Configura l'ambiente per Sharp con impostazioni ottimizzate per produzione
-      safeLog('info', '[ImageProcessor] Setting Sharp environment variables for production');
       process.env.SHARP_IGNORE_GLOBAL_LIBVIPS = '1';
       process.env.SHARP_FORCE_GLOBAL_LIBVIPS = '0';
       process.env.SHARP_VENDOR_LIBVIPS_PATH = path.join(unpackedPath, '@img', 'sharp-libvips-darwin-arm64', 'lib');
       process.env.SHARP_VENDOR_PATH = path.join(unpackedPath, '@img', 'sharp-darwin-arm64', 'lib');
-      
+
       // Su macOS, configura i percorsi delle librerie dinamiche
       if (process.platform === 'darwin') {
         const vendorPath = path.join(sharpPath, 'vendor');
         const libPath = path.join(vendorPath, 'lib');
         const imgLibPath = path.join(darwinArm64Path, 'lib');
-        
+
         // Configura DYLD_LIBRARY_PATH con tutti i percorsi necessari
         const libraryPaths = [libPath, imgLibPath, vendorPath].filter(p => fs.existsSync(p));
         if (libraryPaths.length > 0) {
           process.env.DYLD_LIBRARY_PATH = libraryPaths.join(':');
-          safeLog('info', `[ImageProcessor] Set DYLD_LIBRARY_PATH to: ${process.env.DYLD_LIBRARY_PATH}`);
-        }
-        
-        // Verifica che le librerie .dylib esistano
-        if (fs.existsSync(libPath)) {
-          const dylibFiles = fs.readdirSync(libPath).filter((f: string) => f.endsWith('.dylib'));
-          safeLog('info', `[ImageProcessor] Found ${dylibFiles.length} .dylib files in vendor/lib: ${dylibFiles.join(', ')}`);
-        }
-        if (fs.existsSync(imgLibPath)) {
-          const imgDylibFiles = fs.readdirSync(imgLibPath).filter((f: string) => f.endsWith('.dylib'));
-          safeLog('info', `[ImageProcessor] Found ${imgDylibFiles.length} .dylib files in @img/sharp-darwin-arm64/lib: ${imgDylibFiles.join(', ')}`);
         }
       }
-      
+
       // Cambia temporaneamente la directory di lavoro per aiutare la risoluzione dei moduli
       const originalCwd = process.cwd();
       try {
         process.chdir(path.join(process.resourcesPath, 'app.asar.unpacked'));
-        safeLog('info', `[ImageProcessor] Changed working directory to: ${process.cwd()}`);
-        
+
         // Pulisce la cache dei require per Sharp
         const sharpCacheKey = require.resolve(sharpPath);
         if (require.cache[sharpCacheKey]) {
           delete require.cache[sharpCacheKey];
-          safeLog('info', '[ImageProcessor] Cleared Sharp from require cache');
         }
-        
+
         // Carica Sharp
         sharp = require(sharpPath);
-        safeLog('success', '[ImageProcessor] Sharp loaded successfully from packaged location');
-        
+
       } finally {
         // Ripristina la directory di lavoro
         process.chdir(originalCwd);
-        safeLog('info', `[ImageProcessor] Restored working directory to: ${process.cwd()}`);
       }
     } else {
       // In sviluppo, usa il percorso normale
-      safeLog('info', '[ImageProcessor] Loading Sharp from development path');
       sharp = require('sharp');
     }
-    
-    safeLog('info', '[ImageProcessor] Sharp module loaded successfully, testing functionality...');
-    
+
     const isSharpWorking = await testSharp(sharp);
     if (isSharpWorking) {
-      safeLog('success', '[ImageProcessor] Sharp test passed, using Sharp (high performance)');
       return new SharpProcessor(sharp, input);
     } else {
-      safeLog('warn', '[ImageProcessor] Sharp test failed but module loaded successfully');
-      safeLog('info', '[ImageProcessor] Attempting to use Sharp anyway - may work with actual image data');
       try {
         // Try to create a Sharp processor with the actual input
         const processor = new SharpProcessor(sharp, input);
-        safeLog('success', '[ImageProcessor] Using Sharp despite test failure (high performance)');
         return processor;
       } catch (processorError) {
-        safeLog('error', `[ImageProcessor] Sharp processor creation failed: ${(processorError as Error).message}`);
+        // Fall through to Jimp
       }
     }
   } catch (error) {
-    safeLog('error', `[ImageProcessor] Sharp not available: ${(error as Error).message}`);
-    safeLog('warn', '[ImageProcessor] Will attempt Jimp fallback for stability');
+    // Fall through to Jimp
   }
   } // Close the else block for forceJimp check
 
   // Fallback a Jimp
-  safeLog('info', '[ImageProcessor] Using Jimp fallback (pure JavaScript)');
   try {
     const processor = new JimpProcessor(input);
-    // Don't test metadata here as it may fail for some inputs
-    // The actual processing will handle errors appropriately
-    safeLog('success', '[ImageProcessor] Jimp processor created successfully');
     return processor;
   } catch (error) {
-    safeLog('error', `[ImageProcessor] Jimp initialization failed: ${error}`);
     // Try one more time with a fresh require
     try {
       delete require.cache[require.resolve('jimp')];
-      safeLog('info', '[ImageProcessor] Retrying Jimp with fresh module load...');
       const processor = new JimpProcessor(input);
       return processor;
     } catch (retryError) {
-      safeLog('error', `[ImageProcessor] Jimp retry also failed: ${retryError}`);
+      console.error('[ImageProcessor] Neither Sharp nor Jimp are available');
       throw new Error('Neither Sharp nor Jimp are available for image processing');
     }
   }
@@ -642,12 +484,8 @@ export async function createImageProcessor(input: string | Buffer): Promise<Imag
  * @deprecated Usa createImageProcessor invece
  */
 export function getSharp() {
-  console.warn('[ImageProcessor] getSharp() is deprecated, use createImageProcessor() instead');
-  
   // Restituisce una funzione che crea un processor
   return function(input: string | Buffer) {
-    console.log('[ImageProcessor] Legacy Sharp call, redirecting to hybrid system');
-    
     // Restituisce un oggetto che assomiglia all'API di Sharp
     return {
       resize: (width: number, height: number, options?: any) => {
@@ -655,7 +493,6 @@ export function getSharp() {
         return {
           jpeg: (opts?: any) => ({
             toBuffer: async () => {
-              console.log('[ImageProcessor] Creating processor for legacy call...');
               const processor = await createImageProcessor(input);
               return processor.resize(width, height, options).jpeg(opts).toBuffer();
             }
@@ -673,17 +510,15 @@ export function getSharp() {
 /**
  * Importa in modo sicuro un modulo nativo, fornendo un'implementazione mock
  * se l'importazione fallisce.
- * 
+ *
  * @deprecated Usa il sistema ibrido invece
  */
 export function safeRequire<T>(moduleName: string, mockImplementation: T): T {
   try {
     const module = require(moduleName);
-    console.log(`[NativeModules] Module '${moduleName}' imported successfully`);
     return module;
   } catch (error) {
     console.error(`[NativeModules] Failed to import module '${moduleName}':`, error);
-    console.warn(`[NativeModules] Using mock implementation for '${moduleName}'`);
     return mockImplementation;
   }
 }

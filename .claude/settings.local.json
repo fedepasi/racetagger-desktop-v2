@@ -140,7 +140,8 @@
       "Bash(rm:*)",
       "Bash(brew list:*)",
       "Bash(/opt/homebrew/opt/python@3.11/bin/python3.11:*)",
-      "Bash(timeout 30 npm start:*)"
+      "Bash(timeout 30 npm start:*)",
+      "Bash(gh auth status:*)"
     ],
     "deny": [],
     "ask": []
