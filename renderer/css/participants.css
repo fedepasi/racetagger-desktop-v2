@@ -1427,3 +1427,490 @@
     background-color: rgba(59, 130, 246, 0.2);
   }
 }
+
+/* ========================================
+   PDF Import Styles
+   ======================================== */
+
+/* AI Badge for buttons */
+.btn-ai {
+  position: relative;
+  padding-right: 3.5rem;
+}
+
+.btn-ai .ai-badge {
+  position: absolute;
+  right: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  background: linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%);
+  color: white;
+  font-size: 0.625rem;
+  font-weight: 700;
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* AI Badge in modal header */
+.ai-badge-header {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%);
+  color: white;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 0.35rem 0.6rem;
+  border-radius: 6px;
+  margin-right: 0.75rem;
+  vertical-align: middle;
+}
+
+/* AI Chip in drop zone */
+.ai-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.15) 0%, rgba(99, 102, 241, 0.15) 100%);
+  color: #8b5cf6;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.3rem 0.6rem;
+  border-radius: 12px;
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  margin-right: 0.5rem;
+}
+
+/* PDF Drop Zone */
+.pdf-drop-zone {
+  position: relative;
+  border: 2px dashed var(--border-color);
+  border-radius: 12px;
+  padding: 2rem;
+  text-align: center;
+  background: linear-gradient(135deg, var(--surface-color-light) 0%, var(--surface-color) 100%);
+  cursor: pointer;
+  transition: all 0.3s ease;
+  margin-bottom: 1.5rem;
+}
+
+.pdf-drop-zone:hover {
+  border-color: var(--accent-color);
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.05) 0%, var(--surface-color-light) 100%);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 20px rgba(59, 130, 246, 0.15);
+}
+
+.pdf-drop-zone.drag-over {
+  border-color: #8b5cf6;
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.1) 0%, rgba(99, 102, 241, 0.05) 100%);
+  transform: translateY(-4px);
+  box-shadow: 0 8px 30px rgba(139, 92, 246, 0.25);
+}
+
+.pdf-drop-zone.drag-over .drop-zone-icon {
+  transform: scale(1.2);
+  animation: bounce 0.5s ease infinite;
+}
+
+@keyframes bounce {
+  0%, 100% { transform: scale(1.2) translateY(0); }
+  50% { transform: scale(1.2) translateY(-5px); }
+}
+
+.drop-zone-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.drop-zone-icon {
+  font-size: 3rem;
+  transition: transform 0.3s ease;
+}
+
+.drop-zone-text h4 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.drop-zone-text p {
+  margin: 0.25rem 0 0 0;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.drop-zone-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  margin-top: 0.5rem;
+}
+
+/* PDF Import Modal */
+.pdf-import-modal {
+  max-width: 700px;
+  width: 90vw;
+}
+
+.pdf-import-modal .modal-body {
+  padding: 1.5rem;
+  display: block;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+/* PDF States */
+.pdf-state {
+  animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Processing State */
+.processing-animation {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 3rem 1rem;
+  text-align: center;
+}
+
+.processing-animation h3 {
+  margin: 1.5rem 0 0.5rem;
+  color: var(--text-primary);
+  font-size: 1.25rem;
+}
+
+.processing-animation p {
+  color: var(--text-secondary);
+  font-size: 0.9375rem;
+}
+
+/* AI Loader Animation */
+.ai-loader {
+  position: relative;
+  width: 80px;
+  height: 80px;
+}
+
+.ai-loader-ring {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  border: 3px solid transparent;
+  border-top-color: #8b5cf6;
+  border-right-color: #6366f1;
+  animation: spin 1.2s linear infinite;
+}
+
+.ai-loader-icon {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 2rem;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  50% { opacity: 0.7; transform: translate(-50%, -50%) scale(0.9); }
+}
+
+/* Validation Error State */
+.validation-error-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 2rem 1rem;
+  text-align: center;
+}
+
+.validation-error-content .error-icon {
+  font-size: 3rem;
+  margin-bottom: 1rem;
+}
+
+.validation-error-content h3 {
+  margin: 0 0 0.5rem;
+  color: var(--error-color);
+  font-size: 1.25rem;
+}
+
+.validation-error-content p {
+  color: var(--text-secondary);
+  font-size: 0.9375rem;
+  margin-bottom: 1.5rem;
+  max-width: 400px;
+}
+
+.error-details {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  max-width: 400px;
+  text-align: left;
+}
+
+/* Preview State */
+.pdf-document-info {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.08) 0%, rgba(99, 102, 241, 0.05) 100%);
+  border: 1px solid rgba(139, 92, 246, 0.2);
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  margin: 1.5rem 0;
+}
+
+.doc-info-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid rgba(139, 92, 246, 0.15);
+}
+
+.doc-type-badge {
+  background: linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%);
+  color: white;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  padding: 0.4rem 0.8rem;
+  border-radius: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.doc-confidence {
+  color: #22c55e;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.doc-confidence::before {
+  content: '✓';
+}
+
+.doc-info-details {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+}
+
+.doc-info-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.doc-info-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 500;
+}
+
+.doc-info-value {
+  font-size: 0.9375rem;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* PDF Preview Table */
+.pdf-preview-section {
+  margin-top: 1.5rem;
+}
+
+.pdf-preview-section h4 {
+  margin: 0 0 1rem;
+  color: var(--text-primary);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.pdf-preview-table-container {
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.pdf-preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.pdf-preview-table th {
+  background: var(--surface-color-light);
+  padding: 0.75rem 1rem;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-bottom: 2px solid var(--border-color);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.pdf-preview-table td {
+  padding: 0.625rem 1rem;
+  border-bottom: 1px solid var(--border-color-light);
+  color: var(--text-primary);
+}
+
+.pdf-preview-table tr:hover {
+  background: var(--surface-color-light);
+}
+
+.pdf-preview-table tr:last-child td {
+  border-bottom: none;
+}
+
+/* Extraction Warning */
+.extraction-warning {
+  display: flex;
+  gap: 0.75rem;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-top: 1.5rem;
+}
+
+.extraction-warning .warning-icon {
+  font-size: 1.25rem;
+  flex-shrink: 0;
+}
+
+.extraction-warning .warning-content {
+  flex: 1;
+}
+
+.extraction-warning strong {
+  color: #d97706;
+  font-weight: 600;
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.extraction-warning p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+/* PDF Modal Footer */
+#pdf-modal-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+#pdf-import-count {
+  font-weight: 700;
+}
+
+/* Dark mode adjustments for PDF components */
+@media (prefers-color-scheme: dark) {
+  .pdf-drop-zone {
+    background: linear-gradient(135deg, var(--bg-medium) 0%, var(--bg-dark) 100%);
+    border-color: var(--border-light);
+  }
+
+  .pdf-drop-zone:hover {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.08) 0%, var(--bg-medium) 100%);
+    box-shadow: 0 4px 20px rgba(59, 130, 246, 0.2);
+  }
+
+  .pdf-drop-zone.drag-over {
+    background: linear-gradient(135deg, rgba(139, 92, 246, 0.15) 0%, rgba(99, 102, 241, 0.08) 100%);
+    box-shadow: 0 8px 30px rgba(139, 92, 246, 0.3);
+  }
+
+  .ai-chip {
+    background: linear-gradient(135deg, rgba(139, 92, 246, 0.2) 0%, rgba(99, 102, 241, 0.2) 100%);
+    border-color: rgba(139, 92, 246, 0.4);
+  }
+
+  .pdf-document-info {
+    background: linear-gradient(135deg, rgba(139, 92, 246, 0.12) 0%, rgba(99, 102, 241, 0.08) 100%);
+    border-color: rgba(139, 92, 246, 0.3);
+  }
+
+  .pdf-preview-table th {
+    background: var(--bg-medium);
+  }
+
+  .pdf-preview-table tr:hover {
+    background: rgba(59, 130, 246, 0.08);
+  }
+
+  .extraction-warning {
+    background: rgba(245, 158, 11, 0.15);
+    border-color: rgba(245, 158, 11, 0.4);
+  }
+
+  .error-details {
+    background: rgba(239, 68, 68, 0.15);
+    border-color: rgba(239, 68, 68, 0.3);
+  }
+}
+
+/* Mobile responsive for PDF components */
+@media (max-width: 768px) {
+  .pdf-drop-zone {
+    padding: 1.5rem 1rem;
+  }
+
+  .drop-zone-icon {
+    font-size: 2.5rem;
+  }
+
+  .drop-zone-text h4 {
+    font-size: 1rem;
+  }
+
+  .doc-info-details {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+
+  .pdf-import-modal {
+    width: 100vw;
+    max-width: 100vw;
+  }
+
+  .btn-ai {
+    padding-right: 2.5rem;
+  }
+}
