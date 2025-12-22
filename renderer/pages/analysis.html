@@ -85,7 +85,6 @@
     <div id="folder-organization-section" class="folder-organization-section mb-md">
       <div class="section-header mb-sm">
         <h4>📁 Folder Organization</h4>
-        <div class="public-feature-badge">Available for all users</div>
         <p class="form-text">Automatically organize photos into folders based on race numbers:</p>
       </div>
 
@@ -205,6 +204,61 @@
           <div class="info-text">
             <strong>Note:</strong> Folder organization works alongside metadata writing.
             Both features can be enabled simultaneously for maximum workflow flexibility.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- VISUAL TAGGING: AI-powered tag extraction for marketing search -->
+    <div id="visual-tagging-section" class="visual-tagging-section mb-md">
+      <div class="section-header mb-sm">
+        <h4>🏷️ Visual Tagging</h4>
+        <span class="token-cost-badge">+0.5 tokens/image</span>
+        <p class="form-text">Extract searchable visual tags for marketing and advanced photo search:</p>
+      </div>
+
+      <div class="toggle-option">
+        <label class="toggle-container" for="visual-tagging-enabled">
+          <input type="checkbox" id="visual-tagging-enabled" class="toggle-input">
+          <div class="toggle-slider"></div>
+          <div class="toggle-content">
+            <div class="toggle-title">Enable visual tagging</div>
+            <div class="form-text">Extract location, weather, scene type, subjects, and more from each image</div>
+          </div>
+        </label>
+      </div>
+
+      <div id="visual-tagging-options" class="visual-tagging-opts mt-md" style="display: none;">
+        <div class="tag-categories-info info-box info-box-info mb-sm">
+          <span class="info-icon">🏷️</span>
+          <div class="info-text">
+            <strong>Tags extracted:</strong>
+            <ul class="tag-list">
+              <li><span class="tag-category">📍 Location</span> - track, city, landmarks</li>
+              <li><span class="tag-category">🌤️ Weather</span> - sunny, rainy, golden hour</li>
+              <li><span class="tag-category">👥 Scene</span> - action, podium, pit stop</li>
+              <li><span class="tag-category">🎯 Subjects</span> - vehicles, crowd, crew</li>
+              <li><span class="tag-category">🎨 Style</span> - motion blur, panning, close-up</li>
+              <li><span class="tag-category">😊 Emotion</span> - excitement, tension, joy</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="toggle-option">
+          <label class="toggle-container" for="embed-tags-in-metadata">
+            <input type="checkbox" id="embed-tags-in-metadata" class="toggle-input" checked>
+            <div class="toggle-slider"></div>
+            <div class="toggle-content">
+              <div class="toggle-title">Embed tags as IPTC Keywords</div>
+              <div class="form-text">Add visual tags to image metadata for search in Lightroom, Photo Mechanic, etc.</div>
+            </div>
+          </label>
+        </div>
+
+        <div class="tagging-note info-box mt-sm">
+          <span class="info-icon">⚡</span>
+          <div class="info-text">
+            <strong>Performance:</strong> Visual tagging runs in parallel with recognition, adding minimal processing time.
           </div>
         </div>
       </div>
@@ -431,25 +485,6 @@
             <span class="processing-image-status" id="current-image-status">⏳</span>
             <span class="processing-image-name" id="current-image-name">Preparing...</span>
           </div>
-        </div>
-      </div>
-
-      <div class="processing-details" id="progress-details">
-        <div class="processing-detail-row">
-          <span class="processing-detail-label">⏳ Queued:</span>
-          <span class="processing-detail-value" id="queued-count">0</span>
-        </div>
-        <div class="processing-detail-row">
-          <span class="processing-detail-label">🔄 Processing:</span>
-          <span class="processing-detail-value" id="processing-active-count">0</span>
-        </div>
-        <div class="processing-detail-row">
-          <span class="processing-detail-label">Completed:</span>
-          <span class="processing-detail-value" id="completed-count">0</span>
-        </div>
-        <div class="processing-detail-row">
-          <span class="processing-detail-label">Failed:</span>
-          <span class="processing-detail-value" id="failed-count">0</span>
         </div>
       </div>
 

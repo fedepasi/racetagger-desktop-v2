@@ -2585,11 +2585,23 @@ export async function createParticipantPresetSupabase(presetData: Omit<Participa
 export async function getUserParticipantPresetsSupabase(includeAllForAdmin: boolean = false): Promise<ParticipantPresetSupabase[]> {
   try {
     const userId = getCurrentUserId();
-    if (!userId) return [];
+    console.log('[DB] getUserParticipantPresetsSupabase - userId:', userId, 'includeAllForAdmin:', includeAllForAdmin);
+    if (!userId) {
+      console.log('[DB] No userId, returning empty array');
+      return [];
+    }
 
     // Return cached data if available and recent
     if (presetsCache.length > 0 && (Date.now() - cacheLastUpdated < 30000)) {
-      return presetsCache.filter(p => p.user_id === userId || p.is_public);
+      // In admin mode, return all cached presets without filtering
+      if (includeAllForAdmin) {
+        console.log('[DB] Returning cached presets (admin mode):', presetsCache.length);
+        return presetsCache;
+      }
+      // For regular users, filter by ownership or public access
+      const filtered = presetsCache.filter(p => p.user_id === userId || p.is_public);
+      console.log('[DB] Returning cached presets (filtered):', filtered.length, 'of', presetsCache.length);
+      return filtered;
     }
 
     // Build query based on admin mode
@@ -2610,6 +2622,7 @@ export async function getUserParticipantPresetsSupabase(includeAllForAdmin: bool
     query = query.order('updated_at', { ascending: false });
 
     const { data, error } = await query;
+    console.log('[DB] Supabase query result - data:', data?.length, 'error:', error?.message);
 
     if (error) {
       console.error('[DB] Error getting user participant presets from Supabase:', error);
@@ -2688,13 +2701,22 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
     // Verify preset ownership
     const { data: preset, error: presetError } = await supabase
       .from('participant_presets')
-      .select('id')
+      .select('id, user_id')
       .eq('id', presetId)
-      .eq('user_id', userId)
       .single();
 
-    if (presetError || !preset) {
-      throw new Error('Preset not found or access denied');
+    if (presetError) {
+      console.error('[DB] Preset lookup error:', presetError);
+      throw new Error(`Preset lookup failed: ${presetError.message}`);
+    }
+
+    if (!preset) {
+      throw new Error(`Preset ${presetId} not found`);
+    }
+
+    if (preset.user_id !== userId) {
+      console.error(`[DB] User mismatch: preset.user_id=${preset.user_id}, current userId=${userId}`);
+      throw new Error('Access denied: preset belongs to another user');
     }
 
     // Delete existing participants

@@ -535,43 +535,54 @@ function createWindow() {
 //
 // Removed handleImageAnalysis since we only support folder processing now
 async function handleFolderSelection(event: IpcMainEvent) {
+  console.log('[FolderSelection] handleFolderSelection called');
   if (!mainWindow) {
     console.error('handleFolderSelection: mainWindow is null');
     return;
   }
-  
+
   try {
+    console.log('[FolderSelection] Opening dialog...');
     const result = await dialog.showOpenDialog(mainWindow, {
       properties: ['openDirectory'],
       title: 'Seleziona una cartella di immagini'
     });
-    
+
+    console.log('[FolderSelection] Dialog result:', { canceled: result.canceled, filePaths: result.filePaths });
+
     if (result.canceled) {
       // Don't send any message - user simply closed the dialog
+      console.log('[FolderSelection] User canceled');
       return;
     }
 
     const folderPath = result.filePaths[0];
-    
+    console.log('[FolderSelection] Selected folder:', folderPath);
+
     // Verifica se la cartella esiste
     if (!fs.existsSync(folderPath)) {
       console.error('Selected folder does not exist:', folderPath);
       event.sender.send('folder-selected', { success: false, message: 'La cartella selezionata non esiste' });
       return;
     }
-    
+
     // Ottieni la lista delle immagini nella cartella
+    console.log('[FolderSelection] Getting images from folder...');
     const imageFiles = await getImagesFromFolder(folderPath);
     const imageCount = imageFiles.length;
     const rawCount = imageFiles.filter(img => img.isRaw).length;
-    
+
+    console.log('[FolderSelection] Found images:', { imageCount, rawCount });
+
     // Invia il percorso della cartella e il conteggio delle immagini al renderer process
-    event.sender.send('folder-selected', { 
-      success: true, 
+    const payload = {
+      success: true,
       path: folderPath,
       imageCount: imageCount,
       rawCount: rawCount
-    });
+    };
+    console.log('[FolderSelection] Sending folder-selected event with payload:', payload);
+    event.sender.send('folder-selected', payload);
     
     // Salva il percorso della cartella per un eventuale utilizzo futuro
     if (batchConfig) {

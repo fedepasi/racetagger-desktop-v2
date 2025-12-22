@@ -158,6 +158,17 @@ export interface CropAnalysisResult {
   isPartial: boolean;
   originalBbox?: BoundingBox;
   bboxSource: BboxSource;   // V6 Baseline 2026: Track bbox origin
+
+  // Vehicle DNA fields (SOTA v2) - Optional for backward compatibility
+  livery?: {
+    primary: string;
+    secondary: string[];
+  } | null;
+  make?: string | null;           // Manufacturer (Ferrari, Porsche, etc.)
+  model?: string | null;          // Model (296 GT3, 911 RSR, etc.)
+  category?: string | null;       // Race category (GT3, LMP2, Hypercar, etc.)
+  plateNumber?: string | null;    // License plate (for rally)
+  context?: string | null;        // Scene context (race, pit, podium, portrait)
 }
 
 export interface ContextAnalysisResult {

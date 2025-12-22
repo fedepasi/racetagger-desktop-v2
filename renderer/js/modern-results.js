@@ -130,6 +130,10 @@ class ModernResultsDisplay {
               <span>💾</span>
               <span>Export Results</span>
             </button>
+            <button class="bulk-action-btn" id="btn-export-tags" title="Export visual tags as CSV">
+              <span>🏷️</span>
+              <span>Export Tags</span>
+            </button>
           </div>
         </div>
         
@@ -219,6 +223,8 @@ class ModernResultsDisplay {
         this.bulkDelete();
       } else if (e.target.closest('#btn-export-all')) {
         this.exportAllResults();
+      } else if (e.target.closest('#btn-export-tags')) {
+        this.exportTagsAsCSV();
       }
     });
     
@@ -872,16 +878,67 @@ class ModernResultsDisplay {
   downloadJSON(data, filename) {
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    
+
     const a = document.createElement('a');
     a.href = url;
     a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    
+
     URL.revokeObjectURL(url);
     this.showNotification(`Exported ${filename}`, 'success');
+  }
+
+  downloadCSV(csvContent, filename) {
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+
+    URL.revokeObjectURL(url);
+    this.showNotification(`Exported ${filename}`, 'success');
+  }
+
+  /**
+   * Export visual tags as CSV
+   * Requires execution ID from current results
+   */
+  async exportTagsAsCSV() {
+    // Get execution ID from results (all should share same execution)
+    const executionId = this.results[0]?.executionId || this.executionId;
+
+    if (!executionId) {
+      this.showNotification('No execution found for tag export', 'warning');
+      return;
+    }
+
+    try {
+      this.showNotification('Exporting visual tags...', 'info');
+
+      const result = await window.api.invoke('export-tags-csv', { executionId });
+
+      if (result.success) {
+        if (result.count === 0) {
+          this.showNotification('No visual tags found for this execution', 'warning');
+          return;
+        }
+
+        const filename = `racetagger_visual_tags_${new Date().toISOString().split('T')[0]}.csv`;
+        this.downloadCSV(result.csv, filename);
+        this.showNotification(`Exported ${result.count} tagged images`, 'success');
+      } else {
+        this.showNotification(result.error || 'Failed to export tags', 'error');
+      }
+    } catch (error) {
+      console.error('[ModernResults] Error exporting tags CSV:', error);
+      this.showNotification('Failed to export visual tags: ' + error.message, 'error');
+    }
   }
   
   showNotification(message, type = 'info') {

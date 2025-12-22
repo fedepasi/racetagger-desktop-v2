@@ -370,6 +370,22 @@ document.addEventListener('auth-state-changed', () => {
   window.folderOrganization.initialize();
 });
 
+// Reinitialize when analysis page loads (SPA navigation)
+window.addEventListener('page-loaded', (e) => {
+  if (e.detail?.page === 'analysis') {
+    window.folderOrganization.initialized = false;
+    window.folderOrganization.initialize();
+  }
+});
+
+// Also listen for section-changed (backward compatibility)
+document.addEventListener('section-changed', (e) => {
+  if (e.detail?.section === 'analysis') {
+    window.folderOrganization.initialized = false;
+    window.folderOrganization.initialize();
+  }
+});
+
 // Helper function for other scripts to check folder organization access
 window.hasFolderOrganizationAccess = () => {
   return window.folderOrganization && window.folderOrganization.hasAccess;

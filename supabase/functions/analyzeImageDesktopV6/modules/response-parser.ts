@@ -3,6 +3,9 @@
  *
  * Parse e filtra le risposte JSON da Gemini.
  * Applica filtri da recognition_config (minConfidence, maxResults).
+ *
+ * SOTA v2: Supports both compact (short keys) and expanded response formats.
+ * Auto-detects format and normalizes to expanded format for processing.
  */
 
 import {
@@ -15,6 +18,12 @@ import {
   BboxSource
 } from '../types/index.ts';
 import { RESPONSE_DEFAULTS, LOG_PREFIX } from '../config/constants.ts';
+import {
+  normalizeGeminiResponse,
+  normalizeVehicleResponse,
+  detectResponseFormat,
+  ExpandedVehicleResponse
+} from './response-mapper.ts';
 
 /**
  * Parse Gemini response and extract crop/context analysis
@@ -42,16 +51,23 @@ export function parseGeminiResponse(
 
     const parsed = JSON.parse(cleaned);
 
-    // Parse crop results with bboxSource tracking
-    let cropAnalysis = parseCropResults(parsed.crops || [], crops, bboxSources);
+    // SOTA v2: Auto-detect and normalize response format (compact or expanded)
+    const format = detectResponseFormat(parsed);
+    console.log(`${LOG_PREFIX} Response format detected: ${format}`);
+
+    // Normalize response to expanded format
+    const normalized = normalizeGeminiResponse(parsed);
+
+    // Parse crop results with bboxSource tracking and DNA fields
+    let cropAnalysis = parseCropResults(normalized.crops, crops, bboxSources);
 
     // Apply filters from recognition_config
     cropAnalysis = filterCropResults(cropAnalysis, recognitionConfig);
 
     // Parse context result if present
     let contextAnalysis: ContextAnalysisResult | null = null;
-    if (hasNegative && parsed.context) {
-      contextAnalysis = parseContextResult(parsed.context);
+    if (hasNegative && normalized.context) {
+      contextAnalysis = parseContextResult(normalized.context);
     }
 
     console.log(`${LOG_PREFIX} Parsed ${cropAnalysis.length} crop results${contextAnalysis ? ' + context' : ''}`);
@@ -72,14 +88,16 @@ export function parseGeminiResponse(
 /**
  * Parse crop results from Gemini response
  * V6 Baseline 2026: Now includes bboxSource tracking
+ * SOTA v2: Now includes Vehicle DNA fields (livery, make, model, etc.)
  */
 function parseCropResults(
-  geminiCrops: any[],
+  normalizedCrops: ExpandedVehicleResponse[],
   originalCrops: CropData[],
   bboxSources?: BboxSource[]
 ): CropAnalysisResult[] {
-  return geminiCrops.map((crop: any, idx: number) => ({
-    imageIndex: crop.imageIndex || idx + 1,
+  return normalizedCrops.map((crop: ExpandedVehicleResponse, idx: number) => ({
+    // Core fields
+    imageIndex: idx + 1,
     detectionId: originalCrops[idx]?.detectionId || `det_${idx}`,
     raceNumber: crop.raceNumber || null,
     confidence: typeof crop.confidence === 'number' ? crop.confidence : 0.5,
@@ -88,7 +106,15 @@ function parseCropResults(
     otherText: Array.isArray(crop.otherText) ? crop.otherText : [],
     isPartial: originalCrops[idx]?.isPartial || false,
     originalBbox: originalCrops[idx]?.originalBbox || undefined,
-    bboxSource: bboxSources?.[idx] || 'gemini',  // V6 Baseline 2026: Default to 'gemini' if not specified
+    bboxSource: bboxSources?.[idx] || 'gemini',
+
+    // Vehicle DNA fields (SOTA v2)
+    livery: crop.livery || null,
+    make: crop.make || null,
+    model: crop.model || null,
+    category: crop.category || null,
+    plateNumber: crop.plateNumber || null,
+    context: crop.context || null,
   }));
 }
 
@@ -142,9 +168,11 @@ function parseContextResult(context: any): ContextAnalysisResult {
 /**
  * Create empty crop results for error cases
  * V6 Baseline 2026: Now includes bboxSource tracking
+ * SOTA v2: Now includes Vehicle DNA fields
  */
 function createEmptyCropResults(crops: CropData[], bboxSources?: BboxSource[]): CropAnalysisResult[] {
   return crops.map((crop, idx) => ({
+    // Core fields
     imageIndex: idx + 1,
     detectionId: crop.detectionId,
     raceNumber: null,
@@ -154,7 +182,15 @@ function createEmptyCropResults(crops: CropData[], bboxSources?: BboxSource[]): 
     otherText: [],
     isPartial: crop.isPartial,
     originalBbox: crop.originalBbox || undefined,
-    bboxSource: bboxSources?.[idx] || 'gemini',  // V6 Baseline 2026
+    bboxSource: bboxSources?.[idx] || 'gemini',
+
+    // Vehicle DNA fields (SOTA v2) - null for empty results
+    livery: null,
+    make: null,
+    model: null,
+    category: null,
+    plateNumber: null,
+    context: null,
   }));
 }
 

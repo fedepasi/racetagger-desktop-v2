@@ -237,11 +237,12 @@
         break;
 
       case 'analysis':
-        // Analysis page - renderer.js handles most initialization via section-changed event
+        // Analysis page - initialize all dynamic content
         // Re-bind critical event listeners for dynamically loaded elements
         const folderBtn = document.getElementById('folder-select-button');
         const uploadBtn = document.getElementById('upload-button');
         const advToggle = document.getElementById('advanced-toggle');
+        const categorySelect = document.getElementById('category-select');
 
         if (folderBtn && typeof window.handleFolderSelection === 'function') {
           folderBtn.addEventListener('click', window.handleFolderSelection);
@@ -252,10 +253,29 @@
         if (advToggle && typeof window.toggleAdvancedOptions === 'function') {
           advToggle.addEventListener('click', window.toggleAdvancedOptions);
         }
+        // Bind category selection change handler
+        if (categorySelect && typeof window.handleCategorySelection === 'function') {
+          categorySelect.addEventListener('change', window.handleCategorySelection);
+        }
+
+        // Register IPC listener for folder selection response
+        if (window.api && typeof window.handleFolderSelected === 'function') {
+          window.api.receive('folder-selected', window.handleFolderSelected);
+        }
+
+        // Load dynamic sport categories from database
+        if (typeof window.loadDynamicCategories === 'function') {
+          window.loadDynamicCategories(false); // use cache if valid
+        }
 
         // Load presets for the preset selector
         if (typeof window.loadPresetsForSelector === 'function') {
           window.loadPresetsForSelector();
+        }
+
+        // Initialize metadata overwrite options
+        if (typeof window.initMetadataOverwriteOptions === 'function') {
+          window.initMetadataOverwriteOptions();
         }
         break;
     }

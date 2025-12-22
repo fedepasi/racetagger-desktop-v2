@@ -85,10 +85,13 @@ export function registerSupabaseHandlers(): void {
   });
 
   ipcMain.handle('supabase-get-participant-presets', async () => {
+    console.log('[Presets] Loading participant presets...');
     try {
       const presets = await getUserParticipantPresetsSupabase();
+      console.log(`[Presets] Loaded ${presets?.length || 0} presets`);
       return { success: true, data: presets };
     } catch (e: any) {
+      console.error('[Presets] Error loading presets:', e.message);
       return { success: false, error: e.message };
     }
   });
@@ -159,12 +162,18 @@ export function registerSupabaseHandlers(): void {
   // ==================== ADMIN HANDLERS ====================
 
   ipcMain.handle('supabase-get-all-participant-presets-admin', async () => {
+    console.log('[Presets-Admin] Loading ALL participant presets (admin mode)...');
     try {
-      if (!authService.isAdmin()) {
+      const isAdmin = authService.isAdmin();
+      console.log('[Presets-Admin] isAdmin check:', isAdmin);
+
+      if (!isAdmin) {
+        console.log('[Presets-Admin] Access denied - not admin');
         return { success: false, error: 'Unauthorized: Admin access required' };
       }
 
       const presets = await getUserParticipantPresetsSupabase(true);
+      console.log(`[Presets-Admin] Loaded ${presets?.length || 0} presets (admin mode)`);
       return { success: true, data: presets };
     } catch (e: any) {
       console.error('[Supabase] Error getting all presets:', e);
@@ -229,14 +238,15 @@ export function registerSupabaseHandlers(): void {
         const supabase = getSupabaseClient();
 
         // Query executions with JOIN to execution_settings for photo counts
+        // Use explicit relationship name to avoid ambiguity (there are 2 FK constraints)
         const { data, error } = await supabase
           .from('executions')
           .select(`
             id,
             status,
             created_at,
-            execution_settings (
-              total_images
+            execution_settings!execution_settings_execution_id_fkey (
+              total_images_processed
             )
           `)
           .eq('user_id', userId)
@@ -250,8 +260,8 @@ export function registerSupabaseHandlers(): void {
               completedEvents++;
             }
             const settings = exec.execution_settings as any;
-            if (settings && settings.total_images) {
-              monthlyPhotos += settings.total_images;
+            if (settings && settings.total_images_processed) {
+              monthlyPhotos += settings.total_images_processed;
             }
           }
         }

@@ -283,6 +283,11 @@ function displayParticipantPresets(presets) {
   const container = document.getElementById('presets-list-container');
   const emptyState = document.getElementById('empty-presets-state');
 
+  // Guard: page not loaded yet (dynamic routing)
+  if (!container) {
+    return;
+  }
+
   if (!presets || presets.length === 0) {
     showEmptyPresetsState();
     return;
@@ -491,6 +496,11 @@ function createPresetCard(preset) {
 function showEmptyPresetsState() {
   const container = document.getElementById('presets-list-container');
   let emptyState = document.getElementById('empty-presets-state');
+
+  // Guard: page not loaded yet (dynamic routing)
+  if (!container) {
+    return;
+  }
 
   // Clear any existing content
   container.innerHTML = '';

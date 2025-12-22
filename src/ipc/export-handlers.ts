@@ -256,4 +256,94 @@ export function registerExportHandlers(): void {
       return { success: false, error: e.message, exported: 0, failed: 0 };
     }
   });
+
+  // ==================== VISUAL TAGS EXPORT ====================
+
+  /**
+   * Export visual tags as CSV
+   * Returns CSV content with: original_filename, number, driver, team, tags
+   */
+  ipcMain.handle('export-tags-csv', async (_, { executionId }: { executionId?: string }) => {
+    try {
+      const { getSupabaseClient } = await import('../database-service');
+      const supabase = getSupabaseClient();
+
+      // Build query
+      let query = supabase
+        .from('visual_tags')
+        .select(`
+          *,
+          images!inner(original_filename, storage_path)
+        `)
+        .order('created_at', { ascending: true });
+
+      // Filter by execution if provided
+      if (executionId) {
+        query = query.eq('execution_id', executionId);
+      }
+
+      const { data, error } = await query;
+
+      if (error) {
+        throw new Error(`Database error: ${error.message}`);
+      }
+
+      if (!data || data.length === 0) {
+        return {
+          success: true,
+          csv: 'original_filename,number,driver,team,location,weather,scene,subjects,style,emotion,all_tags\n',
+          count: 0
+        };
+      }
+
+      // Build CSV
+      const headers = ['original_filename', 'number', 'driver', 'team', 'location', 'weather', 'scene', 'subjects', 'style', 'emotion', 'all_tags'];
+      const rows = data.map((row: any) => {
+        const filename = row.images?.original_filename || '';
+        const number = row.participant_number || '';
+        const driver = row.participant_name || '';
+        const team = row.participant_team || '';
+        const location = (row.location_tags || []).join('; ');
+        const weather = (row.weather_tags || []).join('; ');
+        const scene = (row.scene_type_tags || []).join('; ');
+        const subjects = (row.subject_tags || []).join('; ');
+        const style = (row.visual_style_tags || []).join('; ');
+        const emotion = (row.emotion_tags || []).join('; ');
+        const allTags = (row.all_tags || []).join('; ');
+
+        // Escape CSV fields
+        const escapeCSV = (field: string) => {
+          if (field.includes(',') || field.includes('"') || field.includes('\n')) {
+            return `"${field.replace(/"/g, '""')}"`;
+          }
+          return field;
+        };
+
+        return [
+          escapeCSV(filename),
+          escapeCSV(number),
+          escapeCSV(driver),
+          escapeCSV(team),
+          escapeCSV(location),
+          escapeCSV(weather),
+          escapeCSV(scene),
+          escapeCSV(subjects),
+          escapeCSV(style),
+          escapeCSV(emotion),
+          escapeCSV(allTags)
+        ].join(',');
+      });
+
+      const csv = [headers.join(','), ...rows].join('\n');
+
+      return {
+        success: true,
+        csv,
+        count: data.length
+      };
+    } catch (e: any) {
+      console.error('[IPC] Error exporting tags CSV:', e);
+      return { success: false, error: e.message };
+    }
+  });
 }

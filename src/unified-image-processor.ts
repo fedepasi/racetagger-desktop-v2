@@ -129,6 +129,11 @@ export interface UnifiedProcessorConfig {
   onTokenUsed?: (balance: any) => void;
   // Cancellation support
   isCancelled?: () => boolean; // Function to check if processing should be cancelled
+  // Visual Tagging configuration
+  visualTagging?: {
+    enabled: boolean;
+    embedInMetadata: boolean;
+  };
 }
 
 /**
@@ -171,6 +176,8 @@ class UnifiedImageWorker extends EventEmitter {
   private faceDescriptorCount: number = 0;
   // Training consent tracking (default true for opt-out model)
   private userTrainingConsent: boolean = true;
+  // Visual Tagging cache (stores tags by imageId for metadata embedding)
+  private visualTagsCache: Map<string, any> = new Map();
 
   private constructor(config: UnifiedProcessorConfig, analysisLogger?: AnalysisLogger, networkMonitor?: NetworkMonitor) {
     super();
@@ -1874,14 +1881,28 @@ class UnifiedImageWorker extends EventEmitter {
           processingTimeMs: Date.now() - startTime
         };
       }
-      
+
+      // Visual Tagging: Run in parallel with post-processing (after recognition completes)
+      // Since recognition is faster with Gemini 3 Flash and tagging uses Gemini 2.5 Flash Lite,
+      // we invoke tagging after recognition to have imageId available for database linking
+      let visualTagsResult: { tags: any; usage: any } | null = null;
+      if (this.config.visualTagging?.enabled && storagePath) {
+        // Invoke visual tagging (with timeout, non-blocking)
+        try {
+          visualTagsResult = await this.invokeVisualTagging(storagePath, analysisResult);
+        } catch (err: any) {
+          log.warn(`[VisualTagging] Failed (continuing without tags): ${err.message}`);
+        }
+      }
+
       // PUNTO DI CONVERGENZA POST-AI: Qui tutti i workflow si incontrano
       const processedAnalysis = await this.processAnalysisResults(
         imageFile,
         analysisResult,
         uploadReadyPath,
         processor,
-        temporalContext
+        temporalContext,
+        visualTagsResult
       );
 
       // Log detailed analysis with corrections if logger is available (now supports multi-vehicle)
@@ -2568,6 +2589,76 @@ class UnifiedImageWorker extends EventEmitter {
   }
 
   /**
+   * Visual Tagging: Invokes the visualTagging edge function to extract visual descriptive tags
+   * Runs in parallel with recognition for zero additional latency
+   */
+  private async invokeVisualTagging(
+    storagePath: string,
+    analysisResult: any
+  ): Promise<{ tags: any; usage: any } | null> {
+    // Only run if visual tagging is enabled
+    if (!this.config.visualTagging?.enabled) {
+      return null;
+    }
+
+    try {
+      const userId = await authService.getCurrentUserId();
+      const imageUrl = `${SUPABASE_CONFIG.url}/storage/v1/object/public/uploaded-images/${storagePath}`;
+
+      log.debug(`[VisualTagging] Invoking for image: ${storagePath}`);
+
+      const response = await Promise.race([
+        this.supabase.functions.invoke('visualTagging', {
+          body: {
+            imageUrl,
+            imageId: analysisResult?.imageId || '',
+            executionId: this.config.executionId || '',
+            userId: userId || '',
+            recognitionResult: {
+              raceNumber: analysisResult?.analysis?.[0]?.raceNumber,
+              driverName: analysisResult?.analysis?.[0]?.drivers?.[0],
+              teamName: analysisResult?.analysis?.[0]?.teamName
+            }
+          }
+        }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Visual tagging timeout')), 30000)
+        )
+      ]) as any;
+
+      if (response.error) {
+        log.warn(`[VisualTagging] Edge function error: ${response.error.message}`);
+        return null;
+      }
+
+      if (!response.data?.success) {
+        log.warn(`[VisualTagging] Tagging failed: ${response.data?.error}`);
+        return null;
+      }
+
+      // Deduct 0.5 token for visual tagging
+      if (userId) {
+        await authService.useTokens(0.5, analysisResult?.imageId, this.config.onTokenUsed);
+      }
+
+      // Cache tags for metadata embedding
+      if (analysisResult?.imageId) {
+        this.visualTagsCache.set(analysisResult.imageId, response.data.data.tags);
+      }
+
+      log.debug(`[VisualTagging] Success: ${Object.values(response.data.data.tags).flat().length} tags extracted`);
+
+      return {
+        tags: response.data.data.tags,
+        usage: response.data.data.usage
+      };
+    } catch (error: any) {
+      log.warn(`[VisualTagging] Failed (non-blocking): ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
    * PUNTO DI CONVERGENZA POST-AI: Processa i risultati dell'analisi AI
    * Qui si incontrano tutti i workflow (RAW e non-RAW) per future modifiche
    */
@@ -2576,12 +2667,14 @@ class UnifiedImageWorker extends EventEmitter {
     analysisResult: any,
     processedImagePath: string,
     processor?: UnifiedImageProcessor,
-    temporalContext?: { imageTimestamp: ImageTimestamp; temporalNeighbors: ImageTimestamp[] } | null
+    temporalContext?: { imageTimestamp: ImageTimestamp; temporalNeighbors: ImageTimestamp[] } | null,
+    visualTags?: { tags: any; usage: any } | null
   ): Promise<{
     analysis: any[];
     csvMatch: any | null;
     description: string | null;
     keywords: string[] | null;
+    visualTags?: any;
   }> {
     let csvMatch: any = null;
     let description: string | null = null;
@@ -2639,11 +2732,35 @@ class UnifiedImageWorker extends EventEmitter {
       }
     }
 
+    // Build base keywords from recognition
+    let keywords = this.buildMetatag(correctedAnalysis, filteredCsvMatch) || [];
+
+    // Integrate visual tags into keywords if embedding is enabled
+    if (visualTags?.tags && this.config.visualTagging?.embedInMetadata) {
+      const flatVisualTags = [
+        ...(visualTags.tags.location || []),
+        ...(visualTags.tags.weather || []),
+        ...(visualTags.tags.sceneType || []),
+        ...(visualTags.tags.subjects || []),
+        ...(visualTags.tags.visualStyle || []),
+        ...(visualTags.tags.emotion || [])
+      ];
+      // Add visual tags to keywords (avoid duplicates)
+      const existingLower = new Set(keywords.map((k: string) => k.toLowerCase()));
+      for (const tag of flatVisualTags) {
+        if (!existingLower.has(tag.toLowerCase())) {
+          keywords.push(tag);
+        }
+      }
+      log.debug(`[VisualTagging] Added ${flatVisualTags.length} visual tags to keywords`);
+    }
+
     return {
       analysis: correctedAnalysis,
       csvMatch: filteredCsvMatch,
       description,
-      keywords: this.buildMetatag(correctedAnalysis, filteredCsvMatch) // Use filtered data for keywords
+      keywords: keywords.length > 0 ? keywords : null,
+      visualTags: visualTags?.tags
     };
   }
 

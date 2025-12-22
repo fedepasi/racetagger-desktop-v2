@@ -106,15 +106,27 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Event Listeners for folder processing
-  uploadButton.addEventListener('click', handleUploadAndAnalyze);
+  // NOTE: These elements may be null if analysis page is loaded dynamically by router
+  // The router handles binding these events when the analysis page loads
+  if (uploadButton) {
+    uploadButton.addEventListener('click', handleUploadAndAnalyze);
+  }
 
   // Folder selection
-  folderSelectButton.addEventListener('click', handleFolderSelection);
+  if (folderSelectButton) {
+    folderSelectButton.addEventListener('click', handleFolderSelection);
+  }
 
   // Advanced options
-  advancedToggle.addEventListener('click', toggleAdvancedOptions);
-  csvUpload.addEventListener('change', handleCsvUpload);
-  downloadCsvTemplateBtn.addEventListener('click', handleDownloadCsvTemplate);
+  if (advancedToggle) {
+    advancedToggle.addEventListener('click', toggleAdvancedOptions);
+  }
+  if (csvUpload) {
+    csvUpload.addEventListener('change', handleCsvUpload);
+  }
+  if (downloadCsvTemplateBtn) {
+    downloadCsvTemplateBtn.addEventListener('click', handleDownloadCsvTemplate);
+  }
 
   // Metadata strategy radios
   metadataStrategyRadios.forEach(radio => {
@@ -125,10 +137,14 @@ document.addEventListener('DOMContentLoaded', () => {
   initializeMetadataSection();
 
   // Model selection
-  modelSelect.addEventListener('change', handleModelSelection);
+  if (modelSelect) {
+    modelSelect.addEventListener('change', handleModelSelection);
+  }
 
   // Category selection
-  categorySelect.addEventListener('change', handleCategorySelection);
+  if (categorySelect) {
+    categorySelect.addEventListener('change', handleCategorySelection);
+  }
 
   // Listen for messages from main process
   if (window.api) {
@@ -159,10 +175,8 @@ document.addEventListener('DOMContentLoaded', () => {
       loadDynamicCategories(true);
     });
 
-    // Folder selection response
-    window.api.receive('folder-selected', (data) => {
-      handleFolderSelected(data);
-    });
+    // Folder selection response - now registered by router when analysis page loads
+    // (moved to router.js initializePage('analysis') to avoid timing issues)
 
     window.api.receive('folder-error', (error) => {
       showError(error);
@@ -608,13 +622,19 @@ function toggleAdvancedOptions() {
 
 // Handle folder selection
 function handleFolderSelection() {
+  console.log('[Renderer] handleFolderSelection called');
   if (window.api) {
+    console.log('[Renderer] Sending select-folder');
     window.api.send('select-folder');
+  } else {
+    console.error('[Renderer] window.api not available!');
   }
 }
 
 // Handle folder selected response
 async function handleFolderSelected(data) {
+  console.log('[Renderer] handleFolderSelected called with:', data);
+
   if (!data.success) {
     showError(data.message || 'Error during folder selection');
     return;
@@ -624,15 +644,25 @@ async function handleFolderSelected(data) {
   selectedFolderImages = data.imageCount;
   const rawCount = data.rawCount || 0;
 
-  selectedFolder.textContent = selectedFolderPath;
+  // Get elements dynamically (they may be created by router after page load)
+  const selectedFolderEl = document.getElementById('selected-folder');
+  const imageCountEl = document.getElementById('image-count');
+
+  console.log('[Renderer] Found elements:', { selectedFolderEl, imageCountEl });
+
+  if (selectedFolderEl) {
+    selectedFolderEl.textContent = selectedFolderPath;
+  }
 
   // Mostra il numero di immagini trovate con badge per RAW
-  if (rawCount > 0) {
-    imageCount.innerHTML = `${selectedFolderImages} images found
-      <span class="file-type-badge raw">RAW: ${rawCount}</span>
-      <span class="file-type-badge jpeg">JPEG: ${selectedFolderImages - rawCount}</span>`;
-  } else {
-    imageCount.textContent = `${selectedFolderImages} images found`;
+  if (imageCountEl) {
+    if (rawCount > 0) {
+      imageCountEl.innerHTML = `${selectedFolderImages} images found
+        <span class="file-type-badge raw">RAW: ${rawCount}</span>
+        <span class="file-type-badge jpeg">JPEG: ${selectedFolderImages - rawCount}</span>`;
+    } else {
+      imageCountEl.textContent = `${selectedFolderImages} images found`;
+    }
   }
 
   // Check Adobe DNG Converter if RAW files are present
@@ -795,15 +825,23 @@ function handleCategorySelection(event) {
   selectedCategory = event.target.value;
   window.selectedCategory = selectedCategory; // Expose globally for other modules
 
-  // Update the current category display
+  // Update the current category display (get element dynamically for SPA compatibility)
   const categoryNames = {
     'motorsport': 'Motorsport',
     'running': 'Running & Cycling',
     'other': 'Other'
   };
 
-  currentCategoryDisplay.textContent = categoryNames[selectedCategory] || selectedCategory;
+  const display = document.getElementById('current-category-display');
+  if (display) {
+    display.textContent = categoryNames[selectedCategory] || selectedCategory;
+  }
+
+  console.log('[Renderer] Category changed to:', selectedCategory);
 }
+
+// Expose for router binding
+window.handleCategorySelection = handleCategorySelection;
 
 // Handle CSV file upload
 function handleCsvUpload(event) {
@@ -1196,17 +1234,21 @@ function showMessage(message) {
 
 // Update upload button state based on folder selection
 function updateUploadButtonState() {
+  // Get button dynamically (may be created by router)
+  const uploadBtn = document.getElementById('upload-button');
+  if (!uploadBtn) return;
+
   if (uploading) {
-    uploadButton.disabled = true;
+    uploadBtn.disabled = true;
     return;
   }
 
   if (selectedFolderPath && selectedFolderImages > 0) {
-    uploadButton.disabled = false;
-    uploadButton.textContent = 'Analyze Folder';
+    uploadBtn.disabled = false;
+    uploadBtn.textContent = 'Analyze Folder';
   } else {
-    uploadButton.disabled = true;
-    uploadButton.textContent = 'Analyze Folder';
+    uploadBtn.disabled = true;
+    uploadBtn.textContent = 'Analyze Folder';
   }
 }
 
@@ -1438,6 +1480,15 @@ async function proceedWithFolderAnalysis() {
       }
     }
 
+    // Aggiungi configurazione visual tagging se disponibile
+    if (window.getVisualTaggingConfig) {
+      const visualTagConfig = window.getVisualTaggingConfig();
+      if (visualTagConfig && visualTagConfig.enabled) {
+        config.visualTagging = visualTagConfig;
+        console.log('[Renderer] Visual tagging enabled:', visualTagConfig);
+      }
+    }
+
     // Add participant preset configuration if available
     const presetSelect = document.getElementById('preset-select');
     if (presetSelect && presetSelect.value) {
@@ -1530,36 +1581,62 @@ async function handleAnalysisResults(analysisResults) {
 function setUploading(isUploading) {
   uploading = isUploading;
 
+  // Get elements dynamically (they may be created by router after page load)
+  const uploadBtn = document.getElementById('upload-button');
+  const progressCont = document.getElementById('progress-container');
+
   if (isUploading) {
-    uploadButton.disabled = true;
-    uploadButton.textContent = 'Uploading... Analyzing...';
-    progressContainer.style.display = 'block';
+    if (uploadBtn) {
+      uploadBtn.disabled = true;
+      uploadBtn.textContent = 'Uploading... Analyzing...';
+    }
+    if (progressCont) {
+      progressCont.style.display = 'block';
+    }
     // Reset progress fill, not the container
     const progressFill = document.getElementById('progress-fill');
     if (progressFill) {
       progressFill.style.width = '0%';
     }
   } else {
-    uploadButton.disabled = false;
-    uploadButton.textContent = 'Upload and Analyze';
-    progressContainer.style.display = 'none';
+    if (uploadBtn) {
+      uploadBtn.disabled = false;
+      uploadBtn.textContent = 'Upload and Analyze';
+    }
+    if (progressCont) {
+      progressCont.style.display = 'none';
+    }
   }
 }
 
 // Helper: Update progress bar
 function updateProgress(progress) {
-  progressBar.style.width = `${progress}%`;
+  // Get element dynamically (it may be created by router after page load)
+  const pBar = document.getElementById('progress-bar');
+  if (pBar) {
+    pBar.style.width = `${progress}%`;
+  }
 }
 
 // Helper: Show error message
 function showError(message) {
-  errorMessage.textContent = message;
-  errorMessage.style.display = 'block';
+  // Get element dynamically (it may be created by router after page load)
+  const errMsg = document.getElementById('error-message');
+  if (!errMsg) {
+    console.error('[Renderer] Error:', message);
+    return;
+  }
+  errMsg.textContent = message;
+  errMsg.style.display = 'block';
 }
 
 // Helper: Reset UI state
 function resetUI() {
-  errorMessage.style.display = 'none';
+  // Get element dynamically (it may be created by router after page load)
+  const errMsg = document.getElementById('error-message');
+  if (errMsg) {
+    errMsg.style.display = 'none';
+  }
   resetResults();
 }
 
@@ -1954,7 +2031,7 @@ async function loadDynamicCategories(forceRefresh = false) {
 function populateCategorySelect(categories) {
   const categorySelect = document.getElementById('category-select');
   if (!categorySelect) {
-    console.error('Category select element not found');
+    // Element not found - analysis page may not be loaded yet (normal with dynamic routing)
     return;
   }
 
@@ -2038,6 +2115,71 @@ async function refreshCategories() {
 // Expose refresh function globally for debug/admin use
 window.refreshCategories = refreshCategories;
 
+// Expose functions for router/dynamic page initialization
+window.handleFolderSelection = handleFolderSelection;
+window.handleFolderSelected = handleFolderSelected;
+window.toggleAdvancedOptions = toggleAdvancedOptions;
+window.loadDynamicCategories = loadDynamicCategories;
+
+/**
+ * Load participant presets into the preset selector dropdown
+ * Called by router when analysis page loads
+ */
+async function loadPresetsForSelector() {
+  try {
+    const presetSelect = document.getElementById('preset-select');
+    if (!presetSelect) {
+      console.log('[Renderer] preset-select element not found');
+      return;
+    }
+
+    // Check if user is admin to use appropriate endpoint
+    let isAdmin = false;
+    try {
+      const adminCheck = await window.api.invoke('auth-is-admin');
+      isAdmin = adminCheck === true || adminCheck?.isAdmin === true;
+    } catch (e) {
+      console.log('[Renderer] Admin check failed, using regular endpoint');
+    }
+
+    // Use appropriate endpoint based on admin status (same logic as participants-manager.js)
+    const channel = isAdmin
+      ? 'supabase-get-all-participant-presets-admin'
+      : 'supabase-get-participant-presets';
+
+    console.log(`[Renderer] Loading presets with channel: ${channel} (isAdmin: ${isAdmin})`);
+    const response = await window.api.invoke(channel);
+
+    // API returns { success, data } structure
+    if (!response || !response.success || !response.data) {
+      console.log('[Renderer] No presets returned from API:', response);
+      return;
+    }
+
+    const presets = response.data;
+
+    // Clear existing options except first placeholder
+    while (presetSelect.options.length > 1) {
+      presetSelect.remove(1);
+    }
+
+    // Add preset options
+    presets.forEach(preset => {
+      const option = document.createElement('option');
+      option.value = preset.id;
+      const count = preset.participant_count || preset.participants?.length || 0;
+      option.textContent = `${preset.name} (${count} participants)`;
+      presetSelect.appendChild(option);
+    });
+
+    console.log(`[Renderer] Loaded ${presets.length} presets into selector`);
+  } catch (error) {
+    console.error('[Renderer] Error loading presets for selector:', error);
+  }
+}
+
+window.loadPresetsForSelector = loadPresetsForSelector;
+
 /**
  * Initialize metadata overwrite options visibility based on preset selection
  */
@@ -2076,3 +2218,6 @@ function initMetadataOverwriteOptions() {
   // Initial visibility check
   updateDescriptionOverwriteVisibility();
 }
+
+// Expose for router initialization
+window.initMetadataOverwriteOptions = initMetadataOverwriteOptions;

@@ -31,6 +31,10 @@ const validSendReceiveChannels: string[] = [
   'processing-started', 'processing-progress', 'processing-file-started',
   'processing-phase-changed', 'processing-completed', 'processing-error',
   'processing-paused', 'processing-resumed',
+  // Unified processor and temporal analysis channels
+  'unified-processing-started',
+  'temporal-analysis-started', 'temporal-batch-progress', 'temporal-analysis-complete',
+  'recognition-phase-started',
   // Cancellation channels
   'cancel-batch-processing', 'batch-cancelled',
   // Window control events are typically send-only from renderer or receive-only
@@ -194,6 +198,7 @@ const validInvokeChannels: string[] = [
   'export-destinations-toggle-active',
   'export-destinations-get-matching',
   'export-to-destinations',  // Export images to configured destinations
+  'export-tags-csv',         // Export visual tags as CSV
 ];
 
 
