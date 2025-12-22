@@ -55,38 +55,45 @@ export const VALIDATION_CONFIG = {
     'starting_grid',
     'race_entry',
     'participant_list',
-    'competitor_list'
+    'competitor_list',
+    'race_results',
+    'classification',
+    'final_results'
   ]
 };
 
 // ==================== PROMPT ====================
 
-export const DOCUMENT_VALIDATION_PROMPT = `Analyze this PDF document and determine if it's a motorsport/sports entry list, start list, or participant list.
+export const DOCUMENT_VALIDATION_PROMPT = `Analyze this PDF document and determine if it contains a list of racing/sports participants with their race numbers.
 
 Return ONLY valid JSON in this exact format:
 {
   "is_valid_entry_list": true/false,
   "confidence": 0.0-1.0,
-  "document_type": "entry_list" | "start_list" | "starting_grid" | "race_entry" | "participant_list" | "competitor_list" | "other",
+  "document_type": "entry_list" | "start_list" | "starting_grid" | "race_entry" | "participant_list" | "competitor_list" | "race_results" | "classification" | "final_results" | "other",
   "rejection_reason": "string if not valid, null otherwise",
   "detected_language": "en" | "it" | "es" | "fr" | "de" | "other"
 }
 
-A valid entry/start list typically contains:
-- Race number columns (pettorale, numero, #, n., no.)
+VALID documents (accept these):
+- Entry lists, start lists, starting grids
+- Participant lists, competitor lists
+- Race results, classifications, final standings (these contain valid participant data!)
+- Any document with race numbers and driver/rider names
+
+A valid document typically contains:
+- Race number columns (pettorale, numero, #, n., no., pos.)
 - Driver/Rider/Athlete names
-- Team/Manufacturer names
-- Categories or classes
-- Event name or date
+- Team/Manufacturer names (optional)
+- Categories or classes (optional)
 
-Reject documents that are:
-- Race results or classifications
-- General news articles
-- Random images or photos
-- Non-racing documents
-- Invoices, contracts, or administrative documents`;
+REJECT only these:
+- General news articles or press releases
+- Random images or photos without data
+- Non-racing documents (invoices, contracts, tickets)
+- Documents without race numbers`;
 
-export const EXTRACTION_PROMPT = `Extract ALL participants from this entry list/start list document.
+export const EXTRACTION_PROMPT = `Extract ALL participants from this racing document (entry list, start list, or race results).
 
 Return ONLY valid JSON in this exact format:
 {
@@ -115,7 +122,9 @@ IMPORTANT RULES:
 5. If team name appears multiple times (e.g., "Team XYZ Racing" and "#1 XYZ"), use the cleaner version
 6. Clean up formatting (remove extra spaces, fix capitalization)
 7. Merge duplicate entries if same number appears multiple times
-8. For nationality, use standard 3-letter codes (ITA, GER, FRA, ESP, etc.)`;
+8. For nationality, use standard 3-letter codes (ITA, GER, FRA, ESP, etc.)
+9. For race results: ignore position/classification columns, extract race NUMBER not finishing position
+10. If document has both "Pos" and "No." columns, use "No." for race number`;
 
 // ==================== LOGGING ====================
 

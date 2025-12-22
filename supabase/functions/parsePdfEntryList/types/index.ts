@@ -30,6 +30,9 @@ export type DocumentType =
   | 'race_entry'
   | 'participant_list'
   | 'competitor_list'
+  | 'race_results'
+  | 'classification'
+  | 'final_results'
   | 'other';
 
 // ==================== EXTRACTION ====================

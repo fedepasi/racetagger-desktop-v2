@@ -2576,6 +2576,9 @@ function formatDocumentType(type) {
     'race_entry': 'Race Entry',
     'participant_list': 'Participant List',
     'competitor_list': 'Competitor List',
+    'race_results': 'Race Results',
+    'classification': 'Classification',
+    'final_results': 'Final Results',
     'other': 'Document'
   };
   return types[type] || type;
