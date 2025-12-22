@@ -1488,72 +1488,7 @@ function setupDatabaseIpcHandlers() {
     }
   });
 
-  // Analysis Log Handler (for Log Visualizer compatibility)
-  ipcMain.handle('get-analysis-log', async (_, executionId: string) => {
-    try {
-      // Handle mock execution IDs for testing
-      if (executionId.startsWith('mock-exec-')) {
-        const mockLogData = [
-          {
-            event: 'IMAGE_ANALYSIS',
-            fileName: 'IMG_0001.jpg',
-            timestamp: new Date().toISOString(),
-            data: {
-              fileName: 'IMG_0001.jpg',
-              analysis: [{ number: '42', confidence: 0.95 }],
-              csvMatch: { numero: '42', nome: 'Test Driver', squadra: 'Test Team' },
-              imagePath: '/mock/path/IMG_0001.jpg',
-              compressedPath: '/mock/compressed/IMG_0001.jpg',
-              thumbnailPath: '/mock/thumb/IMG_0001.jpg',
-              microThumbPath: '/mock/micro/IMG_0001.jpg'
-            }
-          },
-          {
-            event: 'IMAGE_ANALYSIS',
-            fileName: 'IMG_0002.jpg',
-            timestamp: new Date().toISOString(),
-            data: {
-              fileName: 'IMG_0002.jpg',
-              analysis: [{ number: '17', confidence: 0.88 }],
-              csvMatch: { numero: '17', nome: 'Another Driver', squadra: 'Racing Team' },
-              imagePath: '/mock/path/IMG_0002.jpg',
-              compressedPath: '/mock/compressed/IMG_0002.jpg',
-              thumbnailPath: '/mock/thumb/IMG_0002.jpg',
-              microThumbPath: '/mock/micro/IMG_0002.jpg'
-            }
-          }
-        ];
-        console.log(`[Main Process] Returning mock log data for execution ${executionId}`);
-        return mockLogData;
-      }
-
-      const logsDir = path.join(app.getPath('userData'), '.analysis-logs');
-      const logFilePath = path.join(logsDir, `exec_${executionId}.jsonl`);
-
-      if (!fs.existsSync(logFilePath)) {
-        console.warn(`[Main Process] Analysis log file not found: ${logFilePath}`);
-        return []; // Return empty array if no log file (Log Visualizer expects array directly)
-      }
-
-      const logContent = fs.readFileSync(logFilePath, 'utf-8');
-      const logLines = logContent.trim().split('\n').filter(line => line.trim());
-      const logEvents = logLines.map(line => {
-        try {
-          return JSON.parse(line);
-        } catch (error) {
-          console.warn('[Main Process] Invalid JSON line in analysis log:', line);
-          return null;
-        }
-      }).filter(Boolean);
-
-      console.log(`[Main Process] Loaded ${logEvents.length} analysis log events for execution ${executionId}`);
-      return logEvents;
-
-    } catch (error) {
-      console.error('[Main Process] Error reading analysis log:', error);
-      return [];
-    }
-  });
+  // NOTE: get-analysis-log is now in analysis-handlers.ts
 
   // Helper function to get statistics from local cache
   async function getHomeStatisticsFromCache(userId: string, monthStart: Date, monthEnd: Date): Promise<{
@@ -4473,7 +4408,7 @@ app.whenReady().then(async () => { // Added async here
   });
   // NOTE: Token handlers (submit-token-request, get-token-balance, get-pending-tokens, get-token-info)
   // are now registered BEFORE createWindow() to avoid race conditions
-  ipcMain.on('cancel-batch-processing', handleCancelBatchProcessing);
+  // NOTE: cancel-batch-processing is now in analysis-handlers.ts
 
   // NOTE: These handlers are now in app-handlers.ts:
   // - get-training-consent
@@ -4689,9 +4624,9 @@ app.whenReady().then(async () => { // Added async here
   // NOTE: get-supabase-image-url is now in image-handlers.ts
   // NOTE: get-local-image is now in image-handlers.ts
   // NOTE: list-files-in-folder is now in file-handlers.ts
+  // NOTE: load-csv is now in csv-handlers.ts
+  // NOTE: download-csv-template is now in csv-handlers.ts
 
-  ipcMain.on('load-csv', handleCsvLoading);
-  ipcMain.on('download-csv-template', handleCsvTemplateDownload);
   ipcMain.on('analyze-folder', (event: IpcMainEvent, config: BatchProcessConfig) => {
     console.log('[Main Process] analyze-folder IPC event received with config:', config);
     
@@ -4705,36 +4640,16 @@ app.whenReady().then(async () => { // Added async here
   ipcMain.on('submit-feedback', handleFeedbackSubmission);
 
   // NOTE: count-folder-images is now in file-handlers.ts
-
-  // Handler per ottenere la configurazione della streaming pipeline
-  ipcMain.handle('get-pipeline-config', async () => {
-    try {
-      const { PIPELINE_CONFIG } = await import('./config');
-      
-      return {
-        success: true,
-        config: {
-          enabled: PIPELINE_CONFIG.enabled,
-          workers: PIPELINE_CONFIG.workers,
-          diskManagement: PIPELINE_CONFIG.diskManagement,
-          performance: PIPELINE_CONFIG.performance
-        }
-      };
-    } catch (error) {
-      console.error('[Main Process] Error getting pipeline config:', error);
-      return {
-        success: false,
-        error: (error as Error).message || 'Error getting pipeline configuration'
-      };
-    }
-  });
+  // NOTE: get-pipeline-config is now in analysis-handlers.ts
+  // NOTE: get-execution-log is now in analysis-handlers.ts
+  // NOTE: update-analysis-log is now in analysis-handlers.ts
 
   // =====================================================
-  // LOG VISUALIZER IPC HANDLERS
+  // REMAINING LOG VISUALIZER IPC HANDLERS (to be removed)
   // =====================================================
 
-  // Get execution log data for log visualizer
-  ipcMain.handle('get-execution-log', async (_, executionId: string) => {
+  // DUPLICATE - TODO: Remove after testing - get-execution-log is now in analysis-handlers.ts
+  ipcMain.handle('get-execution-log-DEPRECATED', async (_, executionId: string) => {
     try {
       // Handle mock execution IDs for testing
       if (executionId.startsWith('mock-exec-')) {

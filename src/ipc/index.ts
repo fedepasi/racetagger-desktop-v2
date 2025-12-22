@@ -6,16 +6,18 @@
  *
  * Handler Modules:
  * - window-handlers.ts: Window control (3 handlers)
- * - auth-handlers.ts: Authentication & tokens (17 handlers)
+ * - auth-handlers.ts: Authentication & tokens (18 handlers)
  * - database-handlers.ts: Projects, executions, presets (22 handlers)
- * - supabase-handlers.ts: Sport categories, caching, feature flags (17 handlers)
+ * - supabase-handlers.ts: Sport categories, caching, feature flags (19 handlers)
  * - export-handlers.ts: Export destinations & processing (13 handlers)
  * - app-handlers.ts: App info, consent, settings (11 handlers)
  * - file-handlers.ts: File dialogs, folder operations (8 handlers)
  * - image-handlers.ts: Thumbnail generation, image loading (5 handlers)
+ * - csv-handlers.ts: CSV loading and parsing (4 handlers)
+ * - analysis-handlers.ts: Analysis logs and pipeline (4 handlers)
  *
- * Total: 96 handlers extracted into modular files
- * Note: Some handlers remain in main.ts due to global state dependencies
+ * Total: 107 handlers extracted into modular files
+ * Note: Some complex handlers (analyze-folder) remain in main.ts due to dependencies
  */
 
 import { BrowserWindow } from 'electron';
@@ -28,6 +30,8 @@ import { registerExportHandlers } from './export-handlers';
 import { registerAppHandlers } from './app-handlers';
 import { registerFileHandlers } from './file-handlers';
 import { registerImageHandlers } from './image-handlers';
+import { registerCsvHandlers } from './csv-handlers';
+import { registerAnalysisHandlers } from './analysis-handlers';
 
 /**
  * Initialize IPC context with mainWindow reference
@@ -70,8 +74,14 @@ export function registerAllHandlers(): void {
   // Image processing handlers (5)
   registerImageHandlers();
 
+  // CSV handlers (4)
+  registerCsvHandlers();
+
+  // Analysis handlers (4)
+  registerAnalysisHandlers();
+
   console.log('[IPC] ========================================');
-  console.log('[IPC] All handlers registered (96 modular handlers)');
+  console.log('[IPC] All handlers registered (107 modular handlers)');
   console.log('[IPC] ========================================');
 }
 
