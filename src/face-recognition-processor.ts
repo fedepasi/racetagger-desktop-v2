@@ -482,6 +482,49 @@ export class FaceRecognitionProcessor {
   }
 
   /**
+   * Load face descriptors from a participant preset
+   * Queries preset_participant_face_photos for all participants in the preset
+   * These descriptors are added with source='preset' and have priority over global faces
+   */
+  async loadFromPreset(presetId: string): Promise<number> {
+    try {
+      // Import database function dynamically to avoid circular dependencies
+      const { loadPresetFaceDescriptors } = await import('./database-service');
+
+      const descriptors = await loadPresetFaceDescriptors(presetId);
+
+      if (!descriptors || descriptors.length === 0) {
+        console.log(`[FaceRecognition] No face descriptors found in preset ${presetId}`);
+        return 0;
+      }
+
+      // Convert to StoredFaceDescriptor format
+      const storedDescriptors: StoredFaceDescriptor[] = descriptors.map(d => ({
+        id: `preset-${d.personId}-${Math.random().toString(36).substr(2, 9)}`,
+        personId: d.personId,
+        personName: d.personName,
+        team: d.team,
+        carNumber: d.carNumber,
+        descriptor: d.descriptor,
+        referencePhotoUrl: d.referencePhotoUrl,
+        source: 'preset' as const,
+        photoType: d.photoType,
+        isPrimary: d.isPrimary
+      }));
+
+      // Load into processor (this will add to existing descriptors)
+      this.loadFaceDescriptors(storedDescriptors);
+
+      console.log(`[FaceRecognition] Loaded ${storedDescriptors.length} face descriptors from preset ${presetId}`);
+      return storedDescriptors.length;
+
+    } catch (error) {
+      console.error('[FaceRecognition] Failed to load from preset:', error);
+      return 0;
+    }
+  }
+
+  /**
    * Parse descriptor from various formats (array, string JSON, etc.)
    */
   private parseDescriptor(descriptor: any, personName: string): number[] | null {

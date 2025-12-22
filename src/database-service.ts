@@ -2386,6 +2386,35 @@ export interface PresetParticipantSupabase {
   custom_fields?: any;
   sort_order?: number;
   created_at?: string;
+  face_photo_count?: number; // Cached count of face photos
+}
+
+/**
+ * Interface for face photos associated with preset participants
+ */
+export interface PresetParticipantFacePhoto {
+  id: string;
+  participant_id: string;
+  photo_url: string;
+  storage_path: string;
+  face_descriptor: number[] | null;
+  photo_type: 'reference' | 'action' | 'podium' | 'helmet_off';
+  detection_confidence: number | null;
+  is_primary: boolean;
+  created_at: string;
+}
+
+/**
+ * Interface for creating a new face photo
+ */
+export interface CreatePresetFacePhotoParams {
+  participant_id: string;
+  photo_url: string;
+  storage_path: string;
+  face_descriptor?: number[];
+  photo_type?: 'reference' | 'action' | 'podium' | 'helmet_off';
+  detection_confidence?: number;
+  is_primary?: boolean;
 }
 
 // Cache locale per categorie
@@ -3504,6 +3533,229 @@ export async function isFeatureEnabled(featureName: string): Promise<boolean> {
   } catch (error) {
     console.error(`[DB] Error checking feature flag ${featureName}:`, error);
     return false;
+  }
+}
+
+// =====================================================
+// Preset Participant Face Photos Functions
+// =====================================================
+
+/**
+ * Get all face photos for a participant
+ */
+export async function getPresetParticipantFacePhotos(participantId: string): Promise<PresetParticipantFacePhoto[]> {
+  try {
+    const { data, error } = await supabase
+      .from('preset_participant_face_photos')
+      .select('*')
+      .eq('participant_id', participantId)
+      .order('is_primary', { ascending: false })
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('[DB] Error fetching face photos:', error);
+      throw error;
+    }
+
+    return (data || []).map(photo => ({
+      ...photo,
+      face_descriptor: photo.face_descriptor ? Array.from(photo.face_descriptor) : null
+    }));
+  } catch (error) {
+    console.error('[DB] Failed to get preset face photos:', error);
+    throw error;
+  }
+}
+
+/**
+ * Add a new face photo for a participant
+ */
+export async function addPresetParticipantFacePhoto(params: CreatePresetFacePhotoParams): Promise<PresetParticipantFacePhoto> {
+  try {
+    const { data, error } = await supabase
+      .from('preset_participant_face_photos')
+      .insert({
+        participant_id: params.participant_id,
+        photo_url: params.photo_url,
+        storage_path: params.storage_path,
+        face_descriptor: params.face_descriptor || null,
+        photo_type: params.photo_type || 'reference',
+        detection_confidence: params.detection_confidence || null,
+        is_primary: params.is_primary || false
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[DB] Error adding face photo:', error);
+      throw error;
+    }
+
+    return {
+      ...data,
+      face_descriptor: data.face_descriptor ? Array.from(data.face_descriptor) : null
+    };
+  } catch (error) {
+    console.error('[DB] Failed to add preset face photo:', error);
+    throw error;
+  }
+}
+
+/**
+ * Delete a face photo
+ */
+export async function deletePresetParticipantFacePhoto(photoId: string): Promise<void> {
+  try {
+    const { error } = await supabase
+      .from('preset_participant_face_photos')
+      .delete()
+      .eq('id', photoId);
+
+    if (error) {
+      console.error('[DB] Error deleting face photo:', error);
+      throw error;
+    }
+  } catch (error) {
+    console.error('[DB] Failed to delete preset face photo:', error);
+    throw error;
+  }
+}
+
+/**
+ * Update a face photo (e.g., set as primary or update descriptor)
+ */
+export async function updatePresetParticipantFacePhoto(
+  photoId: string,
+  updates: Partial<Pick<PresetParticipantFacePhoto, 'is_primary' | 'face_descriptor' | 'photo_type' | 'detection_confidence'>>
+): Promise<PresetParticipantFacePhoto> {
+  try {
+    const { data, error } = await supabase
+      .from('preset_participant_face_photos')
+      .update(updates)
+      .eq('id', photoId)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[DB] Error updating face photo:', error);
+      throw error;
+    }
+
+    return {
+      ...data,
+      face_descriptor: data.face_descriptor ? Array.from(data.face_descriptor) : null
+    };
+  } catch (error) {
+    console.error('[DB] Failed to update preset face photo:', error);
+    throw error;
+  }
+}
+
+/**
+ * Load all face descriptors for a preset (for face recognition during analysis)
+ * Returns descriptors in the format expected by FaceRecognitionProcessor
+ */
+export async function loadPresetFaceDescriptors(presetId: string): Promise<Array<{
+  personId: string;
+  personName: string;
+  team: string;
+  carNumber: string;
+  descriptor: number[];
+  referencePhotoUrl: string;
+  source: 'preset';
+  photoType: string;
+  isPrimary: boolean;
+}>> {
+  try {
+    // Get all participants with their face photos
+    const { data: participants, error: participantsError } = await supabase
+      .from('preset_participants')
+      .select(`
+        id,
+        numero,
+        nome,
+        squadra,
+        preset_participant_face_photos (
+          id,
+          photo_url,
+          face_descriptor,
+          photo_type,
+          is_primary,
+          detection_confidence
+        )
+      `)
+      .eq('preset_id', presetId);
+
+    if (participantsError) {
+      console.error('[DB] Error loading preset face descriptors:', participantsError);
+      throw participantsError;
+    }
+
+    const descriptors: Array<{
+      personId: string;
+      personName: string;
+      team: string;
+      carNumber: string;
+      descriptor: number[];
+      referencePhotoUrl: string;
+      source: 'preset';
+      photoType: string;
+      isPrimary: boolean;
+    }> = [];
+
+    for (const participant of participants || []) {
+      const facePhotos = (participant as any).preset_participant_face_photos || [];
+
+      for (const photo of facePhotos) {
+        // Skip photos without descriptors
+        if (!photo.face_descriptor || !Array.isArray(photo.face_descriptor) || photo.face_descriptor.length !== 128) {
+          continue;
+        }
+
+        descriptors.push({
+          personId: participant.id,
+          personName: participant.nome || `#${participant.numero}`,
+          team: participant.squadra || '',
+          carNumber: participant.numero,
+          descriptor: Array.from(photo.face_descriptor),
+          referencePhotoUrl: photo.photo_url,
+          source: 'preset',
+          photoType: photo.photo_type || 'reference',
+          isPrimary: photo.is_primary || false
+        });
+      }
+    }
+
+    if (DEBUG_MODE) {
+      console.log(`[DB] Loaded ${descriptors.length} face descriptors from preset ${presetId}`);
+    }
+
+    return descriptors;
+  } catch (error) {
+    console.error('[DB] Failed to load preset face descriptors:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get face photo count for a participant
+ */
+export async function getPresetParticipantFacePhotoCount(participantId: string): Promise<number> {
+  try {
+    const { count, error } = await supabase
+      .from('preset_participant_face_photos')
+      .select('*', { count: 'exact', head: true })
+      .eq('participant_id', participantId);
+
+    if (error) {
+      console.error('[DB] Error counting face photos:', error);
+      throw error;
+    }
+
+    return count || 0;
+  } catch (error) {
+    console.error('[DB] Failed to count preset face photos:', error);
+    return 0;
   }
 }
 

@@ -172,6 +172,15 @@ const validInvokeChannels: string[] = [
   'face-recognition-status',
   'face-recognition-clear',
   'face-recognition-load-from-database',
+
+  // Preset Face Photos Operations
+  'preset-face-upload-photo',
+  'preset-face-delete-photo',
+  'preset-face-get-photos',
+  'preset-face-set-primary',
+  'preset-face-update-descriptor',
+  'preset-face-load-for-preset',
+
   'get-app-path',
 
   // User Settings & Consent

@@ -293,6 +293,67 @@
 
           <small class="form-hint">💡 Photos will be copied to ALL selected folders</small>
         </div>
+
+        <!-- FACE RECOGNITION SECTION -->
+        <div class="form-section face-photos-section" id="face-photos-section">
+          <h3 class="section-title">
+            Face Recognition Photos
+            <span class="badge badge-beta" title="Experimental feature">BETA</span>
+          </h3>
+          <p class="section-description">Upload up to 5 reference photos for face recognition. Best results with clear, front-facing photos.</p>
+
+          <div class="face-photos-grid" id="face-photos-grid">
+            <!-- Face photos will be rendered here dynamically -->
+            <div class="face-photo-placeholder" id="face-photo-placeholder-0">
+              <div class="placeholder-content">
+                <span class="placeholder-icon">📷</span>
+                <span class="placeholder-text">Add Photo</span>
+              </div>
+            </div>
+            <div class="face-photo-placeholder" id="face-photo-placeholder-1">
+              <div class="placeholder-content">
+                <span class="placeholder-icon">+</span>
+              </div>
+            </div>
+            <div class="face-photo-placeholder" id="face-photo-placeholder-2">
+              <div class="placeholder-content">
+                <span class="placeholder-icon">+</span>
+              </div>
+            </div>
+            <div class="face-photo-placeholder" id="face-photo-placeholder-3">
+              <div class="placeholder-content">
+                <span class="placeholder-icon">+</span>
+              </div>
+            </div>
+            <div class="face-photo-placeholder" id="face-photo-placeholder-4">
+              <div class="placeholder-content">
+                <span class="placeholder-icon">+</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="face-photos-actions">
+            <input type="file" id="face-photo-input" accept="image/*" style="display: none;" onchange="handleFacePhotoSelect(event)">
+            <button type="button" class="btn btn-secondary btn-sm" id="add-face-photo-btn" onclick="triggerFacePhotoUpload()">
+              <span class="btn-icon">📷</span>
+              Add Photo
+            </button>
+            <span class="photo-count-label" id="face-photo-count">0/5 photos</span>
+          </div>
+
+          <div class="face-photos-info">
+            <span class="info-icon">💡</span>
+            <div class="info-text">
+              <strong>Tips for best results:</strong>
+              <ul>
+                <li>Use clear, well-lit photos</li>
+                <li>Front-facing portraits work best</li>
+                <li>Include photos without helmet for motorsport</li>
+                <li>Variety helps: podium, portrait, action shots</li>
+              </ul>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="modal-footer">

@@ -1427,3 +1427,303 @@
     background-color: rgba(59, 130, 246, 0.2);
   }
 }
+
+/* ========================================
+   Face Recognition Photos Section
+   ======================================== */
+.face-photos-section {
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.face-photos-section .section-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.face-photos-section .section-description {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  margin-bottom: 1rem;
+  line-height: 1.5;
+}
+
+/* Badge Beta */
+.badge-beta {
+  display: inline-block;
+  background: linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%);
+  color: white;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  vertical-align: middle;
+}
+
+/* Face Photos Grid */
+.face-photos-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+/* Face Photo Card */
+.face-photo-card {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface-color-light);
+  border: 2px solid var(--border-color);
+  transition: all 0.2s ease;
+}
+
+.face-photo-card:hover {
+  border-color: var(--accent-color);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  transform: translateY(-2px);
+}
+
+.face-photo-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Primary Badge */
+.face-photo-card .primary-badge {
+  position: absolute;
+  bottom: 4px;
+  left: 4px;
+  background: var(--accent-color);
+  color: white;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+}
+
+/* Confidence Indicator */
+.face-photo-card .confidence-indicator {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  background: #22c55e;
+  color: white;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: bold;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+}
+
+/* No Face Indicator */
+.face-photo-card .no-face-indicator {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  background: #f59e0b;
+  color: white;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+}
+
+/* Photo Actions */
+.face-photo-card .photo-actions {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.face-photo-card:hover .photo-actions {
+  opacity: 1;
+}
+
+.face-photo-card .action-btn {
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.875rem;
+  transition: all 0.2s ease;
+}
+
+.face-photo-card .primary-btn {
+  background: rgba(255, 255, 255, 0.9);
+  color: #f59e0b;
+}
+
+.face-photo-card .primary-btn:hover {
+  background: #f59e0b;
+  color: white;
+}
+
+.face-photo-card .delete-btn {
+  background: rgba(255, 255, 255, 0.9);
+  color: #ef4444;
+}
+
+.face-photo-card .delete-btn:hover {
+  background: #ef4444;
+  color: white;
+}
+
+/* Face Photo Placeholder */
+.face-photo-placeholder {
+  aspect-ratio: 1;
+  border: 2px dashed var(--border-color);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background: var(--surface-color-light);
+}
+
+.face-photo-placeholder:hover {
+  border-color: var(--accent-color);
+  background: var(--accent-color-10);
+}
+
+.face-photo-placeholder .placeholder-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--text-secondary);
+}
+
+.face-photo-placeholder .placeholder-icon {
+  font-size: 1.5rem;
+}
+
+.face-photo-placeholder .placeholder-text {
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+/* Face Photos Actions Row */
+.face-photos-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.face-photos-actions .photo-count-label {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+/* Face Photos Info Box */
+.face-photos-info {
+  display: flex;
+  gap: 0.75rem;
+  padding: 1rem;
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.08) 0%, rgba(99, 102, 241, 0.06) 100%);
+  border: 1px solid rgba(139, 92, 246, 0.2);
+  border-radius: 8px;
+  font-size: 0.875rem;
+}
+
+.face-photos-info .info-icon {
+  font-size: 1.25rem;
+  flex-shrink: 0;
+}
+
+.face-photos-info .info-text {
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+.face-photos-info .info-text strong {
+  color: var(--accent-color);
+  display: block;
+  margin-bottom: 0.5rem;
+}
+
+.face-photos-info .info-text ul {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.face-photos-info .info-text li {
+  margin-bottom: 0.25rem;
+}
+
+/* Responsive adjustments for face photos grid */
+@media (max-width: 768px) {
+  .face-photos-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .face-photos-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .face-photos-info {
+    flex-direction: column;
+  }
+}
+
+/* Dark mode adjustments for face photos */
+@media (prefers-color-scheme: dark) {
+  .face-photo-card {
+    background: var(--bg-medium);
+    border-color: var(--border-light);
+  }
+
+  .face-photo-card:hover {
+    border-color: var(--accent-color);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  }
+
+  .face-photo-placeholder {
+    background: var(--bg-medium);
+    border-color: var(--border-light);
+  }
+
+  .face-photo-placeholder:hover {
+    background: rgba(59, 130, 246, 0.1);
+    border-color: var(--accent-color);
+  }
+
+  .face-photos-info {
+    background: linear-gradient(135deg, rgba(139, 92, 246, 0.12) 0%, rgba(99, 102, 241, 0.08) 100%);
+    border-color: rgba(139, 92, 246, 0.3);
+  }
+
+  .badge-beta {
+    background: linear-gradient(135deg, #a78bfa 0%, #818cf8 100%);
+  }
+}

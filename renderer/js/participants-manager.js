@@ -18,6 +18,11 @@ async function initParticipantsManager() {
   // Setup event listeners
   setupEventListeners();
 
+  // Initialize face manager if available
+  if (typeof presetFaceManager !== 'undefined' && presetFaceManager.initialize) {
+    presetFaceManager.initialize();
+  }
+
   // Load existing presets
   await loadParticipantPresets();
 }
@@ -607,11 +612,22 @@ function confirmAddFolder() {
  * Open participant edit modal
  * @param {number} rowIndex - Index in participantsData array (-1 for new participant)
  */
-function openParticipantEditModal(rowIndex = -1) {
+async function openParticipantEditModal(rowIndex = -1) {
   editingRowIndex = rowIndex;
 
   const title = rowIndex === -1 ? 'Add Participant' : 'Edit Participant';
   document.getElementById('participant-edit-title').textContent = title;
+
+  // Get current user ID for face photos
+  let currentUserId = null;
+  try {
+    const sessionResult = await window.api.invoke('auth-get-session');
+    if (sessionResult.success && sessionResult.session?.user) {
+      currentUserId = sessionResult.session.user.id;
+    }
+  } catch (e) {
+    console.warn('[Participants] Could not get user session for face photos:', e);
+  }
 
   if (rowIndex >= 0 && participantsData[rowIndex]) {
     // Edit mode: populate form with existing data
@@ -629,6 +645,15 @@ function openParticipantEditModal(rowIndex = -1) {
     document.getElementById('edit-folder-1').value = participant.folder_1 || '';
     document.getElementById('edit-folder-2').value = participant.folder_2 || '';
     document.getElementById('edit-folder-3').value = participant.folder_3 || '';
+
+    // Load face photos for existing participant (if has database ID)
+    if (typeof presetFaceManager !== 'undefined' && participant.id && currentPreset) {
+      const isOfficial = currentPreset.is_official === true;
+      await presetFaceManager.loadPhotos(participant.id, currentPreset.id, currentUserId, isOfficial);
+    } else if (typeof presetFaceManager !== 'undefined') {
+      // No participant ID yet - hide face photos section
+      presetFaceManager.hideSection();
+    }
   } else {
     // Create mode: clear all fields
     document.getElementById('edit-numero').value = '';
@@ -643,6 +668,11 @@ function openParticipantEditModal(rowIndex = -1) {
     document.getElementById('edit-folder-1').value = '';
     document.getElementById('edit-folder-2').value = '';
     document.getElementById('edit-folder-3').value = '';
+
+    // Hide face photos section for new participants (no ID yet)
+    if (typeof presetFaceManager !== 'undefined') {
+      presetFaceManager.hideSection();
+    }
   }
 
   // Show modal
@@ -660,6 +690,11 @@ function openParticipantEditModal(rowIndex = -1) {
 function closeParticipantEditModal() {
   document.getElementById('participant-edit-modal').classList.remove('show');
   editingRowIndex = -1;
+
+  // Reset face manager state
+  if (typeof presetFaceManager !== 'undefined' && presetFaceManager.reset) {
+    presetFaceManager.reset();
+  }
 }
 
 /**
