@@ -1,0 +1,34 @@
+<!-- Home Page Content -->
+<!-- Loaded dynamically by router.js -->
+
+<div id="section-home" class="content-section active-section">
+  <!-- Welcome Hero Section -->
+  <div class="home-hero">
+    <div class="hero-content">
+      <h1 class="hero-title">Welcome back, <span id="user-name-hero">Photographer</span>!</h1>
+      <p class="hero-subtitle">Ready to analyze your next racing event?</p>
+
+      <div class="hero-stats">
+        <div class="stat-item">
+          <div class="stat-number" id="monthly-photos">0</div>
+          <div class="stat-label">Photos (Last 30 Days)</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-number" id="completed-events">0</div>
+          <div class="stat-label">Executions (Last 30 Days)</div>
+        </div>
+      </div>
+
+      <button class="hero-cta" onclick="navigateToAnalysis()">
+        🚀 Start New Analysis
+      </button>
+    </div>
+  </div>
+
+  <!-- Announcements Section (dynamically rendered if content exists) -->
+  <div id="announcements-section" class="home-section announcements-section" style="display: none;">
+    <h2 class="section-title">📢 Latest News & Tips</h2>
+    <div class="announcements-carousel" id="announcements-carousel"></div>
+    <div class="announcements-indicators" id="announcements-indicators"></div>
+  </div>
+</div>

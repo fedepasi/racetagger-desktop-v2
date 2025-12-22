@@ -1,0 +1,475 @@
+<!-- Analysis Page Content -->
+<!-- Loaded dynamically by router.js -->
+
+<div id="section-analysis" class="content-section active-section">
+  <div class="card mb-lg">
+    <div class="card-header">
+      <div class="card-title">Image Analysis</div>
+  </div>
+  <div class="card-body">
+    <div id="error-message" class="error-message" style="display: none;"></div>
+
+    <!-- Unified Folder & Category Selection -->
+    <div class="selection-group mb-md">
+      <!--<label class="form-label selection-group-label">Select Images Folder & Category</label>-->
+
+      <div class="selection-controls">
+        <div class="folder-section">
+          <div class="folder-selector-enhanced">
+            <div class="step-badge">1</div>
+            <label class="folder-label">
+              <span class="folder-icon">📂</span>
+              Select Images Folder
+            </label>
+            <button id="folder-select-button" class="btn btn-secondary folder-btn">
+              📂 Select Folder
+            </button>
+            <div id="selected-folder" class="form-text folder-selected"></div>
+            <div id="image-count" class="form-text folder-hint">No images selected</div>
+          </div>
+        </div>
+
+        <div class="category-section">
+          <div class="category-selector-enhanced">
+            <div class="step-badge">2</div>
+            <label class="category-label" for="category-select">
+              <span class="category-icon">🏎️</span>
+              Event Type
+            </label>
+            <select class="form-control category-control" id="category-select">
+              <option value="motorsport">🏎️ Motorsport</option>
+              <option value="running">🏃 Running & Cycling</option>
+              <option value="other">⚡ Other Sports</option>
+            </select>
+            <div class="form-text category-hint">
+              Choose sport type for better AI recognition
+            </div>
+            <div class="form-text category-current">
+              <strong>Current:</strong> <span id="current-category-display">Motorsport</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="preset-section">
+          <div class="preset-selector-enhanced">
+            <div class="step-badge step-new">3</div>
+            <div class="preset-new-indicator">NEW</div>
+            <label class="preset-label" for="preset-select">
+              <span class="preset-icon">🎯</span>
+              Participant Preset
+            </label>
+            <select class="form-control preset-control" id="preset-select">
+              <option value="">🎯 Enhance Recognition Accuracy</option>
+            </select>
+            <div class="form-text preset-hint">
+              Load participant data for precise race number matching and sponsor detection
+            </div>
+            <div class="preset-details" id="preset-details" style="display: none;">
+              <div class="preset-info">
+                <div class="preset-participants">
+                  <span id="preset-participant-count">0</span> participants loaded
+                </div>
+                <div class="preset-actions">
+                  <button type="button" class="btn btn-link preset-manage-btn" onclick="navigateToParticipants()">
+                    Manage Presets
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- FOLDER ORGANIZATION: Now available as a main feature -->
+    <div id="folder-organization-section" class="folder-organization-section mb-md">
+      <div class="section-header mb-sm">
+        <h4>📁 Folder Organization</h4>
+        <div class="public-feature-badge">Available for all users</div>
+        <p class="form-text">Automatically organize photos into folders based on race numbers:</p>
+      </div>
+
+      <div class="toggle-option">
+        <label class="toggle-container" for="folder-organization-enabled">
+          <input type="checkbox" id="folder-organization-enabled" class="toggle-input">
+          <div class="toggle-slider"></div>
+          <div class="toggle-content">
+            <div class="toggle-title">Enable folder organization</div>
+            <div class="form-text">Create folders named after race numbers and organize photos accordingly</div>
+          </div>
+        </label>
+      </div>
+
+      <div id="folder-organization-options" class="folder-org-options mt-md" style="display: none;">
+        <div class="destination-selection-section mb-md">
+          <h5>Destination Folder:</h5>
+          <div class="toggle-option">
+            <label class="toggle-container" for="custom-destination-enabled">
+              <input type="checkbox" id="custom-destination-enabled" class="toggle-input">
+              <div class="toggle-slider"></div>
+              <div class="toggle-content">
+                <div class="toggle-title">Choose custom destination folder</div>
+                <div class="form-text">By default, creates "Organized_Photos" in source folder</div>
+              </div>
+            </label>
+          </div>
+
+          <div id="custom-destination-controls" class="custom-input-container mt-sm" style="display: none;">
+            <div style="display: flex; align-items: center; gap: 1rem;">
+              <input type="text" id="custom-destination-path" class="form-control" placeholder="No folder selected" readonly style="flex: 1; background: var(--surface-color-light); cursor: pointer;">
+              <button type="button" id="select-destination-btn" class="btn btn-secondary">
+                📁 Browse
+              </button>
+            </div>
+            <div class="form-text">Click Browse to select where to organize your photos</div>
+          </div>
+        </div>
+
+        <div class="org-mode-section mb-md">
+          <h5>Operation Mode:</h5>
+          <div class="radio-group space-y-2">
+            <label class="radio-option" for="org-mode-copy">
+              <input type="radio" id="org-mode-copy" name="org-mode" value="copy" checked>
+              <div class="radio-content">
+                <div class="radio-title">📄 Copy files</div>
+                <div class="form-text">Safe option - creates copies in organized folders (preserves originals)</div>
+              </div>
+            </label>
+
+            <label class="radio-option warning-option" for="org-mode-move">
+              <input type="radio" id="org-mode-move" name="org-mode" value="move">
+              <div class="radio-content">
+                <div class="radio-title">🔄 Move files</div>
+                <div class="form-text warning-text">Moves originals to organized folders (use with caution)</div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <div class="conflict-handling-section mb-md">
+          <h5>File Conflicts:</h5>
+          <div class="radio-group space-y-2">
+            <label class="radio-option" for="conflict-rename">
+              <input type="radio" id="conflict-rename" name="conflict-strategy" value="rename" checked>
+              <div class="radio-content">
+                <div class="radio-title">🔄 Rename automatically</div>
+                <div class="form-text">If file exists, rename to IMG_0001_2.jpg, IMG_0001_3.jpg, etc.</div>
+              </div>
+            </label>
+
+            <label class="radio-option" for="conflict-skip">
+              <input type="radio" id="conflict-skip" name="conflict-strategy" value="skip">
+              <div class="radio-content">
+                <div class="radio-title">Skip duplicates</div>
+                <div class="form-text">Don't copy/move files that already exist in destination</div>
+              </div>
+            </label>
+
+            <label class="radio-option warning-option" for="conflict-overwrite">
+              <input type="radio" id="conflict-overwrite" name="conflict-strategy" value="overwrite">
+              <div class="radio-content">
+                <div class="radio-title">Overwrite existing</div>
+                <div class="form-text warning-text">Replace existing files (use with caution)</div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <div class="special-options-section">
+          <h5>Special Cases:</h5>
+          <div class="toggle-option">
+            <label class="toggle-container" for="create-unknown-folder">
+              <input type="checkbox" id="create-unknown-folder" class="toggle-input" checked>
+              <div class="toggle-slider"></div>
+              <div class="toggle-content">
+                <div class="toggle-title">Create "Unknown" folder</div>
+                <div class="form-text">For photos where no race number was detected</div>
+              </div>
+            </label>
+          </div>
+
+          <div class="toggle-option">
+            <label class="toggle-container" for="include-xmp-files">
+              <input type="checkbox" id="include-xmp-files" class="toggle-input" checked>
+              <div class="toggle-slider"></div>
+              <div class="toggle-content">
+                <div class="toggle-title">Include XMP sidecar files</div>
+                <div class="form-text">Copy XMP files alongside RAW images (recommended for Lightroom users)</div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <div class="organization-warning info-box mt-md">
+          <span class="info-icon">💡</span>
+          <div class="info-text">
+            <strong>Note:</strong> Folder organization works alongside metadata writing.
+            Both features can be enabled simultaneously for maximum workflow flexibility.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mb-md">
+      <button id="advanced-toggle" class="btn btn-secondary" style="display: none;">Advanced Options</button>
+      <div id="advanced-panel" class="card mt-sm" style="display: none;">
+        <div class="card-body">
+        <div class="model-selection-section">
+          <div class="section-header mb-sm">
+            <h4>Analysis Configuration</h4>
+            <p class="form-text">Select the AI model to use for analysis:</p>
+          </div>
+
+
+          <div class="form-group">
+            <label class="form-label" for="model-select">Analysis mode:</label>
+            <select class="form-control" id="model-select">
+              <option value="gemini-2.5-flash-lite-preview-06-17">FAST - Quick results for live events (10x speed, ~85% accuracy, low cost)</option>
+              <option value="gemini-2.5-flash-preview-04-17">BALANCED - Optimal for most events (3x speed, ~92% accuracy, medium cost)</option>
+              <option value="gemini-2.5-pro-preview-05-06">ADVANCED - Maximum precision results (~98% accuracy, premium cost)</option>
+            </select>
+            <div class="form-text">
+              <strong>Current mode:</strong> <span id="current-model-display">FAST</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="csv-section mt-md">
+          <div class="section-header mb-sm">
+            <h4>Starting List</h4>
+            <p class="form-text">Optionally upload a CSV file with the starting list to compare race numbers and add metadata to images:</p>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="csv-upload">Starting list CSV (optional):</label>
+            <input
+              class="form-control"
+              id="csv-upload"
+              name="csv-upload"
+              type="file"
+              accept=".csv"
+            />
+          </div>
+          <button id="download-csv-template" class="btn btn-secondary">Download CSV Template</button>
+          <div id="csv-info" class="form-text mt-sm" style="display: none;">
+            <div id="csv-filename"></div>
+            <div id="csv-entries"></div>
+          </div>
+        </div>
+
+        <div class="metadata-section mt-md">
+          <div class="section-header mb-sm">
+            <h4>Metadata Management</h4>
+            <p class="form-text">Choose how to handle image metadata:</p>
+          </div>
+
+          <div class="metadata-options space-y-3">
+            <label class="radio-option" for="metadata-strategy-no">
+              <input type="radio" id="metadata-strategy-no" name="metadata-strategy" value="no_metadata" checked>
+              <div class="radio-content">
+                <div class="radio-title">Don't add metadata</div>
+                <div class="form-text">Don't modify the image or create XMP files</div>
+              </div>
+            </label>
+
+            <label class="radio-option" for="metadata-strategy-default">
+              <input type="radio" id="metadata-strategy-default" name="metadata-strategy" value="default">
+              <div class="radio-content">
+                <div class="radio-title">Use default metatag</div>
+                <div class="form-text">Automatically add filename and date as metatag</div>
+              </div>
+            </label>
+
+            <label class="radio-option" for="metadata-strategy-manual">
+              <input type="radio" id="metadata-strategy-manual" name="metadata-strategy" value="manual">
+              <div class="radio-content">
+                <div class="radio-title">Enter metatag manually</div>
+                <div class="form-text">Specify a custom metatag for all images</div>
+              </div>
+            </label>
+
+            <div id="manual-metatag-container" class="manual-input-container" style="display: none;">
+              <input type="text" id="manual-metatag" class="form-control" placeholder="e.g: Race XYZ, 05/10/2025">
+            </div>
+
+            <label class="radio-option" for="metadata-strategy-full">
+              <input type="radio" id="metadata-strategy-full" name="metadata-strategy" value="full">
+              <div class="radio-content">
+                <div class="radio-title">Use all analysis data</div>
+                <div class="form-text">Embed all analysis results as metadata</div>
+              </div>
+            </label>
+          </div>
+
+          <div class="metadata-note">
+            <p><strong>Note:</strong> If the CSV file contains a <code>metatag</code> field, it will always be used for matching images.</p>
+          </div>
+
+          <!-- Metadata Overwrite Options -->
+          <div class="metadata-overwrite-section mt-md">
+            <div class="section-header mb-sm">
+              <h5>Metadata Write Mode</h5>
+              <p class="form-text">Choose how to handle existing metadata in images:</p>
+            </div>
+
+            <div class="overwrite-options space-y-2">
+              <label class="checkbox-option" for="keywords-overwrite">
+                <input type="checkbox" id="keywords-overwrite" name="keywords-overwrite">
+                <div class="checkbox-content">
+                  <div class="checkbox-title">Overwrite keywords</div>
+                  <div class="form-text">Replace existing IPTC keywords instead of appending</div>
+                </div>
+              </label>
+
+              <label class="checkbox-option" for="description-overwrite" id="description-overwrite-container" style="display: none;">
+                <input type="checkbox" id="description-overwrite" name="description-overwrite">
+                <div class="checkbox-content">
+                  <div class="checkbox-title">Overwrite description</div>
+                  <div class="form-text">Replace existing description instead of appending</div>
+                </div>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="resize-optimization-section mt-md">
+          <div class="section-header mb-sm">
+            <h4>Upload Optimization</h4>
+            <p class="form-text">Automatically reduce image sizes to speed up upload (original image is not modified):</p>
+          </div>
+
+          <div class="toggle-option">
+            <label class="toggle-container" for="resize-enabled">
+              <input type="checkbox" id="resize-enabled" class="toggle-input">
+              <div class="toggle-slider"></div>
+              <div class="toggle-content">
+                <div class="toggle-title">Enable upload optimization</div>
+                <div class="form-text">When enabled, large images are resized for upload while maintaining optimal quality for AI analysis</div>
+              </div>
+            </label>
+          </div>
+
+          <div id="resize-presets-container" class="preset-options mt-md" style="display: none;">
+            <div class="preset-header">
+              <h5>Optimization level:</h5>
+              <p class="form-text">Choose the balance between upload speed and analysis quality</p>
+            </div>
+
+            <div class="preset-list space-y-3">
+              <label class="preset-option" for="preset-fast">
+                <input type="radio" id="preset-fast" name="resize-preset" value="fast">
+                <div class="preset-content">
+                  <div class="preset-name">Fast</div>
+                  <div class="preset-description">1080px, 75% quality - Faster upload</div>
+                </div>
+              </label>
+
+              <label class="preset-option" for="preset-balanced">
+                <input type="radio" id="preset-balanced" name="resize-preset" value="balanced" checked>
+                <div class="preset-content">
+                  <div class="preset-name">Balanced</div>
+                  <div class="preset-description">1440px, 85% quality - Speed/quality balance (recommended)</div>
+                  <div class="preset-badge">Recommended</div>
+                </div>
+              </label>
+
+              <label class="preset-option" for="preset-quality">
+                <input type="radio" id="preset-quality" name="resize-preset" value="quality">
+                <div class="preset-content">
+                  <div class="preset-name">Quality</div>
+                  <div class="preset-description">1920px, 90% quality - Maximum analysis precision</div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <div id="resize-estimate" class="resize-info mt-sm" style="display: none;">
+            <div class="info-box">
+              <span class="info-icon">📊</span>
+              <span class="info-text">Estimated size reduction: <strong id="size-reduction-estimate">60-80%</strong></span>
+            </div>
+          </div>
+        </div>
+
+        </div>
+      </div>
+    </div>
+
+
+    <button id="upload-button" class="btn btn-primary" disabled>Analyze Folder</button>
+
+    <!-- Enhanced Progress Tracking -->
+    <div id="progress-container" class="processing-status-panel" style="display: none;">
+      <div class="processing-header">
+        <h3 class="processing-title">Processing Images...</h3>
+        <button id="cancel-processing-btn" class="btn btn-secondary btn-sm">Cancel</button>
+      </div>
+
+      <div class="processing-stats">
+        <div class="processing-counter">
+          <span id="current-image-number">1</span> of <span id="total-images">0</span> images
+        </div>
+        <div class="processing-percentage">
+          <span id="progress-percent">0</span>%
+        </div>
+        <div class="processing-eta">
+          ETA: <span id="progress-eta-time">Calculating...</span>
+        </div>
+      </div>
+
+      <div class="processing-bar-container">
+        <div id="progress-bar" class="processing-main-bar">
+          <div id="progress-fill" class="processing-fill"></div>
+        </div>
+      </div>
+
+      <div class="processing-current">
+        <div class="processing-current-image">
+          <div class="processing-image-preview" id="current-image-preview">
+            <div class="processing-image-placeholder">📸</div>
+          </div>
+          <div class="processing-image-info">
+            <span class="processing-image-status" id="current-image-status">⏳</span>
+            <span class="processing-image-name" id="current-image-name">Preparing...</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="processing-details" id="progress-details">
+        <div class="processing-detail-row">
+          <span class="processing-detail-label">⏳ Queued:</span>
+          <span class="processing-detail-value" id="queued-count">0</span>
+        </div>
+        <div class="processing-detail-row">
+          <span class="processing-detail-label">🔄 Processing:</span>
+          <span class="processing-detail-value" id="processing-active-count">0</span>
+        </div>
+        <div class="processing-detail-row">
+          <span class="processing-detail-label">Completed:</span>
+          <span class="processing-detail-value" id="completed-count">0</span>
+        </div>
+        <div class="processing-detail-row">
+          <span class="processing-detail-label">Failed:</span>
+          <span class="processing-detail-value" id="failed-count">0</span>
+        </div>
+      </div>
+
+      <!-- Performance Telemetry -->
+      <div class="processing-telemetry">
+        <div class="telemetry-item">
+          <span class="telemetry-label">Average Speed:</span>
+          <span class="telemetry-value" id="telemetry-average-time">-</span>
+        </div>
+        <div class="telemetry-item">
+          <span class="telemetry-label">Processing Time:</span>
+          <span class="telemetry-value" id="telemetry-processing-time">-</span>
+        </div>
+        <div class="telemetry-item">
+          <span class="telemetry-label">Images/min:</span>
+          <span class="telemetry-value" id="telemetry-throughput">-</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+<!-- END Analysis Section -->

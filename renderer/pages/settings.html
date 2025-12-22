@@ -1,0 +1,80 @@
+<!-- Settings Page Content -->
+<!-- Loaded dynamically by router.js -->
+
+<div id="section-settings" class="content-section active-section">
+  <div class="settings-page">
+    <h1 class="page-title">Settings</h1>
+
+    <!-- Account & Profile -->
+    <div class="card mb-lg">
+      <div class="card-header">
+        <div class="card-title">Account & Profile</div>
+      </div>
+      <div class="card-body">
+        <div class="settings-item">
+          <div class="settings-item-label">Email</div>
+          <div class="settings-item-value" id="settings-user-email">Loading...</div>
+        </div>
+        <div class="settings-item">
+          <div class="settings-item-label">Analyses Remaining</div>
+          <div class="settings-item-value">
+            <span id="settings-token-balance">0</span> images
+            <button id="settings-buy-tokens-btn" class="btn btn-outline btn-sm">Buy more</button>
+          </div>
+        </div>
+        <div class="settings-item">
+          <div class="settings-item-label">Account Status</div>
+          <div class="settings-item-value" id="settings-subscription-status">
+            <span class="status-badge status-active">Active</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Privacy & AI -->
+    <div class="card mb-lg">
+      <div class="card-header">
+        <div class="card-title">Privacy & AI</div>
+      </div>
+      <div class="card-body">
+        <div class="toggle-option">
+          <label class="toggle-container" for="settings-training-consent">
+            <input type="checkbox" id="settings-training-consent" class="toggle-input">
+            <div class="toggle-content">
+              <div class="toggle-title">AI Training Contribution</div>
+              <div class="form-text">
+                Help improve RaceTagger by allowing your processed images to be used for AI training.
+              </div>
+            </div>
+          </label>
+        </div>
+        <div class="info-box mt-md">
+          <span class="info-icon">ℹ️</span>
+          <div class="info-text">
+            <strong>What does this mean?</strong><br>
+            When enabled, images you analyze may be used to improve our AI recognition accuracy.
+            <ul class="consent-details-list">
+              <li>Images are stored securely and used only for model training</li>
+              <li>No personal data or metadata is shared externally</li>
+              <li>You can disable this at any time</li>
+            </ul>
+          </div>
+        </div>
+        <div class="consent-timestamp" id="settings-consent-updated"></div>
+      </div>
+    </div>
+
+    <!-- About -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">About</div>
+      </div>
+      <div class="card-body">
+        <div class="settings-item">
+          <div class="settings-item-label">Version</div>
+          <div class="settings-item-value" id="settings-app-version">Loading...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

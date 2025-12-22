@@ -59,11 +59,38 @@ This is an advanced Electron desktop application for race photography analysis b
 - Optimizes resource usage across CPU cores and memory constraints
 
 ### Main Process (src/main.ts)
-- Enhanced Electron main process with extensive IPC handlers
+- Electron main process (~3,800 lines) with core application logic
 - EPIPE error protection and graceful degradation
 - Manages RAW file conversion using dcraw
 - Supports both online (Supabase) and offline (SQLite cache) data management
 - Coordinates between unified processors and streaming pipelines
+- IPC handlers delegated to modular files in `src/ipc/`
+
+### IPC Handler Architecture (src/ipc/)
+
+The IPC handlers have been modularized into 12 specialized files for maintainability:
+
+| File | Handlers | Purpose |
+|------|----------|---------|
+| `window-handlers.ts` | 3 | Window control (close, minimize, maximize) |
+| `auth-handlers.ts` | 18 | Authentication, tokens, admin checks |
+| `database-handlers.ts` | 22 | Projects, executions, presets |
+| `supabase-handlers.ts` | 19 | Sport categories, caching, feature flags |
+| `export-handlers.ts` | 13 | Export destinations, processing |
+| `app-handlers.ts` | 11 | App info, consent, settings |
+| `file-handlers.ts` | 8 | File dialogs, folder operations |
+| `image-handlers.ts` | 5 | Thumbnail generation, image loading |
+| `csv-handlers.ts` | 4 | CSV loading and parsing |
+| `analysis-handlers.ts` | 4 | Analysis logs and pipeline control |
+| `face-recognition-handlers.ts` | 6 | Face detection and matching |
+| `version-handlers.ts` | 4 | App version checking, force updates |
+
+**Total: 117 modular handlers**
+
+Key files:
+- `src/ipc/index.ts` - Central registration and exports
+- `src/ipc/context.ts` - Shared context (mainWindow, caches, state)
+- `src/ipc/types.ts` - TypeScript interfaces for IPC communication
 
 ### Authentication & Token Management (src/auth-service.ts)
 - Supabase authentication with automatic session persistence
@@ -168,6 +195,57 @@ This is an advanced Electron desktop application for race photography analysis b
 ### File Extensions Support
 - **Standard formats**: JPG, JPEG, PNG, WebP
 - **RAW formats**: NEF, ARW, CR2, CR3, ORF, RAW, RW2, DNG
+
+### Frontend Router Architecture (renderer/)
+
+The frontend uses a modular page-based architecture with Navigo.js hash routing. All pages have been migrated from the monolithic index.html to separate page files.
+
+```
+renderer/
+├── index.html              # Layout shell: header, sidebar, modals, page container
+├── pages/                  # Dynamically loaded page content (ALL MIGRATED)
+│   ├── home.html           # Dashboard with hero section and announcements
+│   ├── settings.html       # Account, privacy & AI settings
+│   ├── projects.html       # Project management
+│   ├── analysis.html       # Image analysis with folder organization options
+│   ├── participants.html   # Participant presets with CSV/JSON import
+│   └── destinations.html   # Export destinations with FTP settings
+├── js/
+│   ├── router.js           # Navigo.js hash router (~300 lines)
+│   ├── vendor/navigo.min.js # Navigo.js library (8.11.1)
+│   └── [23 other JS modules]
+└── css/                    # 15 CSS files organized by feature
+```
+
+**Router Features (router.js):**
+- Hash-based routing: `#/home`, `#/analysis`, `#/settings`, etc.
+- Page caching to avoid re-fetching
+- `page-loaded` and `section-changed` events for initialization
+- `initializePage()` function re-binds event listeners for dynamically loaded elements
+- Backward compatibility with legacy section-based navigation
+
+**Navigation Flow:**
+1. User clicks sidebar nav item
+2. `router.js` intercepts click, navigates to `#/pagename`
+3. Router fetches `pages/pagename.html` (cached after first load)
+4. Content injected into `#page-content` container
+5. Events dispatched: `page-loaded` (on window), `section-changed` (on document)
+6. `initializePage()` re-attaches event listeners for dynamically loaded buttons
+
+**Page Initialization:**
+- **home**: Loads recent presets and home stats
+- **settings**: Initializes SettingsManager
+- **projects**: Loads project list, attaches create button handler
+- **destinations**: Initializes ExportDestinationsManager
+- **participants**: Attaches preset/CSV/JSON import handlers
+- **analysis**: Re-binds folder selection, upload, and preset handlers
+
+**Benefits:**
+- Lazy loading of page content (~80% reduction in initial HTML)
+- Browser history support (back/forward navigation)
+- Deep linking support (`#/analysis`, `#/settings`)
+- Easier maintenance with page-specific files
+- Global modals remain in index.html for availability across all pages
 
 ### Enhanced Frontend Components
 

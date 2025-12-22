@@ -27,6 +27,37 @@
 
   <!-- Settings Page -->
   <link rel="stylesheet" href="css/settings.css">
+
+  <!-- Router Page Container Styles -->
+  <style>
+    .page-container {
+      display: none;
+    }
+    .page-container.active {
+      display: block;
+    }
+    .page-container.page-loading {
+      opacity: 0.6;
+      pointer-events: none;
+    }
+    .error-page {
+      padding: 2rem;
+      text-align: center;
+    }
+    .error-page h2 {
+      color: var(--color-danger, #e74c3c);
+      margin-bottom: 1rem;
+    }
+    .error-page button {
+      margin-top: 1rem;
+      padding: 0.5rem 1.5rem;
+      background: var(--color-primary, #2196F3);
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+  </style>
 </head>
 <body>
   <!-- Window Chrome (macOS style) -->
@@ -223,7 +254,10 @@
 
     <!-- Main Content -->
     <main class="main-content">
-      <!-- Home Section (Dashboard) -->
+      <!-- Dynamic Page Container (for router-loaded pages) -->
+      <div id="page-content" class="page-container"></div>
+
+      <!-- Home Section (Dashboard) - Will be loaded dynamically by router -->
       <div id="section-home" class="content-section active-section">
         <!-- Welcome Hero Section -->
         <div class="home-hero">
@@ -1653,6 +1687,10 @@
 
   <!-- Sortable Table Library - lightweight table sorting with no dependencies (local copy for offline support) -->
   <script src="js/vendor/sortable.min.js"></script>
+
+  <!-- Navigo Router -->
+  <script src="js/vendor/navigo.min.js"></script>
+  <script src="js/router.js"></script>
 
   <script src="js/streaming-view.js"></script>
   <script src="js/log-visualizer.js"></script>

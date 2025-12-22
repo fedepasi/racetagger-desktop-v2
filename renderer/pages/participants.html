@@ -1,0 +1,469 @@
+<!-- Participants Page Content -->
+<!-- Loaded dynamically by router.js -->
+
+<div id="section-participants" class="content-section active-section">
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">Participant Presets</div>
+      <div class="card-header-actions">
+        <button id="create-new-preset-btn" class="btn btn-primary">
+          <span class="btn-icon">+</span>
+          New Preset
+        </button>
+        <button id="import-csv-preset-btn" class="btn btn-secondary">
+          <span class="btn-icon">📄</span>
+          Import CSV
+        </button>
+        <button id="import-json-preset-btn" class="btn btn-secondary">
+          <span class="btn-icon">💾</span>
+          Import JSON
+        </button>
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="info-box mb-md">
+        <span class="info-icon">ℹ️</span>
+        <div class="info-text">
+          <strong>What are Participant Presets?</strong> Presets help improve AI recognition accuracy by providing expected race numbers, driver names, and sponsor information.
+          <a href="https://www.racetagger.cloud/blog/3-CSV-Starting-Lists-for-Race-Photography" target="_blank" style="color: var(--primary-color); text-decoration: underline;">Learn more →</a>
+        </div>
+      </div>
+      <div id="presets-list-container">
+        <div class="empty-state" id="empty-presets-state">
+          <div class="empty-icon">👥</div>
+          <h3>No participant presets yet</h3>
+          <p>Create your first preset to start managing participants efficiently</p>
+          <button class="btn btn-primary" onclick="createNewPreset()">Create First Preset</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Preset Editor Modal -->
+  <div id="preset-editor-modal" class="modal">
+    <div class="modal-content participants-modal">
+      <div class="modal-header">
+        <h2 id="preset-editor-title">New Participant Preset</h2>
+        <button class="modal-close" onclick="closePresetEditor()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <!-- Container affiancato per Preset Info + Folder Organization -->
+        <div class="preset-header-row">
+          <!-- Preset Info -->
+          <div class="preset-info-section">
+            <div class="form-group">
+              <label for="preset-name">Preset Name *</label>
+              <input type="text" id="preset-name" placeholder="e.g., Monza 2024 GT Championship">
+            </div>
+              <div class="form-group">
+                <label for="preset-description">Description</label>
+                <input type="text" id="preset-description" placeholder="Optional description">
+              </div>
+            <!-- Person Shown Template (for IPTC PersonInImage field) -->
+            <div class="form-group">
+              <label for="person-shown-template">
+                Person Shown Template
+                <span class="label-hint" title="Template for IPTC PersonInImage field. Used by photo agencies.">ℹ️</span>
+              </label>
+              <input type="text" id="person-shown-template" placeholder="{name} ({nationality}) {team} {car_model}">
+              <div class="form-hint">
+                <span class="placeholders-hint">
+                  Placeholders: <code>{name}</code> <code>{surname}</code> <code>{number}</code> <code>{team}</code> <code>{car_model}</code> <code>{nationality}</code>
+                </span>
+                <span class="preview-label" id="person-shown-preview"></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Folder Organization Section -->
+          <div class="folder-organization-section">
+            <div class="section-header">
+              <h3>📁 Personalize your Folder Organization</h3>
+              <p class="form-text">Create custom folders to organize photos. You can assign each participant to one or more folders.</p>
+            </div>
+
+            <div class="custom-folders-manager">
+              <div class="folders-list" id="custom-folders-list">
+                <!-- Custom folders will be added here dynamically -->
+                <p class="empty-folders-message" id="empty-folders-message">No custom folders yet. Click "Add Folder" to create one.</p>
+              </div>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="addCustomFolder()">
+                <span class="btn-icon">+</span>
+                Add Folder
+              </button>
+            </div>
+
+            <div class="folder-info-box">
+              <span class="info-icon">ℹ️</span>
+              <div class="info-text">
+                <strong>How it works:</strong><br>
+                • <strong>No folders assigned:</strong> Photos organized by race number (e.g., "50/")<br>
+                • <strong>One or more folders assigned:</strong> Photos <strong>copied to ALL</strong> assigned folders<br>
+                <br>
+                <strong>Example:</strong> Number 50 with Folder 1 = "Ferrari" and Folder 2 = "50-Pilota"<br>
+                → Photos copied to <strong>BOTH</strong> "Ferrari/" AND "50-Pilota/" folders for easy client delivery.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Participants Table -->
+        <div class="participants-table-section">
+          <div class="table-header">
+            <h3>Participants</h3>
+            <div class="table-actions">
+              <button class="btn btn-secondary btn-sm" onclick="openParticipantEditModal(-1)">
+                <span class="btn-icon">+</span>
+                Add Participant
+              </button>
+              <button class="btn btn-secondary btn-sm" onclick="clearAllParticipants()">
+                <span class="btn-icon">🗑️</span>
+                Clear All
+              </button>
+            </div>
+          </div>
+
+          <div class="participants-table-container">
+            <table id="participants-table" class="participants-table sortable asc">
+              <thead>
+                <tr>
+                  <th>Num</th>
+                  <th>Driver</th>
+                  <th>Category</th>
+                  <th>Team</th>
+                  <th>Plate</th>
+                  <th class="no-sort">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="participants-tbody">
+                <!-- Participants rows will be added here -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closePresetEditor()">Cancel</button>
+        <button class="btn btn-primary" onclick="savePreset()" id="save-preset-btn">
+          <span class="btn-icon">💾</span>
+          Save Preset
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Folder Name Input Modal -->
+  <div id="folder-name-modal" class="modal">
+    <div class="modal-content folder-name-modal">
+      <div class="modal-header">
+        <h2>Add Custom Folder</h2>
+        <button class="modal-close" onclick="closeFolderNameModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="folder-name-input text-white">Folder Name *</label>
+          <div class="folder-input-container">
+            <input type="text" id="folder-name-input" class="form-input" placeholder="e.g., Ferrari  or  {number}-{name}" autofocus autocomplete="off">
+            <datalist id="keyword-suggestions">
+              <option value="{number}">Race number</option>
+              <option value="{name}">Driver name</option>
+              <option value="{team}">Team name</option>
+              <option value="{category}">Category</option>
+              <option value="{tag}">Custom tag</option>
+            </datalist>
+            <div id="keyword-dropdown" class="keyword-dropdown" style="display: none;"></div>
+          </div>
+        </div>
+
+        <div class="folder-modal-tip">
+          <span class="tip-icon">💡</span>
+          <div class="tip-content">
+            <strong>Pro Tip: Use Dynamic Keywords!</strong><br>
+            Type <strong>{</strong> to see available keywords that will be replaced automatically:<br>
+            • <code>{number}</code> = Race number (e.g., "51")<br>
+            • <code>{name}</code> = Driver name<br>
+            • <code>{team}</code> = Team name<br>
+            • <code>{category}</code> = Category<br>
+            • <code>{tag}</code> = Custom tag<br>
+            <br>
+            <strong>Example:</strong> <code>{number}-{name}</code> → "51-A. Pier Guidi"
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeFolderNameModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="confirmAddFolder()">
+          <span class="btn-icon">+</span>
+          Add Folder
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Participant Edit Modal -->
+  <div id="participant-edit-modal" class="modal">
+    <div class="modal-content participant-edit-modal">
+      <div class="modal-header">
+        <h2 id="participant-edit-title">Edit Participant</h2>
+        <button class="modal-close" onclick="closeParticipantEditModal()">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- BASIC INFO SECTION -->
+        <div class="form-section">
+          <h3 class="section-title">Basic Information</h3>
+
+          <!-- Number + Category (only row with 2 columns) -->
+          <div class="form-row-number-category">
+            <div class="form-group">
+              <label>Number *</label>
+              <input type="text" id="edit-numero" class="form-input" placeholder="51" required>
+            </div>
+            <div class="form-group">
+              <label>Category</label>
+              <input type="text" id="edit-categoria" class="form-input" placeholder="GT3, F1, MotoGP...">
+            </div>
+          </div>
+
+          <!-- Driver Name (full width) -->
+          <div class="form-group">
+            <label>Driver Name *</label>
+            <input type="text" id="edit-nome" class="form-input" placeholder="Alessandro Pier Guidi" required>
+          </div>
+
+          <!-- Team (full width) -->
+          <div class="form-group">
+            <label>Team</label>
+            <input type="text" id="edit-squadra" class="form-input" placeholder="Ferrari">
+          </div>
+        </div>
+
+        <!-- ADDITIONAL INFO SECTION -->
+        <div class="form-section">
+          <h3 class="section-title">Additional Information</h3>
+
+          <!-- Plate Number (full width) -->
+          <div class="form-group">
+            <label>Plate Number 🚗</label>
+            <input type="text" id="edit-plate-number" class="form-input" placeholder="AB123CD" style="text-transform: uppercase;">
+            <small class="form-hint">License plate for future car recognition</small>
+          </div>
+
+          <!-- Sponsors (full width) -->
+          <div class="form-group">
+            <label>Sponsors</label>
+            <input type="text" id="edit-sponsor" class="form-input" placeholder="Shell, Santander, Ray-Ban">
+            <small class="form-hint">Comma-separated list</small>
+          </div>
+
+          <!-- Meta Tag (full width) -->
+          <div class="form-group">
+            <label>Meta Tag</label>
+            <input type="text" id="edit-metatag" class="form-input" placeholder="Pro Driver, VIP, etc.">
+          </div>
+        </div>
+
+        <!-- FOLDER ORGANIZATION SECTION -->
+        <div class="form-section">
+          <h3 class="section-title">Folder Organization</h3>
+
+          <!-- Folder 1 -->
+          <div class="folder-item">
+            <label class="folder-item-label">📁 Folder 1</label>
+            <select id="edit-folder-1" class="form-input">
+              <option value="">None</option>
+            </select>
+          </div>
+
+          <!-- Folder 2 -->
+          <div class="folder-item">
+            <label class="folder-item-label">📁 Folder 2</label>
+            <select id="edit-folder-2" class="form-input">
+              <option value="">None</option>
+            </select>
+          </div>
+
+          <!-- Folder 3 -->
+          <div class="folder-item">
+            <label class="folder-item-label">📁 Folder 3</label>
+            <select id="edit-folder-3" class="form-input">
+              <option value="">None</option>
+            </select>
+          </div>
+
+          <small class="form-hint">💡 Photos will be copied to ALL selected folders</small>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeParticipantEditModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveParticipantEdit()">
+          <span class="btn-icon">💾</span>
+          Save Changes
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit Folder Name Modal -->
+  <div id="edit-folder-modal" class="modal">
+    <div class="modal-content" style="max-width: 500px;">
+      <div class="modal-header">
+        <h2>Edit Folder Name</h2>
+        <button class="modal-close" onclick="closeEditFolderModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="edit-folder-name-input">Folder Name *</label>
+          <input
+            type="text"
+            id="edit-folder-name-input"
+            class="form-input"
+            placeholder="Enter folder name"
+            onkeypress="if(event.key === 'Enter') saveEditedFolderName()"
+          >
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeEditFolderModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveEditedFolderName()">
+          <span class="btn-icon">💾</span>
+          Save
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CSV Import Modal -->
+  <div id="csv-import-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Import Participants from CSV</h2>
+        <button class="modal-close" onclick="closeCsvImportModal()">&times;</button>
+      </div>
+      <div class="modal-body" style="padding: 2rem;">
+        <!-- Preset Name Section -->
+        <div class="form-group" style="margin-bottom: 2rem;">
+          <label class="csv-preset-name" for="csv-preset-name" style="display: block; margin-bottom: 0.75rem; font-weight: 600; color: var(--text-primary);">
+            📋 Preset Name *
+          </label>
+          <input
+            type="text"
+            id="csv-preset-name"
+            class="form-input-sm"
+            placeholder="e.g., Monza 2024 Starting List"
+            style="width: 100%; font-size: 1rem; padding: 0.75rem 1rem;"
+          >
+          <small class="form-hint" style="display: block; margin-top: 0.5rem;">
+            Give this participant list a meaningful name
+          </small>
+        </div>
+
+        <!-- CSV File Upload Section -->
+        <div class="form-group" style="margin-bottom: 2rem;">
+          <label class for="csv-file-input" style="display: block; margin-bottom: 0.75rem; font-weight: 600; color: var(--text-dark);">
+            📂 CSV File *
+          </label>
+          <div style="border: 2px dashed var(--border-color); border-radius: 8px; padding: 2rem; text-align: center; transition: all 0.2s ease; background: var(--surface-color-light);">
+            <input
+              type="file"
+              id="csv-file-input"
+              accept=".csv"
+              onchange="previewCsvFile()"
+              style="margin-bottom: 1rem; font-size: 0.95rem;"
+            >
+            <div style="color: var(--text-secondary); font-size: 0.875rem;">
+              <strong>Expected columns:</strong> number, name, team, category, navigator, sponsor, metatag<br>
+              <small>Upload a CSV file with participant data</small>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="downloadCsvTemplate()" style="margin-top: 1rem;">
+              <span class="btn-icon">📥</span>
+              Download CSV Template
+            </button>
+          </div>
+        </div>
+
+        <!-- CSV Preview Section -->
+        <div id="csv-preview" class="csv-preview-container" style="display: none; margin-top: 2rem;">
+          <h4 style="color: var(--text-primary); margin-bottom: 1rem; display: flex; align-items: center;">
+            👁️ Preview (first 5 rows):
+          </h4>
+          <div id="csv-preview-table" style="border-radius: 6px; overflow: hidden; border: 1px solid var(--border-color);"></div>
+          <small class="form-hint" style="display: block; margin-top: 0.75rem; text-align: center;">
+            Verify the data looks correct before importing
+          </small>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeCsvImportModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="importCsvPreset()" id="import-csv-btn" disabled>
+          <span class="btn-icon">📥</span>
+          Import
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- JSON Import Modal -->
+  <div id="json-import-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Import Complete Preset (JSON)</h2>
+        <button class="modal-close" onclick="closeJsonImportModal()">&times;</button>
+      </div>
+      <div class="modal-body" style="padding: 2rem;">
+        <!-- JSON File Upload Section -->
+        <div class="form-group" style="margin-bottom: 2rem;">
+          <label for="json-file-input" style="display: block; margin-bottom: 0.75rem; font-weight: 600; color: #000;">
+            📂 JSON Preset File *
+          </label>
+          <div style="border: 2px dashed var(--border-color); border-radius: 8px; padding: 2rem; text-align: center; transition: all 0.2s ease; background: var(--surface-color-light);">
+            <input
+              type="file"
+              id="json-file-input"
+              accept=".json"
+              onchange="previewJsonFile()"
+              style="margin-bottom: 1rem; font-size: 0.95rem;"
+            >
+            <div style="color: var(--text-secondary); font-size: 0.875rem;">
+              <strong>Complete preset backup</strong><br>
+              <small>Import a previously exported JSON preset with all settings</small>
+            </div>
+          </div>
+        </div>
+
+        <!-- JSON Preview Section -->
+        <div id="json-preview" class="json-preview-container" style="display: none; margin-top: 2rem;">
+          <h4 style="color: var(--text-primary); margin-bottom: 1rem; display: flex; align-items: center;">
+            👁️ Preset Preview:
+          </h4>
+          <div id="json-preview-content" style="background: var(--surface-color-light); padding: 1.5rem; border-radius: 6px; border: 1px solid var(--border-color);">
+            <div class="preview-row" style="margin-bottom: 0.75rem;">
+              <strong>Name:</strong> <span id="json-preview-name">-</span>
+            </div>
+            <div class="preview-row" style="margin-bottom: 0.75rem;">
+              <strong>Description:</strong> <span id="json-preview-description">-</span>
+            </div>
+            <div class="preview-row" style="margin-bottom: 0.75rem;">
+              <strong>Participants:</strong> <span id="json-preview-participants-count">0</span>
+            </div>
+            <div class="preview-row">
+              <strong>Custom Folders:</strong> <span id="json-preview-folders">None</span>
+            </div>
+          </div>
+          <small class="form-hint" style="display: block; margin-top: 0.75rem; text-align: center;">
+            This will create a new preset with all participants and settings
+          </small>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeJsonImportModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="importJsonPreset()" id="import-json-btn" disabled>
+          <span class="btn-icon">📥</span>
+          Import Preset
+        </button>
+      </div>
+    </div>
+  </div>
+
+</div>
