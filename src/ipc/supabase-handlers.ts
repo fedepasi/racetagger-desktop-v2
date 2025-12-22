@@ -27,7 +27,9 @@ import {
   getCachedParticipantPresets,
   duplicateOfficialPresetSupabase,
   // Feature Flags
-  isFeatureEnabled
+  isFeatureEnabled,
+  // Supabase client
+  getSupabaseClient
 } from '../database-service';
 
 export function registerSupabaseHandlers(): void {
@@ -206,5 +208,105 @@ export function registerSupabaseHandlers(): void {
     }
   });
 
-  console.log('[IPC] Supabase handlers registered (17 handlers)');
+  // ==================== HOME STATISTICS ====================
+
+  ipcMain.handle('get-home-statistics', async () => {
+    console.log('[Home Stats] Starting home statistics calculation...');
+    try {
+      const userId = authService.getAuthState().user?.id;
+      if (!userId) {
+        console.log('[Home Stats] No user ID available, returning default stats');
+        return {
+          success: true,
+          data: {
+            monthlyPhotos: 0,
+            completedEvents: 0
+          }
+        };
+      }
+
+      // Get last 30 days date range
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+      let monthlyPhotos = 0;
+      let completedEvents = 0;
+
+      try {
+        const supabase = getSupabaseClient();
+
+        // Query executions with JOIN to execution_settings for photo counts
+        const { data, error } = await supabase
+          .from('executions')
+          .select(`
+            id,
+            status,
+            created_at,
+            execution_settings (
+              total_images
+            )
+          `)
+          .eq('user_id', userId)
+          .gte('created_at', thirtyDaysAgo.toISOString());
+
+        if (error) {
+          console.error('[Home Stats] Query error:', error);
+        } else if (data) {
+          for (const exec of data) {
+            if (exec.status === 'completed') {
+              completedEvents++;
+            }
+            const settings = exec.execution_settings as any;
+            if (settings && settings.total_images) {
+              monthlyPhotos += settings.total_images;
+            }
+          }
+        }
+      } catch (queryError) {
+        console.error('[Home Stats] Error querying stats:', queryError);
+      }
+
+      console.log(`[Home Stats] Result: ${monthlyPhotos} photos, ${completedEvents} events`);
+      return {
+        success: true,
+        data: {
+          monthlyPhotos,
+          completedEvents
+        }
+      };
+    } catch (error) {
+      console.error('[Home Stats] Error:', error);
+      return {
+        success: false,
+        data: { monthlyPhotos: 0, completedEvents: 0 }
+      };
+    }
+  });
+
+  // ==================== ANNOUNCEMENTS ====================
+
+  ipcMain.handle('get-announcements', async () => {
+    console.log('[Announcements] Fetching desktop announcements...');
+    try {
+      const supabase = getSupabaseClient();
+      const { data, error } = await supabase
+        .from('desktop_announcements')
+        .select('title, description, image_url, link_url')
+        .eq('is_active', true)
+        .order('display_order', { ascending: true })
+        .limit(5);
+
+      if (error) {
+        console.error('[Announcements] Supabase error:', error);
+        return { success: false, data: [] };
+      }
+
+      console.log(`[Announcements] Retrieved ${data?.length || 0} announcements`);
+      return { success: true, data: data || [] };
+    } catch (error) {
+      console.error('[Announcements] Error fetching announcements:', error);
+      return { success: false, data: [] };
+    }
+  });
+
+  console.log('[IPC] Supabase handlers registered (19 handlers)');
 }

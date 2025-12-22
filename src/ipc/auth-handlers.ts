@@ -300,7 +300,25 @@ export function registerAuthHandlers(): void {
     await syncUserProjects();
   });
 
-  console.log('[IPC] Auth handlers registered (17 handlers)');
+  // ==================== User Info ====================
+
+  ipcMain.handle('get-user-info', async () => {
+    try {
+      const authState = authService.getAuthState();
+      if (authState.user) {
+        return {
+          success: true,
+          name: authState.user.user_metadata?.name || authState.user.email?.split('@')[0] || 'Photographer'
+        };
+      }
+      return { success: false, name: 'Photographer' };
+    } catch (error) {
+      console.error('[Auth] Error getting user info:', error);
+      return { success: false, name: 'Photographer' };
+    }
+  });
+
+  console.log('[IPC] Auth handlers registered (18 handlers)');
 }
 
 // Export for use in other modules

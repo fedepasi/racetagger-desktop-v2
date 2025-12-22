@@ -141,6 +141,8 @@ import { FolderOrganizerConfig } from './utils/folder-organizer';
 import { faceRecognitionProcessor, StoredFaceDescriptor, DetectedFace, FaceContext } from './face-recognition-processor';
 import { faceDetectionBridge } from './face-detection-bridge';
 import { getModelManager } from './model-manager';
+// Modular IPC handlers
+import { registerAllHandlers, initializeIpcContext } from './ipc';
 
 // Definisci le estensioni supportate a livello globale per riutilizzo
 const RAW_EXTENSIONS = ['.nef', '.arw', '.cr2', '.cr3', '.orf', '.raw', '.rw2', '.dng'];
@@ -4356,40 +4358,35 @@ app.whenReady().then(async () => { // Added async here
   console.log('[Main Process] Checking app version...');
   versionCheckResult = await checkAppVersion();
 
-  // Register early IPC handlers needed by renderer on load
-  ipcMain.handle('get-app-path', () => {
-    // In production, assets are in app.asar.unpacked, not app.asar
-    // This is needed for face-api.js to load models via fetch()
-    const appPath = app.getAppPath();
-    if (appPath.includes('app.asar')) {
-      return appPath.replace('app.asar', 'app.asar.unpacked');
-    }
-    return appPath;
-  });
-  ipcMain.handle('get-app-version', () => {
-    return app.getVersion();
-  });
-
-  // Return the maximum supported edge function version for this app
-  ipcMain.handle('get-max-supported-edge-function-version', () => {
-    const { MAX_SUPPORTED_EDGE_FUNCTION_VERSION } = require('./config');
-    return MAX_SUPPORTED_EDGE_FUNCTION_VERSION;
-  });
+  // NOTE: These handlers are now in app-handlers.ts
+  // ipcMain.handle('get-app-path', ...)
+  // ipcMain.handle('get-app-version', ...)
+  // ipcMain.handle('get-max-supported-edge-function-version', ...)
 
   // CRITICAL: Register all IPC handlers BEFORE creating window to avoid race conditions
   // The renderer will call these handlers immediately on load
   console.log('[Main Process] Registering IPC handlers before window creation...');
-  setupAuthHandlers();
-  setupWindowControlHandlers();
+  // NOTE: These are now handled by modular IPC handlers in src/ipc/
+  // setupAuthHandlers();  // -> auth-handlers.ts
+  // setupWindowControlHandlers();  // -> window-handlers.ts
 
-  // Register token handlers needed immediately by renderer
+  // Token handlers - these remain in main.ts (will migrate to auth-handlers.ts later)
   ipcMain.handle('submit-token-request', handleTokenRequest);
   ipcMain.handle('get-token-balance', handleGetTokenBalance);
   ipcMain.handle('get-pending-tokens', handleGetPendingTokens);
   ipcMain.handle('get-token-info', handleGetTokenInfo);
 
+  // Register modular IPC handlers BEFORE window creation
+  registerAllHandlers();
+  console.log('[Main Process] Modular IPC handlers registered');
+
   createWindow();
-  
+
+  // Initialize IPC context with mainWindow reference
+  if (mainWindow) {
+    initializeIpcContext(mainWindow);
+  }
+
   // Cleanup temp files older than 7 days at startup and start periodic cleanup
   console.log('[Main Process] Cleaning up temporary files at startup...');
   try {
@@ -4409,9 +4406,10 @@ app.whenReady().then(async () => { // Added async here
   initializeDatabaseSchema(); // Usa il nome esportato corretto
   
   
-  console.log('[Main Process] After initializeDatabaseSchema. Setting up DB IPC handlers...');
-  setupDatabaseIpcHandlers();
-  console.log('[Main Process] After setupDatabaseIpcHandlers.');
+  console.log('[Main Process] After initializeDatabaseSchema.');
+  // NOTE: Database IPC handlers are now in database-handlers.ts and supabase-handlers.ts
+  // setupDatabaseIpcHandlers();
+  console.log('[Main Process] Database handlers already registered via registerAllHandlers()');
 
   // Initialize Supabase cache after authentication is ready
   console.log('[Main Process] Caching Supabase data...');
@@ -4464,40 +4462,9 @@ app.whenReady().then(async () => { // Added async here
     return forceUpdateRequired;
   });
   
-  // Adobe DNG Converter check handler
-  ipcMain.handle('check-adobe-dng-converter', async () => {
-    try {
-      // Only required if FORCE_ADOBE_DNG_FALLBACK is true
-      if (process.env.FORCE_ADOBE_DNG_FALLBACK !== 'true') {
-        console.log('[Main Process] FORCE_ADOBE_DNG_FALLBACK is false, Adobe DNG Converter not required');
-        return { required: false, installed: true };
-      }
-      
-      console.log('[Main Process] Checking Adobe DNG Converter installation...');
-      const isInstalled = await rawConverter.isDngConverterInstalled();
-      console.log(`[Main Process] Adobe DNG Converter installed: ${isInstalled}`);
-      
-      return { 
-        required: true, 
-        installed: isInstalled 
-      };
-    } catch (error) {
-      console.error('[Main Process] Error checking Adobe DNG Converter:', error);
-      return { 
-        required: true, 
-        installed: false, 
-        error: String(error) 
-      };
-    }
-  });
-
-  ipcMain.handle('open-download-url', async (_, url: string) => {
-    if (url) {
-      await shell.openExternal(url);
-      return true;
-    }
-    return false;
-  });
+  // NOTE: These handlers are now in app-handlers.ts
+  // - check-adobe-dng-converter
+  // - open-download-url
   
   ipcMain.handle('quit-app-for-update', () => {
     // Allow app to quit even when force update is required
@@ -4508,103 +4475,17 @@ app.whenReady().then(async () => { // Added async here
   // are now registered BEFORE createWindow() to avoid race conditions
   ipcMain.on('cancel-batch-processing', handleCancelBatchProcessing);
 
-  // TRAINING CONSENT: IPC handlers for user consent management
-  ipcMain.handle('get-training-consent', async () => {
-    try {
-      const { consentService } = await import('./consent-service');
-      return await consentService.getTrainingConsent();
-    } catch (error) {
-      console.error('[Main] Error getting training consent:', error);
-      return true; // Default to true on error
-    }
-  });
-
-  ipcMain.handle('set-training-consent', async (_event, consent: boolean) => {
-    try {
-      const { consentService } = await import('./consent-service');
-      return await consentService.setTrainingConsent(consent);
-    } catch (error) {
-      console.error('[Main] Error setting training consent:', error);
-      return false;
-    }
-  });
-
-  ipcMain.handle('get-consent-status', async () => {
-    try {
-      const { consentService } = await import('./consent-service');
-      return await consentService.getConsentStatus();
-    } catch (error) {
-      console.error('[Main] Error getting consent status:', error);
-      return { trainingConsent: true, consentUpdatedAt: null };
-    }
-  });
-
-  // USER SETTINGS: IPC handler for Settings screen
-  ipcMain.handle('get-full-settings', async () => {
-    try {
-      const { userPreferencesService } = await import('./user-preferences-service');
-      return await userPreferencesService.getFullSettings();
-    } catch (error) {
-      console.error('[Main] Error getting full settings:', error);
-      return {
-        account: { email: '', userId: '', userRole: 'user' },
-        tokens: { total: 0, used: 0, remaining: 0, pending: 0 },
-        subscription: { plan: null, isActive: false, expiresAt: null },
-        privacy: { trainingConsent: true, consentUpdatedAt: null }
-      };
-    }
-  });
+  // NOTE: These handlers are now in app-handlers.ts:
+  // - get-training-consent
+  // - set-training-consent
+  // - get-consent-status
+  // - get-full-settings
 
   // FOLDER ORGANIZATION: IPC handlers (available for all authenticated users)
+  // NOTE: check-folder-organization-enabled and get-folder-organization-config are now in app-handlers.ts
   if (APP_CONFIG.features.ENABLE_FOLDER_ORGANIZATION) {
-    console.log('[Main Process] Registering folder organization IPC handlers (public feature)...');
-    
-    // Check if folder organization feature is available for current user
-    ipcMain.handle('check-folder-organization-enabled', async () => {
-      const isFeatureEnabled = APP_CONFIG.features.ENABLE_FOLDER_ORGANIZATION;
-      const hasAccess = authService.hasFolderOrganizationAccess();
-      const authState = authService.getAuthState();
-      
-      console.log(`[Folder Org] Feature enabled: ${isFeatureEnabled}`);
-      console.log(`[Folder Org] User has access: ${hasAccess}`);
-      console.log(`[Folder Org] Auth state:`, {
-        isAuthenticated: authState.isAuthenticated,
-        userEmail: authState.user?.email,
-        userRole: authState.userRole
-      });
-      
-      return isFeatureEnabled && hasAccess;
-    });
-
-    // Get default folder organization configuration
-    ipcMain.handle('get-folder-organization-config', async () => {
-      if (!authService.hasFolderOrganizationAccess()) {
-        throw new Error('Feature non disponibile');
-      }
-
-      // Import dinamico per mantenere modularità
-      const { createDefaultConfig } = await import('./utils/folder-organizer');
-      return createDefaultConfig();
-    });
-
-    // Select destination folder for organization
-    ipcMain.handle('select-organization-destination', async () => {
-      if (!authService.hasFolderOrganizationAccess()) {
-        throw new Error('Feature non disponibile');
-      }
-
-      const result = await dialog.showOpenDialog({
-        properties: ['openDirectory', 'createDirectory'],
-        title: 'Select Destination Folder for Organized Photos',
-        buttonLabel: 'Select Folder'
-      });
-
-      if (result.canceled || result.filePaths.length === 0) {
-        return null;
-      }
-
-      return result.filePaths[0];
-    });
+    console.log('[Main Process] Registering folder organization IPC handlers (organize-only)...');
+    // NOTE: select-organization-destination is now in file-handlers.ts
 
     // Post-analysis folder organization
     ipcMain.handle('organize-results-post-analysis', async (_, data: {
@@ -4794,471 +4675,21 @@ app.whenReady().then(async () => { // Added async here
   console.log('[Main Process] Registering dcraw IPC handlers...');
   
   
-  // Debug Sharp IPC handler
-  ipcMain.handle('debug-sharp', async () => {
-    console.log('[IPC] debug-sharp handler called');
-    
-    try {
-      console.log('[IPC] Importing debugSharp function');
-      const { debugSharp } = await import('./utils/native-modules');
-      
-      console.log('[IPC] Calling debugSharp()');
-      debugSharp();
-      
-      console.log('[IPC] debugSharp completed');
-      return { success: true, message: 'Debug information logged to console' };
-    } catch (error: any) {
-      console.error('[IPC] Error in debug-sharp handler:', error);
-      return { success: false, error: error.message };
-    }
-  });
+  // NOTE: debug-sharp handler is now in app-handlers.ts
 
-  // Enhanced File Browser IPC handlers
-  ipcMain.handle('dialog-show-open', async (_, options) => {
-    if (!mainWindow) {
-      throw new Error('Main window not available');
-    }
+  // NOTE: Enhanced File Browser IPC handlers are now in file-handlers.ts:
+  // - dialog-show-open
+  // - show-save-dialog
+  // - write-file
+  // - get-folder-files
+  // - get-file-stats
 
-    try {
-      const result = await dialog.showOpenDialog(mainWindow, options);
-      return result;
-    } catch (error) {
-      console.error('Error in dialog-show-open:', error);
-      throw error;
-    }
-  });
+  // NOTE: generate-thumbnail is now in image-handlers.ts
+  // NOTE: get-halfsize-image is now in image-handlers.ts
+  // NOTE: get-supabase-image-url is now in image-handlers.ts
+  // NOTE: get-local-image is now in image-handlers.ts
+  // NOTE: list-files-in-folder is now in file-handlers.ts
 
-  // Show save dialog
-  ipcMain.handle('show-save-dialog', async (_, options) => {
-    if (!mainWindow) {
-      throw new Error('Main window not available');
-    }
-
-    try {
-      const result = await dialog.showSaveDialog(mainWindow, options);
-      return result;
-    } catch (error) {
-      console.error('Error in show-save-dialog:', error);
-      throw error;
-    }
-  });
-
-  // Write file to filesystem
-  ipcMain.handle('write-file', async (_, { path: filePath, content }) => {
-    try {
-      await fsPromises.writeFile(filePath, content, 'utf8');
-      return { success: true };
-    } catch (error) {
-      console.error('Error writing file:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      };
-    }
-  });
-
-  ipcMain.handle('get-folder-files', async (_, { folderPath, extensions = [] }) => {
-    try {
-      if (!fs.existsSync(folderPath)) {
-        throw new Error('Folder does not exist');
-      }
-
-      const files = await fsPromises.readdir(folderPath);
-      const imageFiles = [];
-
-      for (const file of files) {
-        const filePath = path.join(folderPath, file);
-        const stats = await fsPromises.stat(filePath);
-        
-        if (stats.isFile()) {
-          const ext = path.extname(file).toLowerCase().slice(1);
-          if (extensions.length === 0 || extensions.includes(ext)) {
-            imageFiles.push({
-              name: file,
-              path: filePath,
-              size: stats.size,
-              extension: ext,
-              isRaw: ['nef', 'arw', 'cr2', 'cr3', 'orf', 'raw', 'rw2', 'dng'].includes(ext)
-            });
-          }
-        }
-      }
-
-      return imageFiles;
-    } catch (error) {
-      console.error('Error getting folder files:', error);
-      throw error;
-    }
-  });
-
-  ipcMain.handle('get-file-stats', async (_, filePath) => {
-    try {
-      if (!fs.existsSync(filePath)) {
-        throw new Error('File does not exist');
-      }
-
-      const stats = await fsPromises.stat(filePath);
-      return {
-        size: stats.size,
-        mtime: stats.mtime,
-        ctime: stats.ctime,
-        isFile: stats.isFile(),
-        isDirectory: stats.isDirectory()
-      };
-    } catch (error) {
-      console.error('Error getting file stats:', error);
-      throw error;
-    }
-  });
-
-  ipcMain.handle('generate-thumbnail', async (_, filePath) => {
-    try {
-      if (!fs.existsSync(filePath)) {
-        return null;
-      }
-
-      const ext = path.extname(filePath).toLowerCase();
-      const isRaw = RAW_EXTENSIONS.includes(ext);
-      
-      if (isRaw) {
-        console.log(`[Main Process] Generating thumbnail for RAW file: ${path.basename(filePath)}`);
-        
-        try {
-          // Crea percorso per thumbnail cache
-          const baseFileName = path.basename(filePath, path.extname(filePath));
-          const thumbnailDir = path.join(os.tmpdir(), 'racetagger-thumbnails');
-          
-          // Assicurati che la directory cache esista
-          if (!fs.existsSync(thumbnailDir)) {
-            fs.mkdirSync(thumbnailDir, { recursive: true });
-          }
-          
-          const thumbnailPath = path.join(thumbnailDir, `${baseFileName}_thumb.jpg`);
-          
-          // Controlla se abbiamo già una thumbnail in cache
-          if (fs.existsSync(thumbnailPath)) {
-            console.log(`[Main Process] Using cached thumbnail: ${thumbnailPath}`);
-            return `file://${thumbnailPath}`;
-          }
-          
-          // Genera thumbnail usando il rawConverter
-          const generatedThumbPath = await rawConverter.extractThumbnailFromRaw(filePath, thumbnailPath);
-          
-          if (fs.existsSync(generatedThumbPath)) {
-            console.log(`[Main Process] Generated RAW thumbnail: ${generatedThumbPath}`);
-            return `file://${generatedThumbPath}`;
-          }
-          
-          return null;
-        } catch (rawError) {
-          console.error(`[Main Process] Error generating RAW thumbnail for ${filePath}:`, rawError);
-          return null;
-        }
-      } else if (STANDARD_EXTENSIONS.includes(ext)) {
-        // For regular images, return the file path as data URL would be too large
-        // The frontend can create its own thumbnail from the file path
-        return `file://${filePath}`;
-      }
-
-      return null;
-    } catch (error) {
-      console.error('Error generating thumbnail:', error);
-      return null;
-    }
-  });
-
-  // Import exec for dcraw thumbnail generation
-  const { exec } = require('child_process');
-  const { promisify } = require('util');
-  const execPromise = promisify(exec);
-  
-  // Handler to serve local images as base64 data URLs with Supabase fallback
-  // New handler for high-quality modal previews
-  ipcMain.handle('get-halfsize-image', async (_, imagePath: string) => {
-    try {
-      console.log(`🖼️ [Main Process] get-halfsize-image called with: ${imagePath}`);
-      
-      if (!imagePath) {
-        console.warn(`🖼️ [Main Process] No imagePath provided`);
-        return null;
-      }
-      
-      const ext = path.extname(imagePath).toLowerCase();
-      const isRaw = RAW_EXTENSIONS.includes(ext);
-      const supportedExtensions = ['.jpg', '.jpeg', '.png', '.webp'];
-      
-      // For JPEG/PNG: Return original file directly (as requested)
-      if (fs.existsSync(imagePath) && supportedExtensions.includes(ext)) {
-        console.log(`🖼️ [Main Process] Loading original JPEG/PNG file: ${imagePath}`);
-
-        try {
-          // Read the image file
-          const imageBuffer = await fsPromises.readFile(imagePath);
-          
-          // Determine MIME type
-          let mimeType = 'image/jpeg';
-          if (ext === '.png') mimeType = 'image/png';
-          else if (ext === '.webp') mimeType = 'image/webp';
-          
-          // Convert to base64 data URL
-          const base64Data = imageBuffer.toString('base64');
-          const dataUrl = `data:${mimeType};base64,${base64Data}`;
-          
-          console.log(`[Main Process] Successfully loaded original image: ${path.basename(imagePath)} (${imageBuffer.length} bytes)`);
-          return dataUrl;
-          
-        } catch (readError) {
-          console.error(`[Main Process] Error reading original image ${imagePath}:`, readError);
-          return null;
-        }
-      }
-      
-      // For RAW files: Generate halfsize thumbnail using dcraw -h (no resize)
-      if (isRaw && fs.existsSync(imagePath)) {
-        const fileName = path.basename(imagePath);
-        console.log(`🖼️ [Main Process] Generating halfsize RAW preview for: ${fileName}`);
-        
-        try {
-          // Use dcraw -h (halfsize) without further resize for natural halfsize preview
-          const dcrawCommand = `dcraw -h -w -c "${imagePath}"`;
-          const result = await execPromise(dcrawCommand, { maxBuffer: 10 * 1024 * 1024, encoding: 'buffer' });
-          
-          if (result.stdout && result.stdout.length > 0) {
-            // Convert buffer to base64 data URL
-            const buffer = Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(result.stdout, 'binary');
-            const base64Data = buffer.toString('base64');
-            const dataUrl = `data:image/jpeg;base64,${base64Data}`;
-            
-            console.log(`[Main Process] Successfully generated halfsize RAW preview: ${fileName} (${buffer.length} bytes)`);
-            return dataUrl;
-          } else {
-            console.warn(`[Main Process] dcraw halfsize failed for: ${fileName}`);
-            return null;
-          }
-          
-        } catch (dcrawError) {
-          console.error(`[Main Process] dcraw halfsize generation failed for ${fileName}:`, dcrawError);
-          return null;
-        }
-      }
-      
-      // Unsupported format
-      console.warn(`[Main Process] Unsupported image format for halfsize preview: ${ext}`);
-      return null;
-      
-    } catch (error) {
-      console.error(`[Main Process] Error in get-halfsize-image ${imagePath}:`, error);
-      return null;
-    }
-  });
-
-  // Handler per recuperare URL Supabase per immagini già processate
-  ipcMain.handle('get-supabase-image-url', async (_, fileName: string) => {
-    try {
-      console.log(`🖼️ [Main Process] Looking for Supabase URL for: ${fileName}`);
-      
-      // Check cache first
-      let cachedUrl = supabaseImageUrlCache.get(fileName);
-      if (cachedUrl) {
-        console.log(`🖼️ [Main Process] Found cached Supabase URL for: ${fileName}`);
-        return cachedUrl;
-      }
-      
-      // Query database for existing processed image
-      const authState = authService.getAuthState();
-      if (!authState.isAuthenticated) {
-        console.log(`🖼️ [Main Process] User not authenticated, cannot query Supabase`);
-        return null;
-      }
-      
-      try {
-        const { data, error } = await supabase
-          .from('images')
-          .select('storage_path')
-          .eq('original_filename', fileName)
-          .order('created_at', { ascending: false })
-          .limit(1);
-          
-        if (error) {
-          console.error(`🖼️ [Main Process] Error querying images table:`, error);
-          return null;
-        }
-        
-        if (data && data.length > 0 && data[0].storage_path) {
-          const storagePath = data[0].storage_path;
-          const publicUrl = `${SUPABASE_CONFIG.url}/storage/v1/object/public/uploaded-images/${storagePath}`;
-          
-          // Cache the URL for future use
-          supabaseImageUrlCache.set(fileName, publicUrl);
-          console.log(`🖼️ [Main Process] Retrieved and cached Supabase URL for: ${fileName}`);
-          
-          return publicUrl;
-        } else {
-          console.log(`🖼️ [Main Process] No processed image found in Supabase for: ${fileName}`);
-          return null;
-        }
-      } catch (dbError) {
-        console.error(`🖼️ [Main Process] Database query error for ${fileName}:`, dbError);
-        return null;
-      }
-    } catch (error) {
-      console.error(`🖼️ [Main Process] Error in get-supabase-image-url:`, error);
-      return null;
-    }
-  });
-
-  ipcMain.handle('get-local-image', async (_, imagePath: string) => {
-    try {
-      console.log(`🖼️ [Main Process] get-local-image called with: ${imagePath}`);
-      
-      if (!imagePath) {
-        console.warn(`🖼️ [Main Process] No imagePath provided`);
-        return null;
-      }
-      
-      const ext = path.extname(imagePath).toLowerCase();
-      const isRaw = RAW_EXTENSIONS.includes(ext);
-      const supportedExtensions = ['.jpg', '.jpeg', '.png', '.webp'];
-      
-      // Try local file first for supported formats
-      if (fs.existsSync(imagePath) && supportedExtensions.includes(ext)) {
-        console.log(`🖼️ [Main Process] Local image file exists: ${imagePath}`);
-
-        try {
-          // Read the image file
-          const imageBuffer = await fsPromises.readFile(imagePath);
-          
-          // Determine MIME type
-          let mimeType = 'image/jpeg';
-          if (ext === '.png') mimeType = 'image/png';
-          else if (ext === '.webp') mimeType = 'image/webp';
-          
-          // Convert to base64 data URL
-          const base64Data = imageBuffer.toString('base64');
-          const dataUrl = `data:${mimeType};base64,${base64Data}`;
-          
-          console.log(`[Main Process] Successfully loaded local image: ${path.basename(imagePath)} (${imageBuffer.length} bytes)`);
-          return dataUrl;
-          
-        } catch (readError) {
-          console.error(`[Main Process] Error reading local image ${imagePath}:`, readError);
-          // Fall through to Supabase fallback
-        }
-      }
-      
-      // For RAW files, check Supabase cache first, then generate thumbnail using dcraw
-      if (isRaw && fs.existsSync(imagePath)) {
-        const fileName = path.basename(imagePath);
-        
-        // Check if we have a cached Supabase URL for this image (by full path or filename)
-        let cachedUrl = supabaseImageUrlCache.get(imagePath);
-        if (!cachedUrl) {
-          // Also try by filename in case it was cached that way
-          cachedUrl = supabaseImageUrlCache.get(fileName);
-        }
-        
-        if (cachedUrl) {
-          console.log(`🖼️ [Main Process] Using cached Supabase URL for RAW file: ${fileName}`);
-          return cachedUrl;
-        }
-        
-        console.log(`🖼️ [Main Process] No cached Supabase URL found, generating dcraw thumbnail for: ${fileName}`);
-        
-        try {
-          let result;
-          
-          // For RAW files, try using the existing raw-converter first
-          console.log(`🖼️ [Main Process] Attempting RAW thumbnail generation for: ${fileName}`);
-          
-          try {
-            // Use the raw converter to create a temporary thumbnail
-            const tempThumbnailPath = `/tmp/thumbnail_${Date.now()}_${path.basename(imagePath, ext)}.jpg`;
-            
-            if (ext === '.cr3') {
-              console.log(`🖼️ [Main Process] Using raw-converter for CR3 file: ${fileName}`);
-              await rawConverter.convertRawToJpeg(imagePath, tempThumbnailPath);
-            } else {
-              // For other RAW formats, use dcraw directly
-              console.log(`🖼️ [Main Process] Using dcraw for ${ext.toUpperCase()} file: ${fileName}`);
-              const dcrawCommand = `dcraw -h -w -c "${imagePath}" | convert - -resize 400x400 -quality 85 "${tempThumbnailPath}"`;
-              await execPromise(dcrawCommand, { maxBuffer: 5 * 1024 * 1024 });
-            }
-            
-            // Read the generated thumbnail
-            if (fs.existsSync(tempThumbnailPath)) {
-              const thumbnailBuffer = await fsPromises.readFile(tempThumbnailPath);
-              // Clean up temp file
-              await fsPromises.unlink(tempThumbnailPath);
-              
-              // Convert to base64
-              const base64Data = thumbnailBuffer.toString('base64');
-              const dataUrl = `data:image/jpeg;base64,${base64Data}`;
-              console.log(`[Main Process] Successfully generated RAW thumbnail for: ${fileName} (${thumbnailBuffer.length} bytes)`);
-              return dataUrl;
-            }
-          } catch (rawConverterError: any) {
-            console.log(`🖼️ [Main Process] Raw converter failed for ${fileName}:`, rawConverterError.message);
-          }
-          
-          // Fallback: try exiftool to extract embedded thumbnail
-          console.log(`🖼️ [Main Process] Trying exiftool thumbnail fallback for: ${fileName}`);
-          const exiftoolCommand = `exiftool -b -ThumbnailImage "${imagePath}"`;
-          result = await execPromise(exiftoolCommand, { maxBuffer: 2 * 1024 * 1024, encoding: 'buffer' });
-          
-          if (result.stdout && result.stdout.length > 0) {
-            // Convert buffer to base64 data URL
-            const buffer = Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(result.stdout, 'binary');
-            const base64Data = buffer.toString('base64');
-            const dataUrl = `data:image/jpeg;base64,${base64Data}`;
-            
-            console.log(`[Main Process] Successfully extracted embedded thumbnail for: ${fileName} (${buffer.length} bytes)`);
-            return dataUrl;
-          } else {
-            console.warn(`[Main Process] All thumbnail generation methods failed for: ${fileName}`);
-            return null;
-          }
-          
-        } catch (dcrawError) {
-          console.error(`[Main Process] dcraw thumbnail generation failed for ${fileName}:`, dcrawError);
-          return null;
-        }
-      }
-      
-      // If we get here, the file format is unsupported and no fallback is available
-      console.warn(`[Main Process] Unsupported image format and no fallback available: ${ext}`);
-      return null;
-      
-    } catch (error) {
-      console.error(`[Main Process] Error in get-local-image ${imagePath}:`, error);
-      return null;
-    }
-  });
-  
-  // Handler per listare i file in una cartella (per supportare il modal di progresso migliorato)
-  ipcMain.handle('list-files-in-folder', async (_, { path: folderPath }) => {
-    try {
-      console.log(`[Main Process] Listing files in folder: ${folderPath}`);
-      
-      // Verifica se la cartella esiste
-      if (!fs.existsSync(folderPath)) {
-        return { success: false, error: 'La cartella specificata non esiste' };
-      }
-      
-      // Leggi tutti i file nella cartella
-      const files = await fsPromises.readdir(folderPath);
-      
-      // Ritorna la lista di file
-      return { 
-        success: true, 
-        files: files.map(file => path.join(folderPath, file))
-      };
-    } catch (error) {
-      console.error('Error listing files in folder:', error);
-      return { success: false, error: (error as Error).message || 'Errore durante la lettura della cartella' };
-    }
-  });
-
-  
   ipcMain.on('load-csv', handleCsvLoading);
   ipcMain.on('download-csv-template', handleCsvTemplateDownload);
   ipcMain.on('analyze-folder', (event: IpcMainEvent, config: BatchProcessConfig) => {
@@ -5272,39 +4703,9 @@ app.whenReady().then(async () => { // Added async here
   
   ipcMain.on('extract-raw-preview', handleRawPreviewExtraction);
   ipcMain.on('submit-feedback', handleFeedbackSubmission);
-  
-  // Handler per contare le immagini in una cartella
-  ipcMain.handle('count-folder-images', async (_, { path: folderPath }) => {
-    try {
-      console.log(`[Main Process] Conteggio immagini nella cartella: ${folderPath}`);
-      
-      // Verifica se la cartella esiste
-      if (!fs.existsSync(folderPath)) {
-        return { success: false, error: 'La cartella specificata non esiste', count: 0 };
-      }
-      
-      // Leggi tutti i file nella cartella
-      const files = await fsPromises.readdir(folderPath);
-      
-      // Filtra solo le immagini (.jpg, .jpeg, .png, .webp)
-      const imageFiles = files.filter(file => {
-        const ext = path.extname(file).toLowerCase();
-        return ['.jpg', '.jpeg', '.png', '.webp'].includes(ext);
-      });
-      
-      console.log(`[Main Process] Trovate ${imageFiles.length} immagini nella cartella`);
-      
-      // Ritorna il conteggio delle immagini
-      return { 
-        success: true, 
-        count: imageFiles.length
-      };
-    } catch (error) {
-      console.error('Error counting images in folder:', error);
-      return { success: false, error: (error as Error).message || 'Errore durante il conteggio delle immagini', count: 0 };
-    }
-  });
-  
+
+  // NOTE: count-folder-images is now in file-handlers.ts
+
   // Handler per ottenere la configurazione della streaming pipeline
   ipcMain.handle('get-pipeline-config', async () => {
     try {
