@@ -200,98 +200,168 @@
     </div>
   </div>
 
-  <!-- Participant Edit Modal -->
+  <!-- Participant Edit Modal - Fullscreen Layout -->
   <div id="participant-edit-modal" class="modal">
-    <div class="modal-content participant-edit-modal">
+    <div class="modal-content participant-edit-modal-fullscreen">
       <div class="modal-header">
         <h2 id="participant-edit-title">Edit Participant</h2>
         <button class="modal-close" onclick="closeParticipantEditModal()">&times;</button>
       </div>
 
-      <div class="modal-body">
-        <!-- BASIC INFO SECTION -->
-        <div class="form-section">
-          <h3 class="section-title">Basic Information</h3>
+      <div class="modal-body participant-edit-body">
+        <!-- Three-column layout -->
+        <div class="participant-edit-grid">
 
-          <!-- Number + Category (only row with 2 columns) -->
-          <div class="form-row-number-category">
-            <div class="form-group">
-              <label>Number *</label>
-              <input type="text" id="edit-numero" class="form-input" placeholder="51" required>
+          <!-- COLUMN 1: IPTC Metadata (Written to file) -->
+          <div class="participant-edit-column">
+            <div class="column-header metadata-column">
+              <div class="column-badge badge-written">
+                <span class="badge-icon">📝</span>
+                <span class="badge-text">WRITTEN TO FILE</span>
+              </div>
+              <h3 class="column-title">IPTC Metadata</h3>
+              <p class="column-description">These fields are embedded directly into your image files as IPTC keywords</p>
             </div>
-            <div class="form-group">
-              <label>Category</label>
-              <input type="text" id="edit-categoria" class="form-input" placeholder="GT3, F1, MotoGP...">
+
+            <div class="column-content">
+              <!-- Number -->
+              <div class="form-group">
+                <label>
+                  Race Number *
+                  <span class="field-destination">→ IPTC:Keywords</span>
+                </label>
+                <input type="text" id="edit-numero" class="form-input form-input-metadata" placeholder="51" required>
+              </div>
+
+              <!-- Driver Name -->
+              <div class="form-group">
+                <label>
+                  Driver Name *
+                  <span class="field-destination">→ IPTC:Keywords</span>
+                </label>
+                <input type="text" id="edit-nome" class="form-input form-input-metadata" placeholder="Alessandro Pier Guidi" required>
+              </div>
+
+              <!-- Category -->
+              <div class="form-group">
+                <label>
+                  Category
+                  <span class="field-destination">→ IPTC:Keywords</span>
+                </label>
+                <input type="text" id="edit-categoria" class="form-input form-input-metadata" placeholder="GT3, F1, MotoGP...">
+              </div>
+
+              <!-- Team -->
+              <div class="form-group">
+                <label>
+                  Team
+                  <span class="field-destination">→ IPTC:Keywords</span>
+                </label>
+                <input type="text" id="edit-squadra" class="form-input form-input-metadata" placeholder="Ferrari">
+              </div>
+
+              <!-- Meta Tag -->
+              <div class="form-group">
+                <label>
+                  Meta Tag
+                  <span class="field-destination">→ IPTC:Keywords</span>
+                </label>
+                <input type="text" id="edit-metatag" class="form-input form-input-metadata" placeholder="Pro Driver, Champion 2024...">
+                <small class="form-hint">Custom keywords added to the image</small>
+              </div>
             </div>
           </div>
 
-          <!-- Driver Name (full width) -->
-          <div class="form-group">
-            <label>Driver Name *</label>
-            <input type="text" id="edit-nome" class="form-input" placeholder="Alessandro Pier Guidi" required>
+          <!-- COLUMN 2: AI Matching (NOT written to file) -->
+          <div class="participant-edit-column">
+            <div class="column-header matching-column">
+              <div class="column-badge badge-matching">
+                <span class="badge-icon">🔍</span>
+                <span class="badge-text">AI MATCHING ONLY</span>
+              </div>
+              <h3 class="column-title">Recognition Helpers</h3>
+              <p class="column-description">These fields help AI identify participants more accurately but are <strong>NOT</strong> written to files</p>
+            </div>
+
+            <div class="column-content">
+              <!-- Sponsors -->
+              <div class="form-group">
+                <label>
+                  Sponsors
+                  <span class="field-destination field-destination-matching">→ AI only</span>
+                </label>
+                <input type="text" id="edit-sponsor" class="form-input form-input-matching" placeholder="Shell, Santander, Ray-Ban">
+                <small class="form-hint">Comma-separated list. Helps AI confirm participant identity when sponsor logos are visible</small>
+              </div>
+
+              <!-- Plate Number -->
+              <div class="form-group">
+                <label>
+                  Plate Number 🚗
+                  <span class="field-destination field-destination-matching">→ AI only</span>
+                </label>
+                <input type="text" id="edit-plate-number" class="form-input form-input-matching" placeholder="AB123CD" style="text-transform: uppercase;">
+                <small class="form-hint">License plate for future car recognition feature</small>
+              </div>
+
+              <!-- Info box -->
+              <div class="matching-info-box">
+                <div class="info-icon">💡</div>
+                <div class="info-content">
+                  <strong>How AI Matching Works</strong>
+                  <p>When analyzing images, the AI looks for sponsor logos and other visual cues to confirm which participant is in the photo. This improves accuracy especially when race numbers are partially obscured.</p>
+                </div>
+              </div>
+            </div>
           </div>
 
-          <!-- Team (full width) -->
-          <div class="form-group">
-            <label>Team</label>
-            <input type="text" id="edit-squadra" class="form-input" placeholder="Ferrari">
-          </div>
-        </div>
+          <!-- COLUMN 3: Folder Organization -->
+          <div class="participant-edit-column">
+            <div class="column-header folder-column">
+              <div class="column-badge badge-folder">
+                <span class="badge-icon">📁</span>
+                <span class="badge-text">OUTPUT ORGANIZATION</span>
+              </div>
+              <h3 class="column-title">Folder Assignment</h3>
+              <p class="column-description">Organize exported photos into custom folders for easy delivery to clients</p>
+            </div>
 
-        <!-- ADDITIONAL INFO SECTION -->
-        <div class="form-section">
-          <h3 class="section-title">Additional Information</h3>
+            <div class="column-content">
+              <!-- Folder 1 -->
+              <div class="folder-item-enhanced">
+                <label class="folder-item-label">Folder 1</label>
+                <select id="edit-folder-1" class="form-input form-input-folder">
+                  <option value="">None</option>
+                </select>
+              </div>
 
-          <!-- Plate Number (full width) -->
-          <div class="form-group">
-            <label>Plate Number 🚗</label>
-            <input type="text" id="edit-plate-number" class="form-input" placeholder="AB123CD" style="text-transform: uppercase;">
-            <small class="form-hint">License plate for future car recognition</small>
-          </div>
+              <!-- Folder 2 -->
+              <div class="folder-item-enhanced">
+                <label class="folder-item-label">Folder 2</label>
+                <select id="edit-folder-2" class="form-input form-input-folder">
+                  <option value="">None</option>
+                </select>
+              </div>
 
-          <!-- Sponsors (full width) -->
-          <div class="form-group">
-            <label>Sponsors</label>
-            <input type="text" id="edit-sponsor" class="form-input" placeholder="Shell, Santander, Ray-Ban">
-            <small class="form-hint">Comma-separated list</small>
-          </div>
+              <!-- Folder 3 -->
+              <div class="folder-item-enhanced">
+                <label class="folder-item-label">Folder 3</label>
+                <select id="edit-folder-3" class="form-input form-input-folder">
+                  <option value="">None</option>
+                </select>
+              </div>
 
-          <!-- Meta Tag (full width) -->
-          <div class="form-group">
-            <label>Meta Tag</label>
-            <input type="text" id="edit-metatag" class="form-input" placeholder="Pro Driver, VIP, etc.">
-          </div>
-        </div>
-
-        <!-- FOLDER ORGANIZATION SECTION -->
-        <div class="form-section">
-          <h3 class="section-title">Folder Organization</h3>
-
-          <!-- Folder 1 -->
-          <div class="folder-item">
-            <label class="folder-item-label">📁 Folder 1</label>
-            <select id="edit-folder-1" class="form-input">
-              <option value="">None</option>
-            </select>
-          </div>
-
-          <!-- Folder 2 -->
-          <div class="folder-item">
-            <label class="folder-item-label">📁 Folder 2</label>
-            <select id="edit-folder-2" class="form-input">
-              <option value="">None</option>
-            </select>
+              <!-- Info box -->
+              <div class="folder-info-box-enhanced">
+                <div class="info-icon">📋</div>
+                <div class="info-content">
+                  <strong>Multi-folder Export</strong>
+                  <p>Photos will be <strong>copied to ALL</strong> selected folders during export. Perfect for delivering to multiple clients or organizing by team AND driver.</p>
+                </div>
+              </div>
+            </div>
           </div>
 
-          <!-- Folder 3 -->
-          <div class="folder-item">
-            <label class="folder-item-label">📁 Folder 3</label>
-            <select id="edit-folder-3" class="form-input">
-              <option value="">None</option>
-            </select>
-          </div>
-
-          <small class="form-hint">💡 Photos will be copied to ALL selected folders</small>
         </div>
 
         <!-- FACE RECOGNITION SECTION -->
@@ -357,11 +427,18 @@
       </div>
 
       <div class="modal-footer">
-        <button class="btn btn-secondary" onclick="closeParticipantEditModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="saveParticipantEdit()">
-          <span class="btn-icon">💾</span>
-          Save Changes
-        </button>
+        <div class="footer-legend">
+          <span class="legend-item legend-written"><span class="legend-dot"></span> Written to file</span>
+          <span class="legend-item legend-matching"><span class="legend-dot"></span> AI matching only</span>
+          <span class="legend-item legend-folder"><span class="legend-dot"></span> Export organization</span>
+        </div>
+        <div class="footer-actions">
+          <button class="btn btn-secondary" onclick="closeParticipantEditModal()">Cancel</button>
+          <button class="btn btn-primary" onclick="saveParticipantEdit()">
+            <span class="btn-icon">💾</span>
+            Save Changes
+          </button>
+        </div>
       </div>
     </div>
   </div>
