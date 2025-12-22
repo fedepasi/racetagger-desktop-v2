@@ -138,11 +138,10 @@ import { writeKeywordsToImage } from './utils/metadata-writer';
 import { rawConverter } from './utils/raw-converter'; // Import the singleton instance
 import { unifiedImageProcessor, UnifiedImageFile, UnifiedProcessingResult, UnifiedProcessorConfig } from './unified-image-processor';
 import { FolderOrganizerConfig } from './utils/folder-organizer';
-import { faceRecognitionProcessor, StoredFaceDescriptor, DetectedFace, FaceContext } from './face-recognition-processor';
 import { faceDetectionBridge } from './face-detection-bridge';
 import { getModelManager } from './model-manager';
 // Modular IPC handlers
-import { registerAllHandlers, initializeIpcContext } from './ipc';
+import { registerAllHandlers, initializeIpcContext, isForceUpdateRequired, checkAppVersion } from './ipc';
 
 // Definisci le estensioni supportate a livello globale per riutilizzo
 const RAW_EXTENSIONS = ['.nef', '.arw', '.cr2', '.cr3', '.orf', '.raw', '.rw2', '.dng'];
@@ -176,68 +175,10 @@ function safeSendToSender(eventSender: any, channel: string, ...args: any[]) {
   }
 }
 
-// Version checking functionality
-interface VersionCheckResult {
-  requires_update: boolean
-  force_update_enabled: boolean
-  update_message?: string
-  download_url?: string
-  urgency?: string
-  current_version?: string
-  minimum_version?: string
-  error?: string
-}
-
-let forceUpdateRequired = false;
-
-// Check app version against server requirements
-async function checkAppVersion(): Promise<VersionCheckResult | null> {
-  try {
-    const currentVersion = app.getVersion();
-    const platform = process.platform === 'darwin' ? 'macos' : 
-                    process.platform === 'win32' ? 'windows' : 'linux';
-    
-    console.log(`Checking version: ${currentVersion} on ${platform}`);
-    
-    // Get user ID from auth service if available
-    const authState = authService.getAuthState();
-    const userId = authState.user?.id;
-    
-    const supabase = createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.key);
-    
-    const { data, error } = await supabase.functions.invoke('check-app-version', {
-      body: {
-        app_version: currentVersion,
-        platform: platform,
-        user_id: userId
-      }
-    });
-    
-    if (error) {
-      console.error('Version check error:', error);
-      return { 
-        requires_update: false, 
-        force_update_enabled: false, 
-        error: error.message 
-      };
-    }
-    
-    const result: VersionCheckResult = data;
-    console.log('Version check result:', result);
-    
-    // Store force update status globally
-    forceUpdateRequired = result.force_update_enabled && result.requires_update;
-    
-    return result;
-  } catch (error) {
-    console.error('Version check exception:', error);
-    return { 
-      requires_update: false, 
-      force_update_enabled: false, 
-      error: String(error) 
-    };
-  }
-}
+// NOTE: Version checking functionality moved to ipc/version-handlers.ts
+// VersionCheckResult interface is in ipc/types.ts
+// checkAppVersion function is imported from ipc/version-handlers.ts
+// forceUpdateRequired state is managed in ipc/context.ts
 
 type VehicleAnalysis = {
   raceNumber: string | null;
@@ -448,7 +389,7 @@ function formatMetadataByCategory(
 let globalCsvData: CsvEntry[] = [];
 let batchConfig: BatchProcessConfig | null = null;
 let mainWindow: BrowserWindow | null = null;
-let versionCheckResult: VersionCheckResult | null = null;
+// NOTE: versionCheckResult is now managed in ipc/context.ts
 
 const supabase = createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.key);
 
@@ -882,7 +823,7 @@ function createWindow() {
   });
   
   // Check if force update is required and load appropriate HTML
-  if (forceUpdateRequired) {
+  if (isForceUpdateRequired()) {
     const forceUpdatePath = path.join(__dirname, '../../renderer/force-update.html');
     console.log('[Main Process] Force update required, loading HTML from:', forceUpdatePath);
     mainWindow.loadFile(forceUpdatePath);
@@ -4290,8 +4231,9 @@ app.whenReady().then(async () => { // Added async here
   console.log('[Main Process] Running in', isDev ? 'DEVELOPMENT' : 'PRODUCTION', 'mode');
 
   // Check app version before creating window
+  // Note: checkAppVersion() stores result in context via setVersionCheckResult/setForceUpdateRequired
   console.log('[Main Process] Checking app version...');
-  versionCheckResult = await checkAppVersion();
+  await checkAppVersion();
 
   // NOTE: These handlers are now in app-handlers.ts
   // ipcMain.handle('get-app-path', ...)
@@ -4375,37 +4317,12 @@ app.whenReady().then(async () => { // Added async here
   console.log('[Main Process] main.ts: Setting up remaining IPC .on listeners...');
   ipcMain.on('select-folder', handleFolderSelection);
   
-  // Version checking IPC handlers
-  ipcMain.handle('check-app-version', async () => {
-    try {
-      return await checkAppVersion();
-    } catch (error) {
-      console.error('Error in check-app-version handler:', error);
-      return { 
-        requires_update: false, 
-        force_update_enabled: false, 
-        error: String(error) 
-      };
-    }
-  });
-  
-  ipcMain.handle('get-version-check-result', () => {
-    return versionCheckResult;
-  });
-  
-  ipcMain.handle('is-force-update-required', () => {
-    return forceUpdateRequired;
-  });
-  
+  // NOTE: Version checking IPC handlers moved to version-handlers.ts
+  // (check-app-version, get-version-check-result, is-force-update-required, quit-app-for-update)
+
   // NOTE: These handlers are now in app-handlers.ts
   // - check-adobe-dng-converter
   // - open-download-url
-  
-  ipcMain.handle('quit-app-for-update', () => {
-    // Allow app to quit even when force update is required
-    forceUpdateRequired = false;
-    app.quit();
-  });
   // NOTE: Token handlers (submit-token-request, get-token-balance, get-pending-tokens, get-token-info)
   // are now registered BEFORE createWindow() to avoid race conditions
   // NOTE: cancel-batch-processing is now in analysis-handlers.ts
@@ -5046,135 +4963,10 @@ app.whenReady().then(async () => { // Added async here
   });
 
   // ============================================
-  // Face Recognition IPC Handlers
-  // ============================================
-
-  // Initialize face recognition processor
-  ipcMain.handle('face-recognition-initialize', async () => {
-    try {
-      console.log('[FaceRecognition IPC] Initializing face recognition...');
-      const result = await faceRecognitionProcessor.initialize();
-      console.log('[FaceRecognition IPC] Initialization result:', result);
-      return result;
-    } catch (error) {
-      console.error('[FaceRecognition IPC] Initialization error:', error);
-      return { success: false, error: (error as Error).message };
-    }
-  });
-
-  // Load face descriptors for matching
-  ipcMain.handle('face-recognition-load-descriptors', async (_, descriptors: StoredFaceDescriptor[]) => {
-    try {
-      console.log(`[FaceRecognition IPC] Loading ${descriptors.length} face descriptors...`);
-      faceRecognitionProcessor.loadFaceDescriptors(descriptors);
-      const count = faceRecognitionProcessor.getDescriptorCount();
-      console.log(`[FaceRecognition IPC] Loaded ${count} unique drivers`);
-      return { success: true, count };
-    } catch (error) {
-      console.error('[FaceRecognition IPC] Error loading descriptors:', error);
-      return { success: false, error: (error as Error).message };
-    }
-  });
-
-  // Match detected faces against loaded descriptors
-  ipcMain.handle('face-recognition-match', async (_, faces: DetectedFace[], context: FaceContext = 'auto') => {
-    try {
-      console.log(`[FaceRecognition IPC] Matching ${faces.length} faces with context: ${context}`);
-      const result = faceRecognitionProcessor.matchFaces(faces, context);
-      console.log(`[FaceRecognition IPC] Matched ${result.matchedDrivers.length} drivers`);
-      return result;
-    } catch (error) {
-      console.error('[FaceRecognition IPC] Match error:', error);
-      return { success: false, error: (error as Error).message, faces: [], matchedDrivers: [], inferenceTimeMs: 0 };
-    }
-  });
-
-  // Get face recognition status
-  ipcMain.handle('face-recognition-status', async () => {
-    try {
-      const modelInfo = faceRecognitionProcessor.getModelInfo();
-      return {
-        success: true,
-        ...modelInfo
-      };
-    } catch (error) {
-      console.error('[FaceRecognition IPC] Status error:', error);
-      return { success: false, error: (error as Error).message };
-    }
-  });
-
-  // Clear loaded face descriptors
-  ipcMain.handle('face-recognition-clear', async () => {
-    try {
-      faceRecognitionProcessor.clearDescriptors();
-      console.log('[FaceRecognition IPC] Descriptors cleared');
-      return { success: true };
-    } catch (error) {
-      console.error('[FaceRecognition IPC] Clear error:', error);
-      return { success: false, error: (error as Error).message };
-    }
-  });
-
-  // Load face descriptors from Supabase sport_category_faces table
-  ipcMain.handle('face-recognition-load-from-database', async (_, categoryCode?: string) => {
-    try {
-      console.log(`[FaceRecognition IPC] Loading face descriptors from database${categoryCode ? ` for category: ${categoryCode}` : ''}...`);
-
-      const supabase = getSupabaseClient();
-
-      // Query sport_category_faces table
-      let query = supabase
-        .from('sport_category_faces')
-        .select('*');
-
-      if (categoryCode) {
-        query = query.eq('sport_category_code', categoryCode);
-      }
-
-      const { data: faces, error } = await query;
-
-      if (error) {
-        console.error('[FaceRecognition IPC] Database query error:', error);
-        return { success: false, error: error.message };
-      }
-
-      if (!faces || faces.length === 0) {
-        console.log('[FaceRecognition IPC] No face descriptors found in database');
-        return { success: true, count: 0, message: 'No faces found' };
-      }
-
-      // Convert database format to StoredFaceDescriptor format
-      const descriptors: StoredFaceDescriptor[] = faces
-        .filter((face: any) => face.face_descriptor && face.face_descriptor.length === 128)
-        .map((face: any) => ({
-          id: face.id,
-          personId: face.id,
-          personName: face.person_name,
-          personRole: face.person_role,
-          team: face.team || '',
-          carNumber: face.car_number || '',
-          descriptor: face.face_descriptor,
-          referencePhotoUrl: face.reference_photo_url,
-          source: 'global' as const,
-          photoType: 'reference',
-          isPrimary: true
-        }));
-
-      // Load into processor
-      faceRecognitionProcessor.loadFaceDescriptors(descriptors);
-      const count = faceRecognitionProcessor.getDescriptorCount();
-
-      console.log(`[FaceRecognition IPC] Loaded ${count} persons from database (${descriptors.length} valid descriptors)`);
-      return { success: true, count, totalInDb: faces.length, validDescriptors: descriptors.length };
-
-    } catch (error) {
-      console.error('[FaceRecognition IPC] Error loading from database:', error);
-      return { success: false, error: (error as Error).message };
-    }
-  });
-
-  // ============================================
-  // End Face Recognition IPC Handlers
+  // NOTE: Face Recognition IPC Handlers moved to face-recognition-handlers.ts
+  // (face-recognition-initialize, face-recognition-load-descriptors,
+  //  face-recognition-match, face-recognition-status, face-recognition-clear,
+  //  face-recognition-load-from-database)
   // ============================================
 
   // Update image metadata with manual correction

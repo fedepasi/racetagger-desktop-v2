@@ -15,8 +15,10 @@
  * - image-handlers.ts: Thumbnail generation, image loading (5 handlers)
  * - csv-handlers.ts: CSV loading and parsing (4 handlers)
  * - analysis-handlers.ts: Analysis logs and pipeline (4 handlers)
+ * - face-recognition-handlers.ts: Face detection and matching (6 handlers)
+ * - version-handlers.ts: App version checking (4 handlers)
  *
- * Total: 107 handlers extracted into modular files
+ * Total: 117 handlers extracted into modular files
  * Note: Some complex handlers (analyze-folder) remain in main.ts due to dependencies
  */
 
@@ -32,6 +34,8 @@ import { registerFileHandlers } from './file-handlers';
 import { registerImageHandlers } from './image-handlers';
 import { registerCsvHandlers } from './csv-handlers';
 import { registerAnalysisHandlers } from './analysis-handlers';
+import { registerFaceRecognitionHandlers } from './face-recognition-handlers';
+import { registerVersionHandlers } from './version-handlers';
 
 /**
  * Initialize IPC context with mainWindow reference
@@ -80,8 +84,14 @@ export function registerAllHandlers(): void {
   // Analysis handlers (4)
   registerAnalysisHandlers();
 
+  // Face recognition handlers (6)
+  registerFaceRecognitionHandlers();
+
+  // Version handlers (4)
+  registerVersionHandlers();
+
   console.log('[IPC] ========================================');
-  console.log('[IPC] All handlers registered (107 modular handlers)');
+  console.log('[IPC] All handlers registered (117 modular handlers)');
   console.log('[IPC] ========================================');
 }
 
@@ -91,6 +101,10 @@ export { getGlobalCsvData, setGlobalCsvData } from './context';
 export { getBatchConfig, setBatchConfig } from './context';
 export { isBatchProcessingCancelled, setBatchProcessingCancelled } from './context';
 export { getSupabase, getSupabaseImageUrlCache } from './context';
+export { isForceUpdateRequired, setVersionCheckResult, getVersionCheckResult } from './context';
+
+// Re-export version check function for use during app startup
+export { checkAppVersion } from './version-handlers';
 
 // Re-export types
 export * from './types';
