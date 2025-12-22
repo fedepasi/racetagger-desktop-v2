@@ -36,6 +36,9 @@ function setupEventListeners() {
   document.getElementById('import-csv-preset-btn')?.addEventListener('click', openCsvImportModal);
   document.getElementById('import-json-preset-btn')?.addEventListener('click', openJsonImportModal);
 
+  // Setup PDF drop zone
+  setupPdfDropZone();
+
   // Person Shown Template - live preview
   document.getElementById('person-shown-template')?.addEventListener('input', updatePersonShownPreview);
 
@@ -2253,6 +2256,474 @@ function downloadCsvTemplate() {
   window.api.send('download-csv-template');
 }
 
+// ============================================
+// PDF Import Functions
+// ============================================
+
+/** Stores the PDF extraction result for import */
+var pdfImportData = null;
+
+/**
+ * Setup PDF drop zone event listeners
+ */
+function setupPdfDropZone() {
+  const dropZone = document.getElementById('pdf-drop-zone');
+  const fileInput = document.getElementById('pdf-file-input');
+  const importPdfBtn = document.getElementById('import-pdf-preset-btn');
+
+  if (!dropZone || !fileInput) {
+    return;
+  }
+
+  // Click to open file browser
+  dropZone.addEventListener('click', () => {
+    fileInput.click();
+  });
+
+  // Import PDF button click
+  if (importPdfBtn) {
+    importPdfBtn.addEventListener('click', () => {
+      fileInput.click();
+    });
+  }
+
+  // File input change
+  fileInput.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      await processPdfFile(file);
+    }
+    // Reset input so same file can be selected again
+    fileInput.value = '';
+  });
+
+  // Drag events
+  dropZone.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dropZone.classList.add('drag-over');
+  });
+
+  dropZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dropZone.classList.add('drag-over');
+  });
+
+  dropZone.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Only remove class if we're leaving the drop zone entirely
+    if (!dropZone.contains(e.relatedTarget)) {
+      dropZone.classList.remove('drag-over');
+    }
+  });
+
+  dropZone.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dropZone.classList.remove('drag-over');
+
+    const files = e.dataTransfer?.files;
+    if (files && files.length > 0) {
+      const file = files[0];
+      if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+        await processPdfFile(file);
+      } else {
+        showNotification('Please upload a PDF file', 'error');
+      }
+    }
+  });
+}
+
+/**
+ * Process the uploaded PDF file
+ * @param {File} file - The PDF file to process
+ */
+async function processPdfFile(file) {
+  // Validate file type
+  if (!file.type.includes('pdf') && !file.name.toLowerCase().endsWith('.pdf')) {
+    showNotification('Please upload a PDF file', 'error');
+    return;
+  }
+
+  // Validate file size (max 20MB)
+  const maxSize = 20 * 1024 * 1024;
+  if (file.size > maxSize) {
+    showNotification('PDF file is too large. Maximum size is 20MB.', 'error');
+    return;
+  }
+
+  // Show modal with processing state
+  openPdfImportModal();
+  showPdfProcessingState('Uploading document...');
+
+  try {
+    // Convert file to base64
+    const base64 = await fileToBase64(file);
+
+    // Update status
+    showPdfProcessingState('AI is validating document type...');
+
+    // Call edge function
+    const response = await window.api.invoke('supabase-parse-pdf-entry-list', {
+      pdfBase64: base64
+    });
+
+    if (!response.success) {
+      // Show validation error
+      if (response.validation) {
+        showPdfValidationError(
+          'Document Not Recognized',
+          response.error,
+          `Type detected: ${response.validation.document_type}\nConfidence: ${(response.validation.confidence * 100).toFixed(1)}%\n\n${response.validation.rejection_reason || ''}`
+        );
+      } else {
+        showPdfValidationError(
+          'Processing Error',
+          response.error,
+          response.details || ''
+        );
+      }
+      return;
+    }
+
+    // Store the result
+    pdfImportData = response.data;
+
+    // Show preview
+    showPdfPreviewState(response.data);
+
+  } catch (error) {
+    console.error('[Participants] PDF processing error:', error);
+    showPdfValidationError(
+      'Processing Error',
+      'Failed to process the PDF file',
+      error.message || ''
+    );
+  }
+}
+
+/**
+ * Convert file to base64
+ * @param {File} file - The file to convert
+ * @returns {Promise<string>} Base64 string (without data URI prefix)
+ */
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      // Remove the data URI prefix (data:application/pdf;base64,)
+      const base64 = reader.result.split(',')[1];
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Open PDF import modal
+ */
+function openPdfImportModal() {
+  const modal = document.getElementById('pdf-import-modal');
+  if (modal) {
+    modal.classList.add('show');
+  }
+  // Hide all states initially
+  hidePdfStates();
+}
+
+/**
+ * Close PDF import modal
+ */
+function closePdfImportModal() {
+  const modal = document.getElementById('pdf-import-modal');
+  if (modal) {
+    modal.classList.remove('show');
+  }
+  // Reset state
+  pdfImportData = null;
+  hidePdfStates();
+}
+
+/**
+ * Reset PDF import to initial state
+ */
+function resetPdfImport() {
+  pdfImportData = null;
+  hidePdfStates();
+  closePdfImportModal();
+}
+
+/**
+ * Hide all PDF states
+ */
+function hidePdfStates() {
+  const states = ['pdf-processing-state', 'pdf-validation-error', 'pdf-preview-state'];
+  states.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+
+  // Reset footer button
+  const importBtn = document.getElementById('import-pdf-btn');
+  if (importBtn) {
+    importBtn.disabled = true;
+  }
+}
+
+/**
+ * Show processing state
+ * @param {string} status - Status message to display
+ */
+function showPdfProcessingState(status) {
+  hidePdfStates();
+  const processingState = document.getElementById('pdf-processing-state');
+  const statusEl = document.getElementById('pdf-processing-status');
+
+  if (processingState) {
+    processingState.style.display = 'block';
+  }
+  if (statusEl) {
+    statusEl.textContent = status;
+  }
+}
+
+/**
+ * Show validation error state
+ * @param {string} title - Error title
+ * @param {string} message - Error message
+ * @param {string} details - Additional details
+ */
+function showPdfValidationError(title, message, details) {
+  hidePdfStates();
+  const errorState = document.getElementById('pdf-validation-error');
+  const titleEl = document.getElementById('pdf-error-title');
+  const messageEl = document.getElementById('pdf-error-message');
+  const detailsEl = document.getElementById('pdf-error-details');
+
+  if (errorState) {
+    errorState.style.display = 'block';
+  }
+  if (titleEl) {
+    titleEl.textContent = title;
+  }
+  if (messageEl) {
+    messageEl.textContent = message;
+  }
+  if (detailsEl) {
+    if (details) {
+      detailsEl.style.display = 'block';
+      detailsEl.textContent = details;
+    } else {
+      detailsEl.style.display = 'none';
+    }
+  }
+}
+
+/**
+ * Show preview state with extracted data
+ * @param {Object} data - Extraction result data
+ */
+function showPdfPreviewState(data) {
+  hidePdfStates();
+  const previewState = document.getElementById('pdf-preview-state');
+
+  if (!previewState) return;
+  previewState.style.display = 'block';
+
+  // Update document info
+  const docTypeBadge = document.getElementById('pdf-doc-type-badge');
+  const confidenceEl = document.getElementById('pdf-doc-confidence');
+  const eventNameEl = document.getElementById('pdf-event-name');
+  const categoryEl = document.getElementById('pdf-category-name');
+  const participantsCountEl = document.getElementById('pdf-participants-count');
+
+  if (docTypeBadge) {
+    docTypeBadge.textContent = formatDocumentType(data.validation.document_type);
+  }
+  if (confidenceEl) {
+    confidenceEl.textContent = `${(data.validation.confidence * 100).toFixed(0)}% confidence`;
+  }
+  if (eventNameEl) {
+    eventNameEl.textContent = data.event.name || 'Not detected';
+  }
+  if (categoryEl) {
+    categoryEl.textContent = data.event.category || 'Not detected';
+  }
+  if (participantsCountEl) {
+    participantsCountEl.textContent = data.participants.length;
+  }
+
+  // Suggest preset name from event name
+  const presetNameInput = document.getElementById('pdf-preset-name');
+  if (presetNameInput && data.event.name) {
+    presetNameInput.value = data.event.name;
+  }
+
+  // Populate preview table
+  populatePdfPreviewTable(data.participants);
+
+  // Show extraction warning if needed
+  const warningEl = document.getElementById('pdf-extraction-warning');
+  const warningMessageEl = document.getElementById('pdf-warning-message');
+  if (warningEl && data.notes) {
+    warningEl.style.display = 'flex';
+    if (warningMessageEl) {
+      warningMessageEl.textContent = data.notes;
+    }
+  } else if (warningEl) {
+    warningEl.style.display = 'none';
+  }
+
+  // Update preview hint
+  const hintEl = document.getElementById('pdf-preview-hint');
+  if (hintEl) {
+    if (data.participants.length > 10) {
+      hintEl.textContent = `Showing first 10 of ${data.participants.length} participants.`;
+    } else {
+      hintEl.textContent = `Showing all ${data.participants.length} participants.`;
+    }
+  }
+
+  // Enable import button and update count
+  const importBtn = document.getElementById('import-pdf-btn');
+  const importCountEl = document.getElementById('pdf-import-count');
+  if (importBtn) {
+    importBtn.disabled = false;
+  }
+  if (importCountEl) {
+    importCountEl.textContent = data.participants.length;
+  }
+}
+
+/**
+ * Format document type for display
+ * @param {string} type - Document type from API
+ * @returns {string} Formatted display string
+ */
+function formatDocumentType(type) {
+  const types = {
+    'entry_list': 'Entry List',
+    'start_list': 'Start List',
+    'starting_grid': 'Starting Grid',
+    'race_entry': 'Race Entry',
+    'participant_list': 'Participant List',
+    'competitor_list': 'Competitor List',
+    'race_results': 'Race Results',
+    'classification': 'Classification',
+    'final_results': 'Final Results',
+    'other': 'Document'
+  };
+  return types[type] || type;
+}
+
+/**
+ * Populate PDF preview table with participants
+ * @param {Array} participants - Array of participant objects
+ */
+function populatePdfPreviewTable(participants) {
+  const tbody = document.getElementById('pdf-preview-tbody');
+  if (!tbody) return;
+
+  tbody.innerHTML = '';
+
+  // Show first 10 participants
+  const previewParticipants = participants.slice(0, 10);
+
+  previewParticipants.forEach(p => {
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td><strong>${escapeHtml(p.numero || '-')}</strong></td>
+      <td>${escapeHtml(p.nome || '-')}</td>
+      <td>${escapeHtml(p.squadra || '-')}</td>
+      <td>${escapeHtml(p.categoria || '-')}</td>
+    `;
+    tbody.appendChild(row);
+  });
+}
+
+/**
+ * Import the PDF data as a new preset
+ */
+async function importPdfPreset() {
+  if (!pdfImportData || !pdfImportData.participants || pdfImportData.participants.length === 0) {
+    showNotification('No data to import', 'error');
+    return;
+  }
+
+  const presetName = document.getElementById('pdf-preset-name')?.value?.trim();
+  if (!presetName) {
+    showNotification('Please enter a preset name', 'error');
+    document.getElementById('pdf-preset-name')?.focus();
+    return;
+  }
+
+  // Disable import button
+  const importBtn = document.getElementById('import-pdf-btn');
+  if (importBtn) {
+    importBtn.disabled = true;
+    importBtn.innerHTML = '<span class="btn-icon">⏳</span>Importing...';
+  }
+
+  try {
+    // Map extracted participants to database format
+    const participants = pdfImportData.participants.map(p => ({
+      numero: p.numero || '',
+      nome: p.nome || '',
+      categoria: p.categoria || '',
+      squadra: p.squadra || '',
+      navigatore: p.navigatore || '',
+      sponsor: p.sponsor || '',
+      metatag: '',
+      plate_number: '',
+      folder_1: '',
+      folder_2: '',
+      folder_3: ''
+    }));
+
+    // Create preset
+    const createResponse = await window.api.invoke('supabase-create-participant-preset', {
+      name: presetName,
+      description: pdfImportData.event.category
+        ? `${pdfImportData.event.category} - Imported from PDF`
+        : 'Imported from PDF via AI extraction',
+      custom_folders: []
+    });
+
+    if (!createResponse.success) {
+      throw new Error(createResponse.error || 'Failed to create preset');
+    }
+
+    const presetId = createResponse.data.id;
+
+    // Save participants
+    const saveResponse = await window.api.invoke('supabase-save-preset-participants', {
+      presetId: presetId,
+      participants: participants
+    });
+
+    if (!saveResponse.success) {
+      throw new Error(saveResponse.error || 'Failed to save participants');
+    }
+
+    showNotification(`Successfully imported ${participants.length} participants from PDF!`, 'success');
+    closePdfImportModal();
+    await loadParticipantPresets(); // Refresh list
+
+  } catch (error) {
+    console.error('[Participants] PDF import error:', error);
+    showNotification('Error importing PDF: ' + error.message, 'error');
+
+    // Re-enable button
+    if (importBtn) {
+      importBtn.disabled = false;
+      importBtn.innerHTML = `<span class="btn-icon">📥</span>Import <span id="pdf-import-count">${pdfImportData.participants.length}</span> Participants`;
+    }
+  }
+}
+
 // Export functions for HTML onclick handlers immediately
 window.createNewPreset = createNewPreset;
 window.editPreset = editPreset;
@@ -2287,6 +2758,12 @@ window.removeParticipant = removeParticipant;
 window.updatePersonShownPreview = updatePersonShownPreview;
 window.duplicateParticipant = duplicateParticipant;
 window.duplicateParticipantFromRow = duplicateParticipantFromRow;
+
+// PDF import functions
+window.openPdfImportModal = openPdfImportModal;
+window.closePdfImportModal = closePdfImportModal;
+window.resetPdfImport = resetPdfImport;
+window.importPdfPreset = importPdfPreset;
 
 // Export utility functions for preset management
 window.getSelectedPreset = getSelectedPreset;

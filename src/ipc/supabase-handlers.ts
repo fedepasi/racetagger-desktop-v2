@@ -308,4 +308,34 @@ export function registerSupabaseHandlers(): void {
       return { success: false, data: [] };
     }
   });
+
+  // ==================== PDF ENTRY LIST PARSING ====================
+
+  ipcMain.handle('supabase-parse-pdf-entry-list', async (_, { pdfBase64 }: { pdfBase64: string }) => {
+    try {
+      const supabase = getSupabaseClient();
+      const userId = authService.getAuthState().user?.id;
+
+      console.log('[PDF Parser] Calling edge function...');
+
+      const { data, error } = await supabase.functions.invoke('parsePdfEntryList', {
+        body: {
+          pdfBase64,
+          userId
+        }
+      });
+
+      if (error) {
+        console.error('[PDF Parser] Edge function error:', error);
+        return { success: false, error: error.message };
+      }
+
+      // The edge function returns its own success/error format
+      return data;
+
+    } catch (e: any) {
+      console.error('[PDF Parser] Error:', e);
+      return { success: false, error: e.message };
+    }
+  });
 }
