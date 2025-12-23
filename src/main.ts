@@ -272,6 +272,12 @@ type BatchProcessConfig = {
       location?: string;
     };
   };
+
+  // Visual Tagging configuration
+  visualTagging?: {
+    enabled: boolean;
+    embedInMetadata: boolean;
+  };
 };
 
 /**
@@ -1486,7 +1492,9 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
         if (mainWindow) {
           mainWindow.webContents.send('token-used', tokenBalance);
         }
-      }
+      },
+      // Visual Tagging configuration
+      visualTagging: config.visualTagging
     };
 
     // Configura il processor con i parametri necessari
@@ -2542,6 +2550,101 @@ async function checkAndDownloadModels(): Promise<void> {
   }
 }
 
+/**
+ * Track app launch for analytics
+ * Sends device info to Supabase to track user engagement funnel
+ */
+async function trackAppLaunch(): Promise<void> {
+  try {
+    const os = require('os');
+    const crypto = require('crypto');
+    const { v4: uuidv4 } = require('uuid');
+
+    // Generate machine ID (same as in unified-image-processor)
+    const machineIdSource = [
+      os.hostname(),
+      os.platform(),
+      os.arch(),
+      os.cpus()[0]?.model || '',
+      os.totalmem().toString()
+    ].join('|');
+    const machineId = crypto.createHash('sha256').update(machineIdSource).digest('hex').substring(0, 16);
+
+    // Generate session ID for this launch
+    const sessionId = uuidv4();
+
+    // Get hardware info
+    const cpus = os.cpus();
+    const totalRamGB = Math.round(os.totalmem() / (1024 * 1024 * 1024));
+
+    // Check if user is logged in
+    const { authService } = await import('./auth-service');
+    const authState = authService.getAuthState();
+    const userId = authState.isAuthenticated ? authState.user?.id : null;
+
+    // Get Supabase client
+    const { getSupabaseClient } = await import('./database-service');
+    const supabase = getSupabaseClient();
+
+    // Check if this is the first launch for this machine
+    const { data: existingLaunches, error: countError } = await supabase
+      .from('app_launches')
+      .select('id, app_version')
+      .eq('machine_id', machineId)
+      .limit(1);
+
+    const isFirstLaunch = !existingLaunches || existingLaunches.length === 0;
+    const isFirstLaunchThisVersion = isFirstLaunch ||
+      !existingLaunches.some((l: any) => l.app_version === app.getVersion());
+
+    // Get launch count for this machine
+    const { count: launchCount } = await supabase
+      .from('app_launches')
+      .select('id', { count: 'exact', head: true })
+      .eq('machine_id', machineId);
+
+    // Insert launch record
+    const launchData = {
+      user_id: userId,
+      machine_id: machineId,
+      hostname: os.hostname(),
+      platform: os.platform(),
+      username: os.userInfo().username,
+      app_version: app.getVersion(),
+      electron_version: process.versions.electron || 'N/A',
+      node_version: process.version,
+      cpu: cpus[0]?.model || 'Unknown',
+      cores: cpus.length,
+      ram_gb: totalRamGB,
+      architecture: `${os.platform()} ${os.arch()} - ${os.release()}`,
+      is_first_launch: isFirstLaunch,
+      is_first_launch_this_version: isFirstLaunchThisVersion,
+      launch_count: (launchCount || 0) + 1,
+      session_id: sessionId
+    };
+
+    const { error: insertError } = await supabase
+      .from('app_launches')
+      .insert(launchData);
+
+    if (insertError) {
+      // If RLS blocks (user not logged in), try with service role via edge function
+      if (insertError.code === '42501' || insertError.message?.includes('policy')) {
+        console.log('[AppLaunch] RLS blocked insert, user may not be logged in');
+      } else {
+        console.warn('[AppLaunch] Insert error:', insertError.message);
+      }
+    } else {
+      console.log(`[AppLaunch] Tracked: ${isFirstLaunch ? 'FIRST LAUNCH' : `launch #${(launchCount || 0) + 1}`} for ${os.hostname()}`);
+    }
+
+    // Store session ID for correlation with executions
+    (global as any).__racetagger_session_id = sessionId;
+
+  } catch (error: any) {
+    console.warn('[AppLaunch] Tracking failed (non-critical):', error.message);
+  }
+}
 
 app.whenReady().then(async () => { // Added async here
   // Set app name for proper dock/taskbar display
@@ -2589,6 +2692,11 @@ app.whenReady().then(async () => { // Added async here
   if (mainWindow) {
     initializeIpcContext(mainWindow);
   }
+
+  // Track app launch for analytics (non-blocking)
+  trackAppLaunch().catch(err => {
+    console.warn('[AppLaunch] Failed to track launch (non-critical):', err.message);
+  });
 
   // Cleanup temp files older than 7 days at startup and start periodic cleanup
   try {

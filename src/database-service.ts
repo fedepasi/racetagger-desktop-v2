@@ -638,7 +638,6 @@ export interface ParticipantPreset {
   id?: string;
   user_id: string;
   name: string;
-  category?: string;
   description?: string;
   created_at?: string;
   updated_at?: string;
@@ -2089,7 +2088,7 @@ export async function createParticipantPreset(presetData: Omit<ParticipantPreset
     `);
 
     stmt.run(
-      preset.id, preset.user_id, preset.name, preset.category || 'motorsport',
+      preset.id, preset.user_id, preset.name, 'motorsport', // category column kept for DB compatibility
       preset.description, preset.created_at, preset.updated_at, preset.last_used_at
     );
 
@@ -2279,11 +2278,10 @@ export async function deleteParticipantPreset(presetId: string): Promise<void> {
 /**
  * Importa partecipanti da dati CSV esistenti
  */
-export async function importParticipantsFromCSV(csvData: any[], presetName: string, category = 'motorsport'): Promise<ParticipantPreset> {
+export async function importParticipantsFromCSV(csvData: any[], presetName: string): Promise<ParticipantPreset> {
   const preset = await createParticipantPreset({
     user_id: getCurrentUserId() || '',
     name: presetName,
-    category,
     description: `Imported from CSV with ${csvData.length} participants`
   });
 
@@ -2897,7 +2895,7 @@ export async function updatePresetLastUsedSupabase(presetId: string): Promise<vo
 /**
  * Update participant preset details in Supabase
  */
-export async function updateParticipantPresetSupabase(presetId: string, updateData: Partial<Pick<ParticipantPresetSupabase, 'name' | 'description' | 'category_id'>>): Promise<void> {
+export async function updateParticipantPresetSupabase(presetId: string, updateData: Partial<Pick<ParticipantPresetSupabase, 'name' | 'description' | 'category_id' | 'custom_folders' | 'person_shown_template'>>): Promise<void> {
   try {
     const userId = getCurrentUserId();
     if (!userId) throw new Error('User not authenticated');

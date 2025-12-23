@@ -1,5 +1,23 @@
 # Changelog - RaceTagger Desktop
 
+## [1.1.0] - 2025-12-23
+
+### 🎯 New Features
+- **Sport Category Filtering**: I preset dei partecipanti sono ora filtrati per sport category
+  - Selezione obbligatoria della sport category durante creazione/modifica preset
+  - Il dropdown dei preset nella pagina analisi mostra solo preset della categoria selezionata
+  - Mapping automatico tra codice categoria e ID per il filtering
+
+### 🎨 UI Improvements
+- **Renamed "Event Type" to "Sport Category"**: Label più chiara nell'interfaccia
+- **Folder Organization Box**: Aggiornato il tema colore (da verde/teal a blu)
+
+### 🔧 Technical Improvements
+- Cached presets con filtering dinamico per migliori performance
+- Category code-to-ID mapping per supportare il filtering dei preset
+
+---
+
 ## [1.0.11] - 2025-11-27
 
 ### 🤖 AI/ML Enhancements

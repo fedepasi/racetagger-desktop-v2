@@ -164,6 +164,16 @@ export interface BatchProcessConfig {
     destinationPath?: string;
     conflictStrategy?: 'rename' | 'skip' | 'overwrite';
   };
+
+  // Visual Tagging
+  visualTagging?: {
+    enabled: boolean;
+    embedInMetadata: boolean;
+  };
+
+  // Keywords and Description mode
+  keywordsMode?: 'append' | 'overwrite';
+  descriptionMode?: 'append' | 'overwrite';
 }
 
 /**

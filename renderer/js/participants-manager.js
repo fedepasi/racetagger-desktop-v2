@@ -11,6 +11,7 @@ var editingRowIndex = -1; // -1 = new participant, >=0 = editing existing
 var currentSortColumn = 0; // Colonna corrente di ordinamento (0 = numero)
 var currentSortDirection = 'asc'; // Direzione: 'asc' o 'desc'
 var editDriversTags = []; // Array of driver names for tag input
+var cachedSportCategories = []; // Cached sport categories for dropdown
 
 /**
  * Initialize participants manager
@@ -24,8 +25,49 @@ async function initParticipantsManager() {
     presetFaceManager.initialize();
   }
 
+  // Load sport categories for dropdown
+  await loadSportCategoriesForDropdown();
+
   // Load existing presets
   await loadParticipantPresets();
+}
+
+/**
+ * Load sport categories into the preset editor dropdown
+ */
+async function loadSportCategoriesForDropdown() {
+  try {
+    const response = await window.api.invoke('supabase-get-sport-categories');
+    if (response.success && response.data) {
+      cachedSportCategories = response.data;
+      console.log('[Participants] Loaded', cachedSportCategories.length, 'sport categories');
+    }
+  } catch (error) {
+    console.error('[Participants] Error loading sport categories:', error);
+  }
+}
+
+/**
+ * Populate sport category dropdown with cached categories
+ * @param {string|null} selectedCategoryId - ID to pre-select
+ */
+function populateSportCategoryDropdown(selectedCategoryId = null) {
+  const dropdown = document.getElementById('preset-sport-category');
+  if (!dropdown) return;
+
+  // Clear existing options except placeholder
+  dropdown.innerHTML = '<option value="">Select a sport category...</option>';
+
+  // Add categories
+  cachedSportCategories.forEach(category => {
+    const option = document.createElement('option');
+    option.value = category.id;
+    option.textContent = category.name;
+    if (selectedCategoryId && category.id === selectedCategoryId) {
+      option.selected = true;
+    }
+    dropdown.appendChild(option);
+  });
 }
 
 /**
@@ -548,6 +590,9 @@ function createNewPreset() {
   // Clear Person Shown preview
   const previewEl = document.getElementById('person-shown-preview');
   if (previewEl) previewEl.textContent = '';
+
+  // Populate sport category dropdown (no selection)
+  populateSportCategoryDropdown(null);
 
   // Clear custom folders
   clearCustomFolders();
@@ -1181,6 +1226,9 @@ async function editPreset(presetId) {
     document.getElementById('person-shown-template').value = currentPreset.person_shown_template || '';
     document.getElementById('preset-editor-title').textContent = 'Edit Participant Preset';
 
+    // Populate sport category dropdown with current preset's category
+    populateSportCategoryDropdown(currentPreset.category_id);
+
     // Update Person Shown preview
     updatePersonShownPreview();
 
@@ -1274,7 +1322,6 @@ async function exportPresetJSON(presetId) {
     const exportData = {
       name: preset.name,
       description: preset.description,
-      category: preset.category,
       participants: (preset.participants || []).map(p => ({
         number: p.numero,
         driver: p.nome || p.nome_pilota,
@@ -1664,11 +1711,18 @@ async function savePreset() {
     const presetName = document.getElementById('preset-name').value.trim();
     const presetDescription = document.getElementById('preset-description').value.trim();
     const personShownTemplate = document.getElementById('person-shown-template').value.trim();
+    const sportCategoryId = document.getElementById('preset-sport-category')?.value || null;
 
     // Validation
     if (!presetName) {
       showNotification('Please enter a preset name', 'error');
       document.getElementById('preset-name').focus();
+      return;
+    }
+
+    if (!sportCategoryId) {
+      showNotification('Please select a sport category', 'error');
+      document.getElementById('preset-sport-category').focus();
       return;
     }
 
@@ -1700,6 +1754,7 @@ async function savePreset() {
       const updateData = {
         name: presetName,
         description: presetDescription,
+        category_id: sportCategoryId,
         custom_folders: customFolders,
         person_shown_template: personShownTemplate || null
       };
@@ -1717,6 +1772,7 @@ async function savePreset() {
       const presetData = {
         name: presetName,
         description: presetDescription,
+        category_id: sportCategoryId,
         custom_folders: customFolders,
         person_shown_template: personShownTemplate || null
       };
@@ -2086,7 +2142,6 @@ async function importJsonPreset() {
     const createResponse = await window.api.invoke('supabase-create-participant-preset', {
       name: presetData.name,
       description: presetData.description || '',
-      category: presetData.category || 'imported',
       custom_folders: presetData.custom_folders || []
     });
 

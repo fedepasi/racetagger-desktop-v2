@@ -58,6 +58,10 @@ window.selectedCategory = selectedCategory; // Expose globally for other modules
 let analysisStartTime = null;
 let analysisEndTime = null;
 
+// Preset filtering cache
+let cachedAllPresets = []; // All loaded presets (unfiltered)
+let categoryCodeToIdMap = {}; // Map category code to ID for filtering
+
 // No preset warning modal callback
 let noPresetWarningCallback = null;
 
@@ -838,6 +842,11 @@ function handleCategorySelection(event) {
   }
 
   console.log('[Renderer] Category changed to:', selectedCategory);
+
+  // Re-filter presets based on the new category
+  if (cachedAllPresets.length > 0) {
+    filterAndDisplayPresets();
+  }
 }
 
 // Expose for router binding
@@ -2037,6 +2046,13 @@ function populateCategorySelect(categories) {
     return;
   }
 
+  // Build category code-to-id mapping for preset filtering
+  categoryCodeToIdMap = {};
+  categories.forEach(category => {
+    categoryCodeToIdMap[category.code] = category.id;
+  });
+  console.log('[Renderer] Built category mapping:', Object.keys(categoryCodeToIdMap).length, 'categories');
+
   // Clear existing options (keep current selection if possible)
   const currentValue = categorySelect.value;
   categorySelect.innerHTML = '';
@@ -2126,6 +2142,7 @@ window.loadDynamicCategories = loadDynamicCategories;
 /**
  * Load participant presets into the preset selector dropdown
  * Called by router when analysis page loads
+ * Filters presets by the currently selected sport category
  */
 async function loadPresetsForSelector() {
   try {
@@ -2158,29 +2175,60 @@ async function loadPresetsForSelector() {
       return;
     }
 
-    const presets = response.data;
+    // Cache all presets for filtering
+    cachedAllPresets = response.data;
+    console.log(`[Renderer] Cached ${cachedAllPresets.length} total presets`);
 
-    // Clear existing options except first placeholder
-    while (presetSelect.options.length > 1) {
-      presetSelect.remove(1);
-    }
-
-    // Add preset options
-    presets.forEach(preset => {
-      const option = document.createElement('option');
-      option.value = preset.id;
-      const count = preset.participant_count || preset.participants?.length || 0;
-      option.textContent = `${preset.name} (${count} participants)`;
-      presetSelect.appendChild(option);
-    });
-
-    console.log(`[Renderer] Loaded ${presets.length} presets into selector`);
+    // Filter and display presets based on selected category
+    filterAndDisplayPresets();
   } catch (error) {
     console.error('[Renderer] Error loading presets for selector:', error);
   }
 }
 
+/**
+ * Filter cached presets by selected sport category and update the dropdown
+ */
+function filterAndDisplayPresets() {
+  const presetSelect = document.getElementById('preset-select');
+  if (!presetSelect) {
+    return;
+  }
+
+  // Get the category ID for the selected category code
+  const selectedCategoryId = categoryCodeToIdMap[selectedCategory];
+
+  // Filter presets by category_id
+  let filteredPresets = cachedAllPresets;
+  if (selectedCategoryId) {
+    filteredPresets = cachedAllPresets.filter(preset => preset.category_id === selectedCategoryId);
+    console.log(`[Renderer] Filtered presets for category '${selectedCategory}' (${selectedCategoryId}): ${filteredPresets.length}/${cachedAllPresets.length}`);
+  } else {
+    console.log(`[Renderer] No category mapping for '${selectedCategory}', showing all ${cachedAllPresets.length} presets`);
+  }
+
+  // Clear existing options except first placeholder
+  while (presetSelect.options.length > 1) {
+    presetSelect.remove(1);
+  }
+
+  // Reset selection to placeholder
+  presetSelect.value = '';
+
+  // Add filtered preset options
+  filteredPresets.forEach(preset => {
+    const option = document.createElement('option');
+    option.value = preset.id;
+    const count = preset.participant_count || preset.participants?.length || 0;
+    option.textContent = `${preset.name} (${count} participants)`;
+    presetSelect.appendChild(option);
+  });
+
+  console.log(`[Renderer] Displayed ${filteredPresets.length} presets for category '${selectedCategory}'`);
+}
+
 window.loadPresetsForSelector = loadPresetsForSelector;
+window.filterAndDisplayPresets = filterAndDisplayPresets;
 
 /**
  * Initialize metadata overwrite options visibility based on preset selection

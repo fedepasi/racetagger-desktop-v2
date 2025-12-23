@@ -159,6 +159,7 @@ class UnifiedImageWorker extends EventEmitter {
   private totalRfDetrDetections: number = 0;
   private totalRfDetrCost: number = 0;
   private recognitionMethod: 'gemini' | 'rf-detr' | 'local-onnx' | null = null;
+  private edgeFunctionLogged: boolean = false; // Log edge function selection only once
   // Scene Classification (ONNX Runtime for fast inference)
   private sceneClassifier: SceneClassifierONNX | null = null;
   private sceneClassificationEnabled: boolean = true;
@@ -1726,7 +1727,23 @@ class UnifiedImageWorker extends EventEmitter {
               workerLog.info(`[FaceRecognition] Deducted 1 token for user ${faceRecUserId}`);
             }
 
-            // 5. Log to JSONL with real Supabase URL
+            // 5. Visual Tagging for face recognition path (same as standard flow)
+            let faceVisualTagsResult: { tags: any; usage: any } | null = null;
+            if (this.config.visualTagging?.enabled && faceRecognitionStoragePath) {
+              try {
+                faceVisualTagsResult = await this.invokeVisualTagging(faceRecognitionStoragePath, {
+                  imageId: faceRecognitionImageId,
+                  analysis: matchedDrivers
+                });
+                if (faceVisualTagsResult) {
+                  workerLog.info(`[FaceRecognition] Visual tags extracted: ${Object.values(faceVisualTagsResult.tags).flat().length} tags`);
+                }
+              } catch (err: any) {
+                workerLog.warn(`[FaceRecognition] Visual tagging failed (continuing): ${err.message}`);
+              }
+            }
+
+            // 6. Log to JSONL with real Supabase URL
             if (this.analysisLogger) {
               const { SUPABASE_CONFIG } = await import('./config');
               const faceSupabaseUrl = faceRecognitionStoragePath
@@ -1761,7 +1778,9 @@ class UnifiedImageWorker extends EventEmitter {
                 },
                 thumbnailPath,
                 microThumbPath,
-                compressedPath
+                compressedPath,
+                visualTags: faceVisualTagsResult?.tags,
+                recognitionMethod: 'face_recognition'
               });
               workerLog.info(`[FaceRecognition] Logged to JSONL with URL: ${faceSupabaseUrl}`);
             }
@@ -2051,6 +2070,38 @@ class UnifiedImageWorker extends EventEmitter {
           // Backward compatibility - use first vehicle as primary
           primaryVehicle: vehicles.length > 0 ? vehicles[0] : undefined
         });
+
+        // UPDATE analysis_results with enriched vehicle data (participantMatch, corrections, etc.)
+        // This ensures the management portal can view the same data as the JSONL logs
+        if (imageFile.id && vehicles.length > 0) {
+          try {
+            const { error: updateError } = await this.supabase
+              .from('analysis_results')
+              .update({
+                raw_response: {
+                  vehicles,
+                  totalVehicles: filteredAnalysis.length,
+                  recognitionMethod: analysisResult.recognitionMethod || undefined,
+                  modelSource: analysisResult.recognitionMethod || 'gemini', // Actual AI model used
+                  segmentationPreprocessing: analysisResult.segmentationPreprocessing || undefined,
+                  imageSize: analysisResult.imageSize || undefined,
+                  visualTags: visualTagsResult?.tags || undefined,
+                  temporalContext: temporalContextLog,
+                  enrichedByDesktop: true, // Flag to indicate SmartMatcher enrichment
+                  enrichedAt: new Date().toISOString()
+                }
+              })
+              .eq('image_id', imageFile.id);
+
+            if (updateError) {
+              log.warn(`[DBUpdate] Failed to update analysis_results with enriched data: ${updateError.message}`);
+            } else {
+              log.debug(`[DBUpdate] Updated analysis_results with ${vehicles.length} enriched vehicles for image ${imageFile.id}`);
+            }
+          } catch (dbError: any) {
+            log.warn(`[DBUpdate] Exception updating analysis_results: ${dbError.message}`);
+          }
+        }
       }
 
       // Fase 5: Scrittura dei metadata (XMP per RAW, IPTC per JPEG) con dual-mode system
@@ -2550,11 +2601,12 @@ class UnifiedImageWorker extends EventEmitter {
 
     // Determine which Edge Function to use based on sport category edge_function_version or fallback to settings
     let functionName: string;
+    let functionSource: string;
 
     if (this.currentSportCategory?.edge_function_version) {
       const version = this.currentSportCategory.edge_function_version;
       if (version === 6) {
-        functionName = 'analyzeImageDesktopV5';
+        functionName = 'analyzeImageDesktopV6';
       } else if (version === 5) {
         functionName = 'analyzeImageDesktopV5';
       } else if (version === 4) {
@@ -2564,12 +2616,20 @@ class UnifiedImageWorker extends EventEmitter {
       } else if (version === 2) {
         functionName = 'analyzeImageDesktopV2';
       } else {
-        functionName = 'analyzeImageDesktopV2';
+        functionName = 'analyzeImageDesktopV3'; // Default to V3 for unknown versions
       }
+      functionSource = `sport_category.edge_function_version=${version}`;
     } else {
-      functionName = this.config.enableAdvancedAnnotations
-        ? 'analyzeImageDesktopV3'
-        : 'analyzeImageDesktopV2';
+      // Default to V3 for standard single-image analysis
+      // V6 is only for Crop-Context flow (performCropContextAnalysis)
+      functionName = 'analyzeImageDesktopV3';
+      functionSource = 'default (V3 for single-image, V6 only via Crop-Context)';
+    }
+
+    // Log edge function selection (first image only to avoid spam)
+    if (!this.edgeFunctionLogged) {
+      log.info(`[EdgeFunction] Using ${functionName} (${functionSource}) for category: ${this.config.category}`);
+      this.edgeFunctionLogged = true;
     }
 
     let response: any;
@@ -2637,7 +2697,7 @@ class UnifiedImageWorker extends EventEmitter {
           }
         }),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Visual tagging timeout')), 30000)
+          setTimeout(() => reject(new Error('Visual tagging timeout')), 65000)  // 65s to allow 60s edge function timeout + buffer
         )
       ]) as any;
 
@@ -4134,6 +4194,20 @@ export class UnifiedImageProcessor extends EventEmitter {
 
         // Collect environment info
         const { app } = await import('electron');
+        const os = await import('os');
+        const crypto = await import('crypto');
+
+        // Generate a persistent machine ID based on hardware characteristics
+        // This ID remains consistent across app restarts but is unique per machine
+        const machineIdSource = [
+          os.hostname(),
+          os.platform(),
+          os.arch(),
+          os.cpus()[0]?.model || '',
+          os.totalmem().toString()
+        ].join('|');
+        const machineId = crypto.createHash('sha256').update(machineIdSource).digest('hex').substring(0, 16);
+
         this.systemEnvironment = {
           hardware: hardwareInfo,
           network: networkMetrics,
@@ -4144,6 +4218,14 @@ export class UnifiedImageProcessor extends EventEmitter {
             sharp_version: 'N/A', // TODO: Get Sharp version safely
             timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
             locale: app.getLocale()
+          },
+          // Device identification for license management
+          device: {
+            hostname: os.hostname(),
+            machineId: machineId, // Unique per machine, persistent across restarts
+            platform: os.platform(),
+            username: os.userInfo().username,
+            appVersion: app.getVersion()
           }
         };
 
@@ -4203,17 +4285,18 @@ export class UnifiedImageProcessor extends EventEmitter {
             system_environment: this.systemEnvironment
           };
 
+          // Use UPSERT to handle case where execution was already created by main.ts
           const { data, error } = await supabase
             .from('executions')
-            .insert(executionData)
+            .upsert(executionData, { onConflict: 'id' })
             .select()
             .single();
 
           if (error) {
-            console.error(`[UnifiedProcessor] ❌ Failed to create execution record:`, JSON.stringify(error, null, 2));
+            console.error(`[UnifiedProcessor] ❌ Failed to upsert execution record:`, JSON.stringify(error, null, 2));
             console.error(`[UnifiedProcessor] Error details - code: ${error.code}, message: ${error.message}, details: ${error.details}, hint: ${error.hint}`);
           } else {
-            if (DEBUG_MODE) console.log(`[UnifiedProcessor] ✅ Execution record created in database: ${data.id}`);
+            if (DEBUG_MODE) console.log(`[UnifiedProcessor] ✅ Execution record upserted in database: ${data.id}`);
           }
         }
       } catch (executionError) {

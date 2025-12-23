@@ -128,7 +128,7 @@ export function registerSupabaseHandlers(): void {
     }
   });
 
-  ipcMain.handle('supabase-update-participant-preset', async (_, { presetId, updateData }: { presetId: string, updateData: Partial<{ name: string, description: string, category_id: string }> }) => {
+  ipcMain.handle('supabase-update-participant-preset', async (_, { presetId, updateData }: { presetId: string, updateData: Partial<{ name: string, description: string, category_id: string, custom_folders: string[], person_shown_template: string | null }> }) => {
     try {
       await updateParticipantPresetSupabase(presetId, updateData);
       return { success: true };

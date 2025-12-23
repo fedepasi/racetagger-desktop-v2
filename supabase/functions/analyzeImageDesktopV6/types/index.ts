@@ -143,6 +143,11 @@ export interface RequestBody {
   // V6 Baseline 2026: New fields for fullImage fallback and bbox tracking
   fullImage?: string;           // Base64 full image (fallback when crops is empty)
   bboxSources?: BboxSource[];   // Source of each crop's bounding box
+
+  // V6 2026: V3-compatible mode - load image from Supabase Storage
+  imagePath?: string;           // Path in Supabase Storage bucket (e.g., "1703156789_abc123.jpg")
+  mimeType?: string;            // Image MIME type (image/jpeg, image/png, etc.)
+  sizeBytes?: number;           // Original file size in bytes (for logging)
 }
 
 // ==================== ANALYSIS RESULT TYPES ====================

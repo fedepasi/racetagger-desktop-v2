@@ -331,6 +331,14 @@ class LogVisualizer {
                   <span id="lv-file-size" class="lv-info-value">-</span>
                 </div>
               </div>
+
+              <!-- Visual Tags Section -->
+              <div class="lv-visual-tags-section" id="lv-visual-tags" style="display: none;">
+                <h4>🏷️ Visual Tags</h4>
+                <div class="lv-tags-container" id="lv-tags-container">
+                  <!-- Tags will be populated dynamically -->
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -1600,8 +1608,74 @@ class LogVisualizer {
       analysisTimeEl.textContent = timestamp.toLocaleTimeString();
     }
 
+    // Update visual tags section
+    this.updateVisualTagsSection(result);
+
     // Setup event delegation for vehicle editor buttons
     this.setupVehicleEditorEvents();
+  }
+
+  /**
+   * Update visual tags section in gallery
+   */
+  updateVisualTagsSection(result) {
+    const tagsSection = document.getElementById('lv-visual-tags');
+    const tagsContainer = document.getElementById('lv-tags-container');
+
+    if (!tagsSection || !tagsContainer) return;
+
+    // Get visual tags from result (could be in result.visualTags or result.logEvent.visualTags)
+    const visualTags = result.visualTags || result.logEvent?.visualTags;
+
+    if (!visualTags || Object.keys(visualTags).length === 0) {
+      tagsSection.style.display = 'none';
+      return;
+    }
+
+    // Check if there are any actual tags
+    const hasAnyTags = Object.values(visualTags).some(arr => Array.isArray(arr) && arr.length > 0);
+    if (!hasAnyTags) {
+      tagsSection.style.display = 'none';
+      return;
+    }
+
+    tagsSection.style.display = 'block';
+
+    // Category icons and colors
+    const categoryConfig = {
+      location: { icon: '📍', label: 'Location', color: '#3b82f6' },
+      weather: { icon: '🌤️', label: 'Weather', color: '#f59e0b' },
+      sceneType: { icon: '👥', label: 'Scene', color: '#8b5cf6' },
+      subjects: { icon: '🎯', label: 'Subjects', color: '#10b981' },
+      visualStyle: { icon: '🎨', label: 'Style', color: '#ec4899' },
+      emotion: { icon: '😊', label: 'Emotion', color: '#f97316' }
+    };
+
+    let tagsHTML = '';
+
+    for (const [category, tags] of Object.entries(visualTags)) {
+      if (!Array.isArray(tags) || tags.length === 0) continue;
+
+      const config = categoryConfig[category] || { icon: '🏷️', label: category, color: '#6b7280' };
+
+      tagsHTML += `
+        <div class="lv-tag-category">
+          <div class="lv-tag-category-header">
+            <span class="lv-tag-icon">${config.icon}</span>
+            <span class="lv-tag-label">${config.label}</span>
+          </div>
+          <div class="lv-tag-chips">
+            ${tags.map(tag => `
+              <span class="lv-tag-chip" style="--tag-color: ${config.color}">
+                ${tag}
+              </span>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    tagsContainer.innerHTML = tagsHTML;
   }
 
   /**
@@ -2533,7 +2607,11 @@ class LogVisualizer {
         // Include path information if available
         originalPath: event.originalPath,
         thumbnailPath: event.thumbnailPath,
-        compressedPath: event.compressedPath
+        compressedPath: event.compressedPath,
+        // Include visual tags if available
+        visualTags: event.visualTags || null,
+        // Store original log event for additional data access
+        logEvent: event
       };
     });
 

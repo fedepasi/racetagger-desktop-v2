@@ -264,9 +264,9 @@ export function registerDatabaseHandlers(): void {
     }
   });
 
-  ipcMain.handle('db-import-participants-from-csv', async (_, { csvData, presetName, category }: { csvData: any[], presetName: string, category?: string }) => {
+  ipcMain.handle('db-import-participants-from-csv', async (_, { csvData, presetName }: { csvData: any[], presetName: string }) => {
     try {
-      const preset = await importParticipantsFromCSV(csvData, presetName, category);
+      const preset = await importParticipantsFromCSV(csvData, presetName);
       return { success: true, data: preset };
     } catch (e: any) {
       return { success: false, error: e.message };

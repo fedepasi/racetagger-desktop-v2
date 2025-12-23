@@ -30,6 +30,7 @@ import { analyzeWithGemini, isVertexConfigured } from './modules/gemini-analyzer
 import { parseGeminiResponse, correlateResults, getPrimaryResult } from './modules/response-parser.ts';
 import { saveAnalysisResults, calculateCost } from './modules/database-writer.ts';
 import { analyzeFullImage, buildFullImagePrompt } from './modules/full-image-handler.ts';
+import { loadImageFromStorage } from './modules/image-loader.ts';
 
 // Types and constants
 import { RequestBody, SuccessResponse, ErrorResponse } from './types/index.ts';
@@ -57,18 +58,34 @@ serve(async (req: Request) => {
       storagePath,
       participantPreset,
       fullImage,      // V6 Baseline 2026
-      bboxSources     // V6 Baseline 2026
+      bboxSources,    // V6 Baseline 2026
+      imagePath,      // V6 2026: V3-compatible mode
+      mimeType        // V6 2026: for logging
     } = body;
 
-    // V6 Baseline 2026: Allow either crops OR fullImage
+    // V6 2026: Support multiple input modes (crops, fullImage, or imagePath)
     const hasCrops = crops && crops.length > 0;
-    const hasFullImage = !!fullImage;
+    let hasFullImage = !!fullImage;
+    const hasImagePath = !!imagePath;
 
-    if (!hasCrops && !hasFullImage) {
-      throw new Error('Either crops[] or fullImage must be provided');
+    // V6 2026: If imagePath provided without crops/fullImage, load from Storage
+    let loadedFullImage = fullImage;
+    if (!hasCrops && !hasFullImage && hasImagePath) {
+      console.log(`${LOG_PREFIX} V3-compatible mode: loading from imagePath (${mimeType || 'unknown type'})`);
+      try {
+        loadedFullImage = await loadImageFromStorage(imagePath);
+        hasFullImage = true;
+      } catch (loadError: any) {
+        throw new Error(`Failed to load image from storage: ${loadError.message}`);
+      }
     }
 
-    console.log(`${LOG_PREFIX} Request: ${hasCrops ? `${crops.length} crops` : 'fullImage'}, negative: ${!!negative}, category: ${category || 'default'}`);
+    if (!hasCrops && !hasFullImage) {
+      throw new Error('Either crops[], fullImage, or imagePath must be provided');
+    }
+
+    const inputMode = hasCrops ? `${crops.length} crops` : (hasImagePath ? 'imagePath' : 'fullImage');
+    console.log(`${LOG_PREFIX} Request: ${inputMode}, negative: ${!!negative}, category: ${category || 'default'}`);
 
     // Check Vertex AI configuration
     if (!isVertexConfigured()) {
@@ -111,8 +128,9 @@ serve(async (req: Request) => {
         categoryConfig.fallbackPrompt
       );
     } else {
-      // 2b. V6 Baseline 2026: fullImage fallback
-      console.log(`${LOG_PREFIX} Using fullImage fallback (no crops detected)`);
+      // 2b. V6 2026: fullImage mode (from base64 or loaded from imagePath)
+      const imageSource = hasImagePath ? 'imagePath' : 'fullImage';
+      console.log(`${LOG_PREFIX} Using full image analysis (source: ${imageSource})`);
       usedFullImage = true;
 
       // Build modified prompt for full image analysis
@@ -125,9 +143,9 @@ serve(async (req: Request) => {
       );
       const fullImagePrompt = buildFullImagePrompt(basePrompt);
 
-      // 3b. Call Gemini with full image
+      // 3b. Call Gemini with full image (use loadedFullImage which may come from imagePath)
       geminiResult = await analyzeFullImage(
-        fullImage!,
+        loadedFullImage!,
         fullImagePrompt,
         categoryConfig.fallbackPrompt
       );

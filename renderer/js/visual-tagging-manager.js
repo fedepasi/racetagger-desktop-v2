@@ -3,13 +3,15 @@
  *
  * Manages the visual tagging feature UI and configuration.
  * Handles toggle state, options, and provides config to renderer.js
+ *
+ * NOTE: Config is NOT persisted - defaults to false on every app start
  */
 
 class VisualTaggingManager {
   constructor() {
     this.config = {
       enabled: false,
-      embedInMetadata: true
+      embedInMetadata: false
     };
 
     this.initialized = false;
@@ -22,7 +24,6 @@ class VisualTaggingManager {
     if (this.initialized) return;
 
     this.setupEventListeners();
-    this.loadSavedConfig();
     this.initialized = true;
 
     console.log('[VisualTagging] Manager initialized');
@@ -45,7 +46,6 @@ class VisualTaggingManager {
     if (embedToggle) {
       embedToggle.addEventListener('change', (e) => {
         this.config.embedInMetadata = e.target.checked;
-        this.saveConfig();
       });
     }
   }
@@ -62,9 +62,6 @@ class VisualTaggingManager {
       optionsPanel.style.display = enabled ? 'block' : 'none';
     }
 
-    // Save to localStorage
-    this.saveConfig();
-
     console.log(`[VisualTagging] ${enabled ? 'Enabled' : 'Disabled'}`);
   }
 
@@ -76,57 +73,12 @@ class VisualTaggingManager {
   }
 
   /**
-   * Save config to localStorage
-   */
-  saveConfig() {
-    try {
-      localStorage.setItem('visualTaggingConfig', JSON.stringify(this.config));
-    } catch (e) {
-      console.warn('[VisualTagging] Failed to save config:', e);
-    }
-  }
-
-  /**
-   * Load saved config from localStorage
-   */
-  loadSavedConfig() {
-    try {
-      const saved = localStorage.getItem('visualTaggingConfig');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        this.config = { ...this.config, ...parsed };
-
-        // Apply to UI
-        const mainToggle = document.getElementById('visual-tagging-enabled');
-        if (mainToggle) {
-          mainToggle.checked = this.config.enabled;
-        }
-
-        const embedToggle = document.getElementById('embed-tags-in-metadata');
-        if (embedToggle) {
-          embedToggle.checked = this.config.embedInMetadata;
-        }
-
-        // Show options if enabled
-        if (this.config.enabled) {
-          const optionsPanel = document.getElementById('visual-tagging-options');
-          if (optionsPanel) {
-            optionsPanel.style.display = 'block';
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('[VisualTagging] Failed to load config:', e);
-    }
-  }
-
-  /**
    * Reset configuration to defaults
    */
   resetConfig() {
     this.config = {
       enabled: false,
-      embedInMetadata: true
+      embedInMetadata: false
     };
 
     // Reset UI
@@ -137,15 +89,13 @@ class VisualTaggingManager {
 
     const embedToggle = document.getElementById('embed-tags-in-metadata');
     if (embedToggle) {
-      embedToggle.checked = true;
+      embedToggle.checked = false;
     }
 
     const optionsPanel = document.getElementById('visual-tagging-options');
     if (optionsPanel) {
       optionsPanel.style.display = 'none';
     }
-
-    this.saveConfig();
   }
 }
 
@@ -157,7 +107,7 @@ window.getVisualTaggingConfig = function() {
   if (window.visualTaggingManager) {
     return window.visualTaggingManager.getConfig();
   }
-  return { enabled: false, embedInMetadata: true };
+  return { enabled: false, embedInMetadata: false };
 };
 
 // Initialize on page load or section change

@@ -116,7 +116,7 @@ export interface ImageAnalysisEvent extends LogEvent {
   microThumbPath?: string | null;
   compressedPath?: string | null;
   // Recognition method tracking
-  recognitionMethod?: 'gemini' | 'rf-detr' | 'local-onnx' | 'gemini-v6-seg';
+  recognitionMethod?: 'gemini' | 'rf-detr' | 'local-onnx' | 'gemini-v6-seg' | 'face_recognition';
   // Original image dimensions for bbox mapping (especially useful for local-onnx)
   imageSize?: { width: number; height: number };
   // Segmentation preprocessing info (YOLO model used before recognition)

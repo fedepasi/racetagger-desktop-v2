@@ -29,7 +29,7 @@ import {
   VisualTaggingSuccessResponse,
   VisualTaggingErrorResponse
 } from './types/index.ts';
-import { CORS_HEADERS, LOG_PREFIX, VERTEX_AI } from './config/constants.ts';
+import { CORS_HEADERS, LOG_PREFIX, GEMINI_CONFIG } from './config/constants.ts';
 
 serve(async (req: Request) => {
   // Handle CORS preflight
@@ -99,7 +99,7 @@ serve(async (req: Request) => {
         estimatedCostUSD
       },
       processingTimeMs,
-      modelUsed: VERTEX_AI.DEFAULT_MODEL
+      modelUsed: GEMINI_CONFIG.MODEL
     });
 
     // 6. Build success response
@@ -114,7 +114,7 @@ serve(async (req: Request) => {
           estimatedCostUSD
         },
         processingTimeMs,
-        modelUsed: VERTEX_AI.DEFAULT_MODEL
+        modelUsed: GEMINI_CONFIG.MODEL
       }
     };
 

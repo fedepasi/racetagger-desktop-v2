@@ -1116,6 +1116,7 @@ html {
 }
 
 .official-badge-title {
+  color: #fff;
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
