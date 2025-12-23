@@ -277,6 +277,21 @@
         if (typeof window.initMetadataOverwriteOptions === 'function') {
           window.initMetadataOverwriteOptions();
         }
+
+        // Initialize EnhancedFileBrowser if not already done
+        // This is critical for preset selection to work properly
+        if (typeof window.EnhancedFileBrowser !== 'undefined' && !window.enhancedFileBrowser) {
+          try {
+            window.enhancedFileBrowser = new window.EnhancedFileBrowser();
+            console.log('[Router] EnhancedFileBrowser initialized');
+          } catch (e) {
+            console.error('[Router] Failed to initialize EnhancedFileBrowser:', e);
+          }
+        } else if (window.enhancedFileBrowser) {
+          // Re-initialize presets if browser already exists
+          console.log('[Router] EnhancedFileBrowser already exists, reloading presets');
+          window.enhancedFileBrowser.loadAvailablePresets();
+        }
         break;
     }
   }

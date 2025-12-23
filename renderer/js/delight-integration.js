@@ -89,10 +89,10 @@ class RacetaggerDelightIntegration {
     
     // Racing-specific keyboard shortcuts
     this.setupRacingShortcuts();
-    
-    // Global drag and drop
-    this.setupGlobalDragDrop();
-    
+
+    // Global drag and drop - DISABLED for now (interferes with PDF drop zones)
+    // this.setupGlobalDragDrop();
+
     // Performance tracking
     this.setupPerformanceTracking();
   }
@@ -112,9 +112,17 @@ class RacetaggerDelightIntegration {
     });
     
     document.addEventListener('drop', (e) => {
+      // Check if drop is on a specific drop zone - let those handle it
+      const specificDropZone = e.target.closest('#pdf-drop-zone, .face-photo-drop-zone, .custom-drop-zone');
+      if (specificDropZone) {
+        // Don't handle - let the specific zone handle it
+        document.body.classList.remove('dragover');
+        return;
+      }
+
       e.preventDefault();
       document.body.classList.remove('dragover');
-      
+
       const files = Array.from(e.dataTransfer.files);
       if (files.length > 0) {
         this.handleGlobalDrop(files);

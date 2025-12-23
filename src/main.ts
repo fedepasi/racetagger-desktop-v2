@@ -1472,6 +1472,7 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
       csvData: csvData || [],
       category: config.category || 'motorsport',
       executionId: currentExecutionId || undefined, // Pass execution_id to link images to this execution
+      presetId: config.participantPreset?.id || undefined, // Preset ID for loading face descriptors specific to this preset
       participantPresetData: config.participantPreset?.participants || [], // Pass participant data directly to workers
       personShownTemplate: config.participantPreset?.person_shown_template || undefined, // Template for IPTC PersonInImage field
       folderOrganization: folderOrgConfig,

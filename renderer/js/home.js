@@ -248,22 +248,12 @@ window.openAnnouncementLink = function(url) {
 function setupNavigationFunctions() {
   // Make navigation function globally available
   window.navigateToAnalysis = function() {
-    // Use existing navigation system
-    if (window.navigateToSection) {
-      window.navigateToSection('analysis');
+    // Use hash router
+    if (window.router) {
+      window.router.navigate('/analysis');
     } else {
-      // Fallback to direct section switching
-      const sections = document.querySelectorAll('.content-section');
-      const navItems = document.querySelectorAll('.nav-item');
-
-      sections.forEach(section => section.classList.remove('active-section'));
-      navItems.forEach(item => item.classList.remove('active'));
-
-      const analysisSection = document.getElementById('section-analysis');
-      const analysisNavItem = document.querySelector('.nav-item[href="#"]:nth-child(2)');
-
-      if (analysisSection) analysisSection.classList.add('active-section');
-      if (analysisNavItem) analysisNavItem.classList.add('active');
+      // Fallback to hash navigation
+      window.location.hash = '#/analysis';
     }
   };
 
@@ -281,12 +271,12 @@ function setupNavigationFunctions() {
 
   // Participants navigation
   window.navigateToParticipants = function() {
-    // Use existing navigation system
-    if (window.navigateToSection) {
-      window.navigateToSection('participants');
+    // Use hash router
+    if (window.router) {
+      window.router.navigate('/participants');
     } else {
-      // Fallback navigation
-      showParticipantsSection();
+      // Fallback to hash navigation
+      window.location.hash = '#/participants';
     }
   };
 }

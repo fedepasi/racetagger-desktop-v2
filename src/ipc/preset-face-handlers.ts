@@ -11,7 +11,7 @@
  */
 
 import { ipcMain } from 'electron';
-import { getSupabase } from './context';
+import { authService } from '../auth-service';
 import {
   getPresetParticipantFacePhotos,
   addPresetParticipantFacePhoto,
@@ -51,7 +51,8 @@ export function registerPresetFaceHandlers(): void {
     isPrimary?: boolean;
   }) => {
     try {
-      const supabase = getSupabase();
+      // Use authenticated Supabase client from authService for RLS policy compliance
+      const supabase = authService.getSupabaseClient();
 
       // Check if participant already has 5 photos
       const currentCount = await getPresetParticipantFacePhotoCount(params.participantId);
@@ -92,6 +93,7 @@ export function registerPresetFaceHandlers(): void {
       // Save to database
       const createParams: CreatePresetFacePhotoParams = {
         participant_id: params.participantId,
+        user_id: params.userId, // Required for RLS policy
         photo_url: photoUrl,
         storage_path: storagePath,
         face_descriptor: params.faceDescriptor,
@@ -122,7 +124,8 @@ export function registerPresetFaceHandlers(): void {
     storagePath: string;
   }) => {
     try {
-      const supabase = getSupabase();
+      // Use authenticated Supabase client from authService for RLS policy compliance
+      const supabase = authService.getSupabaseClient();
 
       // Delete from storage first
       const { error: storageError } = await supabase.storage

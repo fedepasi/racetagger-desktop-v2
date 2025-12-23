@@ -55,6 +55,15 @@ export function registerAuthHandlers(): void {
     return authService.isAdmin();
   });
 
+  // Get current session (for face photos and other features that need user ID)
+  ipcMain.handle('auth-get-session', () => {
+    const authState = authService.getAuthState();
+    if (authState.isAuthenticated && authState.user) {
+      return { success: true, session: { user: authState.user } };
+    }
+    return { success: false, error: 'Not authenticated' };
+  });
+
   // ==================== Auth Status ====================
 
   ipcMain.on('check-auth-status', async (event: IpcMainEvent) => {

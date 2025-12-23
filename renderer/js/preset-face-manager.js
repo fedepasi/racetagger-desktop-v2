@@ -42,12 +42,15 @@ class PresetFaceManager {
     this.fileInput = document.getElementById('face-photo-input');
     this.section = document.getElementById('face-photos-section');
 
-    // Initialize face detector if available
-    if (window.faceDetector) {
+    // Initialize face detector if available (use getFaceDetector function)
+    if (window.getFaceDetector) {
+      this.faceDetector = window.getFaceDetector();
+      console.log('[PresetFaceManager] Face detector obtained via getFaceDetector()');
+    } else if (window.faceDetector) {
       this.faceDetector = window.faceDetector;
     }
 
-    console.log('[PresetFaceManager] Initialized');
+    console.log('[PresetFaceManager] Initialized, faceDetector:', this.faceDetector ? 'available' : 'not available');
   }
 
   /**
@@ -60,9 +63,10 @@ class PresetFaceManager {
     this.isOfficial = isOfficial;
     this.photos = [];
 
-    // Hide section for new participants (no ID yet)
+    // For new participants (no ID yet), show section with message
     if (!participantId) {
-      this.hideSection();
+      this.render(); // Show empty state with add button
+      this.showSection();
       return;
     }
 
@@ -168,8 +172,50 @@ class PresetFaceManager {
    * Upload a photo with face detection
    */
   async uploadPhoto(file) {
-    if (!this.currentParticipantId || !this.currentPresetId || !this.currentUserId) {
-      this.showNotification('Please save the participant first before adding face photos', 'warning');
+    // Auto-save participant if no ID yet
+    if (!this.currentParticipantId || !this.currentPresetId) {
+      console.log('[PresetFaceManager] No participant ID, triggering auto-save...');
+      this.showNotification('Saving participant...', 'info');
+
+      try {
+        // Call the global saveParticipantAndStay function which saves to database and updates IDs
+        if (typeof window.saveParticipantAndStay === 'function') {
+          await window.saveParticipantAndStay();
+
+          // Wait a bit for the IDs to be updated
+          await new Promise(resolve => setTimeout(resolve, 300));
+
+          // Check if we now have the IDs
+          if (!this.currentParticipantId) {
+            this.showNotification('Could not save participant. Please try again.', 'error');
+            return;
+          }
+        } else {
+          this.showNotification('Please save the preset first, then try adding photos.', 'warning');
+          return;
+        }
+      } catch (saveError) {
+        console.error('[PresetFaceManager] Auto-save failed:', saveError);
+        this.showNotification('Failed to save participant: ' + saveError.message, 'error');
+        return;
+      }
+    }
+
+    // Try to get userId if not set
+    if (!this.currentUserId) {
+      try {
+        const sessionResult = await window.api.invoke('auth-get-session');
+        if (sessionResult.success && sessionResult.session?.user) {
+          this.currentUserId = sessionResult.session.user.id;
+          console.log('[PresetFaceManager] Retrieved userId from session:', this.currentUserId);
+        }
+      } catch (e) {
+        console.warn('[PresetFaceManager] Could not get session:', e);
+      }
+    }
+
+    if (!this.currentUserId) {
+      this.showNotification('User session not found. Please log in again.', 'warning');
       return;
     }
 
@@ -184,22 +230,38 @@ class PresetFaceManager {
       let faceDescriptor = null;
       let detectionConfidence = null;
 
-      if (this.faceDetector && this.faceDetector.isInitialized) {
+      if (this.faceDetector) {
         try {
-          const img = await this.loadImage(base64Data);
-          const detection = await this.faceDetector.detectSingleFace(img);
+          // Ensure face detector is initialized (models loaded)
+          if (!this.faceDetector.isInitialized) {
+            console.log('[PresetFaceManager] Initializing face detector...');
+            const initResult = await this.faceDetector.initialize();
+            if (!initResult.success) {
+              console.warn('[PresetFaceManager] Face detector initialization failed:', initResult.error);
+            }
+          }
 
-          if (detection) {
-            faceDescriptor = Array.from(detection.descriptor);
-            detectionConfidence = detection.confidence;
-            console.log('[PresetFaceManager] Face detected with confidence:', detectionConfidence);
-          } else {
-            // No face detected - ask user if they want to continue
-            const confirmed = await this.confirmNoFaceDetected();
-            if (!confirmed) {
-              this.isUploading = false;
-              this.updateUploadButton(false);
-              return;
+          if (this.faceDetector.isInitialized) {
+            // Pass base64 data URL directly - _loadImage handles data URLs
+            const detectionStart = performance.now();
+            const result = await this.faceDetector.detectSingleFace(base64Data);
+            const detectionTime = (performance.now() - detectionStart).toFixed(0);
+
+            if (result.success && result.face) {
+              faceDescriptor = Array.from(result.face.descriptor);
+              detectionConfidence = result.face.confidence;
+              console.log(`[PresetFaceManager] Face detected in ${detectionTime}ms - confidence: ${(detectionConfidence * 100).toFixed(1)}%`);
+            } else if (result.success && !result.face) {
+              // No face detected - ask user if they want to continue
+              console.log(`[PresetFaceManager] No face detected in ${detectionTime}ms`);
+              const confirmed = await this.confirmNoFaceDetected();
+              if (!confirmed) {
+                this.isUploading = false;
+                this.updateUploadButton(false);
+                return;
+              }
+            } else {
+              console.warn('[PresetFaceManager] Face detection error:', result.error);
             }
           }
         } catch (detectionError) {

@@ -44,8 +44,8 @@
 
 /* Folder organization section styling (now public) */
 .folder-organization-section {
-  border: 2px solid #74b9ff;
-  background: linear-gradient(135deg, #74b9ff 0%, #0984e3 100%);
+  border: 2px solid #14b8a6;
+  background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%);
   background-size: 200% 200%;
   animation: publicBackground 4s ease infinite;
   border-radius: 8px;
@@ -129,12 +129,12 @@
 }
 
 .radio-group .radio-option:hover {
-  border-color: #0984e3;
-  box-shadow: 0 2px 8px rgba(9,132,227,0.1);
+  border-color: #14b8a6;
+  box-shadow: 0 2px 8px rgba(20,184,166,0.15);
 }
 
 .radio-group .radio-option input[type="radio"]:checked + .radio-content {
-  color: #0984e3;
+  color: #0d9488;
 }
 
 /* Ensure radio titles are readable in admin sections */
@@ -146,7 +146,7 @@
 }
 
 .radio-group .radio-option input[type="radio"]:checked ~ * {
-  border-color: #0984e3;
+  border-color: #14b8a6;
 }
 
 /* Warning styling for move option */
@@ -182,8 +182,8 @@
 
 /* Organization warning */
 .organization-warning {
-  background: #e8f4fd;
-  border: 1px solid #74b9ff;
+  background: #e6fffa;
+  border: 1px solid #14b8a6;
   border-radius: 6px;
   padding: 12px;
   display: flex;
@@ -271,8 +271,8 @@ body.admin-user::after {
 
 /* Visual tagging section styling */
 .visual-tagging-section {
-  border: 2px solid #a855f7;
-  background: linear-gradient(135deg, #a855f7 0%, #7c3aed 100%);
+  border: 2px solid rgba(168, 85, 247, 0.5);
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.35) 0%, rgba(124, 58, 237, 0.35) 100%);
   background-size: 200% 200%;
   animation: taggingBackground 4s ease infinite;
   border-radius: 8px;
@@ -390,27 +390,27 @@ body.admin-user::after {
 }
 
 .visual-tagging-section .section-header h4 {
-  color: white;
+  color: #1e293b;
   font-weight: 700;
   font-size: 18px;
   margin: 0;
-  text-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  text-shadow: none;
 }
 
 .visual-tagging-section .section-header .form-text {
   width: 100%;
-  color: rgba(255,255,255,0.9);
+  color: #334155;
   margin-top: 4px;
 }
 
 /* Toggle content within visual tagging section */
 .visual-tagging-section .toggle-content .toggle-title {
-  color: white;
+  color: #1e293b;
   font-weight: 600;
 }
 
 .visual-tagging-section .toggle-content .form-text {
-  color: rgba(255,255,255,0.85);
+  color: #475569;
 }
 
 /* Responsive design for visual tagging */

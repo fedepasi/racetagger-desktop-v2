@@ -18,11 +18,6 @@
           <span class="btn-icon">💾</span>
           Import JSON
         </button>
-        <button id="import-pdf-preset-btn" class="btn btn-secondary btn-ai">
-          <span class="btn-icon">📄</span>
-          Import PDF
-          <span class="ai-badge">AI</span>
-        </button>
       </div>
     </div>
     <div class="card-body">
@@ -72,7 +67,7 @@
         <div class="preset-header-row">
           <!-- Preset Info -->
           <div class="preset-info-section">
-            <div class="form-group">
+            <div class="form-group text-white">
               <label for="preset-name">Preset Name *</label>
               <input type="text" id="preset-name" placeholder="e.g., Monza 2024 GT Championship">
             </div>
@@ -248,19 +243,26 @@
               <!-- Number -->
               <div class="form-group">
                 <label>
-                  Race Number *
+                  Race Number
                   <span class="field-destination">→ IPTC:Keywords</span>
                 </label>
-                <input type="text" id="edit-numero" class="form-input form-input-metadata" placeholder="51" required>
+                <input type="text" id="edit-numero" class="form-input form-input-metadata" placeholder="51">
+                <small class="form-hint">Optional for Team Principal, VIP, mechanics. Required for drivers.</small>
               </div>
 
-              <!-- Driver Name -->
+              <!-- Drivers (Tag Input) -->
               <div class="form-group">
                 <label>
-                  Driver Name *
+                  Drivers *
                   <span class="field-destination">→ IPTC:Keywords</span>
                 </label>
-                <input type="text" id="edit-nome" class="form-input form-input-metadata" placeholder="Alessandro Pier Guidi" required>
+                <div class="tag-input-container" id="edit-drivers-container">
+                  <div class="tag-input-tags" id="edit-drivers-tags"></div>
+                  <input type="text" id="edit-drivers-input" class="tag-input-field" placeholder="Type driver name and press Enter">
+                </div>
+                <small class="form-hint">Press Enter or comma to add each driver. Click × to remove.</small>
+                <!-- Hidden field to store comma-separated value -->
+                <input type="hidden" id="edit-nome" value="">
               </div>
 
               <!-- Category -->
@@ -349,24 +351,34 @@
 
             <div class="column-content">
               <!-- Folder 1 -->
-              <div class="folder-item-enhanced">
-                <label class="folder-item-label">Folder 1</label>
+              <div class="form-group">
+                <label>
+                  Primary Folder
+                  <span class="field-destination field-destination-folder">→ Export</span>
+                </label>
                 <select id="edit-folder-1" class="form-input form-input-folder">
                   <option value="">None</option>
                 </select>
+                <small class="form-hint">Main output folder for this participant</small>
               </div>
 
               <!-- Folder 2 -->
-              <div class="folder-item-enhanced">
-                <label class="folder-item-label">Folder 2</label>
+              <div class="form-group">
+                <label>
+                  Secondary Folder
+                  <span class="field-destination field-destination-folder">→ Export</span>
+                </label>
                 <select id="edit-folder-2" class="form-input form-input-folder">
                   <option value="">None</option>
                 </select>
               </div>
 
               <!-- Folder 3 -->
-              <div class="folder-item-enhanced">
-                <label class="folder-item-label">Folder 3</label>
+              <div class="form-group">
+                <label>
+                  Additional Folder
+                  <span class="field-destination field-destination-folder">→ Export</span>
+                </label>
                 <select id="edit-folder-3" class="form-input form-input-folder">
                   <option value="">None</option>
                 </select>
@@ -503,7 +515,7 @@
       <div class="modal-body" style="padding: 2rem;">
         <!-- Preset Name Section -->
         <div class="form-group" style="margin-bottom: 2rem;">
-          <label class="csv-preset-name" for="csv-preset-name" style="display: block; margin-bottom: 0.75rem; font-weight: 600; color: var(--text-primary);">
+          <label class="csv-preset-name" for="csv-preset-name" style="display: block; margin-bottom: 0.75rem; font-weight: 600; color: #fff;">
             📋 Preset Name *
           </label>
           <input
@@ -665,7 +677,7 @@
         <!-- Preview State -->
         <div id="pdf-preview-state" class="pdf-state" style="display: none;">
           <!-- Preset Name Section -->
-          <div class="form-group">
+          <div class="form-group text-white>
             <label for="pdf-preset-name">
               📋 Preset Name *
             </label>

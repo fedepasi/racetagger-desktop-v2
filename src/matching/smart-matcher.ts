@@ -642,6 +642,11 @@ export class SmartMatcher {
 
     // Step 1.5: Check if the recognized race number exists in the participant database
     const raceNumberEvidence = evidence.find(e => e.type === EvidenceType.RACE_NUMBER);
+
+    // Flag: no race number was detected in the image
+    // This enables alternative matching via sponsor/team/name for photos without visible numbers
+    const noNumberDetected = !raceNumberEvidence;
+
     const recognizedNumberExists = raceNumberEvidence &&
       participants.some(p => {
         const participantNumber = String(p.numero || p.number || '');
@@ -679,7 +684,7 @@ export class SmartMatcher {
     const candidates: MatchCandidate[] = [];
 
     for (const participant of participants) {
-      const candidate = this.evaluateParticipant(participant, correctedEvidence, !recognizedNumberExists);
+      const candidate = this.evaluateParticipant(participant, correctedEvidence, !recognizedNumberExists, noNumberDetected);
       if (candidate.score > 0) {
         candidates.push(candidate);
       }
@@ -749,13 +754,18 @@ export class SmartMatcher {
   private evaluateParticipant(
     participant: Participant,
     evidence: Evidence[],
-    allowFuzzyMatching: boolean = true
+    allowFuzzyMatching: boolean = true,
+    noNumberDetected: boolean = false  // Flag: no race number in image, boost non-number matching
   ): MatchCandidate {
     let totalScore = 0;
     const matchedEvidence: Evidence[] = [];
     const reasoning: string[] = [];
     let hasUniqueEvidence = false; // Track if any unique evidence was matched
     let ghostVehicleWarning = false; // Track if ghost vehicle detected
+
+    // When no number is detected, we boost non-number evidence matching
+    // This allows matching via sponsor/team/name when the race number isn't visible
+    const noNumberBoostMultiplier = noNumberDetected ? 1.5 : 1.0;
 
     // Set current evidence context for advanced matching
     this.currentAllEvidence = evidence;
@@ -768,12 +778,20 @@ export class SmartMatcher {
     for (const evidenceItem of nonSponsorEvidence) {
       const match = this.evaluateEvidence(participant, evidenceItem, allowFuzzyMatching);
       if (match.score > 0) {
-        totalScore += match.score;
+        // Apply boost for non-number evidence when no number was detected
+        const isNonNumberEvidence = evidenceItem.type !== EvidenceType.RACE_NUMBER;
+        const boostedScore = isNonNumberEvidence && noNumberDetected
+          ? match.score * noNumberBoostMultiplier
+          : match.score;
+
+        totalScore += boostedScore;
         matchedEvidence.push({
           ...evidenceItem,
-          score: match.score
+          score: boostedScore
         });
-        reasoning.push(match.reason);
+
+        const boostNote = isNonNumberEvidence && noNumberDetected ? ' (no-number boost applied)' : '';
+        reasoning.push(match.reason + boostNote);
 
         // Check if this evidence is unique in the preset
         if (this.isUniqueInPreset(evidenceItem.type, evidenceItem.value)) {
@@ -785,9 +803,20 @@ export class SmartMatcher {
     // Process ALL sponsor evidence intelligently (prioritized by uniqueness)
     if (sponsorEvidence.length > 0) {
       const sponsorResults = this.evaluateAllSponsors(participant, sponsorEvidence);
-      totalScore += sponsorResults.totalScore;
+      // Apply boost for sponsor evidence when no number was detected
+      const boostedSponsorScore = noNumberDetected
+        ? sponsorResults.totalScore * noNumberBoostMultiplier
+        : sponsorResults.totalScore;
+
+      totalScore += boostedSponsorScore;
       matchedEvidence.push(...sponsorResults.matchedEvidence);
-      reasoning.push(...sponsorResults.reasoning);
+
+      if (noNumberDetected && sponsorResults.totalScore > 0) {
+        reasoning.push(...sponsorResults.reasoning.map(r => r + ' (no-number boost applied)'));
+      } else {
+        reasoning.push(...sponsorResults.reasoning);
+      }
+
       if (sponsorResults.hasUniqueEvidence) {
         hasUniqueEvidence = true;
       }

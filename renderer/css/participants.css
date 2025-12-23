@@ -334,7 +334,7 @@
 .participants-modal {
   max-width: 95%;
   width: 95vw;
-  max-height: 90vh;
+  max-height: 95vh;  /* Increased from 90vh for more table space */
   display: flex;
   flex-direction: column;
 }
@@ -411,8 +411,8 @@
 .preset-header-row {
   display: grid;
   grid-template-columns: 1fr 1fr; /* 50% - 50% */
-  gap: 1.5rem;
-  margin-bottom: 1.5rem;
+  gap: 1rem;
+  margin-bottom: 1rem;  /* Reduced to give more space to table */
 }
 
 @media (max-width: 1200px) {
@@ -464,8 +464,8 @@
   overflow: auto;
   border: 1px solid var(--border-color);
   border-radius: 6px;
-  min-height: 350px;  /* Core element - needs good visibility */
-  max-height: 50vh;   /* Use viewport height for better scaling */
+  min-height: 450px;  /* Core element - needs good visibility */
+  max-height: 60vh;   /* Use viewport height for better scaling */
 }
 
 .participants-table {
@@ -857,13 +857,11 @@
   }
 }
 
-/* Folder Organization Section */
+/* Folder Organization Section - colori definiti in admin-features.css */
 .folder-organization-section {
-  background: var(--surface-color-light);
   padding: 1.25rem;
   border-radius: 8px;
   margin-bottom: 0; /* Gestito dal .preset-header-row */
-  border: 1px solid var(--border-color);
 }
 
 .folder-organization-section .section-header h3 {
@@ -1020,10 +1018,7 @@
 
 /* Dark mode adjustments for folder organization */
 @media (prefers-color-scheme: dark) {
-  .folder-organization-section {
-    background: var(--bg-medium);
-    border-color: var(--border-light);
-  }
+  /* Background/border del box principale definiti in admin-features.css */
 
   .folders-list {
     background: var(--bg-dark);
@@ -1031,19 +1026,19 @@
   }
 
   .folder-chip {
-    background: rgba(59, 130, 246, 0.15);
-    border-color: var(--accent-color);
-    color: var(--accent-color);
+    background: rgba(20, 184, 166, 0.15);
+    border-color: #14b8a6;
+    color: #14b8a6;
   }
 
   .folder-chip:hover {
-    background: var(--accent-color);
+    background: #14b8a6;
     color: white;
   }
 
   .folder-info-box {
-    background: rgba(59, 130, 246, 0.08);
-    border-color: rgba(59, 130, 246, 0.2);
+    background: rgba(20, 184, 166, 0.08);
+    border-color: rgba(20, 184, 166, 0.2);
   }
 }
 
@@ -1384,6 +1379,11 @@
   background: rgba(251, 191, 36, 0.15);
 }
 
+.field-destination-folder {
+  color: #3b82f6;
+  background: rgba(59, 130, 246, 0.15);
+}
+
 /* Input Styling per Column Type */
 .form-input-metadata {
   border-color: rgba(16, 185, 129, 0.3);
@@ -1403,13 +1403,91 @@
   box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.15);
 }
 
+/* Enhanced Select Styling for Folder Column */
 .form-input-folder {
-  border-color: rgba(59, 130, 246, 0.3);
+  width: 100%;
+  padding: 0.75rem 2.5rem 0.75rem 1rem;
+  border: 2px solid rgba(59, 130, 246, 0.3);
+  border-radius: 8px;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  background-color: var(--surface-color);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%233b82f6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  background-size: 16px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+}
+
+.form-input-folder:hover {
+  border-color: rgba(59, 130, 246, 0.5);
+  background-color: rgba(59, 130, 246, 0.03);
 }
 
 .form-input-folder:focus {
+  outline: none;
   border-color: #3b82f6;
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+  background-color: var(--surface-color);
+}
+
+/* Style when a folder is selected (not "None") */
+.form-input-folder:not([data-empty="true"]):not(:invalid) {
+  background-color: rgba(59, 130, 246, 0.05);
+}
+
+/* Option styling */
+.form-input-folder option {
+  padding: 0.5rem;
+  font-size: 0.9375rem;
+}
+
+.form-input-folder option:first-child {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.form-input-folder option:checked {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.2) 0%, rgba(59, 130, 246, 0.1) 100%);
+}
+
+/* Folder icon prefix for selected options */
+.form-input-folder option:not(:first-child)::before {
+  content: "📁 ";
+}
+
+/* Dark mode adjustments */
+@media (prefers-color-scheme: dark) {
+  .form-input-folder {
+    background-color: var(--bg-medium);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2360a5fa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  }
+
+  .form-input-folder:hover {
+    background-color: rgba(59, 130, 246, 0.08);
+  }
+
+  .form-input-folder:focus {
+    background-color: var(--bg-dark);
+  }
+
+  .form-input-folder:not([data-empty="true"]):not(:invalid) {
+    background-color: rgba(59, 130, 246, 0.1);
+  }
+
+  .form-input-folder option {
+    background: var(--bg-medium);
+    color: var(--text-primary);
+  }
+
+  .form-input-folder option:checked {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.3) 0%, rgba(59, 130, 246, 0.2) 100%);
+  }
 }
 
 /* Info Boxes */
@@ -2299,6 +2377,19 @@
   font-size: 0.9375rem;
 }
 
+/* Animated Processing Message */
+.processing-message-animated {
+  transition: opacity 0.3s ease-in-out;
+  min-height: 1.5em;
+}
+
+#pdf-processing-status {
+  font-size: 1rem;
+  color: var(--text-primary);
+  margin-top: 0.5rem;
+  transition: opacity 0.3s ease-in-out;
+}
+
 /* AI Loader Animation */
 .ai-loader {
   position: relative;
@@ -2612,5 +2703,235 @@
 
   .btn-ai {
     padding-right: 2.5rem;
+  }
+}
+
+/* ========================================
+   Tag Input Component Styles
+   - Multi-driver/value input with tags
+   ======================================== */
+
+.tag-input-container {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 2px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--input-bg);
+  min-height: 44px;
+  cursor: text;
+  transition: all 0.2s ease;
+}
+
+.tag-input-container:hover {
+  border-color: var(--border-color-light);
+}
+
+.tag-input-container:focus-within {
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 3px var(--accent-color-20);
+}
+
+.tag-input-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  align-items: center;
+}
+
+/* Individual Tag */
+.tag-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  background: var(--accent-color-20);
+  color: var(--accent-color);
+  padding: 0.25rem 0.5rem;
+  border-radius: 16px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  border: 1px solid var(--accent-color);
+  transition: all 0.2s ease;
+  max-width: 200px;
+}
+
+.tag-item:hover {
+  background: var(--accent-color);
+  color: white;
+}
+
+.tag-item .tag-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tag-item .tag-remove {
+  background: none;
+  border: none;
+  color: currentColor;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  opacity: 0.7;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.tag-item .tag-remove:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.15);
+  transform: scale(1.1);
+}
+
+.tag-item:hover .tag-remove {
+  color: white;
+}
+
+.tag-item:hover .tag-remove:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Primary Driver Tag (first in list) */
+.tag-item.primary-driver {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.2) 0%, rgba(16, 185, 129, 0.1) 100%);
+  border-color: #10b981;
+  color: #10b981;
+}
+
+.tag-item.primary-driver:hover {
+  background: #10b981;
+  color: white;
+}
+
+/* Tag Input Field */
+.tag-input-field {
+  flex: 1;
+  min-width: 120px;
+  border: none;
+  background: transparent;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  outline: none;
+  padding: 0.25rem 0;
+}
+
+.tag-input-field::placeholder {
+  color: var(--text-placeholder);
+  font-style: italic;
+  opacity: 0.7;
+}
+
+/* Tag Input in Edit Participant Modal - Metadata Column */
+.form-input-metadata .tag-input-container {
+  border-color: rgba(16, 185, 129, 0.3);
+}
+
+.form-input-metadata .tag-input-container:focus-within {
+  border-color: #10b981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
+}
+
+/* Tag counter */
+.tag-count {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-left: auto;
+  padding-left: 0.5rem;
+  white-space: nowrap;
+}
+
+/* Empty State */
+.tag-input-container.empty .tag-input-field::placeholder {
+  opacity: 1;
+}
+
+/* Dark mode adjustments for tag input */
+@media (prefers-color-scheme: dark) {
+  .tag-input-container {
+    background: var(--bg-medium);
+    border-color: var(--border-light);
+  }
+
+  .tag-input-container:focus-within {
+    background: var(--bg-dark);
+    border-color: var(--accent-color);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+  }
+
+  .tag-item {
+    background: rgba(59, 130, 246, 0.15);
+    border-color: var(--accent-color);
+    color: var(--accent-color);
+  }
+
+  .tag-item:hover {
+    background: var(--accent-color);
+    color: white;
+  }
+
+  .tag-item.primary-driver {
+    background: rgba(16, 185, 129, 0.15);
+    border-color: #34d399;
+    color: #34d399;
+  }
+
+  .tag-item.primary-driver:hover {
+    background: #10b981;
+    color: white;
+  }
+
+  .tag-input-field {
+    color: var(--text-primary);
+  }
+}
+
+/* Responsive for tag input */
+@media (max-width: 768px) {
+  .tag-input-container {
+    padding: 0.625rem 0.75rem;
+    min-height: 48px;
+  }
+
+  .tag-item {
+    font-size: 0.875rem;
+    padding: 0.375rem 0.625rem;
+  }
+
+  .tag-input-field {
+    font-size: 1rem; /* Prevent zoom on iOS */
+    min-width: 100px;
+  }
+}
+
+/* Animation for new tags */
+@keyframes tagAppear {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.tag-item {
+  animation: tagAppear 0.2s ease-out;
+}
+
+/* Respect reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  .tag-item {
+    animation: none;
   }
 }

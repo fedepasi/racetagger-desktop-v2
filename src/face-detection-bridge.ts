@@ -144,13 +144,18 @@ class FaceDetectionBridge {
     }
   }
 
-  async loadDescriptorsForCategory(categoryCode: string): Promise<number> {
+  /**
+   * Load face descriptors from a specific participant preset.
+   * This allows each preset to have its own face recognition database,
+   * supporting Team Principals, VIPs, and other non-numbered participants.
+   */
+  async loadDescriptorsForPreset(presetId: string): Promise<number> {
     try {
-      const count = await faceRecognitionProcessor.loadFromDatabase(categoryCode);
-      log.info(`Loaded ${count} face descriptors for category: ${categoryCode}`);
+      const count = await faceRecognitionProcessor.loadFromPreset(presetId);
+      log.info(`Loaded ${count} face descriptors for preset: ${presetId}`);
       return count;
     } catch (error) {
-      log.error(`Failed to load descriptors for category ${categoryCode}:`, error);
+      log.error(`Failed to load descriptors for preset ${presetId}:`, error);
       return 0;
     }
   }

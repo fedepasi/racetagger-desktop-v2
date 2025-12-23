@@ -10,6 +10,7 @@ var customFolders = []; // Array di nomi folder personalizzate
 var editingRowIndex = -1; // -1 = new participant, >=0 = editing existing
 var currentSortColumn = 0; // Colonna corrente di ordinamento (0 = numero)
 var currentSortDirection = 'asc'; // Direzione: 'asc' o 'desc'
+var editDriversTags = []; // Array of driver names for tag input
 
 /**
  * Initialize participants manager
@@ -642,16 +643,22 @@ async function openParticipantEditModal(rowIndex = -1) {
     console.warn('[Participants] Could not get user session for face photos:', e);
   }
 
+  // Initialize tag input for drivers
+  initDriversTagInput();
+
   if (rowIndex >= 0 && participantsData[rowIndex]) {
     // Edit mode: populate form with existing data
     const participant = participantsData[rowIndex];
     document.getElementById('edit-numero').value = participant.numero || '';
-    document.getElementById('edit-nome').value = participant.nome || participant.nome_pilota || '';
     document.getElementById('edit-categoria').value = participant.categoria || '';
     document.getElementById('edit-squadra').value = participant.squadra || '';
     document.getElementById('edit-plate-number').value = participant.plate_number || '';
     document.getElementById('edit-sponsor').value = participant.sponsor || '';
     document.getElementById('edit-metatag').value = participant.metatag || '';
+
+    // Populate drivers tag input - prefer drivers array, fallback to nome/nome_pilota string
+    const driversData = participant.drivers || participant.nome || participant.nome_pilota || '';
+    setDriversTags(driversData);
 
     // Populate folder selects
     populateFolderSelects();
@@ -659,32 +666,33 @@ async function openParticipantEditModal(rowIndex = -1) {
     document.getElementById('edit-folder-2').value = participant.folder_2 || '';
     document.getElementById('edit-folder-3').value = participant.folder_3 || '';
 
-    // Load face photos for existing participant (if has database ID)
-    if (typeof presetFaceManager !== 'undefined' && participant.id && currentPreset) {
+    // Load face photos for participant
+    if (typeof presetFaceManager !== 'undefined' && currentPreset) {
       const isOfficial = currentPreset.is_official === true;
-      await presetFaceManager.loadPhotos(participant.id, currentPreset.id, currentUserId, isOfficial);
-    } else if (typeof presetFaceManager !== 'undefined') {
-      // No participant ID yet - hide face photos section
-      presetFaceManager.hideSection();
+      // Pass participant.id (may be null for new participants - will show empty state with add button)
+      await presetFaceManager.loadPhotos(participant.id || null, currentPreset.id, currentUserId, isOfficial);
     }
   } else {
     // Create mode: clear all fields
     document.getElementById('edit-numero').value = '';
-    document.getElementById('edit-nome').value = '';
     document.getElementById('edit-categoria').value = '';
     document.getElementById('edit-squadra').value = '';
     document.getElementById('edit-plate-number').value = '';
     document.getElementById('edit-sponsor').value = '';
     document.getElementById('edit-metatag').value = '';
 
+    // Clear drivers tags
+    clearDriversTags();
+
     populateFolderSelects();
     document.getElementById('edit-folder-1').value = '';
     document.getElementById('edit-folder-2').value = '';
     document.getElementById('edit-folder-3').value = '';
 
-    // Hide face photos section for new participants (no ID yet)
-    if (typeof presetFaceManager !== 'undefined') {
-      presetFaceManager.hideSection();
+    // Show face photos section for new participants (will auto-save when adding photos)
+    if (typeof presetFaceManager !== 'undefined' && currentPreset) {
+      const isOfficial = currentPreset?.is_official === true;
+      await presetFaceManager.loadPhotos(null, currentPreset.id, currentUserId, isOfficial);
     }
   }
 
@@ -735,26 +743,30 @@ function populateFolderSelects() {
 
 /**
  * Save participant edit
+ * @param {boolean} closeAfterSave - Whether to close modal after save (default: true)
  */
-function saveParticipantEdit() {
+async function saveParticipantEdit(closeAfterSave = true) {
   const numero = document.getElementById('edit-numero').value.trim();
-  if (!numero) {
-    alert('Number is required');
+
+  // Get drivers from tag input
+  const driversArray = getDriversTagsArray();
+
+  // Validation: at least number OR driver name must be present
+  // This allows Team Principal, VIP, mechanics without race numbers
+  if (!numero && driversArray.length === 0) {
+    alert('Please enter a race number or at least one driver name.\n\nTeam Principal, VIP and mechanics can be added without a number if a name is provided.');
     document.getElementById('edit-numero').focus();
     return;
   }
 
-  const nome = document.getElementById('edit-nome').value.trim();
-  if (!nome) {
-    alert('Driver name is required');
-    document.getElementById('edit-nome').focus();
-    return;
-  }
+  // Comma-separated for nome_pilota compatibility
+  const nome = driversArray.join(', ');
 
   const participant = {
     numero,
     nome,
     nome_pilota: nome, // For compatibility
+    drivers: driversArray, // New: array of driver names
     categoria: document.getElementById('edit-categoria').value.trim(),
     squadra: document.getElementById('edit-squadra').value.trim(),
     plate_number: document.getElementById('edit-plate-number').value.trim().toUpperCase(),
@@ -771,12 +783,17 @@ function saveParticipantEdit() {
   // Salva l'ordinamento corrente prima di aggiornare
   const sortState = getCurrentSortState();
 
+  // Check if this is a new participant (no existing ID)
+  const isNewParticipant = editingRowIndex === -1 || !participantsData[editingRowIndex]?.id;
+
   if (editingRowIndex === -1) {
     // Add new participant
     participantsData.push(participant);
+    editingRowIndex = participantsData.length - 1; // Update index to new position
   } else {
-    // Update existing participant
-    participantsData[editingRowIndex] = participant;
+    // Update existing participant - preserve ID if exists
+    const existingId = participantsData[editingRowIndex]?.id;
+    participantsData[editingRowIndex] = { ...participant, id: existingId };
   }
 
   // Refresh table display
@@ -790,7 +807,90 @@ function saveParticipantEdit() {
   // Scorri al pilota modificato dopo un breve delay per permettere il re-render
   setTimeout(() => scrollToParticipant(participantNumero), 150);
 
-  closeParticipantEditModal();
+  if (closeAfterSave) {
+    closeParticipantEditModal();
+  } else {
+    // Update save button to show saved state
+    const saveBtn = document.querySelector('#participant-edit-modal .btn-primary');
+    if (saveBtn) {
+      const originalText = saveBtn.innerHTML;
+      saveBtn.innerHTML = '✓ Saved';
+      saveBtn.disabled = true;
+      setTimeout(() => {
+        saveBtn.innerHTML = originalText;
+        saveBtn.disabled = false;
+      }, 1500);
+    }
+  }
+}
+
+/**
+ * Save participant and stay in modal (for adding face photos)
+ */
+async function saveParticipantAndStay() {
+  await saveParticipantEdit(false);
+
+  // Now save the preset to database to get participant IDs
+  if (!currentPreset?.id) {
+    showNotification('Please save the preset first using "Save Preset" button', 'warning');
+    return;
+  }
+
+  try {
+    // Get current user ID for face photos
+    let currentUserId = null;
+    const sessionResult = await window.api.invoke('auth-get-session');
+    if (sessionResult.success && sessionResult.session?.user) {
+      currentUserId = sessionResult.session.user.id;
+    }
+
+    // Collect and save participants to database
+    const participants = participantsData.map((p, index) => ({
+      numero: p.numero || '',
+      nome: p.nome || '',
+      categoria: p.categoria || '',
+      squadra: p.squadra || '',
+      plate_number: p.plate_number || '',
+      sponsor: p.sponsor || '',
+      metatag: p.metatag || '',
+      folder_1: p.folder_1 || '',
+      folder_2: p.folder_2 || '',
+      folder_3: p.folder_3 || '',
+      sort_order: index
+    }));
+
+    const saveResponse = await window.api.invoke('supabase-save-preset-participants', {
+      presetId: currentPreset.id,
+      participants: participants
+    });
+
+    if (!saveResponse.success) {
+      throw new Error(saveResponse.error || 'Failed to save participants');
+    }
+
+    // Reload the preset to get updated participant IDs
+    const presetResponse = await window.api.invoke('supabase-get-participant-preset-by-id', currentPreset.id);
+    if (presetResponse.success && presetResponse.data) {
+      currentPreset = presetResponse.data;
+      participantsData = presetResponse.data.participants || [];
+
+      // Find the participant we just saved by numero
+      const savedParticipant = participantsData.find(p => p.numero === document.getElementById('edit-numero').value.trim());
+
+      if (savedParticipant?.id && typeof presetFaceManager !== 'undefined') {
+        const isOfficial = currentPreset.is_official === true;
+        await presetFaceManager.loadPhotos(savedParticipant.id, currentPreset.id, currentUserId, isOfficial);
+        showNotification('Participant saved! You can now add face photos.', 'success');
+      }
+    }
+
+    // Refresh table with new IDs
+    loadParticipantsIntoTable(participantsData);
+
+  } catch (error) {
+    console.error('[Participants] Error saving participant for face photos:', error);
+    showNotification('Error saving: ' + error.message, 'error');
+  }
 }
 
 /**
@@ -1484,6 +1584,7 @@ function duplicateParticipant(rowIndex) {
     numero: originalParticipant.numero || '',
     nome: originalParticipant.nome || originalParticipant.nome_pilota || '',
     nome_pilota: originalParticipant.nome || originalParticipant.nome_pilota || '',
+    drivers: originalParticipant.drivers ? [...originalParticipant.drivers] : [],
     categoria: originalParticipant.categoria || '',
     squadra: originalParticipant.squadra || '',
     plate_number: originalParticipant.plate_number || '',
@@ -2207,6 +2308,178 @@ function showConfirmDialog(title, message) {
   return Promise.resolve(confirm(`${title}\n\n${message}`));
 }
 
+// ============================================
+// Tag Input Functions for Drivers
+// ============================================
+
+/**
+ * Initialize tag input for drivers in edit modal
+ */
+function initDriversTagInput() {
+  const container = document.getElementById('edit-drivers-container');
+  const tagsContainer = document.getElementById('edit-drivers-tags');
+  const input = document.getElementById('edit-drivers-input');
+  const hiddenInput = document.getElementById('edit-nome');
+
+  if (!container || !tagsContainer || !input) return;
+
+  // Clear any existing event listeners by cloning and replacing
+  const newInput = input.cloneNode(true);
+  input.parentNode.replaceChild(newInput, input);
+
+  // Handle input events
+  newInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault();
+      const value = newInput.value.trim();
+      if (value) {
+        addDriverTag(value);
+        newInput.value = '';
+      }
+    } else if (e.key === 'Backspace' && newInput.value === '' && editDriversTags.length > 0) {
+      // Remove last tag on backspace when input is empty
+      removeDriverTag(editDriversTags.length - 1);
+    }
+  });
+
+  // Handle blur - add tag if there's content
+  newInput.addEventListener('blur', () => {
+    const value = newInput.value.trim();
+    if (value) {
+      addDriverTag(value);
+      newInput.value = '';
+    }
+  });
+
+  // Click on container focuses input
+  container.addEventListener('click', (e) => {
+    if (e.target === container || e.target === tagsContainer) {
+      newInput.focus();
+    }
+  });
+
+  // Update empty state class
+  updateDriversTagsEmptyState();
+}
+
+/**
+ * Add a driver tag
+ * @param {string} name - Driver name to add
+ */
+function addDriverTag(name) {
+  const trimmedName = name.trim();
+  if (!trimmedName) return;
+
+  // Check for duplicates (case insensitive)
+  if (editDriversTags.some(tag => tag.toLowerCase() === trimmedName.toLowerCase())) {
+    return;
+  }
+
+  editDriversTags.push(trimmedName);
+  renderDriversTags();
+  syncDriversToHiddenInput();
+}
+
+/**
+ * Remove a driver tag by index
+ * @param {number} index - Index of tag to remove
+ */
+function removeDriverTag(index) {
+  if (index >= 0 && index < editDriversTags.length) {
+    editDriversTags.splice(index, 1);
+    renderDriversTags();
+    syncDriversToHiddenInput();
+  }
+}
+
+/**
+ * Render all driver tags in the container
+ */
+function renderDriversTags() {
+  const tagsContainer = document.getElementById('edit-drivers-tags');
+  if (!tagsContainer) return;
+
+  tagsContainer.innerHTML = '';
+
+  editDriversTags.forEach((tag, index) => {
+    const tagEl = document.createElement('span');
+    tagEl.className = 'tag-item' + (index === 0 ? ' primary-driver' : '');
+    tagEl.innerHTML = `
+      <span class="tag-text">${escapeHtml(tag)}</span>
+      <button type="button" class="tag-remove" onclick="removeDriverTag(${index})" title="Remove">×</button>
+    `;
+    tagsContainer.appendChild(tagEl);
+  });
+
+  updateDriversTagsEmptyState();
+}
+
+/**
+ * Sync drivers array to hidden input for form submission
+ */
+function syncDriversToHiddenInput() {
+  const hiddenInput = document.getElementById('edit-nome');
+  if (hiddenInput) {
+    // Join with comma and space for nome_pilota field
+    hiddenInput.value = editDriversTags.join(', ');
+  }
+}
+
+/**
+ * Update empty state class on container
+ */
+function updateDriversTagsEmptyState() {
+  const container = document.getElementById('edit-drivers-container');
+  if (container) {
+    if (editDriversTags.length === 0) {
+      container.classList.add('empty');
+    } else {
+      container.classList.remove('empty');
+    }
+  }
+}
+
+/**
+ * Set drivers from existing data (when editing a participant)
+ * @param {string|Array} drivers - Either comma-separated string or array of driver names
+ */
+function setDriversTags(drivers) {
+  editDriversTags = [];
+
+  if (Array.isArray(drivers)) {
+    // Already an array
+    editDriversTags = drivers.filter(d => d && d.trim()).map(d => d.trim());
+  } else if (typeof drivers === 'string' && drivers.trim()) {
+    // Comma-separated string - split it
+    editDriversTags = drivers.split(',').map(d => d.trim()).filter(d => d);
+  }
+
+  renderDriversTags();
+  syncDriversToHiddenInput();
+}
+
+/**
+ * Get drivers as array
+ * @returns {Array<string>} Array of driver names
+ */
+function getDriversTagsArray() {
+  return [...editDriversTags];
+}
+
+/**
+ * Clear all driver tags
+ */
+function clearDriversTags() {
+  editDriversTags = [];
+  renderDriversTags();
+  syncDriversToHiddenInput();
+}
+
+// Export for global access
+window.removeDriverTag = removeDriverTag;
+window.addDriverTag = addDriverTag;
+window.clearDriversTags = clearDriversTags;
+
 /**
  * Update Person Shown template preview with sample data
  */
@@ -2262,6 +2535,26 @@ function downloadCsvTemplate() {
 
 /** Stores the PDF extraction result for import */
 var pdfImportData = null;
+
+/** Interval ID for cycling processing messages */
+var processingMessageInterval = null;
+
+/** Fun racing-themed messages for PDF processing */
+const PDF_PROCESSING_MESSAGES = [
+  "🏎️ Warming up the AI engine...",
+  "🔍 Scanning for race numbers...",
+  "📊 Analyzing entry list structure...",
+  "🏁 Checking starting grid positions...",
+  "👀 Looking for driver names...",
+  "🏆 Identifying competitors...",
+  "📋 Reading team information...",
+  "⚡ Processing at full throttle...",
+  "🎯 Extracting participant data...",
+  "🔧 Fine-tuning the results...",
+  "🚀 Almost at the finish line...",
+  "📝 Double-checking the data...",
+  "🏅 Preparing your entry list..."
+];
 
 /**
  * Setup PDF drop zone event listeners
@@ -2356,14 +2649,11 @@ async function processPdfFile(file) {
 
   // Show modal with processing state
   openPdfImportModal();
-  showPdfProcessingState('Uploading document...');
+  showPdfProcessingState('📤 Uploading document...', true); // Start cycling messages
 
   try {
     // Convert file to base64
     const base64 = await fileToBase64(file);
-
-    // Update status
-    showPdfProcessingState('AI is validating document type...');
 
     // Call edge function
     const response = await window.api.invoke('supabase-parse-pdf-entry-list', {
@@ -2460,6 +2750,9 @@ function resetPdfImport() {
  * Hide all PDF states
  */
 function hidePdfStates() {
+  // Stop message cycling
+  stopProcessingMessageCycle();
+
   const states = ['pdf-processing-state', 'pdf-validation-error', 'pdf-preview-state'];
   states.forEach(id => {
     const el = document.getElementById(id);
@@ -2474,10 +2767,11 @@ function hidePdfStates() {
 }
 
 /**
- * Show processing state
- * @param {string} status - Status message to display
+ * Show processing state with animated cycling messages
+ * @param {string} status - Initial status message to display
+ * @param {boolean} startCycling - Whether to start cycling through fun messages
  */
-function showPdfProcessingState(status) {
+function showPdfProcessingState(status, startCycling = false) {
   hidePdfStates();
   const processingState = document.getElementById('pdf-processing-state');
   const statusEl = document.getElementById('pdf-processing-status');
@@ -2487,6 +2781,51 @@ function showPdfProcessingState(status) {
   }
   if (statusEl) {
     statusEl.textContent = status;
+    // Add fade transition class
+    statusEl.classList.add('processing-message-animated');
+  }
+
+  // Start cycling through fun messages if requested
+  if (startCycling) {
+    startProcessingMessageCycle();
+  }
+}
+
+/**
+ * Start cycling through fun processing messages
+ */
+function startProcessingMessageCycle() {
+  // Clear any existing interval
+  stopProcessingMessageCycle();
+
+  let messageIndex = 0;
+  const statusEl = document.getElementById('pdf-processing-status');
+
+  // Change message every 4 seconds
+  processingMessageInterval = setInterval(() => {
+    if (statusEl) {
+      // Fade out
+      statusEl.style.opacity = '0';
+
+      setTimeout(() => {
+        // Change message and fade in
+        statusEl.textContent = PDF_PROCESSING_MESSAGES[messageIndex];
+        statusEl.style.opacity = '1';
+
+        // Cycle through messages
+        messageIndex = (messageIndex + 1) % PDF_PROCESSING_MESSAGES.length;
+      }, 300);
+    }
+  }, 4000);
+}
+
+/**
+ * Stop cycling processing messages
+ */
+function stopProcessingMessageCycle() {
+  if (processingMessageInterval) {
+    clearInterval(processingMessageInterval);
+    processingMessageInterval = null;
   }
 }
 
@@ -2634,9 +2973,11 @@ function populatePdfPreviewTable(participants) {
 
   previewParticipants.forEach(p => {
     const row = document.createElement('tr');
+    // Display drivers as nome_pilota (comma-separated) or fallback to nome
+    const driversDisplay = p.nome_pilota || p.nome || '-';
     row.innerHTML = `
       <td><strong>${escapeHtml(p.numero || '-')}</strong></td>
-      <td>${escapeHtml(p.nome || '-')}</td>
+      <td>${escapeHtml(driversDisplay)}</td>
       <td>${escapeHtml(p.squadra || '-')}</td>
       <td>${escapeHtml(p.categoria || '-')}</td>
     `;
@@ -2669,13 +3010,14 @@ async function importPdfPreset() {
 
   try {
     // Map extracted participants to database format
+    // The Edge Function returns drivers as array and nome_pilota as comma-separated string
+    // Note: 'drivers' array is NOT saved to database (no column exists) - only used locally for UI
     const participants = pdfImportData.participants.map(p => ({
       numero: p.numero || '',
-      nome: p.nome || '',
+      nome: p.nome_pilota || p.nome || '', // Use nome_pilota from Edge Function
       categoria: p.categoria || '',
       squadra: p.squadra || '',
-      navigatore: p.navigatore || '',
-      sponsor: p.sponsor || '',
+      sponsor: Array.isArray(p.sponsors) ? p.sponsors.join(', ') : (p.sponsor || ''),
       metatag: '',
       plate_number: '',
       folder_1: '',
@@ -2754,6 +3096,7 @@ window.confirmAddFolder = confirmAddFolder;
 window.openParticipantEditModal = openParticipantEditModal;
 window.closeParticipantEditModal = closeParticipantEditModal;
 window.saveParticipantEdit = saveParticipantEdit;
+window.saveParticipantAndStay = saveParticipantAndStay;
 window.removeParticipant = removeParticipant;
 window.updatePersonShownPreview = updatePersonShownPreview;
 window.duplicateParticipant = duplicateParticipant;

@@ -649,7 +649,7 @@ export interface ParticipantPreset {
 export interface PresetParticipant {
   id?: string;
   preset_id: string;
-  numero: string;
+  numero?: string;  // Optional: Team Principal, VIP, mechanics may not have a race number
   nome_pilota?: string;
   nome_navigatore?: string;
   nome_terzo?: string;
@@ -2409,6 +2409,7 @@ export interface PresetParticipantFacePhoto {
  */
 export interface CreatePresetFacePhotoParams {
   participant_id: string;
+  user_id: string; // Required for RLS policy
   photo_url: string;
   storage_path: string;
   face_descriptor?: number[];
@@ -2458,7 +2459,12 @@ export async function cacheSupabaseData(): Promise<void> {
       if (presetsError) {
         console.error('[Cache] Error loading presets:', presetsError);
       } else {
-        presetsCache = presets || [];
+        // Map preset_participants to participants for UI compatibility
+        presetsCache = (presets || []).map(preset => ({
+          ...preset,
+          participants: preset.preset_participants || []
+        }));
+        console.log('[Cache] Cached', presetsCache.length, 'presets with participants');
       }
     } else {
       presetsCache = [];
@@ -2595,8 +2601,14 @@ export async function createParticipantPresetSupabase(presetData: Omit<Participa
       throw error;
     }
 
-    // Invalidate cache to force fresh data on next load
-    presetsCache = [];
+    // Add new preset to cache instead of invalidating
+    // This ensures the UI shows the new preset immediately
+    if (data) {
+      const newPreset = { ...data, participants: [] };
+      presetsCache = [newPreset, ...presetsCache];
+      console.log('[DB] Added new preset to cache, total:', presetsCache.length);
+    }
+    // Mark cache for refresh on next detailed load
     cacheLastUpdated = 0;
 
     return data;
@@ -2622,19 +2634,31 @@ export async function getUserParticipantPresetsSupabase(includeAllForAdmin: bool
 
     // Return cached data if available and recent
     if (presetsCache.length > 0 && (Date.now() - cacheLastUpdated < 30000)) {
+      // Ensure all cached presets have participants properly mapped
+      const ensureParticipants = (presets: ParticipantPresetSupabase[]) =>
+        presets.map(p => ({
+          ...p,
+          participants: p.participants || (p as any).preset_participants || []
+        }));
+
       // In admin mode, return all cached presets without filtering
       if (includeAllForAdmin) {
-        console.log('[DB] Returning cached presets (admin mode):', presetsCache.length);
-        return presetsCache;
+        const result = ensureParticipants(presetsCache);
+        console.log('[DB] Returning cached presets (admin mode):', result.length);
+        return result;
       }
       // For regular users, filter by ownership or public access
       const filtered = presetsCache.filter(p => p.user_id === userId || p.is_public);
-      console.log('[DB] Returning cached presets (filtered):', filtered.length, 'of', presetsCache.length);
-      return filtered;
+      const result = ensureParticipants(filtered);
+      console.log('[DB] Returning cached presets (filtered):', result.length, 'of', presetsCache.length);
+      return result;
     }
 
+    // Use authenticated client from authService for RLS policy compliance
+    const authenticatedClient = authService.getSupabaseClient();
+
     // Build query based on admin mode
-    let query = supabase
+    let query = authenticatedClient
       .from('participant_presets')
       .select(`
         *,
@@ -2650,8 +2674,18 @@ export async function getUserParticipantPresetsSupabase(includeAllForAdmin: bool
 
     query = query.order('updated_at', { ascending: false });
 
-    const { data, error } = await query;
+    let { data, error } = await query;
     console.log('[DB] Supabase query result - data:', data?.length, 'error:', error?.message);
+
+    // Retry once if we got 0 results and cache is empty (likely startup timing issue)
+    if (!error && data?.length === 0 && presetsCache.length === 0) {
+      console.log('[DB] Got 0 results with empty cache, retrying after 500ms...');
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const retry = await query;
+      data = retry.data;
+      error = retry.error;
+      console.log('[DB] Retry result - data:', data?.length, 'error:', error?.message);
+    }
 
     if (error) {
       console.error('[DB] Error getting user participant presets from Supabase:', error);
@@ -2660,17 +2694,34 @@ export async function getUserParticipantPresetsSupabase(includeAllForAdmin: bool
 
     // Map preset_participants to participants for UI compatibility
     const mappedData = (data || []).map(preset => {
+      const participantCount = preset.preset_participants?.length || 0;
+      console.log(`[DB] Preset "${preset.name}" has ${participantCount} participants`);
       return {
         ...preset,
         participants: preset.preset_participants || []
       };
     });
 
-    // Update cache for this user
-    presetsCache = mappedData;
-    cacheLastUpdated = Date.now();
-
-    return mappedData;
+    // Update cache only if we got results OR if cache was empty
+    // This prevents overwriting valid cache with empty results due to timing issues
+    if (mappedData.length > 0 || presetsCache.length === 0) {
+      presetsCache = mappedData;
+      cacheLastUpdated = Date.now();
+      console.log('[DB] Cache updated with', mappedData.length, 'presets');
+      return mappedData;
+    } else {
+      // Got 0 results but cache has data - return cached data instead
+      // Ensure participants are mapped for each cached preset
+      const cachedWithParticipants = presetsCache.map(p => ({
+        ...p,
+        participants: p.participants || (p as any).preset_participants || []
+      }));
+      console.log('[DB] Returning cached data instead of empty results:', cachedWithParticipants.length, 'presets');
+      if (includeAllForAdmin) {
+        return cachedWithParticipants;
+      }
+      return cachedWithParticipants.filter(p => p.user_id === userId || p.is_public);
+    }
 
   } catch (error) {
     console.error('[DB] Error getting user participant presets from Supabase:', error);
@@ -2680,17 +2731,34 @@ export async function getUserParticipantPresetsSupabase(includeAllForAdmin: bool
 
 /**
  * Get participant preset by ID from Supabase
+ * Uses authenticated Supabase client for RLS policy compliance
  */
 export async function getParticipantPresetByIdSupabase(presetId: string): Promise<ParticipantPresetSupabase | null> {
   try {
     const userId = getCurrentUserId();
-    if (!userId) return null;
+    if (!userId) {
+      console.warn('[DB] getParticipantPresetByIdSupabase: No userId available');
+      return null;
+    }
 
-    // Check cache first
+    // Check cache first - look for either participants or preset_participants
     const cached = presetsCache.find(p => p.id === presetId);
-    if (cached && cached.participants) return cached;
+    if (cached) {
+      const cachedParticipants = cached.participants || (cached as any).preset_participants;
+      if (cachedParticipants && cachedParticipants.length > 0) {
+        console.log(`[DB] Returning cached preset ${presetId} with ${cachedParticipants.length} participants`);
+        // Ensure participants property is set for UI compatibility
+        if (!cached.participants) {
+          cached.participants = cachedParticipants;
+        }
+        return cached;
+      }
+    }
 
-    const { data, error } = await supabase
+    // Use authenticated client from authService for RLS policy compliance
+    const authenticatedClient = authService.getSupabaseClient();
+
+    const { data, error } = await authenticatedClient
       .from('participant_presets')
       .select(`
         *,
@@ -2709,6 +2777,7 @@ export async function getParticipantPresetByIdSupabase(presetId: string): Promis
     // Map preset_participants to participants for UI compatibility
     if (data) {
       data.participants = data.preset_participants || [];
+      console.log(`[DB] Loaded preset ${presetId} with ${data.participants.length} participants from Supabase`);
     }
 
     return data;
@@ -2780,8 +2849,17 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
       console.error('[DB] Error updating preset timestamp:', updateError);
     }
 
-    // Invalidate cache to force fresh data on next load
-    presetsCache = [];
+    // Update cache with new participants instead of clearing
+    const cacheIndex = presetsCache.findIndex(p => p.id === presetId);
+    if (cacheIndex !== -1) {
+      presetsCache[cacheIndex] = {
+        ...presetsCache[cacheIndex],
+        participants: participants as PresetParticipantSupabase[],
+        updated_at: new Date().toISOString()
+      };
+      console.log('[DB] Cache updated with', participants.length, 'participants for preset', presetId);
+    }
+    // Force refresh on next detailed load to get IDs
     cacheLastUpdated = 0;
 
   } catch (error) {
@@ -2936,8 +3014,18 @@ export async function duplicateOfficialPresetSupabase(sourcePresetId: string): P
       await savePresetParticipantsSupabase(newPreset.id!, participants);
     }
 
-    // Invalidate cache
-    presetsCache = [];
+    // Update preset in cache with participants (don't clear cache)
+    const cacheIndex = presetsCache.findIndex(p => p.id === newPreset.id);
+    if (cacheIndex !== -1) {
+      presetsCache[cacheIndex] = {
+        ...presetsCache[cacheIndex],
+        participants: sourceParticipants.map((p: any) => ({
+          ...p,
+          preset_id: newPreset.id
+        }))
+      };
+    }
+    // Force refresh on next detailed load
     cacheLastUpdated = 0;
 
     // Return the new preset with participants
@@ -3564,10 +3652,14 @@ export async function isFeatureEnabled(featureName: string): Promise<boolean> {
 
 /**
  * Get all face photos for a participant
+ * Uses authenticated Supabase client for RLS policy compliance
  */
 export async function getPresetParticipantFacePhotos(participantId: string): Promise<PresetParticipantFacePhoto[]> {
   try {
-    const { data, error } = await supabase
+    // Use authenticated client from authService for RLS policy compliance
+    const authenticatedClient = authService.getSupabaseClient();
+
+    const { data, error } = await authenticatedClient
       .from('preset_participant_face_photos')
       .select('*')
       .eq('participant_id', participantId)
@@ -3591,13 +3683,18 @@ export async function getPresetParticipantFacePhotos(participantId: string): Pro
 
 /**
  * Add a new face photo for a participant
+ * Uses authenticated Supabase client for RLS policy compliance
  */
 export async function addPresetParticipantFacePhoto(params: CreatePresetFacePhotoParams): Promise<PresetParticipantFacePhoto> {
   try {
-    const { data, error } = await supabase
+    // Use authenticated client from authService for RLS policy compliance
+    const authenticatedClient = authService.getSupabaseClient();
+
+    const { data, error } = await authenticatedClient
       .from('preset_participant_face_photos')
       .insert({
         participant_id: params.participant_id,
+        user_id: params.user_id,
         photo_url: params.photo_url,
         storage_path: params.storage_path,
         face_descriptor: params.face_descriptor || null,
@@ -3625,10 +3722,14 @@ export async function addPresetParticipantFacePhoto(params: CreatePresetFacePhot
 
 /**
  * Delete a face photo
+ * Uses authenticated Supabase client for RLS policy compliance
  */
 export async function deletePresetParticipantFacePhoto(photoId: string): Promise<void> {
   try {
-    const { error } = await supabase
+    // Use authenticated client from authService for RLS policy compliance
+    const authenticatedClient = authService.getSupabaseClient();
+
+    const { error } = await authenticatedClient
       .from('preset_participant_face_photos')
       .delete()
       .eq('id', photoId);
@@ -3645,13 +3746,17 @@ export async function deletePresetParticipantFacePhoto(photoId: string): Promise
 
 /**
  * Update a face photo (e.g., set as primary or update descriptor)
+ * Uses authenticated Supabase client for RLS policy compliance
  */
 export async function updatePresetParticipantFacePhoto(
   photoId: string,
   updates: Partial<Pick<PresetParticipantFacePhoto, 'is_primary' | 'face_descriptor' | 'photo_type' | 'detection_confidence'>>
 ): Promise<PresetParticipantFacePhoto> {
   try {
-    const { data, error } = await supabase
+    // Use authenticated client from authService for RLS policy compliance
+    const authenticatedClient = authService.getSupabaseClient();
+
+    const { data, error } = await authenticatedClient
       .from('preset_participant_face_photos')
       .update(updates)
       .eq('id', photoId)
@@ -3676,6 +3781,7 @@ export async function updatePresetParticipantFacePhoto(
 /**
  * Load all face descriptors for a preset (for face recognition during analysis)
  * Returns descriptors in the format expected by FaceRecognitionProcessor
+ * Uses authenticated Supabase client for RLS policy compliance
  */
 export async function loadPresetFaceDescriptors(presetId: string): Promise<Array<{
   personId: string;
@@ -3689,8 +3795,11 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
   isPrimary: boolean;
 }>> {
   try {
+    // Use authenticated client from authService for RLS policy compliance
+    const authenticatedClient = authService.getSupabaseClient();
+
     // Get all participants with their face photos
-    const { data: participants, error: participantsError } = await supabase
+    const { data: participants, error: participantsError } = await authenticatedClient
       .from('preset_participants')
       .select(`
         id,
@@ -3761,10 +3870,14 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
 
 /**
  * Get face photo count for a participant
+ * Uses authenticated Supabase client for RLS policy compliance
  */
 export async function getPresetParticipantFacePhotoCount(participantId: string): Promise<number> {
   try {
-    const { count, error } = await supabase
+    // Use authenticated client from authService for RLS policy compliance
+    const authenticatedClient = authService.getSupabaseClient();
+
+    const { count, error } = await authenticatedClient
       .from('preset_participant_face_photos')
       .select('*', { count: 'exact', head: true })
       .eq('participant_id', participantId);

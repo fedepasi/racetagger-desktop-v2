@@ -146,7 +146,14 @@
       "Bash(npx electron .)",
       "Bash(git fetch:*)",
       "Bash(git merge:*)",
-      "Bash(npm uninstall:*)"
+      "Bash(npm uninstall:*)",
+      "Bash(git worktree remove:*)",
+      "Bash(git branch:*)",
+      "Bash(git for-each-ref:*)",
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_50babb1bc18dcc6e4fafef1f9f58ed794f8fbead npx supabase functions list:*)",
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_v0_bb2bc3f03c37b1b3d7a5154995bceb172d2b8f1e npx supabase functions list:*)",
+      "WebFetch(domain:supabase.com)",
+      "WebFetch(domain:justadudewhohacks.github.io)"
     ],
     "deny": [],
     "ask": []

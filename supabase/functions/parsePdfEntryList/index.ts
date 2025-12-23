@@ -1,38 +1,74 @@
 /**
  * Parse PDF Entry List Edge Function
  *
- * Extracts participant data from PDF entry lists and start lists using Gemini 2.5 Flash.
+ * Extracts participant data from PDF entry lists and start lists using Gemini.
  * Includes validation to ensure the document is actually an entry/start list.
- *
- * Features:
- * - Document type validation (rejects non-entry-list documents)
- * - Multi-page PDF support
- * - Support for multiple languages (IT, EN, ES, FR, DE)
- * - Rally co-driver extraction
- * - Event metadata extraction
  */
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
+import { GoogleGenerativeAI } from 'https://esm.sh/@google/generative-ai@0.15.0';
 
-import {
-  CORS_HEADERS,
-  VERTEX_AI,
-  COST_CONFIG,
-  VALIDATION_CONFIG,
-  DOCUMENT_VALIDATION_PROMPT,
-  EXTRACTION_PROMPT,
-  LOG_PREFIX
-} from './config/constants.ts';
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Content-Type': 'application/json'
+};
 
-import {
-  ParsePdfRequest,
-  ParsePdfResponse,
-  ParsePdfSuccessResponse,
-  ParsePdfErrorResponse,
-  ValidationResult,
-  ExtractionResult,
-  GeminiResult
-} from './types/index.ts';
+const LOG_PREFIX = '[ParsePdfEntryList]';
+
+// Prompts
+const DOCUMENT_VALIDATION_PROMPT = `Analyze this PDF document and determine if it contains a list of racing/sports participants with their race numbers.
+
+Return ONLY valid JSON in this exact format:
+{
+  "is_valid_entry_list": true/false,
+  "confidence": 0.0-1.0,
+  "document_type": "entry_list" | "start_list" | "starting_grid" | "race_entry" | "participant_list" | "competitor_list" | "race_results" | "classification" | "final_results" | "other",
+  "rejection_reason": "string if not valid, null otherwise",
+  "detected_language": "en" | "it" | "es" | "fr" | "de" | "other"
+}
+
+VALID documents (accept these):
+- Entry lists, start lists, starting grids
+- Participant lists, competitor lists
+- Race results, classifications, final standings (these contain valid participant data!)
+- Any document with race numbers and driver/rider names
+
+REJECT only these:
+- General news articles or press releases
+- Random images or photos without data
+- Non-racing documents (invoices, contracts, tickets)
+- Documents without race numbers`;
+
+const EXTRACTION_PROMPT = `Extract ALL participants from this racing document (entry list, start list, or race results).
+
+Return ONLY valid JSON in this exact format:
+{
+  "event_name": "Event title if found",
+  "event_date": "Date if found (YYYY-MM-DD)",
+  "category": "Main category/championship name if found",
+  "participants": [
+    {
+      "numero": "Race number (REQUIRED)",
+      "drivers": ["Driver 1 full name", "Driver 2 if any", "Driver 3 if any"],
+      "squadra": "Team name",
+      "categoria": "Category/Class",
+      "sponsors": ["Sponsor 1", "Sponsor 2"],
+      "nationality": "Country code if visible (ITA, GER, etc.)"
+    }
+  ],
+  "extraction_notes": "Any issues or notes about extraction"
+}
+
+IMPORTANT RULES:
+1. "numero" is REQUIRED - skip entries without a visible race number
+2. "drivers" is an ARRAY - include ALL drivers/riders for this entry (main driver, co-driver, endurance teammates)
+3. Extract ALL participants, not just a sample
+4. Handle multi-page documents - extract from all pages
+5. For rally: include both driver and co-driver/navigator in the drivers array
+6. For endurance races: include all team drivers in the drivers array
+7. For race results: ignore position/classification columns, extract race NUMBER not finishing position
+8. "sponsors" should be an array of visible sponsor names`;
 
 serve(async (req: Request): Promise<Response> => {
   // Handle CORS preflight
@@ -41,13 +77,11 @@ serve(async (req: Request): Promise<Response> => {
   }
 
   const startTime = Date.now();
-  let totalInputTokens = 0;
-  let totalOutputTokens = 0;
 
   try {
     // Parse request body
-    const body: ParsePdfRequest = await req.json();
-    const { pdfBase64, userId, sportHint } = body;
+    const body = await req.json();
+    const { pdfBase64, userId } = body;
 
     // Validate required fields
     if (!pdfBase64) {
@@ -56,24 +90,57 @@ serve(async (req: Request): Promise<Response> => {
 
     console.log(`${LOG_PREFIX} Processing PDF for user: ${userId || 'anonymous'}`);
 
-    // Check Vertex AI configuration
-    if (!isVertexConfigured()) {
-      throw new Error('Vertex AI not configured');
+    // Get Gemini API key
+    const geminiApiKey = Deno.env.get('GEMINI_API_KEY');
+    if (!geminiApiKey) {
+      throw new Error('GEMINI_API_KEY environment variable not set');
     }
+
+    // Initialize Gemini
+    const genAI = new GoogleGenerativeAI(geminiApiKey);
+    const model = genAI.getGenerativeModel({ model: 'gemini-3-flash-preview' });
 
     // Step 1: Validate document type
     console.log(`${LOG_PREFIX} Step 1: Validating document type...`);
-    const validationResult = await validateDocument(pdfBase64);
-    totalInputTokens += validationResult.inputTokens;
-    totalOutputTokens += validationResult.outputTokens;
 
-    const validation = validationResult.parsedResponse;
+    let validationResult;
+    try {
+      validationResult = await model.generateContent([
+        DOCUMENT_VALIDATION_PROMPT,
+        {
+          inlineData: {
+            data: pdfBase64,
+            mimeType: 'application/pdf'
+          }
+        }
+      ]);
+      console.log(`${LOG_PREFIX} Validation API call successful`);
+    } catch (apiError: any) {
+      console.error(`${LOG_PREFIX} Gemini API error during validation:`, apiError.message);
+      throw new Error(`Gemini API error: ${apiError.message}`);
+    }
+
+    const validationText = validationResult.response.text();
+    console.log(`${LOG_PREFIX} Validation response length: ${validationText.length}`);
+
+    let validation;
+    try {
+      const cleanedValidation = validationText
+        .replace(/```json\n?/g, '')
+        .replace(/```\n?/g, '')
+        .trim();
+      console.log(`${LOG_PREFIX} Cleaned validation: ${cleanedValidation.substring(0, 200)}...`);
+      validation = JSON.parse(cleanedValidation);
+    } catch (e) {
+      console.error(`${LOG_PREFIX} Failed to parse validation response:`, validationText.substring(0, 500));
+      throw new Error(`Failed to parse validation response: ${validationText.substring(0, 200)}`);
+    }
 
     // Check if document is valid
-    if (!validation.is_valid_entry_list || validation.confidence < VALIDATION_CONFIG.MIN_CONFIDENCE) {
+    if (!validation.is_valid_entry_list || validation.confidence < 0.7) {
       console.log(`${LOG_PREFIX} Document rejected: ${validation.rejection_reason || 'Low confidence'}`);
 
-      const errorResponse: ParsePdfErrorResponse = {
+      return new Response(JSON.stringify({
         success: false,
         error: 'Document is not a valid entry list or start list',
         validation: {
@@ -81,9 +148,7 @@ serve(async (req: Request): Promise<Response> => {
           confidence: validation.confidence,
           rejection_reason: validation.rejection_reason || 'Document does not appear to be a motorsport/sports entry list'
         }
-      };
-
-      return new Response(JSON.stringify(errorResponse), {
+      }), {
         status: 400,
         headers: CORS_HEADERS
       });
@@ -93,21 +158,62 @@ serve(async (req: Request): Promise<Response> => {
 
     // Step 2: Extract participants
     console.log(`${LOG_PREFIX} Step 2: Extracting participants...`);
-    const extractionResult = await extractParticipants(pdfBase64);
-    totalInputTokens += extractionResult.inputTokens;
-    totalOutputTokens += extractionResult.outputTokens;
 
-    const extraction = extractionResult.parsedResponse;
+    let extractionResult;
+    try {
+      extractionResult = await model.generateContent([
+        EXTRACTION_PROMPT,
+        {
+          inlineData: {
+            data: pdfBase64,
+            mimeType: 'application/pdf'
+          }
+        }
+      ]);
+      console.log(`${LOG_PREFIX} Extraction API call successful`);
+    } catch (apiError: any) {
+      console.error(`${LOG_PREFIX} Gemini API error during extraction:`, apiError.message);
+      throw new Error(`Gemini API error during extraction: ${apiError.message}`);
+    }
+
+    const extractionText = extractionResult.response.text();
+    console.log(`${LOG_PREFIX} Extraction response length: ${extractionText.length}`);
+
+    let extraction;
+    try {
+      const cleanedExtraction = extractionText
+        .replace(/```json\n?/g, '')
+        .replace(/```\n?/g, '')
+        .trim();
+      console.log(`${LOG_PREFIX} Cleaned extraction preview: ${cleanedExtraction.substring(0, 300)}...`);
+      extraction = JSON.parse(cleanedExtraction);
+    } catch (e) {
+      console.error(`${LOG_PREFIX} Failed to parse extraction response:`, extractionText.substring(0, 500));
+      throw new Error(`Failed to parse extraction response: ${extractionText.substring(0, 200)}`);
+    }
 
     // Validate extraction results
     if (!extraction.participants || extraction.participants.length === 0) {
       throw new Error('No participants could be extracted from the document');
     }
 
-    // Filter out invalid participants (missing required fields)
-    const validParticipants = extraction.participants.filter(p =>
-      p.numero && p.numero.trim().length > 0
-    );
+    // Filter out invalid participants (missing required fields) and transform
+    const validParticipants = extraction.participants
+      .filter((p: any) => p.numero && p.numero.toString().trim().length > 0)
+      .map((p: any) => ({
+        numero: p.numero.toString().trim(),
+        // Convert drivers array to comma-separated string for nome_pilota
+        nome_pilota: Array.isArray(p.drivers)
+          ? p.drivers.filter((d: string) => d && d.trim()).join(', ')
+          : (p.nome || p.drivers || ''),
+        squadra: p.squadra || '',
+        categoria: p.categoria || '',
+        // Convert sponsors array to array (keep as-is if already array)
+        sponsors: Array.isArray(p.sponsors) ? p.sponsors : [],
+        nationality: p.nationality || '',
+        // Keep raw drivers array for frontend tag display
+        drivers: Array.isArray(p.drivers) ? p.drivers.filter((d: string) => d && d.trim()) : []
+      }));
 
     if (validParticipants.length === 0) {
       throw new Error('No valid participants found (all entries missing race numbers)');
@@ -115,12 +221,11 @@ serve(async (req: Request): Promise<Response> => {
 
     // Calculate metrics
     const processingTimeMs = Date.now() - startTime;
-    const estimatedCostUSD = calculateCost(totalInputTokens, totalOutputTokens);
 
-    console.log(`${LOG_PREFIX} Success: Extracted ${validParticipants.length} participants in ${processingTimeMs}ms, cost: $${estimatedCostUSD.toFixed(6)}`);
+    console.log(`${LOG_PREFIX} Success: Extracted ${validParticipants.length} participants in ${processingTimeMs}ms`);
 
     // Build success response
-    const response: ParsePdfSuccessResponse = {
+    const response = {
       success: true,
       data: {
         validation: {
@@ -134,13 +239,8 @@ serve(async (req: Request): Promise<Response> => {
           category: extraction.category
         },
         participants: validParticipants,
-        usage: {
-          inputTokens: totalInputTokens,
-          outputTokens: totalOutputTokens,
-          estimatedCostUSD
-        },
         processingTimeMs,
-        modelUsed: VERTEX_AI.DEFAULT_MODEL,
+        modelUsed: 'gemini-3-flash-preview',
         notes: extraction.extraction_notes
       }
     };
@@ -152,209 +252,13 @@ serve(async (req: Request): Promise<Response> => {
   } catch (error: any) {
     console.error(`${LOG_PREFIX} Error:`, error);
 
-    const errorResponse: ParsePdfErrorResponse = {
+    return new Response(JSON.stringify({
       success: false,
       error: error.message || 'Unknown error',
       details: error.stack
-    };
-
-    return new Response(JSON.stringify(errorResponse), {
+    }), {
       status: 500,
       headers: CORS_HEADERS
     });
   }
 });
-
-// ==================== HELPER FUNCTIONS ====================
-
-/**
- * Check if Vertex AI is configured
- */
-function isVertexConfigured(): boolean {
-  const projectId = Deno.env.get(VERTEX_AI.PROJECT_ID_ENV);
-  const serviceAccountKey = Deno.env.get(VERTEX_AI.SERVICE_ACCOUNT_KEY_ENV);
-  return !!(projectId && serviceAccountKey);
-}
-
-/**
- * Get access token from service account
- */
-async function getAccessToken(): Promise<string> {
-  const serviceAccountKeyJson = Deno.env.get(VERTEX_AI.SERVICE_ACCOUNT_KEY_ENV);
-  if (!serviceAccountKeyJson) {
-    throw new Error('VERTEX_SERVICE_ACCOUNT_KEY not configured');
-  }
-
-  const serviceAccount = JSON.parse(serviceAccountKeyJson);
-
-  // Create JWT header and payload
-  const header = { alg: 'RS256', typ: 'JWT' };
-  const now = Math.floor(Date.now() / 1000);
-  const payload = {
-    iss: serviceAccount.client_email,
-    scope: 'https://www.googleapis.com/auth/cloud-platform',
-    aud: 'https://oauth2.googleapis.com/token',
-    exp: now + 3600,
-    iat: now
-  };
-
-  // Encode header and payload
-  const encoder = new TextEncoder();
-  const headerB64 = btoa(JSON.stringify(header)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-  const payloadB64 = btoa(JSON.stringify(payload)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-  const signInput = `${headerB64}.${payloadB64}`;
-
-  // Import private key and sign
-  const privateKeyPem = serviceAccount.private_key;
-  const pemContents = privateKeyPem
-    .replace('-----BEGIN PRIVATE KEY-----', '')
-    .replace('-----END PRIVATE KEY-----', '')
-    .replace(/\s/g, '');
-  const binaryKey = Uint8Array.from(atob(pemContents), c => c.charCodeAt(0));
-
-  const cryptoKey = await crypto.subtle.importKey(
-    'pkcs8',
-    binaryKey,
-    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
-
-  const signature = await crypto.subtle.sign(
-    'RSASSA-PKCS1-v1_5',
-    cryptoKey,
-    encoder.encode(signInput)
-  );
-
-  const signatureB64 = btoa(String.fromCharCode(...new Uint8Array(signature)))
-    .replace(/=/g, '')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_');
-
-  const jwt = `${signInput}.${signatureB64}`;
-
-  // Exchange JWT for access token
-  const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`
-  });
-
-  if (!tokenResponse.ok) {
-    throw new Error(`Failed to get access token: ${tokenResponse.status}`);
-  }
-
-  const tokenData = await tokenResponse.json();
-  return tokenData.access_token;
-}
-
-/**
- * Call Gemini API with PDF and prompt
- */
-async function callGemini<T>(pdfBase64: string, prompt: string): Promise<GeminiResult<T>> {
-  const projectId = Deno.env.get(VERTEX_AI.PROJECT_ID_ENV);
-  const location = Deno.env.get(VERTEX_AI.LOCATION_ENV) || VERTEX_AI.DEFAULT_LOCATION;
-
-  if (!projectId) {
-    throw new Error('VERTEX_PROJECT_ID not configured');
-  }
-
-  const accessToken = await getAccessToken();
-
-  const endpoint = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${VERTEX_AI.DEFAULT_MODEL}:generateContent`;
-
-  const requestBody = {
-    contents: [
-      {
-        role: 'user',
-        parts: [
-          {
-            inlineData: {
-              mimeType: 'application/pdf',
-              data: pdfBase64
-            }
-          },
-          {
-            text: prompt
-          }
-        ]
-      }
-    ],
-    generationConfig: {
-      temperature: VERTEX_AI.TEMPERATURE,
-      maxOutputTokens: VERTEX_AI.MAX_OUTPUT_TOKENS,
-      responseMimeType: 'application/json'
-    }
-  };
-
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${accessToken}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(requestBody)
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error(`${LOG_PREFIX} Gemini API error:`, errorText);
-    throw new Error(`Gemini API request failed: ${response.status}`);
-  }
-
-  const result = await response.json();
-
-  // Extract response text
-  const responseText = result.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!responseText) {
-    throw new Error('Empty response from Gemini');
-  }
-
-  // Parse JSON response
-  let parsedResponse: T;
-  try {
-    // Clean response (remove markdown code blocks if present)
-    const cleanedResponse = responseText
-      .replace(/```json\n?/g, '')
-      .replace(/```\n?/g, '')
-      .trim();
-    parsedResponse = JSON.parse(cleanedResponse);
-  } catch (e) {
-    console.error(`${LOG_PREFIX} Failed to parse response:`, responseText);
-    throw new Error('Failed to parse Gemini response as JSON');
-  }
-
-  // Extract token usage
-  const usageMetadata = result.usageMetadata || {};
-  const inputTokens = usageMetadata.promptTokenCount || 0;
-  const outputTokens = usageMetadata.candidatesTokenCount || 0;
-
-  return {
-    parsedResponse,
-    inputTokens,
-    outputTokens
-  };
-}
-
-/**
- * Validate that the document is an entry list
- */
-async function validateDocument(pdfBase64: string): Promise<GeminiResult<ValidationResult>> {
-  return callGemini<ValidationResult>(pdfBase64, DOCUMENT_VALIDATION_PROMPT);
-}
-
-/**
- * Extract participants from the document
- */
-async function extractParticipants(pdfBase64: string): Promise<GeminiResult<ExtractionResult>> {
-  return callGemini<ExtractionResult>(pdfBase64, EXTRACTION_PROMPT);
-}
-
-/**
- * Calculate estimated cost
- */
-function calculateCost(inputTokens: number, outputTokens: number): number {
-  const inputCost = (inputTokens / 1_000_000) * COST_CONFIG.INPUT_PER_MILLION;
-  const outputCost = (outputTokens / 1_000_000) * COST_CONFIG.OUTPUT_PER_MILLION;
-  return inputCost + outputCost;
-}

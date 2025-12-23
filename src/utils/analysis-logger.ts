@@ -80,6 +80,15 @@ export interface VehicleAnalysisData {
   };
 }
 
+export interface VisualTagsData {
+  location?: string[];
+  weather?: string[];
+  sceneType?: string[];
+  subjects?: string[];
+  visualStyle?: string[];
+  emotion?: string[];
+}
+
 export interface ImageAnalysisEvent extends LogEvent {
   type: 'IMAGE_ANALYSIS';
   imageId: string;
@@ -127,6 +136,8 @@ export interface ImageAnalysisEvent extends LogEvent {
       detectionId: string;
     }>;
   };
+  // Visual tags extracted by AI (location, weather, scene, subjects, style, emotion)
+  visualTags?: VisualTagsData;
   // Backward compatibility fields (uses first vehicle data)
   primaryVehicle?: VehicleAnalysisData;
 }

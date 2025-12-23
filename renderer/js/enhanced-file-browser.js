@@ -1085,24 +1085,49 @@ class EnhancedFileBrowser {
         ? 'supabase-get-all-participant-presets-admin'
         : 'supabase-get-participant-presets';
 
+      console.log('[EnhancedFileBrowser] Loading presets via:', channelName);
       const response = await window.api.invoke(channelName);
+      console.log('[EnhancedFileBrowser] Response:', response.success, 'presets:', response.data?.length);
+
       if (response.success && Array.isArray(response.data)) {
-        this.availablePresets = response.data.map(preset => ({
-          id: preset.id,
-          name: preset.name,
-          description: preset.description,
-          participantCount: preset.participants ? preset.participants.length : 0,
-          participants: preset.participants || []
-        }));
+        // Debug: log first preset to see structure
+        if (response.data.length > 0) {
+          const firstPreset = response.data[0];
+          console.log('[EnhancedFileBrowser] First preset structure:', {
+            id: firstPreset.id,
+            name: firstPreset.name,
+            hasParticipants: !!firstPreset.participants,
+            participantsLength: firstPreset.participants?.length,
+            hasPresetParticipants: !!(firstPreset).preset_participants,
+            presetParticipantsLength: (firstPreset).preset_participants?.length,
+            keys: Object.keys(firstPreset)
+          });
+        }
+
+        this.availablePresets = response.data.map(preset => {
+          // Try both 'participants' and 'preset_participants' in case of mapping issues
+          const participants = preset.participants || preset.preset_participants || [];
+          return {
+            id: preset.id,
+            name: preset.name,
+            description: preset.description,
+            participantCount: participants.length,
+            participants: participants
+          };
+        });
+
+        console.log('[EnhancedFileBrowser] Mapped presets:', this.availablePresets.map(p => `${p.name}: ${p.participantCount}`));
 
         this.updatePresetSelector();
 
         // After loading presets, restore the selected one from localStorage
         this.loadSelectedPreset();
       } else {
+        console.log('[EnhancedFileBrowser] No presets or invalid response');
         this.availablePresets = [];
       }
     } catch (error) {
+      console.error('[EnhancedFileBrowser] Error loading presets:', error);
       this.availablePresets = [];
     }
   }
@@ -1128,8 +1153,11 @@ class EnhancedFileBrowser {
    * Handle preset selection from dropdown
    */
   async handlePresetSelection(presetId) {
+    console.log('[EnhancedFileBrowser] handlePresetSelection called with:', presetId);
+
     if (!presetId) {
       // Clear preset selection
+      console.log('[EnhancedFileBrowser] Clearing preset selection');
       this.selectedPreset = null;
       // Note: localStorage persistence removed - presets are selected fresh each time
       this.updatePresetDetails();
@@ -1138,7 +1166,10 @@ class EnhancedFileBrowser {
 
     try {
       // Always load full preset data from server to ensure we have complete participants
+      console.log('[EnhancedFileBrowser] Loading preset by ID:', presetId);
       const response = await window.api.invoke('supabase-get-participant-preset-by-id', presetId);
+      console.log('[EnhancedFileBrowser] Preset load response:', response.success, response.data?.name, 'participants:', response.data?.participants?.length);
+
       if (response.success && response.data) {
         this.selectedPreset = {
           id: response.data.id,
@@ -1146,6 +1177,7 @@ class EnhancedFileBrowser {
           description: response.data.description,
           participants: response.data.participants || []
         };
+        console.log('[EnhancedFileBrowser] selectedPreset set:', this.selectedPreset.id, this.selectedPreset.name);
 
         // Note: localStorage persistence removed - presets are selected fresh each time
 
@@ -1162,9 +1194,11 @@ class EnhancedFileBrowser {
         window.dispatchEvent(new CustomEvent('presetSelected', {
           detail: this.selectedPreset
         }));
+      } else {
+        console.log('[EnhancedFileBrowser] Preset load failed or no data');
       }
     } catch (error) {
-      // Failed to select preset
+      console.error('[EnhancedFileBrowser] Error selecting preset:', error);
     }
   }
 
@@ -1318,6 +1352,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }, 600); // Slightly later than coordinator to avoid conflicts
 });
+
+// Expose class on window for router initialization
+window.EnhancedFileBrowser = EnhancedFileBrowser;
 
 // Export for use in other modules
 if (typeof module !== 'undefined' && module.exports) {

@@ -89,6 +89,11 @@ export function registerSupabaseHandlers(): void {
     try {
       const presets = await getUserParticipantPresetsSupabase();
       console.log(`[Presets] Loaded ${presets?.length || 0} presets`);
+      // Log participant counts for debugging
+      const zeroParticipants = presets?.filter(p => !p.participants || p.participants.length === 0) || [];
+      if (zeroParticipants.length > 0) {
+        console.log(`[Presets] WARNING: ${zeroParticipants.length} presets have 0 participants:`, zeroParticipants.map(p => p.name).join(', '));
+      }
       return { success: true, data: presets };
     } catch (e: any) {
       console.error('[Presets] Error loading presets:', e.message);

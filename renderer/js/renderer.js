@@ -1348,6 +1348,8 @@ async function handleFolderAnalysis() {
   const hasPreset = window.enhancedFileBrowser?.selectedPreset?.id;
   const dontShowWarning = localStorage.getItem('racetagger-no-preset-warning-dismissed') === 'true';
 
+  console.log('[Analysis] handleFolderAnalysis - hasPreset:', hasPreset, 'selectedPreset:', window.enhancedFileBrowser?.selectedPreset, 'dontShowWarning:', dontShowWarning);
+
   if (!hasPreset && !dontShowWarning) {
     // Show warning modal and wait for user decision
     return new Promise((resolve) => {

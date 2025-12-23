@@ -18,9 +18,9 @@ export const VERTEX_AI = {
   LOCATION_ENV: 'VERTEX_LOCATION',
   SERVICE_ACCOUNT_KEY_ENV: 'VERTEX_SERVICE_ACCOUNT_KEY',
 
-  // Gemini 2.5 Flash - good balance of speed and accuracy for document parsing
+  // Gemini Flash Latest
   DEFAULT_LOCATION: 'us-central1',
-  DEFAULT_MODEL: 'gemini-2.5-flash-preview-05-20',
+  DEFAULT_MODEL: 'gemini-flash-latest',
 
   // Generation parameters
   TEMPERATURE: 0.1,  // Low for consistent extraction

@@ -59,6 +59,7 @@ const validSendReceiveChannels: string[] = [
 const validInvokeChannels: string[] = [
   // Auth
   'check-auth-status', // Technically send/receive but can be invoke
+  'auth-get-session', // Get current user session for face photos
   'login',
   'register',
   'logout',
@@ -150,6 +151,7 @@ const validInvokeChannels: string[] = [
   'supabase-get-all-participant-presets-admin',
   'supabase-cache-data',
   'supabase-is-feature-enabled',
+  'supabase-parse-pdf-entry-list',
   'auth-is-admin',
 
   // Database Operations - Participant Presets

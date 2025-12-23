@@ -109,6 +109,7 @@ export interface UnifiedProcessorConfig {
   participantPresetData?: any[]; // Direct participant data array from frontend
   category?: string;
   executionId?: string; // Add execution_id for linking images to desktop executions
+  presetId?: string; // Preset ID for loading face descriptors specific to this preset
   keywordsMode?: 'append' | 'overwrite'; // How to handle existing keywords
   descriptionMode?: 'append' | 'overwrite'; // How to handle existing description
   enableAdvancedAnnotations?: boolean; // V3 bounding box annotations
@@ -379,30 +380,36 @@ class UnifiedImageWorker extends EventEmitter {
   /**
    * Initialize Face Recognition for driver identification
    * Uses face-api.js in renderer (via IPC bridge) for detection + main process matching
+   *
+   * Face descriptors are loaded ONLY from the participant preset.
+   * Each preset has its own face recognition database.
    */
   private async initializeFaceRecognition(): Promise<void> {
-    if (!this.currentSportCategory) {
-      log.info('Face recognition: No sport category - disabled');
+    // Face recognition requires a preset with face descriptors
+    if (!this.config.presetId) {
+      log.info('Face recognition: No preset selected - disabled');
       this.faceRecognitionEnabled = false;
       return;
     }
 
     try {
-      log.info(`Initializing face recognition for category: ${this.category}`);
       await faceDetectionBridge.initialize();
-      const descriptorCount = await faceDetectionBridge.loadDescriptorsForCategory(this.category);
+
+      // Load face descriptors from the participant preset
+      const descriptorCount = await faceDetectionBridge.loadDescriptorsForPreset(this.config.presetId);
+      log.info(`Face recognition: Loaded ${descriptorCount} descriptors from preset ${this.config.presetId}`);
 
       if (descriptorCount > 0) {
         this.faceRecognitionEnabled = true;
         this.faceDescriptorsLoaded = true;
         this.faceDescriptorCount = descriptorCount;
-        log.info(`Face recognition initialized with ${descriptorCount} driver descriptors for ${this.category}`);
+        log.info(`Face recognition initialized with ${descriptorCount} descriptors`);
       } else {
-        log.info(`No face descriptors found for ${this.category} - face recognition disabled`);
+        log.info(`No face descriptors in preset - face recognition disabled`);
         this.faceRecognitionEnabled = false;
       }
     } catch (error) {
-      log.warn(`Face recognition initialization failed for ${this.category}:`, error);
+      log.warn(`Face recognition initialization failed:`, error);
       this.faceRecognitionEnabled = false;
     }
   }
@@ -411,23 +418,29 @@ class UnifiedImageWorker extends EventEmitter {
    * Determine recognition strategy based on scene classification
    */
   private getRecognitionStrategy(sceneCategory: SceneCategory | null): { useFaceRecognition: boolean; useNumberRecognition: boolean; context: 'portrait' | 'action' | 'podium' | 'auto' } {
+    // Face recognition always active when preset has face descriptors
+    // Scene classification only affects context (threshold/maxFaces), not whether to use face recognition
+    const useFaceRecognition = this.faceRecognitionEnabled;
+
     if (!sceneCategory) {
-      return { useFaceRecognition: false, useNumberRecognition: true, context: 'auto' };
+      return { useFaceRecognition, useNumberRecognition: true, context: 'auto' };
     }
 
     switch (sceneCategory) {
       case SceneCategory.CROWD_SCENE:
-        return { useFaceRecognition: false, useNumberRecognition: false, context: 'auto' };
+        // Crowd scenes: face recognition active, number recognition disabled (too many people)
+        return { useFaceRecognition, useNumberRecognition: false, context: 'auto' };
       case SceneCategory.GARAGE_PITLANE:
-        return { useFaceRecognition: this.faceRecognitionEnabled, useNumberRecognition: true, context: 'action' };
+        return { useFaceRecognition, useNumberRecognition: true, context: 'action' };
       case SceneCategory.PODIUM_CELEBRATION:
-        return { useFaceRecognition: this.faceRecognitionEnabled, useNumberRecognition: false, context: 'podium' };
+        return { useFaceRecognition, useNumberRecognition: false, context: 'podium' };
       case SceneCategory.PORTRAIT_PADDOCK:
-        return { useFaceRecognition: this.faceRecognitionEnabled, useNumberRecognition: false, context: 'portrait' };
+        return { useFaceRecognition, useNumberRecognition: false, context: 'portrait' };
       case SceneCategory.RACING_ACTION:
-        return { useFaceRecognition: false, useNumberRecognition: true, context: 'action' };
+        // Racing action: face recognition active (will likely not find faces due to helmets)
+        return { useFaceRecognition, useNumberRecognition: true, context: 'action' };
       default:
-        return { useFaceRecognition: false, useNumberRecognition: true, context: 'auto' };
+        return { useFaceRecognition, useNumberRecognition: true, context: 'auto' };
     }
   }
 
@@ -2033,6 +2046,8 @@ class UnifiedImageWorker extends EventEmitter {
           imageSize: analysisResult.imageSize || undefined,
           // Segmentation preprocessing info (YOLOv8-seg used before recognition)
           segmentationPreprocessing: analysisResult.segmentationPreprocessing || undefined,
+          // Visual tags extracted by AI (if enabled)
+          visualTags: visualTagsResult?.tags || undefined,
           // Backward compatibility - use first vehicle as primary
           primaryVehicle: vehicles.length > 0 ? vehicles[0] : undefined
         });
