@@ -167,6 +167,7 @@ const validInvokeChannels: string[] = [
   'get-execution-log',
   'get-analysis-log',
   'update-analysis-log',
+  'get-local-executions',
 
   // Local Thumbnail Operations
   'find-local-thumbnails',

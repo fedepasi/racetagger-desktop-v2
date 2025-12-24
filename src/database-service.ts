@@ -2868,20 +2868,17 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
 
 /**
  * Update preset last used timestamp in Supabase
+ * Uses RPC function for atomic increment of usage_count
  */
 export async function updatePresetLastUsedSupabase(presetId: string): Promise<void> {
   try {
     const userId = getCurrentUserId();
     if (!userId) return;
 
-    const { error } = await supabase
-      .from('participant_presets')
-      .update({
-        last_used_at: new Date().toISOString(),
-        usage_count: supabase.rpc('increment_usage_count', { preset_id: presetId })
-      })
-      .eq('id', presetId)
-      .eq('user_id', userId);
+    // Use RPC function that atomically increments usage_count and updates last_used_at
+    const { error } = await supabase.rpc('increment_usage_count', {
+      p_preset_id: presetId
+    });
 
     if (error) {
       console.error('[DB] Error updating preset last used in Supabase:', error);

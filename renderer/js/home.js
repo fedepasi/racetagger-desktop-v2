@@ -25,6 +25,9 @@ function initializeHomePage() {
   // Load announcements (will only show if there are any)
   loadAnnouncements();
 
+  // Load recent executions
+  loadRecentExecutions();
+
   // Setup navigation functions
   setupNavigationFunctions();
 
@@ -119,6 +122,104 @@ function animateNumber(elementId, targetValue) {
 
   requestAnimationFrame(updateNumber);
 }
+
+/**
+ * Load recent executions from local JSONL files
+ */
+async function loadRecentExecutions() {
+  try {
+    const container = document.getElementById('recent-executions-list');
+    if (!container) return;
+
+    if (window.api && window.api.invoke) {
+      // Use local JSONL files instead of database
+      const result = await window.api.invoke('get-local-executions');
+      if (result.success && result.data?.length > 0) {
+        renderRecentExecutions(result.data);
+      } else {
+        // Show empty state
+        container.innerHTML = `
+          <div class="empty-executions">
+            <div class="empty-executions-icon">📷</div>
+            <h3>No analyses yet</h3>
+            <p>Start your first analysis to see your history here</p>
+          </div>
+        `;
+      }
+    }
+  } catch (error) {
+    console.error('[Home] Error loading recent executions:', error);
+    const container = document.getElementById('recent-executions-list');
+    if (container) {
+      container.innerHTML = `
+        <div class="empty-executions">
+          <div class="empty-executions-icon">⚠️</div>
+          <h3>Could not load analyses</h3>
+          <p>Please try again later</p>
+        </div>
+      `;
+    }
+  }
+}
+
+/**
+ * Render recent executions cards
+ */
+function renderRecentExecutions(executions) {
+  const container = document.getElementById('recent-executions-list');
+  if (!container) return;
+
+  container.innerHTML = executions.map(exec => {
+    const date = new Date(exec.createdAt);
+    const formattedDate = date.toLocaleDateString('it-IT', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    const successRate = exec.totalImages > 0
+      ? Math.round((exec.imagesWithNumbers / exec.totalImages) * 100)
+      : 0;
+
+    return `
+      <div class="execution-card" onclick="openExecutionResults('${exec.id}')">
+        <div class="execution-header">
+          <span class="execution-category">${escapeHtml(exec.sportCategory)}</span>
+          <span class="execution-status ${exec.status}">${exec.status}</span>
+        </div>
+        <div class="execution-date">${formattedDate}</div>
+        <div class="execution-stats">
+          <div class="execution-stat">
+            <span class="execution-stat-value">${exec.totalImages}</span>
+            <span class="execution-stat-label">Photos</span>
+          </div>
+          <div class="execution-stat">
+            <span class="execution-stat-value">${exec.imagesWithNumbers}</span>
+            <span class="execution-stat-label">Detected</span>
+          </div>
+          <div class="execution-stat">
+            <span class="execution-stat-value">${successRate}%</span>
+            <span class="execution-stat-label">Success</span>
+          </div>
+        </div>
+        <button class="execution-view-btn" onclick="event.stopPropagation(); openExecutionResults('${exec.id}')">
+          View Results
+        </button>
+      </div>
+    `;
+  }).join('');
+}
+
+/**
+ * Open execution results in the dedicated results page
+ */
+window.openExecutionResults = function(executionId) {
+  console.log('[Home] Opening execution results:', executionId);
+  // Navigate to results page with execution ID
+  window.location.href = `results.html?executionId=${encodeURIComponent(executionId)}`;
+};
 
 /**
  * Load announcements from Supabase

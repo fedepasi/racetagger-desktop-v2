@@ -314,6 +314,86 @@ export function registerSupabaseHandlers(): void {
     }
   });
 
+  // ==================== RECENT EXECUTIONS ====================
+
+  ipcMain.handle('get-recent-executions', async () => {
+    try {
+      const userId = authService.getAuthState().user?.id;
+      if (!userId) {
+        return { success: false, data: [] };
+      }
+
+      const supabase = getSupabaseClient();
+
+      // Get last 10 executions with details
+      const { data, error } = await supabase
+        .from('executions')
+        .select(`
+          id,
+          status,
+          created_at,
+          completed_at,
+          sport_category_id,
+          sport_categories!executions_sport_category_id_fkey (
+            name,
+            code
+          ),
+          execution_settings!execution_settings_execution_id_fkey (
+            total_images_processed
+          )
+        `)
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(10);
+
+      if (error) {
+        console.error('[Recent Executions] Query error:', error);
+        return { success: false, data: [] };
+      }
+
+      // Get analysis results counts for each execution
+      const executionIds = (data || []).map((e: any) => e.id);
+      let resultsCountMap: Record<string, number> = {};
+
+      if (executionIds.length > 0) {
+        // Query to count analysis results with recognized numbers per execution
+        const { data: countData } = await supabase
+          .from('analysis_results')
+          .select('image_id, recognized_number, images!inner(execution_id)')
+          .in('images.execution_id', executionIds)
+          .not('recognized_number', 'is', null);
+
+        // Count by execution_id
+        if (countData) {
+          for (const result of countData) {
+            const execId = (result as any).images?.execution_id;
+            if (execId) {
+              resultsCountMap[execId] = (resultsCountMap[execId] || 0) + 1;
+            }
+          }
+        }
+      }
+
+      // Format the data for display
+      const formattedData = (data || []).map((exec: any) => ({
+        id: exec.id,
+        status: exec.status,
+        createdAt: exec.created_at,
+        completedAt: exec.completed_at,
+        sportCategory: exec.sport_categories?.name || 'Unknown',
+        sportCategoryCode: exec.sport_categories?.code || '',
+        totalImages: exec.execution_settings?.total_images_processed || 0,
+        imagesWithNumbers: resultsCountMap[exec.id] || 0,
+        presetId: null
+      }));
+
+      return { success: true, data: formattedData };
+    } catch (error) {
+      console.error('[Recent Executions] Error:', error);
+      return { success: false, data: [] };
+    }
+  });
+
   // ==================== PDF ENTRY LIST PARSING ====================
 
   ipcMain.handle('supabase-parse-pdf-entry-list', async (_, { pdfBase64 }: { pdfBase64: string }) => {

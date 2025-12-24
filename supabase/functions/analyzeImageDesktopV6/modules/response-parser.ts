@@ -114,6 +114,7 @@ function parseCropResults(
     model: crop.model || null,
     category: crop.category || null,
     plateNumber: crop.plateNumber || null,
+    plateConfidence: typeof crop.plateConfidence === 'number' ? crop.plateConfidence : null,
     context: crop.context || null,
   }));
 }
@@ -190,6 +191,7 @@ function createEmptyCropResults(crops: CropData[], bboxSources?: BboxSource[]): 
     model: null,
     category: null,
     plateNumber: null,
+    plateConfidence: null,
     context: null,
   }));
 }

@@ -60,7 +60,9 @@ serve(async (req: Request) => {
       fullImage,      // V6 Baseline 2026
       bboxSources,    // V6 Baseline 2026
       imagePath,      // V6 2026: V3-compatible mode
-      mimeType        // V6 2026: for logging
+      mimeType,       // V6 2026: for logging and database
+      sizeBytes,      // V6 2026: for database
+      analysisLog     // V6 2026: complete IMAGE_ANALYSIS event from desktop
     } = body;
 
     // V6 2026: Support multiple input modes (crops, fullImage, or imagePath)
@@ -174,8 +176,9 @@ serve(async (req: Request) => {
     const estimatedCostUSD = calculateCost(geminiResult.inputTokens, geminiResult.outputTokens);
     const inferenceTimeMs = Date.now() - startTime;
 
-    // 6. Save to database (non-blocking, no token deduction)
-    await saveAnalysisResults(supabase, {
+    // 6. Save to database and get the actual database imageId
+    // FIX December 2024: Now generates UUID server-side like V3
+    const dbImageId = await saveAnalysisResults(supabase, {
       imageId: imageId || '',
       executionId,
       userId: userId || '',
@@ -192,10 +195,13 @@ serve(async (req: Request) => {
       categoryCode: categoryConfig.code,
       originalFileName,
       storagePath,
-      inferenceTimeMs
+      mimeType,
+      sizeBytes,
+      inferenceTimeMs,
+      analysisLog  // Complete IMAGE_ANALYSIS event from desktop JSONL
     });
 
-    // 7. Build success response
+    // 7. Build success response (include imageId for token tracking, like V3)
     const response: SuccessResponse = {
       success: true,
       cropAnalysis,
@@ -210,6 +216,7 @@ serve(async (req: Request) => {
       },
       inferenceTimeMs,
       usedFullImage,  // V6 Baseline 2026: Indicate if fullImage fallback was used
+      imageId: dbImageId || undefined,  // FIX: Return actual database UUID for token tracking
     };
 
     console.log(`${LOG_PREFIX} Success: ${cropAnalysis.length} results${usedFullImage ? ' (fullImage)' : ''}, ${inferenceTimeMs}ms`);

@@ -273,8 +273,8 @@ class LogVisualizer {
           <button id="lv-export-csv" class="lv-action-btn lv-btn-secondary">
             📊 Export Results
           </button>
-          <button id="lv-view-log" class="lv-action-btn lv-btn-secondary">
-            📋 View Full Log
+          <button id="lv-export-tags" class="lv-action-btn lv-btn-tags" style="display: none;">
+            🏷️ Export Tags
           </button>
           <button id="lv-save-all" class="lv-action-btn lv-btn-primary">
             💾 Save All Changes
@@ -445,7 +445,7 @@ class LogVisualizer {
    */
   setupActionButtons() {
     const exportBtn = document.getElementById('lv-export-csv');
-    const viewLogBtn = document.getElementById('lv-view-log');
+    const exportTagsBtn = document.getElementById('lv-export-tags');
     const saveAllBtn = document.getElementById('lv-save-all');
 
     // Hide Save All button by default (show only when there are unsaved changes)
@@ -458,8 +458,8 @@ class LogVisualizer {
       exportBtn.addEventListener('click', () => this.exportResults());
     }
 
-    if (viewLogBtn) {
-      viewLogBtn.addEventListener('click', () => this.viewFullLog());
+    if (exportTagsBtn) {
+      exportTagsBtn.addEventListener('click', () => this.exportTagsAsCSV());
     }
 
     // Post-analysis folder organization buttons
@@ -707,9 +707,14 @@ class LogVisualizer {
 
     try {
       // Get paths directly from dataset (more efficient than searching array)
-      const microPath = imgElement.dataset.microPath;
-      const thumbPath = imgElement.dataset.thumbPath;
-      const compressedPath = imgElement.dataset.compressedPath;
+      // Validate paths before using - only use absolute paths or URLs
+      const rawMicroPath = imgElement.dataset.microPath;
+      const rawThumbPath = imgElement.dataset.thumbPath;
+      const rawCompressedPath = imgElement.dataset.compressedPath;
+
+      const microPath = this.isValidPath(rawMicroPath) ? rawMicroPath : null;
+      const thumbPath = this.isValidPath(rawThumbPath) ? rawThumbPath : null;
+      const compressedPath = this.isValidPath(rawCompressedPath) ? rawCompressedPath : null;
 
       // Show loading state only if not already loading
       if (imgElement.style.opacity !== '0.5') {
@@ -1048,6 +1053,23 @@ class LogVisualizer {
       container.scrollTop = 0;
     }
     this.renderAllItems(); // Changed from virtual scrolling to render all
+
+    // Show Export Tags button only if any result has visual tags
+    this.updateExportTagsVisibility();
+  }
+
+  /**
+   * Show/hide Export Tags button based on visual tags presence
+   */
+  updateExportTagsVisibility() {
+    const exportTagsBtn = document.getElementById('lv-export-tags');
+    if (!exportTagsBtn) return;
+
+    const hasVisualTags = this.imageResults.some(r =>
+      r.visualTags || r.logEvent?.visualTags
+    );
+
+    exportTagsBtn.style.display = hasVisualTags ? 'inline-flex' : 'none';
   }
 
   /**
@@ -1203,11 +1225,11 @@ class LogVisualizer {
    */
   getCachedImageUrl(result) {
     if (this.preloadedImages.has(result.fileName)) {
-      // Return the best quality URL we know works
-      if (result.thumbnailPath && (result.thumbnailPath.startsWith('/') || result.thumbnailPath.startsWith('http'))) {
+      // Return the best quality URL we know works - validate paths first
+      if (this.isValidPath(result.thumbnailPath)) {
         return result.thumbnailPath;
       }
-      if (result.compressedPath && (result.compressedPath.startsWith('/') || result.compressedPath.startsWith('http'))) {
+      if (this.isValidPath(result.compressedPath)) {
         return result.compressedPath;
       }
       // Fallback to full URL resolution
@@ -2681,6 +2703,46 @@ class LogVisualizer {
   }
 
   /**
+   * Export visual tags as CSV
+   */
+  async exportTagsAsCSV() {
+    if (!this.executionId) {
+      this.showNotification('⚠️ No execution found for tag export', 'warning');
+      return;
+    }
+
+    try {
+      this.showNotification('🏷️ Exporting visual tags...', 'info');
+
+      const result = await window.api.invoke('export-tags-csv', { executionId: this.executionId });
+
+      if (result.success) {
+        if (result.count === 0) {
+          this.showNotification('⚠️ No visual tags found for this execution', 'warning');
+          return;
+        }
+
+        const blob = new Blob([result.csv], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const filename = `racetagger_visual_tags_${new Date().toISOString().split('T')[0]}.csv`;
+
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+
+        URL.revokeObjectURL(url);
+        this.showNotification(`🏷️ Exported ${result.count} tagged images`, 'success');
+      } else {
+        this.showNotification(result.error || '❌ Failed to export tags', 'error');
+      }
+    } catch (error) {
+      console.error('[LogVisualizer] Error exporting tags CSV:', error);
+      this.showNotification('❌ Failed to export visual tags: ' + error.message, 'error');
+    }
+  }
+
+  /**
    * Generate CSV data from results
    */
   generateCSVData() {
@@ -2717,26 +2779,6 @@ class LogVisualizer {
     });
 
     return rows.join('\n');
-  }
-
-  /**
-   * View full log data
-   */
-  async viewFullLog() {
-    try {
-      if (!this.executionId) {
-        this.showNotification('ℹ️ No execution log available', 'info');
-        return;
-      }
-
-      // Open log viewer (placeholder for now)
-      this.showNotification('📋 Full log viewer coming soon', 'info');
-      console.log('[LogVisualizer] Full log data:', this.logData);
-
-    } catch (error) {
-      console.error('[LogVisualizer] Error viewing log:', error);
-      this.showNotification('❌ Error viewing log', 'error');
-    }
   }
 
   /**

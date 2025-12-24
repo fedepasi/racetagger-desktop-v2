@@ -151,5 +151,96 @@ export function registerAnalysisHandlers(): void {
     setBatchProcessingCancelled(true);
   });
 
-  if (DEBUG_MODE) console.log('[IPC] Analysis handlers registered (4 handlers)');
+  // Get recent executions from local JSONL files
+  ipcMain.handle('get-local-executions', async () => {
+    try {
+      const analysisLogsPath = path.join(app.getPath('userData'), '.analysis-logs');
+
+      // Check if analysis logs directory exists
+      if (!fs.existsSync(analysisLogsPath)) {
+        return { success: true, data: [] };
+      }
+
+      const files = fs.readdirSync(analysisLogsPath);
+      const executionFiles = files.filter(file => file.startsWith('exec_') && file.endsWith('.jsonl'));
+
+      const executions: any[] = [];
+
+      for (const file of executionFiles) {
+        try {
+          const filePath = path.join(analysisLogsPath, file);
+          const content = fs.readFileSync(filePath, 'utf-8');
+          const lines = content.trim().split('\n').filter(line => line.trim());
+
+          if (lines.length === 0) continue;
+
+          // Parse first line (EXECUTION_START)
+          let startLine;
+          try {
+            startLine = JSON.parse(lines[0]);
+          } catch (parseError) {
+            continue;
+          }
+
+          if (startLine.type !== 'EXECUTION_START') continue;
+
+          // Parse last line to get completion status
+          let status = 'processing';
+          let totalProcessed = 0;
+          let imagesWithNumbers = 0;
+
+          // Count IMAGE_ANALYSIS events with recognized numbers
+          for (const line of lines) {
+            try {
+              const event = JSON.parse(line);
+              if (event.type === 'IMAGE_ANALYSIS') {
+                totalProcessed++;
+                // Check if any vehicle was detected with a race number
+                // V6 format: aiResponse.vehicles[]
+                const vehicles = event.aiResponse?.vehicles || event.vehicles || [];
+                if (vehicles.length > 0) {
+                  const hasNumber = vehicles.some((v: any) => v.raceNumber);
+                  if (hasNumber) imagesWithNumbers++;
+                } else if (event.primaryVehicle?.raceNumber) {
+                  // Fallback for backward compatibility
+                  imagesWithNumbers++;
+                }
+              } else if (event.type === 'EXECUTION_COMPLETE') {
+                status = 'completed';
+              }
+            } catch (e) {
+              continue;
+            }
+          }
+
+          const execution = {
+            id: startLine.executionId,
+            createdAt: startLine.timestamp,
+            status: status,
+            sportCategory: startLine.category || 'motorsport',
+            totalImages: startLine.totalImages || totalProcessed,
+            imagesWithNumbers: imagesWithNumbers,
+            folderPath: startLine.folderPath || ''
+          };
+
+          executions.push(execution);
+
+        } catch (error) {
+          if (DEBUG_MODE) console.warn(`[Analysis] Failed to parse ${file}:`, error);
+          continue;
+        }
+      }
+
+      // Sort by timestamp descending (most recent first)
+      executions.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+      return { success: true, data: executions.slice(0, 10) }; // Return only 10 most recent
+
+    } catch (error) {
+      console.error('[Analysis] Error reading local executions:', error);
+      return { success: false, data: [] };
+    }
+  });
+
+  if (DEBUG_MODE) console.log('[IPC] Analysis handlers registered (5 handlers)');
 }

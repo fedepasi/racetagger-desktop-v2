@@ -325,7 +325,17 @@ class UnifiedImageWorker extends EventEmitter {
   private async initializeGenericSegmenter(): Promise<void> {
     // Segmentation is automatically used when crop_config is enabled
     // No separate "use_segmentation" flag - keep config simple
-    const cropConfig = this.currentSportCategory?.crop_config;
+    let cropConfig = this.currentSportCategory?.crop_config;
+
+    // Parse if stored as JSON string (Supabase TEXT column)
+    if (typeof cropConfig === 'string') {
+      try {
+        cropConfig = JSON.parse(cropConfig);
+      } catch (e) {
+        cropConfig = null;
+      }
+    }
+
     if (!cropConfig?.enabled) {
       log.info(`Generic segmenter DISABLED for category ${this.category} (crop_config not enabled)`);
       this.genericSegmenterEnabled = false;
@@ -649,11 +659,21 @@ class UnifiedImageWorker extends EventEmitter {
    */
   private shouldUseCropContext(): boolean {
     // Check if crop_config exists and is enabled
-    const cropConfig = this.currentSportCategory?.crop_config;
+    let cropConfig = this.currentSportCategory?.crop_config;
 
     // BACKWARD COMPATIBILITY: If crop_config is null/undefined, use standard flow
     if (!cropConfig) {
       return false;
+    }
+
+    // Parse if stored as JSON string (Supabase TEXT column)
+    if (typeof cropConfig === 'string') {
+      try {
+        cropConfig = JSON.parse(cropConfig);
+      } catch (e) {
+        log.warn(`[CropContext] Failed to parse crop_config JSON: ${e}`);
+        return false;
+      }
     }
 
     // Check if enabled flag is explicitly true
@@ -681,7 +701,16 @@ class UnifiedImageWorker extends EventEmitter {
     maxCrops: number;
     strategy: 'batch' | 'sequential';
   } {
-    const categoryConfig = this.currentSportCategory?.crop_config;
+    let categoryConfig = this.currentSportCategory?.crop_config;
+
+    // Parse if stored as JSON string (Supabase TEXT column)
+    if (typeof categoryConfig === 'string') {
+      try {
+        categoryConfig = JSON.parse(categoryConfig);
+      } catch (e) {
+        categoryConfig = null;
+      }
+    }
 
     return {
       crop: {
@@ -834,9 +863,14 @@ class UnifiedImageWorker extends EventEmitter {
     imageFile: UnifiedImageFile,
     compressedBuffer: Buffer,
     mimeType: string,
-    uploadReadyPath?: string
+    uploadReadyPath?: string,
+    storagePath?: string  // Storage path from Supabase upload
   ): Promise<any> {
     const startTime = Date.now();
+    // Detailed timing for AI analysis breakdown
+    const aiTiming: Record<string, number> = {};
+    let phaseStart = Date.now();
+
     log.info(`[CropContext] Starting crop-context analysis for ${imageFile.fileName}`);
 
     // Use uploadReadyPath for crop extraction (supports RAW files converted to JPEG)
@@ -853,11 +887,13 @@ class UnifiedImageWorker extends EventEmitter {
       let detectionSource: 'yolo-seg' | 'onnx-detr' | 'full-image' | 'gemini' = 'gemini';
 
       // Step 1: Try SEGMENTATION first (YOLO with masks) if enabled
+      phaseStart = Date.now();
       if (this.genericSegmenterEnabled && this.genericSegmenterLoaded) {
         const segModelId = this.genericSegmenter?.getModelId() || 'yolo-seg';
         log.info(`[CropContext] Using SEGMENTATION mode (${segModelId} with masks)`);
 
         const segmentations = await this.runGenericSegmentation(compressedBuffer);
+        aiTiming['segmentation'] = Date.now() - phaseStart;
 
         if (segmentations.length > 0) {
           // Use mask-based crop extraction
@@ -873,6 +909,7 @@ class UnifiedImageWorker extends EventEmitter {
             includeRawMaskData: saveSegmentationMasks,
           };
 
+          phaseStart = Date.now();
           const maskedCropResult = await extractCropsWithMasks(
             effectivePath,  // Use JPEG-converted path for RAW file support
             segmentations,
@@ -881,6 +918,7 @@ class UnifiedImageWorker extends EventEmitter {
             cropContextConfig.maxCrops,
             extractMaskOptions
           );
+          aiTiming['cropExtraction'] = Date.now() - phaseStart;
 
           if (maskedCropResult.crops.length > 0) {
             log.info(`[CropContext] Extracted ${maskedCropResult.crops.length} masked crops in ${maskedCropResult.processingTimeMs}ms${saveSegmentationMasks ? ' (with RLE mask data)' : ''}`);
@@ -903,7 +941,7 @@ class UnifiedImageWorker extends EventEmitter {
           // V6 Baseline 2026: Send fullImage to V6 instead of returning null
           if (this.currentSportCategory?.edge_function_version === 6) {
             log.info(`[CropContext] V6: Sending full image (no subjects detected by ${segModelId})`);
-            return await this.sendFullImageToV6(imageFile, compressedBuffer, effectivePath);
+            return await this.sendFullImageToV6(imageFile, compressedBuffer, effectivePath, storagePath, mimeType);
           }
 
           // Legacy behavior: Return null to trigger standard analysis flow
@@ -921,14 +959,16 @@ class UnifiedImageWorker extends EventEmitter {
       if (!cropsPayload || cropsPayload.length === 0) {
         log.info(`[CropContext] Using BBOX mode (fallback to ONNX detector)`);
 
+        phaseStart = Date.now();
         const detections = await this.runGenericDetection(compressedBuffer);
+        aiTiming['onnxDetection'] = Date.now() - phaseStart;
 
         // If no detections, fallback to standard analysis or V6 fullImage
         if (detections.length === 0) {
           // V6 Baseline 2026: Send fullImage to V6 instead of returning null
           if (this.currentSportCategory?.edge_function_version === 6) {
             log.info(`[CropContext] V6: Sending full image (no subjects detected by ONNX)`);
-            return await this.sendFullImageToV6(imageFile, compressedBuffer, effectivePath);
+            return await this.sendFullImageToV6(imageFile, compressedBuffer, effectivePath, storagePath, mimeType);
           }
           log.warn(`[CropContext] No detections found, falling back to standard upload+analyze`);
           return null; // Signal to caller to use standard flow
@@ -940,6 +980,7 @@ class UnifiedImageWorker extends EventEmitter {
           detectionId: d.detectionId
         }));
 
+        phaseStart = Date.now();
         const cropContextResult = await extractCropContext(
           effectivePath,  // Use JPEG-converted path for RAW file support
           compressedBuffer,
@@ -948,6 +989,7 @@ class UnifiedImageWorker extends EventEmitter {
           cropContextConfig.negative,
           cropContextConfig.maxCrops
         );
+        aiTiming['cropExtraction'] = Date.now() - phaseStart;
 
         // If crop extraction failed, fallback
         if (cropContextResult.crops.length === 0) {
@@ -974,6 +1016,7 @@ class UnifiedImageWorker extends EventEmitter {
       let allAnalysis: any[] = [];
       let totalUsage = { inputTokens: 0, outputTokens: 0, estimatedCostUSD: 0 };
       let tokensUsed = 0;
+      let v6ImageId: string | undefined;  // DB UUID from V6 response for analysis_log UPDATE
 
       // Step 4: Call V6 edge function based on strategy
       if (cropContextConfig.strategy === 'sequential') {
@@ -990,6 +1033,10 @@ class UnifiedImageWorker extends EventEmitter {
             // DB write support: imageId for analysis_results correlation
             imageId: imageFile.id,
             originalFileName: imageFile.fileName,
+            // Storage tracking for database writes
+            storagePath,
+            mimeType,
+            sizeBytes: compressedBuffer.length,
             participantPreset: this.participantsData.length > 0 ? {
               name: 'Preset Dynamic',
               participants: this.participantsData
@@ -1014,6 +1061,10 @@ class UnifiedImageWorker extends EventEmitter {
           }
 
           if (response.data.success && response.data.cropAnalysis) {
+            // Capture imageId from first successful response
+            if (!v6ImageId && response.data.imageId) {
+              v6ImageId = response.data.imageId;
+            }
             const cropResult = response.data.cropAnalysis[0];
             if (cropResult) {
               // Get bbox from response or local data, convert from 0-1 to 0-100 for logging
@@ -1057,6 +1108,7 @@ class UnifiedImageWorker extends EventEmitter {
         // BATCH: Send all crops in a single call (default)
         log.info(`[CropContext] Using BATCH strategy - sending ${cropsPayload.length} crops in single call`);
 
+        phaseStart = Date.now();
         const v6Payload = {
           crops: cropsPayload,
           negative: negativePayload,
@@ -1066,6 +1118,10 @@ class UnifiedImageWorker extends EventEmitter {
           // DB write support: imageId for analysis_results correlation
           imageId: imageFile.id,
           originalFileName: imageFile.fileName,
+          // Storage tracking for database writes
+          storagePath,
+          mimeType,
+          sizeBytes: compressedBuffer.length,
           participantPreset: this.participantsData.length > 0 ? {
             name: 'Preset Dynamic',
             participants: this.participantsData
@@ -1081,6 +1137,7 @@ class UnifiedImageWorker extends EventEmitter {
             setTimeout(() => reject(new Error('V6 function invocation timeout')), 60000)
           )
         ]) as any;
+        aiTiming['edgeFunctionV6'] = Date.now() - phaseStart;
 
         if (response.error) {
           log.error(`[CropContext] V6 edge function error:`, response.error);
@@ -1094,6 +1151,7 @@ class UnifiedImageWorker extends EventEmitter {
 
         // Transform V6 response to standard analysis format
         const v6Result = response.data;
+        v6ImageId = v6Result.imageId;  // Capture DB UUID for analysis_log UPDATE
         allAnalysis = v6Result.cropAnalysis.map((crop: any) => {
           // Get bbox from response or local data, convert from 0-1 to 0-100 for logging
           const rawBbox = crop.originalBbox || extractedCrops.find((c: any) => c.detectionId === crop.detectionId)?.originalBbox;
@@ -1139,6 +1197,10 @@ class UnifiedImageWorker extends EventEmitter {
       }
 
       const processingTimeMs = Date.now() - startTime;
+      aiTiming['total'] = processingTimeMs;
+
+      // Log detailed AI timing breakdown
+      console.log(`[AI-Timing] ${imageFile.fileName}: ${JSON.stringify(aiTiming, null, 0)}`);
       log.info(`[CropContext] Analysis complete in ${processingTimeMs}ms: ${allAnalysis.length} results, strategy: ${cropContextConfig.strategy}`);
 
       // Include segmentation preprocessing info if available
@@ -1167,7 +1229,8 @@ class UnifiedImageWorker extends EventEmitter {
         cropContextUsed: true,
         strategy: cropContextConfig.strategy,
         segmentationPreprocessing,
-        recognitionMethod: 'gemini-v6-seg'
+        recognitionMethod: 'gemini-v6-seg',
+        imageId: v6ImageId  // Pass DB UUID for analysis_log UPDATE
       };
 
     } catch (error: any) {
@@ -1184,7 +1247,9 @@ class UnifiedImageWorker extends EventEmitter {
   private async sendFullImageToV6(
     imageFile: UnifiedImageFile,
     compressedBuffer: Buffer,
-    effectivePath: string
+    effectivePath: string,
+    storagePath?: string,  // Storage path from Supabase upload
+    mimeType?: string      // MIME type of the image
   ): Promise<any> {
     const startTime = Date.now();
 
@@ -1201,6 +1266,10 @@ class UnifiedImageWorker extends EventEmitter {
       executionId: this.config.executionId,
       imageId: imageFile.id,
       originalFileName: imageFile.fileName,
+      // Storage tracking for database writes
+      storagePath,
+      mimeType,
+      sizeBytes: compressedBuffer.length,
       participantPreset: this.participantsData.length > 0 ? {
         name: 'Preset Dynamic',
         participants: this.participantsData
@@ -1256,7 +1325,8 @@ class UnifiedImageWorker extends EventEmitter {
         cropContextUsed: true,
         strategy: 'full-image',
         usedFullImage: true,
-        recognitionMethod: 'gemini-v6-full-image'
+        recognitionMethod: 'gemini-v6-full-image',
+        imageId: v6Result.imageId  // Pass DB UUID for analysis_log UPDATE
       };
 
     } catch (error: any) {
@@ -1393,6 +1463,10 @@ class UnifiedImageWorker extends EventEmitter {
     let thumbnailFileId: string | null = null;
     let microThumbFileId: string | null = null;
 
+    // Timing tracker for performance analysis
+    const timing: Record<string, number> = {};
+    let phaseStart = Date.now();
+
     // Check for cancellation before starting
     if (this.checkCancellation()) {
       return {
@@ -1412,7 +1486,9 @@ class UnifiedImageWorker extends EventEmitter {
 
     try {
       // Fase 1: Preparazione dell'immagine per upload (RAW→JPEG o compressione JPEG)
+      phaseStart = Date.now();
       const uploadReadyPath = await this.prepareImageForUpload(imageFile);
+      timing['1_prepareImage'] = Date.now() - phaseStart;
 
       // Check for cancellation after preparation
       if (this.checkCancellation()) {
@@ -1432,7 +1508,9 @@ class UnifiedImageWorker extends EventEmitter {
       }
       
       // Fase 2: Compressione per garantire <500KB
+      phaseStart = Date.now();
       const { compressedPath, buffer, mimeType } = await this.compressForUpload(uploadReadyPath, imageFile.fileName);
+      timing['2_compress'] = Date.now() - phaseStart;
 
       // Check for cancellation after compression
       if (this.checkCancellation()) {
@@ -1451,7 +1529,9 @@ class UnifiedImageWorker extends EventEmitter {
 
       // Fase 2.5: Genera thumbnail multi-livello per performance ottimizzata
       // PERFORMANCE OPTIMIZATION: Pass compressed buffer to avoid re-reading from disk
+      phaseStart = Date.now();
       const { thumbnailPath, microThumbPath } = await this.generateThumbnails(compressedPath, imageFile.fileName, buffer);
+      timing['2.5_thumbnails'] = Date.now() - phaseStart;
 
       // Track thumbnail files
       if (thumbnailPath) {
@@ -1464,6 +1544,7 @@ class UnifiedImageWorker extends EventEmitter {
       // ============================================
       // FASE 2.7: Scene Classification (Local ML)
       // ============================================
+      phaseStart = Date.now();
       let sceneClassification: SceneClassificationResult | null = null;
       let shouldSkipAI = false;
 
@@ -1485,6 +1566,7 @@ class UnifiedImageWorker extends EventEmitter {
           sceneClassification = null;
         }
       }
+      timing['2.7_sceneClassification'] = Date.now() - phaseStart;
 
       // If skipping AI, return early with scene classification info
       if (shouldSkipAI && sceneClassification) {
@@ -1534,6 +1616,7 @@ class UnifiedImageWorker extends EventEmitter {
       // ============================================
       // Fase 2.8: Determine Recognition Strategy based on Scene
       // ============================================
+      phaseStart = Date.now();
       const recognitionStrategy = this.getRecognitionStrategy(sceneClassification?.category || null);
       let faceRecognitionResult: FaceRecognitionResult | null = null;
 
@@ -1810,10 +1893,12 @@ class UnifiedImageWorker extends EventEmitter {
           workerLog.info(`Face recognition found 0 matches for ${imageFile.fileName}, falling back to AI analysis`);
         }
       }
+      timing['2.8_faceRecognition'] = Date.now() - phaseStart;
 
       // ============================================
       // Fase 3 & 4: Analysis (Local ONNX, Crop-Context V6, or Standard Cloud API)
       // ============================================
+      phaseStart = Date.now();
       let analysisResult: any;
       let storagePath: string | null = null;
 
@@ -1858,7 +1943,8 @@ class UnifiedImageWorker extends EventEmitter {
 
         // Try crop-context analysis (uses base64 crops, not the uploaded image)
         // Pass uploadReadyPath for RAW file support - this is the JPEG conversion of RAW files
-        analysisResult = await this.analyzeWithCropContext(imageFile, buffer, mimeType, uploadReadyPath);
+        // Pass storagePath for database tracking - the image was already uploaded above
+        analysisResult = await this.analyzeWithCropContext(imageFile, buffer, mimeType, uploadReadyPath, storagePath);
 
         // If crop-context returns null, it signals fallback to standard flow
         if (analysisResult === null) {
@@ -1901,6 +1987,7 @@ class UnifiedImageWorker extends EventEmitter {
           this.recognitionMethod = 'gemini';
         }
       }
+      timing['3_4_aiAnalysis'] = Date.now() - phaseStart;
 
       // Check for cancellation after AI analysis
       if (this.checkCancellation()) {
@@ -1917,6 +2004,7 @@ class UnifiedImageWorker extends EventEmitter {
       // Visual Tagging: Run in parallel with post-processing (after recognition completes)
       // Since recognition is faster with Gemini 3 Flash and tagging uses Gemini 2.5 Flash Lite,
       // we invoke tagging after recognition to have imageId available for database linking
+      phaseStart = Date.now();
       let visualTagsResult: { tags: any; usage: any } | null = null;
       if (this.config.visualTagging?.enabled && storagePath) {
         // Invoke visual tagging (with timeout, non-blocking)
@@ -1926,8 +2014,10 @@ class UnifiedImageWorker extends EventEmitter {
           log.warn(`[VisualTagging] Failed (continuing without tags): ${err.message}`);
         }
       }
+      timing['5_visualTagging'] = Date.now() - phaseStart;
 
       // PUNTO DI CONVERGENZA POST-AI: Qui tutti i workflow si incontrano
+      phaseStart = Date.now();
       const processedAnalysis = await this.processAnalysisResults(
         imageFile,
         analysisResult,
@@ -1936,8 +2026,10 @@ class UnifiedImageWorker extends EventEmitter {
         temporalContext,
         visualTagsResult
       );
+      timing['6_smartMatcher'] = Date.now() - phaseStart;
 
       // Log detailed analysis with corrections if logger is available (now supports multi-vehicle)
+      phaseStart = Date.now();
       if (this.analysisLogger && this.smartMatcher) {
         const corrections = this.smartMatcher.getCorrections();
         // For local ONNX, use local path; for cloud API, use Supabase URL
@@ -2000,6 +2092,12 @@ class UnifiedImageWorker extends EventEmitter {
             confidence: vehicle.confidence || 0,
             plateNumber: vehicle.plateNumber,
             plateConfidence: vehicle.plateConfidence,
+            // V6 Vehicle DNA fields
+            make: vehicle.make || null,           // Manufacturer (Ferrari, Porsche, etc.)
+            model: vehicle.model || null,         // Model (296 GT3, 911 RSR, etc.)
+            category: vehicle.category || null,   // Race category (GT3, LMP2, Hypercar, etc.)
+            livery: vehicle.livery || null,       // { primary: string, secondary: string[] }
+            context: vehicle.context || null,     // Scene context (race, pit, podium, portrait)
             // Include both formats for maximum compatibility
             box_2d,  // Original Gemini format [y1, x1, y2, x2] (0-1000)
             boundingBox,  // Converted format {x, y, width, height}
@@ -2042,7 +2140,8 @@ class UnifiedImageWorker extends EventEmitter {
           }
         }
 
-        this.analysisLogger.logImageAnalysis({
+        // Build the complete analysis event (same structure for JSONL and database)
+        const imageAnalysisEvent = {
           imageId: imageFile.id,
           fileName: imageFile.fileName,
           originalFileName: path.basename(imageFile.originalPath),
@@ -2069,13 +2168,25 @@ class UnifiedImageWorker extends EventEmitter {
           visualTags: visualTagsResult?.tags || undefined,
           // Backward compatibility - use first vehicle as primary
           primaryVehicle: vehicles.length > 0 ? vehicles[0] : undefined
-        });
+        };
+
+        // Log to JSONL file
+        this.analysisLogger.logImageAnalysis(imageAnalysisEvent);
 
         // UPDATE analysis_results with enriched vehicle data (participantMatch, corrections, etc.)
         // This ensures the management portal can view the same data as the JSONL logs
-        if (imageFile.id && vehicles.length > 0) {
+        // NOTE: Use analysisResult.imageId (database UUID) NOT imageFile.id (temporary local ID)
+        const dbImageId = analysisResult.imageId;
+        console.log(`[DBUpdate] Check: dbImageId=${dbImageId}, vehicles.length=${vehicles.length}`);
+        if (dbImageId && vehicles.length > 0) {
           try {
-            const { error: updateError } = await this.supabase
+            // Debug: Check auth state before UPDATE
+            const { data: sessionData } = await this.supabase.auth.getSession();
+            const authUid = sessionData?.session?.user?.id;
+            console.log(`[DBUpdate] Auth state: uid=${authUid || 'NOT AUTHENTICATED'}`);
+
+            // Add .select() to verify rows were actually updated
+            const { data: updateData, error: updateError } = await this.supabase
               .from('analysis_results')
               .update({
                 raw_response: {
@@ -2089,27 +2200,43 @@ class UnifiedImageWorker extends EventEmitter {
                   temporalContext: temporalContextLog,
                   enrichedByDesktop: true, // Flag to indicate SmartMatcher enrichment
                   enrichedAt: new Date().toISOString()
-                }
+                },
+                // Save the complete analysis event (same as JSONL) for SQL queries
+                analysis_log: imageAnalysisEvent
               })
-              .eq('image_id', imageFile.id);
+              .eq('image_id', dbImageId)
+              .select('id, image_id');
 
             if (updateError) {
-              log.warn(`[DBUpdate] Failed to update analysis_results with enriched data: ${updateError.message}`);
+              console.error(`[DBUpdate] FAILED: ${updateError.message}`, updateError);
+            } else if (!updateData || updateData.length === 0) {
+              console.warn(`[DBUpdate] NO ROWS MATCHED: image_id=${dbImageId} - row may not exist or RLS policy denied access`);
             } else {
-              log.debug(`[DBUpdate] Updated analysis_results with ${vehicles.length} enriched vehicles for image ${imageFile.id}`);
+              console.log(`[DBUpdate] SUCCESS: Updated ${updateData.length} row(s) for image ${dbImageId}`);
             }
           } catch (dbError: any) {
-            log.warn(`[DBUpdate] Exception updating analysis_results: ${dbError.message}`);
+            console.error(`[DBUpdate] EXCEPTION: ${dbError.message}`, dbError);
           }
         }
       }
+      timing['7_jsonlAndDbUpdate'] = Date.now() - phaseStart;
 
       // Fase 5: Scrittura dei metadata (XMP per RAW, IPTC per JPEG) con dual-mode system
+      phaseStart = Date.now();
       await this.writeMetadata(imageFile, processedAnalysis.keywords, uploadReadyPath, processedAnalysis.analysis, processedAnalysis.csvMatch);
-      
+      timing['8_writeMetadata'] = Date.now() - phaseStart;
+
       // ADMIN FEATURE: Fase 6 - Organizzazione in cartelle (condizionale)
+      phaseStart = Date.now();
       await this.organizeToFolders(imageFile, processedAnalysis, uploadReadyPath);
-      
+      timing['9_folderOrganization'] = Date.now() - phaseStart;
+
+      // Calculate total processing time
+      timing['total'] = Date.now() - startTime;
+
+      // Log timing breakdown for performance analysis
+      console.log(`[Timing] ${imageFile.fileName}: ${JSON.stringify(timing, null, 0)}`);
+
       // Generazione anteprima per UI
       const previewDataUrl = `data:${mimeType};base64,${buffer.toString('base64')}`;
       
@@ -4718,9 +4845,20 @@ export class UnifiedImageProcessor extends EventEmitter {
 
   /**
    * Aggiorna la configurazione
+   * IMPORTANT: Also resets processing counters to fix bug where consecutive analyses
+   * showed incorrect totals (e.g., "0 of 18" when only 4 images were loaded)
    */
   updateConfig(newConfig: Partial<UnifiedProcessorConfig>): void {
     this.config = { ...this.config, ...newConfig };
+
+    // Reset processing counters for new analysis session
+    // This fixes the bug where totalImages from previous analysis caused
+    // isChunkProcessing to be incorrectly set to true in processBatch()
+    this.totalImages = 0;
+    this.processedImages = 0;
+    this.ghostVehicleCount = 0;
+    this.processingQueue = [];
+
     if (DEBUG_MODE) console.log(`[UnifiedProcessor] Configuration updated with participantPresetData length: ${this.config.participantPresetData?.length || 0}`);
   }
 

@@ -56,8 +56,8 @@ export function buildAnalysisPrompt(
     prompt += '\n\nCORRELAZIONE: Se gli sponsor o i colori nel contesto corrispondono a team noti nella lista partecipanti, usa questa informazione per validare o correggere i numeri identificati nei ritagli.';
   }
 
-  // Add JSON response format
-  prompt += buildResponseFormat(hasNegative);
+  // Add JSON response format (with plateNumber fields if detection enabled)
+  prompt += buildResponseFormat(hasNegative, config.recognitionConfig.detectPlateNumber);
 
   console.log(`${LOG_PREFIX} Built prompt: ${prompt.length} chars, ${cropCount} crops, ${participants?.length || 0} participants`);
 
@@ -125,8 +125,10 @@ function buildRecognitionHints(config: SportCategoryConfig): string {
 
 /**
  * Build JSON response format instructions
+ * @param hasNegative - Whether context image is included
+ * @param detectPlateNumber - Whether plate number detection is enabled
  */
-function buildResponseFormat(hasNegative: boolean): string {
+function buildResponseFormat(hasNegative: boolean, detectPlateNumber: boolean = false): string {
   const contextPart = hasNegative ? `,
   "context": {
     "sponsorVisibili": ["Shell", "Pirelli"],
@@ -135,14 +137,18 @@ function buildResponseFormat(hasNegative: boolean): string {
     "coloriTeam": ["rosso", "giallo"]
   }` : '';
 
+  // Include plateNumber fields when detection is enabled
+  const plateFields = detectPlateNumber ? ', "plateNumber": "AB123CD", "plateConfidence": 0.85' : '';
+  const plateNote = detectPlateNumber ? '\n\nNOTA per targa: Se visibile un numero di targa, includi "plateNumber" (stringa) e "plateConfidence" (0.0-1.0). Estrai SOLO caratteri alfanumerici senza separatori.' : '';
+
   return `
 
 Rispondi SOLO con un oggetto JSON valido in questo formato esatto:
 {
   "crops": [
-    {"imageIndex": 1, "raceNumber": "16", "confidence": 0.95, "drivers": ["Charles Leclerc"], "teamName": "Ferrari", "otherText": ["Shell", "Santander"]}
+    {"imageIndex": 1, "raceNumber": "16", "confidence": 0.95, "drivers": ["Charles Leclerc"], "teamName": "Ferrari", "otherText": ["Shell", "Santander"]${plateFields}}
   ]${contextPart}
-}`;
+}${plateNote}`;
 }
 
 /**

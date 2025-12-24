@@ -30,6 +30,7 @@ export interface CompactVehicleResponse {
   md: string | null;                   // model
   cat: string | null;                  // category
   plt: string | null;                  // plateNumber
+  pltc: number | null;                 // plateConfidence (0.0-1.0)
   ctx: string | null;                  // context (race/pit/podium/portrait)
 }
 
@@ -53,6 +54,7 @@ export interface ExpandedVehicleResponse {
   model: string | null;
   category: string | null;
   plateNumber: string | null;
+  plateConfidence: number | null;
   context: string | null;
 }
 
@@ -113,6 +115,7 @@ export function expandCompactVehicle(compact: CompactVehicleResponse): ExpandedV
     model: compact.md ?? null,
     category: compact.cat ?? null,
     plateNumber: compact.plt ?? null,
+    plateConfidence: typeof compact.pltc === 'number' ? compact.pltc : null,
     context: compact.ctx ?? null
   };
 }
@@ -141,6 +144,7 @@ export function normalizeVehicleResponse(vehicle: any): ExpandedVehicleResponse 
     model: vehicle.model ?? null,
     category: vehicle.category ?? null,
     plateNumber: vehicle.plateNumber ?? null,
+    plateConfidence: typeof vehicle.plateConfidence === 'number' ? vehicle.plateConfidence : null,
     context: vehicle.context ?? null
   };
 }
@@ -198,5 +202,6 @@ export const COMPACT_KEY_MAP = {
   md: 'model',
   cat: 'category',
   plt: 'plateNumber',
+  pltc: 'plateConfidence',
   ctx: 'context'
 } as const;

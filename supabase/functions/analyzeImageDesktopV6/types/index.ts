@@ -148,6 +148,9 @@ export interface RequestBody {
   imagePath?: string;           // Path in Supabase Storage bucket (e.g., "1703156789_abc123.jpg")
   mimeType?: string;            // Image MIME type (image/jpeg, image/png, etc.)
   sizeBytes?: number;           // Original file size in bytes (for logging)
+
+  // V6 2026: Complete analysis log event (same as JSONL IMAGE_ANALYSIS)
+  analysisLog?: Record<string, any>;  // Full ImageAnalysisEvent for database storage
 }
 
 // ==================== ANALYSIS RESULT TYPES ====================
@@ -173,6 +176,7 @@ export interface CropAnalysisResult {
   model?: string | null;          // Model (296 GT3, 911 RSR, etc.)
   category?: string | null;       // Race category (GT3, LMP2, Hypercar, etc.)
   plateNumber?: string | null;    // License plate (for rally)
+  plateConfidence?: number | null; // Confidence score for plate number (0.0-1.0)
   context?: string | null;        // Scene context (race, pit, podium, portrait)
 }
 
@@ -213,6 +217,7 @@ export interface SuccessResponse {
   usage: UsageStats;
   inferenceTimeMs: number;
   usedFullImage?: boolean;  // V6 Baseline 2026: True if fullImage fallback was used
+  imageId?: string;         // FIX December 2024: Database UUID for token tracking (like V3)
 }
 
 export interface ErrorResponse {
@@ -236,5 +241,8 @@ export interface SaveResultsParams {
   categoryCode: string;
   originalFileName?: string;
   storagePath?: string;
+  mimeType?: string;      // Image MIME type (image/jpeg, image/png, etc.)
+  sizeBytes?: number;     // Original file size in bytes
   inferenceTimeMs: number;
+  analysisLog?: Record<string, any>;  // Complete IMAGE_ANALYSIS event from desktop
 }

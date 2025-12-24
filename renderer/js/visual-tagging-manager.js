@@ -56,6 +56,15 @@ class VisualTaggingManager {
   toggleVisualTagging(enabled) {
     this.config.enabled = enabled;
 
+    // When enabling, set embedInMetadata to true by default
+    if (enabled) {
+      this.config.embedInMetadata = true;
+      const embedToggle = document.getElementById('embed-tags-in-metadata');
+      if (embedToggle) {
+        embedToggle.checked = true;
+      }
+    }
+
     // Show/hide options panel
     const optionsPanel = document.getElementById('visual-tagging-options');
     if (optionsPanel) {
