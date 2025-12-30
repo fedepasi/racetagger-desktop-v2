@@ -2,6 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Related Documentation
+
+**IMPORTANT:** Before working on database queries, Edge Functions, or Supabase integrations, consult:
+- **[DATABASE.md](./DATABASE.md)** - Complete schema documentation with 85+ tables, all Edge Functions, and storage buckets
+
 ## Development Commands
 
 ### Development Workflow
