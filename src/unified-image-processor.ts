@@ -1944,7 +1944,19 @@ class UnifiedImageWorker extends EventEmitter {
         // Try crop-context analysis (uses base64 crops, not the uploaded image)
         // Pass uploadReadyPath for RAW file support - this is the JPEG conversion of RAW files
         // Pass storagePath for database tracking - the image was already uploaded above
-        analysisResult = await this.analyzeWithCropContext(imageFile, buffer, mimeType, uploadReadyPath, storagePath);
+        // PERFORMANCE: Run AI analysis and visual tagging IN PARALLEL
+        const visualTaggingEnabled = this.config.visualTagging?.enabled && storagePath;
+        const [cropContextResult, parallelVisualTags] = await Promise.all([
+          this.analyzeWithCropContext(imageFile, buffer, mimeType, uploadReadyPath, storagePath),
+          visualTaggingEnabled
+            ? this.invokeVisualTagging(storagePath, null).catch(err => {
+                log.warn(`[VisualTagging] Failed in parallel (continuing): ${err.message}`);
+                return null;
+              })
+            : Promise.resolve(null)
+        ]);
+
+        analysisResult = cropContextResult;
 
         // If crop-context returns null, it signals fallback to standard flow
         if (analysisResult === null) {
@@ -1952,6 +1964,11 @@ class UnifiedImageWorker extends EventEmitter {
 
           // storagePath already available from upload above
           analysisResult = await this.analyzeImage(imageFile.fileName, storagePath, buffer.length, mimeType);
+        }
+
+        // Store parallel visual tags result for later use (avoid duplicate call)
+        if (parallelVisualTags) {
+          (analysisResult as any)._parallelVisualTags = parallelVisualTags;
         }
       } else {
         // STANDARD CLOUD API - Upload and analyze via Edge Function (V2/V3/V4/V5)
@@ -1971,7 +1988,24 @@ class UnifiedImageWorker extends EventEmitter {
         }
 
         // Fase 4: Analisi AI via Edge Function
-        analysisResult = await this.analyzeImage(imageFile.fileName, storagePath, buffer.length, mimeType);
+        // PERFORMANCE: Run AI analysis and visual tagging IN PARALLEL
+        const stdVisualTaggingEnabled = this.config.visualTagging?.enabled && storagePath;
+        const [stdAnalysisResult, stdParallelVisualTags] = await Promise.all([
+          this.analyzeImage(imageFile.fileName, storagePath, buffer.length, mimeType),
+          stdVisualTaggingEnabled
+            ? this.invokeVisualTagging(storagePath, null).catch(err => {
+                log.warn(`[VisualTagging] Failed in parallel (continuing): ${err.message}`);
+                return null;
+              })
+            : Promise.resolve(null)
+        ]);
+
+        analysisResult = stdAnalysisResult;
+
+        // Store parallel visual tags result for later use
+        if (stdParallelVisualTags) {
+          (analysisResult as any)._parallelVisualTags = stdParallelVisualTags;
+        }
 
         // Track RF-DETR usage metrics if present
         if (analysisResult.rfDetrUsage) {
@@ -2001,13 +2035,18 @@ class UnifiedImageWorker extends EventEmitter {
         };
       }
 
-      // Visual Tagging: Run in parallel with post-processing (after recognition completes)
-      // Since recognition is faster with Gemini 3 Flash and tagging uses Gemini 2.5 Flash Lite,
-      // we invoke tagging after recognition to have imageId available for database linking
+      // Visual Tagging: Use parallel result if available, otherwise skip (already ran in parallel)
       phaseStart = Date.now();
       let visualTagsResult: { tags: any; usage: any } | null = null;
-      if (this.config.visualTagging?.enabled && storagePath) {
-        // Invoke visual tagging (with timeout, non-blocking)
+
+      // Check if we already have parallel visual tags result from Promise.all
+      if ((analysisResult as any)?._parallelVisualTags) {
+        visualTagsResult = (analysisResult as any)._parallelVisualTags;
+        delete (analysisResult as any)._parallelVisualTags;  // Clean up temporary property
+        timing['5_visualTagging_parallel'] = true as any;  // Mark as parallel execution
+        log.info(`[VisualTagging] Using parallel result (0ms additional latency)`);
+      } else if (this.config.visualTagging?.enabled && storagePath && !this.shouldUseCropContext() && !this.shouldUseLocalOnnx()) {
+        // Fallback: Only run sequentially if not already parallelized (shouldn't happen normally)
         try {
           visualTagsResult = await this.invokeVisualTagging(storagePath, analysisResult);
         } catch (err: any) {
@@ -2796,7 +2835,7 @@ class UnifiedImageWorker extends EventEmitter {
    */
   private async invokeVisualTagging(
     storagePath: string,
-    analysisResult: any
+    analysisResult: any | null  // Now accepts null for parallel execution
   ): Promise<{ tags: any; usage: any } | null> {
     // Only run if visual tagging is enabled
     if (!this.config.visualTagging?.enabled) {
@@ -2807,7 +2846,14 @@ class UnifiedImageWorker extends EventEmitter {
       const userId = await authService.getCurrentUserId();
       const imageUrl = `${SUPABASE_CONFIG.url}/storage/v1/object/public/uploaded-images/${storagePath}`;
 
-      log.debug(`[VisualTagging] Invoking for image: ${storagePath}`);
+      log.debug(`[VisualTagging] Invoking for image: ${storagePath}${analysisResult ? '' : ' (parallel mode, no recognition data)'}`);
+
+      // Build recognitionResult only if analysisResult is available
+      const recognitionResult = analysisResult ? {
+        raceNumber: analysisResult.analysis?.[0]?.raceNumber,
+        driverName: analysisResult.analysis?.[0]?.drivers?.[0],
+        teamName: analysisResult.analysis?.[0]?.teamName
+      } : undefined;
 
       const response = await Promise.race([
         this.supabase.functions.invoke('visualTagging', {
@@ -2816,11 +2862,7 @@ class UnifiedImageWorker extends EventEmitter {
             imageId: analysisResult?.imageId || '',
             executionId: this.config.executionId || '',
             userId: userId || '',
-            recognitionResult: {
-              raceNumber: analysisResult?.analysis?.[0]?.raceNumber,
-              driverName: analysisResult?.analysis?.[0]?.drivers?.[0],
-              teamName: analysisResult?.analysis?.[0]?.teamName
-            }
+            recognitionResult  // undefined when running in parallel (edge function handles this)
           }
         }),
         new Promise((_, reject) =>

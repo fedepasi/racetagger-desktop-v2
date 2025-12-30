@@ -719,13 +719,16 @@ export class AuthService {
         updateData = insertResult.data;
         updateError = insertResult.error;
       } else if (existingRecord) {
-        // Record esiste, lo aggiorniamo - prima provo RPC increment
-        const rpcResult = await this.supabase.rpc('increment_user_tokens', {
+        // Record esiste, lo aggiorniamo - usa RPC consume_user_tokens
+        // FIX: increment_user_tokens was updating tokens_purchased instead of tokens_used!
+        const rpcResult = await this.supabase.rpc('consume_user_tokens', {
           p_user_id: userId,
-          p_increment_amount: count
+          p_amount: count
         });
 
         if (rpcResult.error) {
+          // Fallback to direct UPDATE if RPC fails
+          console.warn('consume_user_tokens RPC failed, falling back to direct UPDATE:', rpcResult.error);
           const updateResult = await this.supabase
             .from('user_tokens')
             .update({
@@ -737,10 +740,11 @@ export class AuthService {
           updateData = updateResult.data;
           updateError = updateResult.error;
         } else {
-          // Simulo i dati per mantenere compatibilità
+          // RPC succeeded - use the returned data
+          const rpcData = rpcResult.data;
           updateData = [{
             user_id: userId,
-            tokens_used: newTokensUsed,
+            tokens_used: rpcData?.tokens_used || newTokensUsed,
             last_updated: new Date().toISOString()
           }];
           updateError = null;

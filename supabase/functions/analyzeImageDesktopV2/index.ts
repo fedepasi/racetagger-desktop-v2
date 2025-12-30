@@ -678,33 +678,42 @@ Respond ONLY with a valid JSON array where each object represents one detected v
 
     // 10. ANALYSIS SUCCESSFUL - GET TOKEN BALANCE AND CONSUME 1 TOKEN
     console.log(`[TOKEN CONSUMPTION] Analysis successful. Getting token balance and consuming 1 token for user: ${userEmail}`);
-    
+
     try {
-      // Get user ID from email by checking the user_tokens table directly
-      const { data: userTokenData, error: userTokenError } = await supabaseAdmin
-        .from('user_tokens')
-        .select('user_id, tokens_purchased, tokens_used')
-        .eq('user_email', userEmail)
-        .single();
-      
-      let userId;
+      // First get user_id from auth.users by email
+      const { data: authUser, error: authError } = await supabaseAdmin.auth.admin.getUserByEmail(userEmail);
+
+      let userId: string | null = null;
       let current_purchased = 0;
       let current_used = 0;
-      
-      if (userTokenError && userTokenError.code === 'PGRST116') {
-        // No user tokens record found - this is a new user
-        console.log(`[TOKEN INFO] No token record found for ${userEmail}, treating as new user`);
+
+      if (authError || !authUser?.user) {
+        console.log(`[TOKEN INFO] User not found in auth for ${userEmail}, treating as new user`);
         availableBalance = 0;
-        userId = null; // We'll skip token consumption for new users
-      } else if (userTokenError) {
-        console.error(`[TOKEN ERROR] Failed to get user token data for ${userEmail}:`, userTokenError);
-        throw new Error(`Token system error: ${userTokenError.message}`);
       } else {
-        userId = userTokenData.user_id;
-        current_purchased = userTokenData.tokens_purchased || 0;
-        current_used = userTokenData.tokens_used || 0;
-        availableBalance = current_purchased - current_used;
-        console.log(`[TOKEN INFO] Found token record for ${userEmail}: ${availableBalance} tokens available`);
+        userId = authUser.user.id;
+
+        // Now get token data using user_id (NOT user_email which doesn't exist)
+        const { data: userTokenData, error: userTokenError } = await supabaseAdmin
+          .from('user_tokens')
+          .select('user_id, tokens_purchased, tokens_used')
+          .eq('user_id', userId)
+          .single();
+
+        if (userTokenError && userTokenError.code === 'PGRST116') {
+          // No user tokens record found - this is a new user
+          console.log(`[TOKEN INFO] No token record found for ${userEmail} (user_id: ${userId}), treating as new user`);
+          availableBalance = 0;
+          userId = null; // We'll skip token consumption for new users
+        } else if (userTokenError) {
+          console.error(`[TOKEN ERROR] Failed to get user token data for ${userEmail}:`, userTokenError);
+          throw new Error(`Token system error: ${userTokenError.message}`);
+        } else {
+          current_purchased = userTokenData.tokens_purchased || 0;
+          current_used = userTokenData.tokens_used || 0;
+          availableBalance = current_purchased - current_used;
+          console.log(`[TOKEN INFO] Found token record for ${userEmail}: ${availableBalance} tokens available`);
+        }
       }
       
       // Check if user has enough tokens
