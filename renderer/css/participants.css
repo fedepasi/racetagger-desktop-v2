@@ -343,10 +343,12 @@
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  max-height: none; /* Override the 70vh limit from generic .modal-body */
+  max-height: calc(95vh - 180px); /* Ensure scrollable area with proper height calculation */
   overflow-y: auto;
+  overflow-x: hidden;
   flex: 1;
   min-height: 0; /* Allow flex child to shrink */
+  padding-top: 1.5rem; /* Add top padding to ensure top elements are accessible */
 }
 
 .participants-modal label {
@@ -413,6 +415,7 @@
   grid-template-columns: 1fr 1fr; /* 50% - 50% */
   gap: 1rem;
   margin-bottom: 1rem;  /* Reduced to give more space to table */
+  flex-shrink: 0; /* Prevent compression that might affect scrolling */
 }
 
 @media (max-width: 1200px) {
@@ -862,6 +865,8 @@
   padding: 1.25rem;
   border-radius: 8px;
   margin-bottom: 0; /* Gestito dal .preset-header-row */
+  max-height: 400px; /* Prevent excessive height from many folders */
+  overflow-y: auto; /* Allow internal scrolling if many folders */
 }
 
 .folder-organization-section .section-header h3 {
