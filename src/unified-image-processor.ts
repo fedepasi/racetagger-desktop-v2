@@ -135,6 +135,8 @@ export interface UnifiedProcessorConfig {
     enabled: boolean;
     embedInMetadata: boolean;
   };
+  // Pre-auth system flag (v1.1.0+) - quando true, i worker NON chiamano useTokens
+  usePreAuthSystem?: boolean;
 }
 
 /**
@@ -605,7 +607,8 @@ class UnifiedImageWorker extends EventEmitter {
       }
 
       // 5. Deduct token (same as cloud API - 1 token per image)
-      if (userId) {
+      // NOTA: Con pre-auth system (v1.1.0+), il token tracking avviene nel processor
+      if (userId && !this.config.usePreAuthSystem) {
         try {
           log.info(`[Local ONNX] About to deduct token for ${fileName}, imageId: ${imageId}`);
           await authService.useTokens(1, imageId || undefined, this.config.onTokenUsed);
@@ -614,7 +617,7 @@ class UnifiedImageWorker extends EventEmitter {
         } catch (tokenError) {
           log.warn(`[Local ONNX] Token deduction failed (non-blocking): ${tokenError}`);
         }
-      } else {
+      } else if (!userId) {
         log.warn(`[Local ONNX] No userId available, skipping token deduction`);
       }
 
@@ -1096,7 +1099,8 @@ class UnifiedImageWorker extends EventEmitter {
           }
 
           // Deduct token for each sequential call
-          if (userId) {
+          // NOTA: Con pre-auth system (v1.1.0+), il token tracking avviene nel processor
+          if (userId && !this.config.usePreAuthSystem) {
             await authService.useTokens(1, undefined, this.config.onTokenUsed);
             tokensUsed++;
           }
@@ -1177,7 +1181,8 @@ class UnifiedImageWorker extends EventEmitter {
         totalUsage = v6Result.usage || totalUsage;
 
         // Deduct single token for batch call
-        if (userId) {
+        // NOTA: Con pre-auth system (v1.1.0+), il token tracking avviene nel processor
+        if (userId && !this.config.usePreAuthSystem) {
           await authService.useTokens(1, undefined, this.config.onTokenUsed);
           tokensUsed = 1;
         }
@@ -1312,7 +1317,8 @@ class UnifiedImageWorker extends EventEmitter {
       }));
 
       // Deduct token
-      if (userId) {
+      // NOTA: Con pre-auth system (v1.1.0+), il token tracking avviene nel processor
+      if (userId && !this.config.usePreAuthSystem) {
         await authService.useTokens(1, undefined, this.config.onTokenUsed);
       }
 
@@ -1805,7 +1811,8 @@ class UnifiedImageWorker extends EventEmitter {
             }
 
             // 4. Deduct 1 token
-            if (faceRecUserId) {
+            // NOTA: Con pre-auth system (v1.1.0+), il token tracking avviene nel processor
+            if (faceRecUserId && !this.config.usePreAuthSystem) {
               await authService.useTokens(1, faceRecUserId);
               workerLog.info(`[FaceRecognition] Deducted 1 token for user ${faceRecUserId}`);
             }
@@ -2822,7 +2829,9 @@ class UnifiedImageWorker extends EventEmitter {
     }
 
     // Registra l'utilizzo del token
-    if (userId) {
+    // NOTA: Con pre-auth system (v1.1.0+), il tracking avviene nel processor
+    // La chiamata useTokens rimane per retrocompatibilità con vecchie versioni senza pre-auth
+    if (userId && !this.config.usePreAuthSystem) {
       await authService.useTokens(1, response.data.imageId, this.config.onTokenUsed);
     }
 
@@ -2881,7 +2890,8 @@ class UnifiedImageWorker extends EventEmitter {
       }
 
       // Deduct 0.5 token for visual tagging
-      if (userId) {
+      // NOTA: Con pre-auth system (v1.1.0+), il costo visual tagging è già incluso (1.5x)
+      if (userId && !this.config.usePreAuthSystem) {
         await authService.useTokens(0.5, analysisResult?.imageId, this.config.onTokenUsed);
       }
 
@@ -4048,6 +4058,21 @@ export class UnifiedImageProcessor extends EventEmitter {
   private recognitionMethod: 'gemini' | 'rf-detr' | 'local-onnx' | null = null;
   private currentSportCategory: any = null; // Current category config from Supabase
 
+  // ============================================================================
+  // BATCH TOKEN PRE-AUTHORIZATION (v1.1.0+)
+  // ============================================================================
+  private currentReservationId: string | null = null;
+  private reservationExpiresAt: string | null = null;
+  private batchUsage = {
+    processed: 0,
+    errors: 0,
+    cancelled: 0,
+    sceneSkipped: 0,        // FASE 2: predisposto ma non usato per rimborso
+    noVehicleDetected: 0,   // FASE 2: predisposto ma non usato per rimborso
+    emptyResults: 0         // FASE 2: predisposto ma non usato per rimborso
+  };
+  private usePreAuthSystem: boolean = false; // Flag per usare pre-auth (v1.1.0+)
+
   constructor(config: Partial<UnifiedProcessorConfig> = {}) {
     super();
     
@@ -4222,13 +4247,155 @@ export class UnifiedImageProcessor extends EventEmitter {
       return !basename.startsWith('._');
     });
 
-    // Per batch grandi, dividi in chunk per prevenire crash di memoria
-    if (filteredFiles.length > 1500) {
-      if (DEBUG_MODE) if (DEBUG_MODE) console.log(`[UnifiedProcessor] Large batch (${filteredFiles.length} images), processing in chunks`);
-      return this.processBatchInChunks(filteredFiles);
+    // ========================================================================
+    // PRE-AUTORIZZAZIONE TOKEN BATCH (v1.1.0+)
+    // ========================================================================
+    if (this.config.executionId && authService.isAuthenticated()) {
+      // Calcola token necessari
+      const visualTaggingEnabled = this.config.visualTagging?.enabled || false;
+      const tokensNeeded = authService.calculateTokensNeeded(filteredFiles.length, visualTaggingEnabled);
+
+      // Pre-autorizza
+      const preAuth = await authService.preAuthorizeTokens(
+        tokensNeeded,
+        this.config.executionId,
+        filteredFiles.length,
+        visualTaggingEnabled
+      );
+
+      if (!preAuth.authorized) {
+        // Token insufficienti - emetti evento e ritorna vuoto
+        this.emit('preAuthFailed', {
+          error: preAuth.error,
+          available: preAuth.available,
+          needed: preAuth.needed
+        });
+        throw new Error(`Token insufficienti: ${preAuth.available || 0} disponibili, ${tokensNeeded} richiesti`);
+      }
+
+      // Salva stato reservation
+      this.currentReservationId = preAuth.reservationId || null;
+      this.reservationExpiresAt = preAuth.expiresAt || null;
+      this.usePreAuthSystem = true;
+      // Propaga il flag alla config per i worker
+      this.config.usePreAuthSystem = true;
+
+      // Reset contatori batch
+      this.batchUsage = {
+        processed: 0,
+        errors: 0,
+        cancelled: 0,
+        sceneSkipped: 0,
+        noVehicleDetected: 0,
+        emptyResults: 0
+      };
+
+      if (DEBUG_MODE) console.log(`[UnifiedProcessor] Pre-authorized ${tokensNeeded} tokens, reservation: ${this.currentReservationId}`);
+    }
+    // ========================================================================
+
+    let results: UnifiedProcessingResult[];
+
+    try {
+      // Per batch grandi, dividi in chunk per prevenire crash di memoria
+      if (filteredFiles.length > 1500) {
+        if (DEBUG_MODE) console.log(`[UnifiedProcessor] Large batch (${filteredFiles.length} images), processing in chunks`);
+        results = await this.processBatchInChunks(filteredFiles);
+      } else {
+        results = await this.processBatchInternal(filteredFiles);
+      }
+
+      // Finalizza la reservation se attiva
+      if (this.usePreAuthSystem && this.currentReservationId) {
+        await this.finalizeBatchTokens();
+      }
+
+      return results;
+    } catch (error) {
+      // In caso di errore, finalizza comunque la reservation
+      if (this.usePreAuthSystem && this.currentReservationId) {
+        // Calcola immagini non processate come cancelled
+        const totalExpected = filteredFiles.length;
+        const actualProcessed = this.batchUsage.processed + this.batchUsage.errors;
+        this.batchUsage.cancelled = Math.max(0, totalExpected - actualProcessed);
+        await this.finalizeBatchTokens();
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Finalizza la reservation batch e calcola rimborso
+   */
+  async finalizeBatchTokens(): Promise<void> {
+    if (!this.currentReservationId) {
+      return;
     }
 
-    return this.processBatchInternal(filteredFiles);
+    try {
+      const result = await authService.finalizeTokenReservation(
+        this.currentReservationId,
+        {
+          processed: this.batchUsage.processed,
+          errors: this.batchUsage.errors,
+          cancelled: this.batchUsage.cancelled,
+          sceneSkipped: this.batchUsage.sceneSkipped,
+          noVehicleDetected: this.batchUsage.noVehicleDetected,
+          emptyResults: this.batchUsage.emptyResults,
+          visualTaggingUsed: this.config.visualTagging?.enabled || false
+        }
+      );
+
+      if (result.success) {
+        this.emit('tokensFinalized', {
+          consumed: result.consumed,
+          refunded: result.refunded,
+          newBalance: result.newBalance
+        });
+        if (DEBUG_MODE) console.log(`[UnifiedProcessor] Tokens finalized: ${result.consumed} consumed, ${result.refunded} refunded`);
+      } else {
+        console.error('[UnifiedProcessor] Failed to finalize tokens:', result.error);
+      }
+    } catch (error) {
+      console.error('[UnifiedProcessor] Exception finalizing tokens:', error);
+    } finally {
+      // Reset stato
+      this.currentReservationId = null;
+      this.reservationExpiresAt = null;
+    }
+  }
+
+  /**
+   * Chiamato quando il batch viene cancellato dall'utente
+   */
+  async handleBatchCancellation(): Promise<void> {
+    if (!this.usePreAuthSystem || !this.currentReservationId) {
+      return;
+    }
+
+    // Calcola immagini non processate come cancelled
+    const remaining = this.totalImages - this.processedImages;
+    this.batchUsage.cancelled = remaining;
+
+    await this.finalizeBatchTokens();
+  }
+
+  /**
+   * Incrementa il contatore di immagini processate (usato da worker)
+   */
+  trackImageProcessed(): void {
+    if (this.usePreAuthSystem) {
+      this.batchUsage.processed++;
+    }
+  }
+
+  /**
+   * Incrementa il contatore di errori (usato da worker)
+   */
+  trackImageError(): void {
+    if (this.usePreAuthSystem) {
+      this.batchUsage.errors++;
+    }
   }
 
   /**

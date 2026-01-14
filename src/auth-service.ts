@@ -20,6 +20,38 @@ export interface TokenBalance {
   remaining: number;
 }
 
+// Tipi per sistema pre-autorizzazione batch (v1.1.0+)
+export interface PreAuthResult {
+  authorized: boolean;
+  reservationId?: string;
+  expiresAt?: string;
+  ttlMinutes?: number;
+  error?: string;
+  available?: number;
+  needed?: number;
+}
+
+export interface BatchTokenUsage {
+  processed: number;
+  errors: number;
+  cancelled: number;
+  // FASE 2 - tracciati ma non usati per rimborso
+  sceneSkipped?: number;
+  noVehicleDetected?: number;
+  emptyResults?: number;
+  // Statistiche
+  visualTaggingUsed?: boolean;
+  totalDurationMs?: number;
+}
+
+export interface FinalizeResult {
+  success: boolean;
+  consumed: number;
+  refunded: number;
+  newBalance: number;
+  error?: string;
+}
+
 export interface SubscriptionInfo {
   plan: {
     id: string;
@@ -800,19 +832,8 @@ export class AuthService {
   }
 
   // Ottieni il bilancio token dell'utente con debug logging
+  // NOTA: Version check rimosso - ora solo in main.ts (avvio) e login
   async getTokenBalance(): Promise<TokenBalance> {
-    // Check version before allowing balance check
-    if (this.authState.isAuthenticated) {
-      const versionOk = await this.checkVersionBeforeAuth();
-      if (!versionOk) {
-        return {
-          total: 0,
-          used: 0,
-          remaining: 0
-        };
-      }
-    }
-
     // Default balance per utenti non autenticati o errori
     const defaultBalance: TokenBalance = {
       total: this.demoMode ? this.MAX_DEMO_USAGE : 0,
@@ -1084,6 +1105,160 @@ export class AuthService {
   // Verifica se l'utente corrente è un utente normale
   isUser(): boolean {
     return this.authState.userRole === 'user';
+  }
+
+  // ============================================================================
+  // SISTEMA PRE-AUTORIZZAZIONE BATCH TOKEN (v1.1.0+)
+  // ============================================================================
+
+  /**
+   * Pre-autorizza token per un batch di immagini.
+   * Blocca i token necessari creando una reservation con TTL dinamico.
+   *
+   * @param tokenCount - Numero di token da pre-autorizzare
+   * @param batchId - ID del batch (= execution_id per collegamento DB)
+   * @param imageCount - Numero di immagini per calcolo TTL dinamico
+   * @param visualTagging - Se true, include costo visual tagging (1.5x)
+   * @returns PreAuthResult con reservationId se autorizzato
+   */
+  async preAuthorizeTokens(
+    tokenCount: number,
+    batchId: string,
+    imageCount: number,
+    visualTagging: boolean = false
+  ): Promise<PreAuthResult> {
+    if (!this.authState.isAuthenticated || !this.authState.user?.id) {
+      return {
+        authorized: false,
+        error: 'NOT_AUTHENTICATED'
+      };
+    }
+
+    try {
+      const { data, error } = await this.supabase.rpc('pre_authorize_tokens', {
+        p_user_id: this.authState.user.id,
+        p_tokens_needed: tokenCount,
+        p_batch_id: batchId,
+        p_image_count: imageCount,
+        p_visual_tagging: visualTagging
+      });
+
+      if (error) {
+        console.error('[PreAuth] RPC error:', error);
+        return {
+          authorized: false,
+          error: error.message
+        };
+      }
+
+      if (!data || !data.authorized) {
+        console.warn('[PreAuth] Not authorized:', data?.error);
+        return {
+          authorized: false,
+          error: data?.error || 'UNKNOWN_ERROR',
+          available: data?.available,
+          needed: data?.needed
+        };
+      }
+
+      console.log(`[PreAuth] Authorized ${tokenCount} tokens for batch ${batchId}, TTL: ${data.ttlMinutes}min, expires: ${data.expiresAt}`);
+
+      return {
+        authorized: true,
+        reservationId: data.reservationId,
+        expiresAt: data.expiresAt,
+        ttlMinutes: data.ttlMinutes
+      };
+    } catch (error: any) {
+      console.error('[PreAuth] Exception:', error);
+      return {
+        authorized: false,
+        error: error.message || 'EXCEPTION'
+      };
+    }
+  }
+
+  /**
+   * Finalizza una reservation batch, calcolando token effettivi e rimborso.
+   * Chiamare alla fine del batch o su cancellazione.
+   *
+   * @param reservationId - ID della reservation da finalizzare
+   * @param usage - Conteggi effettivi di utilizzo
+   * @returns FinalizeResult con token consumati/rimborsati
+   */
+  async finalizeTokenReservation(
+    reservationId: string,
+    usage: BatchTokenUsage
+  ): Promise<FinalizeResult> {
+    if (!this.authState.isAuthenticated) {
+      return {
+        success: false,
+        consumed: 0,
+        refunded: 0,
+        newBalance: 0,
+        error: 'NOT_AUTHENTICATED'
+      };
+    }
+
+    try {
+      const { data, error } = await this.supabase.rpc('finalize_token_reservation', {
+        p_reservation_id: reservationId,
+        p_actual_usage: usage
+      });
+
+      if (error) {
+        console.error('[Finalize] RPC error:', error);
+        return {
+          success: false,
+          consumed: 0,
+          refunded: 0,
+          newBalance: 0,
+          error: error.message
+        };
+      }
+
+      if (data?.error) {
+        console.error('[Finalize] Server error:', data.error);
+        return {
+          success: false,
+          consumed: 0,
+          refunded: 0,
+          newBalance: 0,
+          error: data.error
+        };
+      }
+
+      console.log(`[Finalize] Batch completed: ${data.consumed} consumed, ${data.refunded} refunded, new balance: ${data.newBalance}`);
+
+      return {
+        success: true,
+        consumed: data.consumed || 0,
+        refunded: data.refunded || 0,
+        newBalance: data.newBalance || 0
+      };
+    } catch (error: any) {
+      console.error('[Finalize] Exception:', error);
+      return {
+        success: false,
+        consumed: 0,
+        refunded: 0,
+        newBalance: 0,
+        error: error.message || 'EXCEPTION'
+      };
+    }
+  }
+
+  /**
+   * Calcola il numero di token necessari per un batch.
+   *
+   * @param imageCount - Numero di immagini
+   * @param visualTaggingEnabled - Se true, applica moltiplicatore 1.5x
+   * @returns Numero totale di token necessari
+   */
+  calculateTokensNeeded(imageCount: number, visualTaggingEnabled: boolean): number {
+    const baseTokens = imageCount;
+    const visualTaggingTokens = visualTaggingEnabled ? imageCount * 0.5 : 0;
+    return Math.ceil(baseTokens + visualTaggingTokens);
   }
 }
 

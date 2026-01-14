@@ -11,6 +11,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { setBatchProcessingCancelled } from './context';
 import { DEBUG_MODE } from '../config';
+import { unifiedImageProcessor } from '../unified-image-processor';
 
 // ==================== Log Reading Utilities ====================
 
@@ -146,9 +147,16 @@ export function registerAnalysisHandlers(): void {
   });
 
   // Cancel batch processing
-  ipcMain.on('cancel-batch-processing', () => {
+  ipcMain.on('cancel-batch-processing', async () => {
     console.log('[Analysis] Batch processing cancellation requested');
     setBatchProcessingCancelled(true);
+
+    // Finalizza i token pre-autorizzati (v1.1.0+)
+    try {
+      await unifiedImageProcessor.handleBatchCancellation();
+    } catch (error) {
+      console.error('[Analysis] Error handling batch cancellation for tokens:', error);
+    }
   });
 
   // Get recent executions from local JSONL files

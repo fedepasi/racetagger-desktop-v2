@@ -1,464 +1,454 @@
-# CLAUDE.md
+# RaceTagger Desktop
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Professional Electron desktop application for AI-powered race number detection in motorsport photography. Built with TypeScript, Electron, and Supabase.
 
-## Related Documentation
+## Essential Context
 
-**IMPORTANT:** Before working on database queries, Edge Functions, or Supabase integrations, consult:
-- **[DATABASE.md](./DATABASE.md)** - Complete schema documentation with 85+ tables, all Edge Functions, and storage buckets
+**Related Documentation:**
+- **[DATABASE.md](./DATABASE.md)** - Complete schema (85+ tables), Edge Functions, storage buckets
+- **[RACETAGGER_CONTEXT.md](../RACETAGGER_CONTEXT.md)** - Business context, pricing, features
+- **[CHANGELOG.md](./CHANGELOG.md)** - Version history and release notes
 
-## Development Commands
+## Tech Stack
 
-### Development Workflow
-- `npm run dev` - Start development server with TypeScript watch mode and Electron
-- `npm run compile` - Compile TypeScript to JavaScript 
-- `npm start` - Start the compiled Electron app
-- `npm run build` - Build production app with electron-builder
+- **Framework:** Electron 36.0.0, TypeScript 5.9.2, Node.js 18+
+- **Image Processing:** Sharp 0.34.3, jimp 1.6.0, raw-preview-extractor (custom)
+- **RAW Conversion:** dcraw (external), raw-preview-extractor (embedded previews)
+- **Database:** better-sqlite3 11.10.0 (local), Supabase 2.30.0 (cloud sync)
+- **AI Provider:** Google Gemini (Flash/Pro/Lite via Edge Functions)
+- **Face Recognition:** face-api.js 0.22.2, canvas 3.2.0
+- **Build:** electron-builder 24.13.0, cross-platform (macOS, Windows, Linux)
 
-### Testing & Quality Assurance
-- `npm test` - Run Jest test suite
-- `npm run test:watch` - Run Jest tests in watch mode
-- `npm run test:coverage` - Run tests with coverage report
+## Project Structure
 
-### Performance Testing & Benchmarking
-- `npm run test:performance` - Run standard performance test suite
-- `npm run test:performance:quick` - Run quick performance tests (regression testing)
-- `npm run test:performance:full` - Run comprehensive performance benchmark
-- `npm run test:performance:verbose` - Run full performance tests with detailed logging
-- `npm run benchmark` - Alias for full performance testing
-- `npm run regression-test` - Alias for quick performance testing
+```
+/src/                          # TypeScript source code
+├── main.ts                    # Electron main process (~3,800 lines)
+├── preload.ts                 # Preload script for IPC
+├── ipc/                       # Modular IPC handlers (117 handlers)
+│   ├── index.ts              # Central registration
+│   ├── context.ts            # Shared context (window, caches, state)
+│   ├── types.ts              # IPC TypeScript interfaces
+│   ├── window-handlers.ts    # Window control (3 handlers)
+│   ├── auth-handlers.ts      # Auth, tokens, admin (18 handlers)
+│   ├── database-handlers.ts  # Projects, executions, presets (22)
+│   ├── supabase-handlers.ts  # Sport categories, caching (19)
+│   ├── export-handlers.ts    # Export destinations (13)
+│   ├── app-handlers.ts       # App info, settings (11)
+│   ├── file-handlers.ts      # File dialogs, folders (8)
+│   ├── image-handlers.ts     # Thumbnails, loading (5)
+│   ├── csv-handlers.ts       # CSV parsing (4)
+│   ├── analysis-handlers.ts  # Analysis logs, pipeline (4)
+│   ├── face-recognition-handlers.ts  # Face detection (6)
+│   └── version-handlers.ts   # Version checking (4)
+├── unified-image-processor.ts  # Central processing system
+├── streaming-pipeline.ts      # Memory-efficient pipeline for large batches
+├── batch-optimizer.ts         # Intelligent batch processing
+├── parallel-analyzer.ts       # Multi-threaded analysis engine
+├── auth-service.ts            # Supabase auth + token management
+├── database-service.ts        # SQLite + Supabase dual-mode
+├── config.ts / config.production.ts  # Multi-environment config
+├── matching/                  # Participant matching algorithms
+├── utils/                     # Utilities
+│   ├── memory-pool.ts        # Buffer pooling for performance
+│   ├── disk-monitor.ts       # Disk space management
+│   ├── cleanup-manager.ts    # Temp file lifecycle
+│   ├── performance-monitor.ts # Real-time metrics
+│   ├── session-manager.ts    # Session persistence
+│   ├── raw-converter.ts      # dcraw-based RAW processing
+│   ├── dcraw-installer.ts    # Auto dcraw installation
+│   ├── xmp-manager.ts        # XMP sidecar creation
+│   ├── metadata-writer.ts    # EXIF metadata writing
+│   └── analysis-logger.ts    # JSONL logging system
+└── assets/                    # App icons, resources
 
-### Build & Dependencies
-- `npm install` - Install dependencies (includes electron-builder app deps)
-- `npm run rebuild` - Rebuild native modules with electron-rebuild
-- `npm run rebuild:sharp` - Rebuild Sharp.js specifically for Electron
-- `npm run rebuild:debug` - Rebuild Sharp.js with debug logging
-- `npm run postinstall` - Automatically runs electron-builder install-app-deps
+/renderer/                     # Frontend (HTML/CSS/JS)
+├── index.html                # Main layout shell
+├── pages/                    # Page content (dynamically loaded)
+│   ├── home.html            # Dashboard
+│   ├── settings.html        # Settings
+│   ├── projects.html        # Project management
+│   ├── analysis.html        # Image analysis
+│   ├── participants.html    # Participant presets
+│   └── destinations.html    # Export destinations
+├── js/                       # JavaScript modules
+│   ├── router.js            # Navigo.js hash router
+│   ├── vendor/navigo.min.js # Navigo 8.11.1
+│   └── [23 other modules]   # Feature-specific JS
+└── css/                      # 15 CSS files
+
+/tests/                       # Jest tests + performance benchmarks
+/supabase/                    # Edge Functions (shared with web)
+/scripts/                     # Build scripts, utilities
+/vendor/                      # Native dependencies (dcraw, etc.)
+/dist/                        # Compiled TypeScript output
+/release/                     # Built installers (DMG, EXE, etc.)
+```
+
+## Key Commands
+
+**Development:**
+- `npm run dev` - TypeScript watch + Electron dev mode
+- `npm run compile` - Compile TypeScript to /dist
+- `npm start` - Start compiled app
+- `npm run dev:debug` - Development with debug logging
+
+**Testing:**
+- `npm test` - Jest test suite
+- `npm run test:watch` - Jest watch mode
+- `npm run test:coverage` - Coverage report
+- `npm run test:performance` - Standard performance tests
+- `npm run test:performance:quick` - Quick regression tests
+- `npm run test:performance:full` - Comprehensive benchmark
+- `npm run benchmark` - Alias for full performance test
+- `npm run regression-test` - Alias for quick performance test
+
+**Build:**
+- `npm run build` - Production build (current platform)
+- `npm run build:mac:arm64` - macOS Apple Silicon
+- `npm run build:mac:x64` - macOS Intel
+- `npm run build:mac:universal` - macOS Universal Binary
+- `npm run build:win:x64` - Windows 64-bit
+- `npm install` - Install deps + rebuild native modules
+
+**Native Modules:**
+- `npm run rebuild` - Rebuild all native modules
+- `npm run rebuild:sharp` - Rebuild Sharp.js for Electron
+- `npm run postinstall` - Auto-runs electron-builder install-app-deps
 
 ## Architecture Overview
 
-This is an advanced Electron desktop application for race photography analysis built with TypeScript. The app uses AI-powered analysis to detect race numbers in racing images and matches them with participant data. The architecture has evolved significantly with performance optimizations, streaming processing, and advanced memory management.
+**Core Processing Systems:**
 
-### Core Processing Systems
+1. **Unified Image Processor** (`unified-image-processor.ts`)
+   - Central processing for RAW and standard formats
+   - Queue management, memory optimization, result aggregation
+   - Coordinates different pipelines based on resources
 
-**Unified Image Processor (src/unified-image-processor.ts)**
-- Central image processing system that handles both RAW and standard image formats
-- Manages processing queues, memory optimization, and result aggregation
-- Coordinates between different processing pipelines based on system resources
+2. **Streaming Pipeline** (`streaming-pipeline.ts`)
+   - Memory-efficient processing for large batches (>50 images)
+   - Staged: RAW conversion → JPEG → Analysis → Upload
+   - Automatic mode switching based on memory/disk constraints
+   - Disk space monitoring and cleanup
 
-**Streaming Pipeline (src/streaming-pipeline.ts)**
-- Advanced memory-efficient processing pipeline for large image batches
-- Manages temporary file creation, disk space monitoring, and cleanup
-- Implements staged processing: RAW conversion → JPEG generation → Analysis → Upload
-- Automatic switching between batch and streaming modes based on memory/disk constraints
+3. **Batch Optimizer** (`batch-optimizer.ts`)
+   - Dynamic optimization and parallelization
+   - Performance levels: DISABLED, CONSERVATIVE, BALANCED, AGGRESSIVE
+   - Worker pool management (4-20 workers based on CPU)
 
-**Batch Optimizer (src/batch-optimizer.ts)**
-- Intelligent batch processing with dynamic optimization
-- Manages parallelization levels, memory usage, and processing queues
-- Supports legacy batch processing and modern streaming pipeline
-- Advanced configuration for different performance levels
+4. **Parallel Analyzer** (`parallel-analyzer.ts`)
+   - Multi-threaded AI analysis with worker pools
+   - Rate limiting for API requests
+   - CPU core and memory optimization
 
-**Parallel Analyzer (src/parallel-analyzer.ts)**
-- Multi-threaded image analysis engine with worker pool management
-- Handles concurrent AI model requests with rate limiting
-- Optimizes resource usage across CPU cores and memory constraints
+**IPC Handler Architecture:**
+- 117 handlers across 12 modular files
+- Centralized registration in `ipc/index.ts`
+- Shared context via `ipc/context.ts`
+- Type-safe interfaces in `ipc/types.ts`
 
-### Main Process (src/main.ts)
-- Electron main process (~3,800 lines) with core application logic
-- EPIPE error protection and graceful degradation
-- Manages RAW file conversion using dcraw
-- Supports both online (Supabase) and offline (SQLite cache) data management
-- Coordinates between unified processors and streaming pipelines
-- IPC handlers delegated to modular files in `src/ipc/`
+**Frontend Router:**
+- Navigo.js hash-based routing (#/home, #/analysis, etc.)
+- Dynamic page loading from `/renderer/pages/`
+- Page caching to avoid re-fetching
+- Events: `page-loaded`, `section-changed`
+- Backward compatible with legacy navigation
 
-### IPC Handler Architecture (src/ipc/)
+## Code Conventions
 
-The IPC handlers have been modularized into 12 specialized files for maintainability:
+**TypeScript:**
+- Use strict mode (no `any` unless justified)
+- Define interfaces in `/src/ipc/types.ts` for IPC
+- Prefer `interface` for object shapes, `type` for unions
+- Use explicit return types for public functions
 
-| File | Handlers | Purpose |
-|------|----------|---------|
-| `window-handlers.ts` | 3 | Window control (close, minimize, maximize) |
-| `auth-handlers.ts` | 18 | Authentication, tokens, admin checks |
-| `database-handlers.ts` | 22 | Projects, executions, presets |
-| `supabase-handlers.ts` | 19 | Sport categories, caching, feature flags |
-| `export-handlers.ts` | 13 | Export destinations, processing |
-| `app-handlers.ts` | 11 | App info, consent, settings |
-| `file-handlers.ts` | 8 | File dialogs, folder operations |
-| `image-handlers.ts` | 5 | Thumbnail generation, image loading |
-| `csv-handlers.ts` | 4 | CSV loading and parsing |
-| `analysis-handlers.ts` | 4 | Analysis logs and pipeline control |
-| `face-recognition-handlers.ts` | 6 | Face detection and matching |
-| `version-handlers.ts` | 4 | App version checking, force updates |
+**File Organization:**
+- IPC handlers: One handler per file in `/src/ipc/`
+- Utilities: Feature-specific files in `/src/utils/`
+- Keep files under 500 lines (split if larger)
+- Use descriptive names: `raw-converter.ts`, not `utils.ts`
 
-**Total: 117 modular handlers**
+**Electron Patterns:**
+- Main process: `src/main.ts` (avoid modifications when possible)
+- IPC: Use modular handlers in `/src/ipc/`
+- Preload: Expose APIs via `contextBridge` in `src/preload.ts`
+- Renderer: Communicate via IPC, never import Node.js modules
 
-Key files:
-- `src/ipc/index.ts` - Central registration and exports
-- `src/ipc/context.ts` - Shared context (mainWindow, caches, state)
-- `src/ipc/types.ts` - TypeScript interfaces for IPC communication
+**Error Handling:**
+- EPIPE protection in main.ts (graceful degradation)
+- Always log errors with context
+- Return structured error objects to renderer
+- Clean up resources in catch blocks (files, memory)
 
-### Authentication & Token Management (src/auth-service.ts)
-- Supabase authentication with automatic session persistence
-- Advanced token-based usage system with request/approval workflow
-- Subscription management and demo mode with limited free analyses
-- Automatic token refresh and offline session handling
+**Performance:**
+- Use memory pools for buffer reuse (`utils/memory-pool.ts`)
+- Monitor disk space before large operations
+- Enable streaming pipeline for batches >50 images
+- Profile with performance tests after major changes
 
-### Database Layer (src/database-service.ts)
-- Dual-mode architecture: Supabase for online storage + SQLite for local caching
-- Enhanced Projects and Executions management with execution settings tracking
-- CSV file uploads to Supabase Storage with metadata preservation
-- Local database schema mirrors Supabase for seamless offline capability
-- Migration system for database schema evolution
+## Data Flow
 
-### Performance Optimization System
+1. User selects folder via enhanced file browser
+2. Optional CSV with participant data (numero, nome, categoria, squadra, metatag)
+3. Images processed through unified processor or streaming pipeline
+4. RAW files converted via dcraw (or raw-preview-extractor fallback)
+5. AI analysis via parallel analyzer (Gemini API)
+6. Race numbers matched against CSV (fuzzy matching)
+7. Metadata written (XMP sidecars or direct EXIF)
+8. Results stored in Supabase + SQLite cache
+9. Enhanced results displayed in modern UI
 
-**Memory Management (src/utils/memory-pool.ts)**
-- Advanced buffer pooling system for efficient memory reuse
-- Categorized memory pools based on image size requirements
-- Automatic garbage collection and memory pressure monitoring
+## RAW Processing System
 
-**Disk Space Management (src/utils/disk-monitor.ts)**
-- Real-time disk space monitoring with configurable thresholds
-- Automatic cleanup of temporary files when space is low
-- Alert system for critical disk space situations
+**Primary Method: dcraw**
+- Supports: NEF, ARW, CR2, CR3, ORF, RAW, RW2, DNG
+- Auto-installation via `dcraw-installer.ts`
+- Batch processing optimization
+- Fallback to Sharp.js if dcraw unavailable
 
-**Cleanup Manager (src/utils/cleanup-manager.ts)**
-- Comprehensive temporary file lifecycle management
-- Automatic cleanup on process exit and error conditions
-- Tracked file system for reliable resource deallocation
+**Fallback: raw-preview-extractor**
+- Custom module for embedded preview extraction
+- Fast but lower resolution (200KB-2MB previews)
+- Used when dcraw not available or fails
 
-**Performance Monitor (src/utils/performance-monitor.ts)**
-- Real-time performance metrics collection and analysis
-- Memory usage, processing times, and throughput monitoring
-- Automatic performance tuning recommendations
+**Supported Formats:**
+- RAW: NEF, ARW, CR2, CR3, ORF, RAW, RW2, DNG
+- Standard: JPG, JPEG, PNG, WebP
 
-**Session Manager (src/utils/session-manager.ts)**
-- Persistent session state management across app restarts
-- Recovery of interrupted processing sessions
-- User preference and workflow state preservation
+## RF-DETR Recognition System
 
-### RAW Processing System (src/utils/raw-converter.ts)
-- **dcraw-based conversion** instead of Adobe DNG Converter
-- Supports NEF, ARW, CR2, CR3, ORF, RAW, RW2, DNG formats
-- Automatic dcraw installation and dependency management (src/utils/dcraw-installer.ts)
-- Fallback to Sharp.js for basic format support when dcraw unavailable
-- Batch processing optimization for large RAW collections
+**Dual Recognition:**
+- Gemini AI Vision (default)
+- RF-DETR object detection (Roboflow serverless workflows)
 
-### Metadata Management
-
-**XMP Sidecar System (src/utils/xmp-manager.ts)**
-- Advanced XMP sidecar file creation and management
-- Preserves original file integrity while adding metadata
-- Supports complex metadata schemas and custom fields
-
-**Metadata Writer (src/utils/metadata-writer.ts)**
-- Direct EXIF metadata writing to image files
-- Supports both embedded metadata and sidecar files
-- Race participant information integration
-
-### Configuration System (src/config.ts & src/config.production.ts)
-- **Multi-environment configuration** with development/production separation
-- **Resize Presets**: VELOCE (1080p), BILANCIATO (1440p), QUALITA (1920p)
-- **Performance Optimization Levels**: DISABLED, CONSERVATIVE, BALANCED, AGGRESSIVE
-- **Streaming Pipeline Configuration** with worker management and disk thresholds
-- **Roboflow RF-DETR Configuration**: API keys, overlap thresholds, confidence levels, cost tracking
-- Comprehensive validation and error handling
-
-### RF-DETR Recognition System (Edge Function V4)
-- **Dual Recognition Support**: Gemini AI Vision + RF-DETR object detection
-- **Database-driven configuration**: Recognition method configured per sport category in `sport_categories` table
-- **Edge Function V4** (`supabase/functions/analyzeImageDesktopV4/`):
-  - Routes to RF-DETR or Gemini based on `sport_categories.recognition_method`
-  - RF-DETR integration with Roboflow serverless workflows
-  - Label format: `"MODEL_NUMBER"` (e.g., `"SF-25_16"` → race number 16)
-  - IoU-based overlap filtering for multiple detections
-  - Automatic fallback to Gemini V3 on RF-DETR failure
-- **Metrics Tracking**: Detections count, cost tracking ($0.0045/image), recognition method logging
-- **Bounding Boxes**: Full detection data saved to `analysis_results.raw_response` for training
-- **SmartMatcher Integration**: Post-processing with same participant matching logic
-- **Management Dashboard**: UI in racetagger-app for configuring RF-DETR per category
+**Configuration:**
+- Database-driven: `sport_categories.recognition_method`
+- Edge Function V4: Routes to RF-DETR or Gemini
+- Management dashboard in racetagger-app
 
 **Setup:**
-1. Get Roboflow API key from https://app.roboflow.com/
-2. Add to `.env`: `ROBOFLOW_DEFAULT_API_KEY=your_key_here`
-3. Configure sport category in management dashboard:
+1. Get Roboflow API key: https://app.roboflow.com/
+2. Add to `.env`: `ROBOFLOW_DEFAULT_API_KEY=your_key`
+3. Configure sport category in dashboard:
    - Set `recognition_method` to "rf-detr"
-   - Set `rf_detr_workflow_url` to Roboflow workflow endpoint
+   - Set `rf_detr_workflow_url` to endpoint
    - Set `edge_function_version` to 4
-   - Optional: Set custom API key environment variable name
 
-**Label Format Requirements:**
-- RF-DETR models must return labels in format: `"MODEL_NUMBER"` or `"TEAM_NUMBER"`
+**Label Format:**
+- Required: `"MODEL_NUMBER"` or `"TEAM_NUMBER"`
 - Examples: `"SF-25_16"`, `"MCL39_4"`, `"Ducati_93"`
-- Race number is extracted from the portion after the underscore
+- Number extracted after underscore
 
 **Cost Tracking:**
-- RF-DETR usage: ~$0.0045 per image
-- Tracked separately from Gemini token usage
-- Metrics stored in `execution_settings`: `rf_detr_detections_count`, `rf_detr_total_cost`
+- RF-DETR: ~$0.0045/image
+- Tracked in `execution_settings` table
+- Separate from Gemini token usage
 
-### File Extensions Support
-- **Standard formats**: JPG, JPEG, PNG, WebP
-- **RAW formats**: NEF, ARW, CR2, CR3, ORF, RAW, RW2, DNG
+## Analysis Logging System
 
-### Frontend Router Architecture (renderer/)
+**Purpose:** Track corrections and decisions during analysis
 
-The frontend uses a modular page-based architecture with Navigo.js hash routing. All pages have been migrated from the monolithic index.html to separate page files.
+**Components:**
+- AnalysisLogger (`utils/analysis-logger.ts`) - JSONL logging
+- SmartMatcher integration - OCR, temporal, fuzzy matching
+- Temporal clustering - Burst mode detection
 
+**Storage:**
+- Local: `.analysis-logs/` in user data folder
+- Remote: Supabase Storage bucket `analysis-logs`
+- Naming: `exec_{execution_id}.jsonl`
+
+**Log Entries (JSONL format):**
+- `EXECUTION_START` - Total images, category, preset info
+- `IMAGE_ANALYSIS` - AI response, corrections, final results
+- `CORRECTION` - Individual correction with explanation
+- `TEMPORAL_CLUSTER` - Clustering decisions
+- `PARTICIPANT_MATCH` - Fuzzy matching results
+- `EXECUTION_COMPLETE` - Final statistics
+
+**Access:**
+- Development: Auto-upload every 30s to Supabase
+- Remote debugging: Supabase dashboard → Storage → analysis-logs
+- Correlation: Use execution_id from desktop app
+
+## Token System & Pricing
+
+**Current Beta (One-time packages):**
+- STARTER: €29 - 3,000 tokens
+- PROFESSIONAL: €49 - 10,000 tokens ⭐ RECOMMENDED
+- STUDIO: €99 - 25,000 tokens (best value)
+
+**Future Subscriptions:**
+- HOBBY: €39/mo - 2,000 images
+- ENTHUSIAST: €79/mo - 5,000 images
+- PROFESSIONAL: €129/mo - 10,000 images
+- STUDIO: €199/mo - 25,000 images
+- AGENCY: €399/mo - 50,000 images
+
+**Token Management:**
+- 1 token = 1 image analysis
+- Tracked in `user_tokens` and `token_transactions`
+- Request/approval workflow
+- Automatic allocation and renewal
+
+## Environment Variables
+
+**Required in `.env`:**
+```bash
+SUPABASE_URL=https://taompbzifylmdzgbbrpv.supabase.co
+SUPABASE_ANON_KEY=your-anon-key
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+
+# Optional
+ROBOFLOW_DEFAULT_API_KEY=your-roboflow-key
+DEBUG_MODE=false
 ```
-renderer/
-├── index.html              # Layout shell: header, sidebar, modals, page container
-├── pages/                  # Dynamically loaded page content (ALL MIGRATED)
-│   ├── home.html           # Dashboard with hero section and announcements
-│   ├── settings.html       # Account, privacy & AI settings
-│   ├── projects.html       # Project management
-│   ├── analysis.html       # Image analysis with folder organization options
-│   ├── participants.html   # Participant presets with CSV/JSON import
-│   └── destinations.html   # Export destinations with FTP settings
-├── js/
-│   ├── router.js           # Navigo.js hash router (~300 lines)
-│   ├── vendor/navigo.min.js # Navigo.js library (8.11.1)
-│   └── [23 other JS modules]
-└── css/                    # 15 CSS files organized by feature
-```
 
-**Router Features (router.js):**
-- Hash-based routing: `#/home`, `#/analysis`, `#/settings`, etc.
-- Page caching to avoid re-fetching
-- `page-loaded` and `section-changed` events for initialization
-- `initializePage()` function re-binds event listeners for dynamically loaded elements
-- Backward compatibility with legacy section-based navigation
+## Critical DO NOTs
 
-**Navigation Flow:**
-1. User clicks sidebar nav item
-2. `router.js` intercepts click, navigates to `#/pagename`
-3. Router fetches `pages/pagename.html` (cached after first load)
-4. Content injected into `#page-content` container
-5. Events dispatched: `page-loaded` (on window), `section-changed` (on document)
-6. `initializePage()` re-attaches event listeners for dynamically loaded buttons
+**Security:**
+- NEVER expose service role key in client code
+- NEVER commit `.env` files
+- NEVER bypass RLS policies
+- NEVER hardcode API keys
 
-**Page Initialization:**
-- **home**: Loads recent presets and home stats
-- **settings**: Initializes SettingsManager
-- **projects**: Loads project list, attaches create button handler
-- **destinations**: Initializes ExportDestinationsManager
-- **participants**: Attaches preset/CSV/JSON import handlers
-- **analysis**: Re-binds folder selection, upload, and preset handlers
+**Database:**
+- NEVER modify production schema without migration
+- NEVER delete from production tables without backup
+- NEVER use `SELECT *` (specify columns)
+- NEVER disable RLS in production
 
-**Benefits:**
-- Lazy loading of page content (~80% reduction in initial HTML)
-- Browser history support (back/forward navigation)
-- Deep linking support (`#/analysis`, `#/settings`)
-- Easier maintenance with page-specific files
-- Global modals remain in index.html for availability across all pages
+**File Operations:**
+- NEVER modify files in `/vendor/` directory
+- NEVER delete `/dist/` manually (use `npm run compile`)
+- NEVER modify `/release/` (generated by electron-builder)
+- NEVER modify compiled files in `/dist/` (edit source in `/src/`)
 
-### Enhanced Frontend Components
+**Performance:**
+- NEVER load all images into memory at once
+- NEVER skip cleanup of temporary files
+- NEVER exceed 2GB memory usage per worker
+- NEVER process >100 images without streaming pipeline
 
-**Delight System (renderer/js/delight-system.js)**
-- Advanced UX enhancement system with configurable delight levels
-- Race-themed loading messages and micro-interactions
-- Accessibility support with reduced motion preferences
-- Confetti celebrations and sound effects
+**Code Quality:**
+- NEVER use `any` type without justification
+- NEVER create monolithic files >1000 lines
+- NEVER add dependencies without checking native module compatibility
+- NEVER remove error handling from async operations
 
-**Enhanced Processing UI (renderer/js/enhanced-processing.js)**
-- Advanced progress tracking with detailed statistics
-- Token request modal and management interface
-- Real-time processing metrics and error reporting
+**Build:**
+- NEVER modify `package.json` build config without testing
+- NEVER skip native module rebuild after npm install
+- NEVER commit build artifacts (DMG, EXE, etc.)
+- NEVER modify electron-builder config without platform testing
 
-**Folder Organization (renderer/js/admin-features.js)**
-- Intelligent folder organization system for race photos
-- Automated sorting based on race numbers and metadata
-- Batch organization operations with progress tracking
+## Performance Guidelines
 
-**Modern Results Display (renderer/js/modern-results.js)**
-- Enhanced results visualization with sorting and filtering
-- Export capabilities for race results and statistics
-- Integration with CSV participant data
+**Memory Management:**
+1. Use streaming pipeline for batches >50 images
+2. Monitor memory usage with performance-monitor.ts
+3. Enable buffer pooling (memory-pool.ts)
+4. Trigger GC when usage >70%
+5. Adjust worker count based on available RAM
 
-**Enhanced File Browser (renderer/js/enhanced-file-browser.js)**
-- Advanced file selection with preview capabilities
-- RAW format detection and thumbnail generation
-- Batch selection and filtering tools
+**Disk Space:**
+1. Monitor disk space before processing (disk-monitor.ts)
+2. Clean temporary files when <5GB free
+3. Set cleanup thresholds in config.ts
+4. Auto-cleanup on process exit
 
-**Test Dashboards**
-- dcraw Testing Interface (renderer/js/test-dcraw.js)
-- Performance Monitoring Dashboard (renderer/js/test-dashboard.js)
-- Real-time system diagnostics and testing tools
+**Parallelization:**
+1. CONSERVATIVE: 8 workers, 1GB limit
+2. BALANCED: 12 workers, 1.5GB limit (default)
+3. AGGRESSIVE: 20 workers, 2GB limit
+4. Adjust based on CPU cores (formula: cores * 1.5)
 
-### Testing Infrastructure
+**Performance Testing:**
+- Run `npm run regression-test` after changes
+- Run `npm run benchmark` for comprehensive tests
+- Profile memory leaks with coverage tools
+- Monitor metrics in performance dashboard
 
-**Performance Testing Suite (tests/performance/)**
-- Comprehensive benchmark testing for all major components
-- Memory leak detection and performance regression testing
-- Automated performance reporting with historical comparisons
-- Quick regression tests for CI/CD integration
+## Build Configuration
 
-**Unit Testing**
-- Jest-based testing framework with TypeScript support
-- Mock implementations for Electron APIs and file systems
-- Coverage reporting and watch mode for development
+**Cross-Platform Targets:**
+- macOS: DMG, ZIP (arm64, x64, universal)
+- Windows: NSIS installer, portable, ZIP (x64)
+- Linux: AppImage, deb
 
-### Token System & Telemetry
+**Native Modules:**
+- better-sqlite3: Requires rebuild for Electron
+- Sharp.js: Auto-rebuilds with postinstall
+- canvas: Native dependencies for face-api.js
 
-**Token Management**
-- Credit-based usage system with Supabase backend
-- Token request and approval workflow
-- Usage analytics and consumption tracking
-- Automatic token allocation and renewal
+**Code Signing:**
+- macOS: Notarized with Apple Developer ID
+- Windows: No signing (future enhancement)
+- Identity: FEDERICO PASINETTI (MNP388VJLQ)
 
-**Telemetry System**
-- Performance metrics collection and analysis
-- User workflow tracking for UX improvements
-- Error reporting and crash analytics
-- Privacy-compliant data collection
+**Asset Packaging:**
+- ASAR: Main code in app.asar
+- ASAR Unpack: Native modules, vendor tools
+- Icons: racetagger-logo.icns (macOS), icon.ico (Windows)
 
-### Data Flow
-1. User selects folder of racing images through enhanced file browser
-2. Optional CSV file with participant data (numero, nome, categoria, squadra, metatag)
-3. Images processed through unified processor or streaming pipeline
-4. RAW files converted using dcraw with automatic format detection
-5. AI analysis performed using parallel analyzer with rate limiting
-6. Race numbers matched against CSV data with fuzzy matching
-7. Metadata written using XMP sidecars or direct EXIF embedding
-8. Results stored in both Supabase (online) and SQLite (local cache)
-9. Enhanced results displayed with modern UI components
+## Common Tasks
 
-### Build Configuration
-- TypeScript compilation from `src/` to `dist/`
-- Electron-builder configuration for cross-platform builds (macOS, Windows, Linux)
-- Native module rebuilding required for better-sqlite3, Sharp.js, and dcraw
-- Asset packaging with proper native module handling
+**Adding a new IPC handler:**
+1. Create in appropriate file in `/src/ipc/`
+2. Add to exports in that file
+3. Import in `/src/ipc/index.ts`
+4. Register in `registerAllHandlers()`
+5. Add TypeScript interface in `/src/ipc/types.ts`
+6. Test with renderer code
 
-## Important Development Notes
+**Adding a new page:**
+1. Create HTML in `/renderer/pages/pagename.html`
+2. Add route in `/renderer/js/router.js`
+3. Add navigation link in `/renderer/index.html` sidebar
+4. Add page initialization in `initializePage()`
+5. Test navigation and event handlers
 
-- **Native modules** (better-sqlite3, Sharp.js) require rebuilding after npm install
-- **dcraw dependency** automatically installed and managed during setup
-- **Database schema** initialization happens after app.ready() event
-- **Session restoration** handles both online/offline scenarios gracefully
-- **Memory management** is critical due to large image processing workloads
-- **Performance testing** should be run regularly, especially after architectural changes
-- **RAW processing** uses dcraw as primary converter with Sharp.js fallback
-- **Streaming pipeline** automatically activates for large batch processing to prevent memory issues
+**Debugging RAW processing:**
+1. Enable debug mode: `DEBUG_MODE=true npm run dev:debug`
+2. Check dcraw installation: Test in /renderer/js/test-dcraw.js
+3. Monitor logs in console
+4. Use test-dashboard for real-time diagnostics
 
-### Performance Optimization Guidelines
-
-1. **Use streaming pipeline** for batches > 50 images or when memory usage > 70%
-2. **Monitor disk space** during processing and enable cleanup when < 5GB free
-3. **Optimize parallelization** based on CPU cores and memory availability
-4. **Cache converted RAW files** when processing similar batches
-5. **Profile memory usage** regularly and adjust buffer pool sizes as needed
-
-### Debugging and Development
-
-- Use performance dashboard for real-time monitoring
-- Enable debug logging for specific components via environment variables
-- Use test-dcraw interface to verify RAW processing functionality
-- Monitor token usage and API rate limiting in enhanced processing UI
-- Check session manager for workflow recovery after crashes
-
-#### Analysis Logging System
-
-The desktop app features a comprehensive analysis logging system that tracks all corrections and decision-making processes during image analysis:
-
-**System Components:**
-- **AnalysisLogger (src/utils/analysis-logger.ts)**: JSONL-based logging with automatic Supabase upload
-- **SmartMatcher Integration**: Tracks OCR, temporal, fuzzy, and participant matching corrections
-- **Temporal Clustering**: Logs clustering decisions and burst mode detection
-
-**Log Storage:**
-- **Local Files**: `.analysis-logs/` directory in user data folder
-- **Remote Access**: Automatic upload to Supabase Storage bucket `analysis-logs`
-- **Naming Convention**: `exec_{execution_id}.jsonl` for easy correlation with desktop executions
-
-**Log Contents (JSONL format):**
-- `EXECUTION_START`: Total images, category, participant preset info
-- `IMAGE_ANALYSIS`: AI response, corrections applied, final results
-- `CORRECTION`: Individual correction with human-readable explanations
-- `TEMPORAL_CLUSTER`: Clustering decisions and burst mode detection
-- `PARTICIPANT_MATCH`: Fuzzy matching results and evidence
-- `EXECUTION_COMPLETE`: Final statistics and performance metrics
-
-**Accessing Logs:**
-1. **During Development**: Logs upload every 30 seconds to Supabase Storage
-2. **Remote Debugging**: Access via Supabase dashboard → Storage → analysis-logs
-3. **Log Correlation**: Use execution_id from desktop app to find corresponding log file
-4. **Human-Readable Messages**: Each correction includes explanation like "Corretto numero da 61 a 51 perché foto precedente (250ms fa) e successiva (180ms dopo) mostrano entrambe 51"
-
-**Setup Requirements:**
-- Supabase Storage bucket: `analysis-logs` (public read access)
-- Database table: `analysis_log_metadata` for searchable log discovery
-- Row Level Security: Users can only access their own logs
-
-# Pricing Information & Business Model
-
-## Current Beta Pricing (One-time Token Packages)
-
-**STARTER PACK**: €29
-- 3,000 tokens
-- Perfect for testing the app
-- Never expire
-
-**PROFESSIONAL PACK**: €49 ⭐ RECOMMENDED
-- 10,000 tokens
-- Covers 1-2 full racing events
-- Never expire
-
-**STUDIO PACK**: €99
-- 25,000 tokens
-- Ideal for major events
-- Best value per token
-- Never expire
-
-## Future Subscription Pricing
-
-**FREE/TRIAL**: 100 foto - Test software
-
-**HOBBY**: €39/mese - 2,000 foto/mese
-- 1 evento piccolo
-- Fotografo occasionale
-- Weekend hobbyist
-
-**ENTHUSIAST**: €79/mese - 5,000 foto/mese ← NUOVO SWEET SPOT
-- 2 eventi completi o 3-4 eventi singola giornata
-- Fotografo semi-pro
-
-**PROFESSIONAL**: €129/mese - 10,000 foto/mese ← NUOVO SWEET SPOT
-- Eventi multipli, fotografo professionale
-
-**STUDIO**: €199/mese - 25,000 foto/mese
-- 3-4 eventi completi o team con 2 fotografi
-- Agenzia piccola
-
-**AGENCY**: €399/mese - 50,000 foto/mese
-- Team 3-5 fotografi
-- Copertura serie completa
+**Performance tuning:**
+1. Run benchmark: `npm run benchmark`
+2. Analyze bottlenecks in performance monitor
+3. Adjust optimization level in config.ts
+4. Test with real-world image sets
+5. Re-run regression test: `npm run regression-test`
 
 ## Test Lab Features
 
-**Test Lab Location**: `/racetagger-app/src/app/management-portal/test-lab`
+**Location:** Web app (`/racetagger-app/src/app/management-portal/test-lab`)
 
-The Test Lab is an experimental environment for testing new recognition features safely:
+**Features:**
+- Auto-category detection (motorsport/running/altro)
+- Motocross 3-digit mode
+- Context-aware prompts (race/podium/portrait)
+- Participant preset matching
+- A/B testing (current vs experimental)
+- Session management
 
-### Key Features:
-- **Auto-category detection**: Automatic sport recognition (motorsport/running/altro)
-- **Motocross 3-digit mode**: Specialized handling for motocross number recognition
-- **Context-aware prompts**: Different prompts for race vs podium vs portrait contexts
-- **Participant preset matching**: Advanced fuzzy matching with sponsor recognition
-- **A/B testing**: Compare current vs experimental models
-- **Session management**: Named test sessions with configuration tracking
+**Database:**
+- `test_sessions` - Test session config
+- `test_results` - Comparison results
+- `test_presets` - Participant presets
+- `test_images` - Test uploads
+- `test_metrics` - Performance metrics
 
-### Database Tables:
-- `test_sessions`: Test session management
-- `test_results`: Comparison results between current and experimental
-- `test_presets`: Participant data presets
-- `test_images`: Test image uploads
-- `test_metrics`: Performance and accuracy metrics
+**Edge Function:**
+- `analyzeImageExperimental` - Isolated testing environment
 
-### Edge Function:
-- `analyzeImageExperimental`: Separate edge function for testing new features without affecting production
+## General Instructions
 
-# important-instruction-reminders
-Do what has been asked; nothing more, nothing less.
-NEVER create files unless they're absolutely necessary for achieving your goal.
-ALWAYS prefer editing an existing file to creating a new one.
-NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.
+- **Do what has been asked; nothing more, nothing less**
+- **ALWAYS prefer editing existing files to creating new ones**
+- **NEVER proactively create documentation files (*.md) unless explicitly requested**
+- **When modifying core systems (main.ts, processors), run performance tests**
+- **Check DATABASE.md before modifying database-related code**
+- **Test builds on target platform before suggesting deployment**
+- **Preserve EPIPE protection and error handling in main.ts**

@@ -193,6 +193,33 @@ Richieste token da parte degli utenti.
 | payment_date | timestamp | YES | Data pagamento |
 | payment_reference | text | YES | Riferimento pagamento |
 
+### `batch_token_reservations`
+Pre-autorizzazione token per batch processing (v1.1.0+). Sostituisce il consumo token-by-token con un sistema batch.
+
+| Colonna | Tipo | Nullable | Descrizione |
+|---------|------|----------|-------------|
+| id | uuid | NO | Primary key |
+| user_id | uuid | NO | FK a auth.users |
+| batch_id | text | NO | execution_id del batch (per conteggio da DB) |
+| tokens_reserved | integer | NO | Token prenotati all'inizio |
+| tokens_consumed | integer | YES | Token effettivamente consumati (default 0) |
+| tokens_refunded | integer | YES | Token rimborsati (default 0) |
+| status | text | NO | pending/finalized/auto_finalized/expired |
+| created_at | timestamptz | NO | Data creazione |
+| expires_at | timestamptz | NO | Scadenza TTL (dinamico: 30min-12h) |
+| finalized_at | timestamptz | YES | Data finalizzazione |
+| metadata | jsonb | YES | Dettagli: imageCount, errors, cancelled, etc. |
+
+**RPC Associate:**
+- `pre_authorize_tokens(user_id, tokens_needed, batch_id, image_count, visual_tagging)` - Blocca token con TTL dinamico
+- `finalize_token_reservation(reservation_id, actual_usage)` - Consuma token effettivi, rimborsa resto
+- `cleanup_expired_reservations()` - Job automatico che conta immagini da DB per reservation scadute
+
+**Indici:**
+- `idx_reservations_expires` (partial) - Per cleanup automatico
+- `idx_reservations_user_batch` - Lookup veloce
+- `idx_reservations_user_status` - Query utente
+
 ### `token_packs`
 Pacchetti token acquistabili.
 
