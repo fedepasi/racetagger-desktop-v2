@@ -2358,7 +2358,6 @@ export interface ParticipantPresetSupabase {
   is_template?: boolean;
   is_public?: boolean;
   custom_folders?: string[]; // Array di nomi folder personalizzate create dall'utente
-  person_shown_template?: string | null; // Template for person shown in metadata
   created_at?: string;
   updated_at?: string;
   last_used_at?: string;
@@ -2892,7 +2891,7 @@ export async function updatePresetLastUsedSupabase(presetId: string): Promise<vo
 /**
  * Update participant preset details in Supabase
  */
-export async function updateParticipantPresetSupabase(presetId: string, updateData: Partial<Pick<ParticipantPresetSupabase, 'name' | 'description' | 'category_id' | 'custom_folders' | 'person_shown_template'>>): Promise<void> {
+export async function updateParticipantPresetSupabase(presetId: string, updateData: Partial<Pick<ParticipantPresetSupabase, 'name' | 'description' | 'category_id' | 'custom_folders'>>): Promise<void> {
   try {
     const userId = getCurrentUserId();
     if (!userId) throw new Error('User not authenticated');
@@ -2983,8 +2982,7 @@ export async function duplicateOfficialPresetSupabase(sourcePresetId: string): P
       name: `${sourcePreset.name} (My Copy)`,
       description: sourcePreset.description || `Duplicated from Official RT Preset: ${sourcePreset.name}`,
       category_id: sourcePreset.category_id,
-      custom_folders: sourcePreset.custom_folders || [],
-      person_shown_template: sourcePreset.person_shown_template || null
+      custom_folders: sourcePreset.custom_folders || []
     });
 
     // Copy participants
@@ -3143,9 +3141,6 @@ export interface ExportDestination {
   // Keywords
   base_keywords?: string[];
   append_keywords?: boolean;
-
-  // Person Shown
-  person_shown_template?: string;
 
   // Behavior
   auto_apply?: boolean;
