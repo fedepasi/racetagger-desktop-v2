@@ -2496,19 +2496,6 @@
   letter-spacing: 0.5px;
 }
 
-.doc-confidence {
-  color: #22c55e;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-}
-
-.doc-confidence::before {
-  content: '✓';
-}
-
 .doc-info-details {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

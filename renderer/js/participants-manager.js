@@ -2929,16 +2929,12 @@ function showPdfPreviewState(data) {
 
   // Update document info
   const docTypeBadge = document.getElementById('pdf-doc-type-badge');
-  const confidenceEl = document.getElementById('pdf-doc-confidence');
   const eventNameEl = document.getElementById('pdf-event-name');
   const categoryEl = document.getElementById('pdf-category-name');
   const participantsCountEl = document.getElementById('pdf-participants-count');
 
   if (docTypeBadge) {
     docTypeBadge.textContent = formatDocumentType(data.validation.document_type);
-  }
-  if (confidenceEl) {
-    confidenceEl.textContent = `${(data.validation.confidence * 100).toFixed(0)}% confidence`;
   }
   if (eventNameEl) {
     eventNameEl.textContent = data.event.name || 'Not detected';
