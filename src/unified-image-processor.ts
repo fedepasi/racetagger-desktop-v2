@@ -1602,6 +1602,10 @@ class UnifiedImageWorker extends EventEmitter {
           });
         }
 
+        // FOLDER ORGANIZATION: Organize skipped scene images to "Others" folder
+        // This ensures generic images (crowd, portraits, etc.) don't remain in source folder
+        await this.organizeSkippedScene(imageFile, sceneClassification.category);
+
         return {
           fileId: imageFile.id,
           fileName: imageFile.fileName,
@@ -3871,6 +3875,57 @@ class UnifiedImageWorker extends EventEmitter {
 
     } catch (error: any) {
       console.error(`[UnifiedWorker] Error during folder organization for ${imageFile.fileName}:`, error);
+      // Non bloccare il processamento per errori di organizzazione
+    }
+  }
+
+  /**
+   * Organize skipped scene images to "Others" folder
+   * Called for images that were classified by scene detector but skipped from AI analysis
+   * (e.g., crowd_scene, portrait_paddock, podium_celebration)
+   */
+  private async organizeSkippedScene(
+    imageFile: UnifiedImageFile,
+    sceneCategory: string
+  ): Promise<void> {
+    // Verifica se la funzionalità è abilitata
+    const { APP_CONFIG } = await import('./config');
+    if (!APP_CONFIG.features.ENABLE_FOLDER_ORGANIZATION || !this.config.folderOrganization?.enabled) {
+      return;
+    }
+
+    try {
+      // Import dinamico del modulo organizer
+      const { FolderOrganizer } = await import('./utils/folder-organizer');
+
+      // Crea configurazione organizer da config del processor
+      const organizerConfig = {
+        enabled: this.config.folderOrganization.enabled,
+        mode: this.config.folderOrganization.mode,
+        pattern: this.config.folderOrganization.pattern,
+        customPattern: this.config.folderOrganization.customPattern,
+        createUnknownFolder: this.config.folderOrganization.createUnknownFolder,
+        unknownFolderName: this.config.folderOrganization.unknownFolderName,
+        destinationPath: this.config.folderOrganization.destinationPath,
+        includeXmpFiles: this.config.folderOrganization.includeXmpFiles
+      };
+
+      // Crea istanza organizer
+      const organizer = new FolderOrganizer(organizerConfig);
+
+      // Organizza l'immagine nella cartella "Others"
+      const result = await organizer.organizeGenericScene(
+        imageFile.originalPath,
+        sceneCategory,
+        path.dirname(imageFile.originalPath)
+      );
+
+      if (!result.success) {
+        console.error(`[UnifiedWorker] Failed to organize skipped scene ${imageFile.fileName}:`, result.error);
+      }
+
+    } catch (error: any) {
+      console.error(`[UnifiedWorker] Error during skipped scene organization for ${imageFile.fileName}:`, error);
       // Non bloccare il processamento per errori di organizzazione
     }
   }
