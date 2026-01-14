@@ -82,9 +82,6 @@ function setupEventListeners() {
   // Setup PDF drop zone
   setupPdfDropZone();
 
-  // Person Shown Template - live preview
-  document.getElementById('person-shown-template')?.addEventListener('input', updatePersonShownPreview);
-
   // Folder name input - Enter key support and autocomplete
   const folderNameInput = document.getElementById('folder-name-input');
   if (folderNameInput) {
@@ -479,12 +476,6 @@ function createPresetCard(preset) {
         <span class="stat-label">Participants:</span>
         <span class="stat-value">${preset.participants?.length || 0}</span>
       </div>
-      ${preset.person_shown_template ? `
-        <div class="stat">
-          <span class="stat-label">Person Shown:</span>
-          <span class="stat-value" title="${escapeHtml(preset.person_shown_template)}">Configured</span>
-        </div>
-      ` : ''}
       ${!isOfficial && preset.last_used_at ? `
         <div class="stat">
           <span class="stat-label">Last used:</span>
@@ -584,12 +575,7 @@ function createNewPreset() {
   // Reset form
   document.getElementById('preset-name').value = '';
   document.getElementById('preset-description').value = '';
-  document.getElementById('person-shown-template').value = '';
   document.getElementById('preset-editor-title').textContent = 'New Participant Preset';
-
-  // Clear Person Shown preview
-  const previewEl = document.getElementById('person-shown-preview');
-  if (previewEl) previewEl.textContent = '';
 
   // Populate sport category dropdown (no selection)
   populateSportCategoryDropdown(null);
@@ -1223,14 +1209,10 @@ async function editPreset(presetId) {
     // Fill form with preset data
     document.getElementById('preset-name').value = currentPreset.name || '';
     document.getElementById('preset-description').value = currentPreset.description || '';
-    document.getElementById('person-shown-template').value = currentPreset.person_shown_template || '';
     document.getElementById('preset-editor-title').textContent = 'Edit Participant Preset';
 
     // Populate sport category dropdown with current preset's category
     populateSportCategoryDropdown(currentPreset.category_id);
-
-    // Update Person Shown preview
-    updatePersonShownPreview();
 
     // Load participants into table
     loadParticipantsIntoTable(participantsData);
@@ -1710,7 +1692,6 @@ async function savePreset() {
   try {
     const presetName = document.getElementById('preset-name').value.trim();
     const presetDescription = document.getElementById('preset-description').value.trim();
-    const personShownTemplate = document.getElementById('person-shown-template').value.trim();
     const sportCategoryId = document.getElementById('preset-sport-category')?.value || null;
 
     // Validation
@@ -1755,8 +1736,7 @@ async function savePreset() {
         name: presetName,
         description: presetDescription,
         category_id: sportCategoryId,
-        custom_folders: customFolders,
-        person_shown_template: personShownTemplate || null
+        custom_folders: customFolders
       };
 
       const updateResponse = await window.api.invoke('supabase-update-participant-preset', {
@@ -1773,8 +1753,7 @@ async function savePreset() {
         name: presetName,
         description: presetDescription,
         category_id: sportCategoryId,
-        custom_folders: customFolders,
-        person_shown_template: personShownTemplate || null
+        custom_folders: customFolders
       };
 
       const createResponse = await window.api.invoke('supabase-create-participant-preset', presetData);
@@ -2536,47 +2515,6 @@ window.addDriverTag = addDriverTag;
 window.clearDriversTags = clearDriversTags;
 
 /**
- * Update Person Shown template preview with sample data
- */
-function updatePersonShownPreview() {
-  const templateInput = document.getElementById('person-shown-template');
-  const previewEl = document.getElementById('person-shown-preview');
-
-  if (!templateInput || !previewEl) return;
-
-  const template = templateInput.value.trim();
-
-  if (!template) {
-    previewEl.textContent = '';
-    return;
-  }
-
-  // Sample data for preview
-  const sampleData = {
-    name: 'Charles Leclerc',
-    surname: 'Leclerc',
-    number: '16',
-    team: 'Ferrari',
-    car_model: 'SF-25',
-    nationality: 'MON'
-  };
-
-  // Replace placeholders
-  let preview = template;
-  preview = preview.replace(/{name}/g, sampleData.name);
-  preview = preview.replace(/{surname}/g, sampleData.surname);
-  preview = preview.replace(/{number}/g, sampleData.number);
-  preview = preview.replace(/{team}/g, sampleData.team);
-  preview = preview.replace(/{car_model}/g, sampleData.car_model);
-  preview = preview.replace(/{nationality}/g, sampleData.nationality);
-
-  // Clean up empty parentheses and extra spaces
-  preview = preview.replace(/\(\s*\)/g, '').replace(/\s+/g, ' ').trim();
-
-  previewEl.textContent = preview ? `Preview: ${preview}` : '';
-}
-
-/**
  * Download CSV template with correct column headers
  */
 function downloadCsvTemplate() {
@@ -3149,7 +3087,6 @@ window.closeParticipantEditModal = closeParticipantEditModal;
 window.saveParticipantEdit = saveParticipantEdit;
 window.saveParticipantAndStay = saveParticipantAndStay;
 window.removeParticipant = removeParticipant;
-window.updatePersonShownPreview = updatePersonShownPreview;
 window.duplicateParticipant = duplicateParticipant;
 window.duplicateParticipantFromRow = duplicateParticipantFromRow;
 
