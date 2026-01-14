@@ -404,6 +404,98 @@ export class FolderOrganizer {
   }
 
   /**
+   * Organize generic/skipped scene image to "Others" folder
+   * Used for images that were classified by scene detector but skipped from AI analysis
+   * (e.g., crowd_scene, portrait_paddock, podium_celebration)
+   */
+  async organizeGenericScene(
+    imagePath: string,
+    sceneCategory?: string,
+    sourceDir?: string
+  ): Promise<FolderOrganizationResult> {
+    const startTime = Date.now();
+
+    try {
+      const fileName = path.basename(imagePath);
+      const baseDir = sourceDir || this.config.destinationPath || path.dirname(imagePath);
+
+      // Use "Others" as folder name for generic scenes
+      const folderName = 'Others';
+      const targetDir = path.join(baseDir, folderName);
+
+      await this.ensureFolderExists(targetDir);
+
+      const targetPath = path.join(targetDir, fileName);
+      const conflictStrategy = this.config.conflictStrategy || 'rename';
+      let finalTargetPath = targetPath;
+      let operation: 'copy' | 'move' | 'skip' = this.config.mode;
+
+      // Handle conflicts based on strategy
+      if (fs.existsSync(targetPath)) {
+        if (conflictStrategy === 'skip') {
+          operation = 'skip';
+        } else if (conflictStrategy === 'rename') {
+          finalTargetPath = await this.resolveFileNameConflict(targetPath);
+        } else if (conflictStrategy === 'overwrite') {
+          finalTargetPath = targetPath;
+        }
+      }
+
+      // Perform operation if not skipped
+      if (operation !== 'skip') {
+        if (this.config.mode === 'copy') {
+          await fsPromises.copyFile(imagePath, finalTargetPath);
+        } else {
+          await fsPromises.rename(imagePath, finalTargetPath);
+        }
+      }
+
+      // Handle XMP sidecar file if it exists and should be included
+      if (operation !== 'skip' && this.config.includeXmpFiles) {
+        const xmpPath = this.getXmpSidecarPath(imagePath);
+        if (xmpPath) {
+          const xmpFileName = path.basename(xmpPath);
+          const targetXmpPath = path.join(targetDir, xmpFileName);
+
+          if (this.config.mode === 'copy') {
+            await fsPromises.copyFile(xmpPath, targetXmpPath);
+          } else {
+            await fsPromises.rename(xmpPath, targetXmpPath);
+          }
+        }
+      }
+
+      const result: FolderOrganizationResult = {
+        success: true,
+        originalPath: imagePath,
+        organizedPath: operation !== 'skip' ? finalTargetPath : undefined,
+        folderName,
+        operation,
+        timeMs: Date.now() - startTime
+      };
+
+      this.operationLog.push(result);
+
+      return result;
+
+    } catch (error: any) {
+      const result: FolderOrganizationResult = {
+        success: false,
+        originalPath: imagePath,
+        folderName: 'Others',
+        operation: this.config.mode,
+        error: error.message,
+        timeMs: Date.now() - startTime
+      };
+
+      this.operationLog.push(result);
+      console.error(`[FolderOrganizer] Failed to organize ${path.basename(imagePath)} to Others:`, error);
+
+      return result;
+    }
+  }
+
+  /**
    * Parse folder name with dynamic placeholders
    * Supports both English (recommended) and Italian (legacy) keywords:
    * - {number} = Race number
