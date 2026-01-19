@@ -351,4 +351,6 @@ export function getFaceDetectionBridge(): FaceDetectionBridge {
   return FaceDetectionBridge.getInstance();
 }
 
-export const faceDetectionBridge = getFaceDetectionBridge();
+// Export singleton instance getter only - don't initialize at module load time
+// to avoid Electron initialization race conditions
+// export const faceDetectionBridge = getFaceDetectionBridge();

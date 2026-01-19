@@ -157,7 +157,11 @@
       "Bash(xargs cat:*)",
       "Bash(SUPABASE_ACCESS_TOKEN=sbp_50babb1bc18dcc6e4fafef1f9f58ed794f8fbead npx supabase db dump --db-url \"postgresql://postgres.jvaptfshgrplexoslwwh:RaceTagger2025!@aws-0-eu-central-1.pooler.supabase.com:6543/postgres\")",
       "Bash(__NEW_LINE__ echo \"\")",
-      "Bash(PGPASSWORD='RaceTagger2025!' psql \"postgresql://postgres.jvaptfshgrplexoslwwh:RaceTagger2025!@aws-0-eu-central-1.pooler.supabase.com:6543/postgres\" -c \"SELECT cron.schedule\\(''cleanup-expired-reservations'', ''*/5 * * * *'', ''SELECT * FROM cleanup_expired_reservations\\(\\)''\\);\")"
+      "Bash(PGPASSWORD='RaceTagger2025!' psql \"postgresql://postgres.jvaptfshgrplexoslwwh:RaceTagger2025!@aws-0-eu-central-1.pooler.supabase.com:6543/postgres\" -c \"SELECT cron.schedule\\(''cleanup-expired-reservations'', ''*/5 * * * *'', ''SELECT * FROM cleanup_expired_reservations\\(\\)''\\);\")",
+      "Bash(gh repo view:*)",
+      "Bash(chmod:*)",
+      "Bash(sqlite3:*)",
+      "Bash(cd:*)"
     ],
     "deny": [],
     "ask": []

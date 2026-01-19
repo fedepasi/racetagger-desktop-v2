@@ -376,9 +376,6 @@ export class ExportDestinationProcessor {
     if (destination.description_template && participant) {
       metadata.description = this.resolveTemplate(destination.description_template, participant, event);
     }
-    if (destination.person_shown_template && participant) {
-      metadata.personShown = this.resolveTemplate(destination.person_shown_template, participant, event);
-    }
 
     return metadata;
   }

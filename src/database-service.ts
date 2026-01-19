@@ -2419,6 +2419,7 @@ export interface CreatePresetFacePhotoParams {
 let categoriesCache: SportCategory[] = [];
 let presetsCache: ParticipantPresetSupabase[] = [];
 let cacheLastUpdated: number = 0;
+let cacheIncludesInactive: boolean = false; // Track if cache includes inactive categories (admin mode)
 
 /**
  * Cache all Supabase data at app startup
@@ -2426,19 +2427,26 @@ let cacheLastUpdated: number = 0;
 export async function cacheSupabaseData(): Promise<void> {
   try {
     const userId = getCurrentUserId();
+    const isAdmin = authService.isAdmin();
 
     // Cache sport categories (public data - no user ID required)
     // This ensures categories are always available, even before login
-    const { data: categories, error: categoriesError } = await supabase
+    let categoryQuery = supabase
       .from('sport_categories')
-      .select('*')
-      .eq('is_active', true)
-      .order('display_order');
+      .select('*');
+
+    // Non-admin users only see active categories
+    if (!isAdmin) {
+      categoryQuery = categoryQuery.eq('is_active', true);
+    }
+
+    const { data: categories, error: categoriesError } = await categoryQuery.order('display_order');
 
     if (categoriesError) {
       console.error('[Cache] Error loading categories:', categoriesError);
     } else {
       categoriesCache = categories || [];
+      cacheIncludesInactive = isAdmin;
     }
 
     // Cache user presets (requires authentication)
@@ -2493,16 +2501,24 @@ export function getCachedParticipantPresets(): ParticipantPresetSupabase[] {
  */
 export async function refreshCategoriesCache(): Promise<void> {
   try {
-    const { data: categories, error } = await supabase
+    const isAdmin = authService.isAdmin();
+
+    let query = supabase
       .from('sport_categories')
-      .select('*')
-      .eq('is_active', true)
-      .order('display_order');
+      .select('*');
+
+    // Non-admin users only see active categories
+    if (!isAdmin) {
+      query = query.eq('is_active', true);
+    }
+
+    const { data: categories, error } = await query.order('display_order');
 
     if (error) {
       console.error('[Cache] Error refreshing categories:', error);
     } else {
       categoriesCache = categories || [];
+      cacheIncludesInactive = isAdmin;
     }
   } catch (error) {
     console.error('[Cache] Failed to refresh categories cache:', error);
@@ -2511,28 +2527,42 @@ export async function refreshCategoriesCache(): Promise<void> {
 
 /**
  * Get all sport categories from Supabase
+ * Admin users see all categories (including inactive ones)
  */
 export async function getSportCategories(): Promise<SportCategory[]> {
   try {
-    // Return cached data if available and recent
-    if (categoriesCache.length > 0 && (Date.now() - cacheLastUpdated < 60000)) {
+    const isAdmin = authService.isAdmin();
+
+    // Check if cache is valid for current user role
+    const cacheValid = categoriesCache.length > 0 &&
+                       (Date.now() - cacheLastUpdated < 60000) &&
+                       (cacheIncludesInactive === isAdmin); // Cache must match admin status
+
+    if (cacheValid) {
       return categoriesCache;
     }
 
-    const { data, error } = await supabase
+    // Build query
+    let query = supabase
       .from('sport_categories')
-      .select('*')
-      .eq('is_active', true)
-      .order('display_order');
+      .select('*');
+
+    // Non-admin users only see active categories
+    if (!isAdmin) {
+      query = query.eq('is_active', true);
+    }
+
+    const { data, error } = await query.order('display_order');
 
     if (error) {
       console.error('[DB] Error getting sport categories:', error);
       return categoriesCache; // Return cached data as fallback
     }
 
-    // Update cache
+    // Update cache and track whether it includes inactive categories
     categoriesCache = data || [];
     cacheLastUpdated = Date.now();
+    cacheIncludesInactive = isAdmin;
 
     return data || [];
   } catch (error) {
@@ -2543,6 +2573,7 @@ export async function getSportCategories(): Promise<SportCategory[]> {
 
 /**
  * Get sport category by code
+ * Admin users can retrieve inactive categories as well
  */
 export async function getSportCategoryByCode(code: string): Promise<SportCategory | null> {
   try {
@@ -2550,12 +2581,19 @@ export async function getSportCategoryByCode(code: string): Promise<SportCategor
     const cached = categoriesCache.find(cat => cat.code === code);
     if (cached) return cached;
 
-    const { data, error } = await supabase
+    // Build query
+    let query = supabase
       .from('sport_categories')
       .select('*')
-      .eq('code', code)
-      .eq('is_active', true)
-      .single();
+      .eq('code', code);
+
+    // Non-admin users only see active categories
+    const isAdmin = authService.isAdmin();
+    if (!isAdmin) {
+      query = query.eq('is_active', true);
+    }
+
+    const { data, error } = await query.single();
 
     if (error) {
       console.error(`[DB] Error getting sport category ${code}:`, error);

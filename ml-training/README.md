@@ -331,6 +331,70 @@ Per RF-DETR il formato label è: `MODEL_DRIVER`
 - `RB20_VER` = Red Bull RB20, Verstappen (#1)
 - `MCL38_NOR` = McLaren MCL38, Norris (#4)
 
+## 🔄 RF-DETR → ONNX Conversion
+
+Converti modelli RF-DETR trainati su Roboflow in formato ONNX per deployment locale.
+
+### Quick Start
+
+```bash
+cd rf-detr-onnx-converter
+
+# Metodo automatico (raccomandato)
+./convert.sh your_model.pt
+
+# O usa Python direttamente
+python export.py --checkpoint your_model.pt
+```
+
+### Metodi Disponibili
+
+1. **SEMPLICE** (Auto-detect, raccomandato)
+   - Auto-rilevamento model size
+   - Compatibile con risoluzioni standard (384/512/560/576)
+   - Semplificazione automatica
+
+2. **AVANZATO** (Custom resolution, controllo manuale)
+   - Supporta risoluzioni custom (640, 800, etc.)
+   - Double wrapper strategy + JIT tracing
+   - Risolve problemi con position embeddings
+
+3. **GOOGLE COLAB** (Notebook interattivo)
+   - Upload file .pt direttamente
+   - Installazione dipendenze automatica
+   - Download risultato one-click
+
+### Documentazione Completa
+
+📚 **[CONVERSION_GUIDE.md](./CONVERSION_GUIDE.md)** - Guida completa con:
+- Quando usare quale metodo
+- Troubleshooting completo
+- Post-processing pipeline
+- Esempi di codice inference
+
+📓 **[Colab Notebook](./notebooks/RF_DETR_to_ONNX_Conversion_Colab.ipynb)** - Conversione interattiva
+
+🔧 **[convert_advanced.py](./rf-detr-onnx-converter/convert_advanced.py)** - Script Python avanzato
+
+### Output
+
+- **Input**: `[1, 3, resolution, resolution]` - Immagine RGB normalizzata
+- **Output**: `boxes [1, 300, 4]` + `scores [1, 300, num_classes]`
+- **Format**: ONNX Opset 17, semplificato, ottimizzato
+
+### Troubleshooting Rapido
+
+| Problema | Soluzione |
+|----------|-----------|
+| `torch.export` fails | Usa `dynamo=False` (già incluso) |
+| Position embeddings mismatch | Specifica `--resolution` corretta |
+| MPS allocation (Mac M-series) | Forza CPU con `.cpu()` (già incluso) |
+| File troppo grande | Abilita semplificazione con onnxsim |
+
+Vedi [CONVERSION_GUIDE.md](./CONVERSION_GUIDE.md) per dettagli completi.
+
+---
+
 ## 📄 Licenza
 
 Questo modulo di training è parte di RaceTagger Desktop.

@@ -1,5 +1,27 @@
 # RF-DETR to ONNX Conversion Guide
 
+> **📚 ATTENZIONE**: Questa è la guida rapida legacy. Per la documentazione completa e aggiornata, vedi:
+>
+> **[CONVERSION_GUIDE.md](./CONVERSION_GUIDE.md)** - Guida completa con entrambi i metodi
+>
+> Oppure vai direttamente a:
+> - **Google Colab**: [`notebooks/RF_DETR_to_ONNX_Conversion_Colab.ipynb`](./notebooks/RF_DETR_to_ONNX_Conversion_Colab.ipynb)
+> - **Script avanzato**: [`rf-detr-onnx-converter/convert_advanced.py`](./rf-detr-onnx-converter/convert_advanced.py)
+> - **Bash automation**: [`rf-detr-onnx-converter/convert.sh`](./rf-detr-onnx-converter/convert.sh)
+
+---
+
+## Quick Start (Metodo Semplice)
+
+```bash
+cd rf-detr-onnx-converter
+./convert.sh your_model.pt
+```
+
+---
+
+# Guida Legacy (Metodo Base)
+
 Guida per convertire modelli RF-DETR trainati su Roboflow in formato ONNX per inferenza locale.
 
 ## Requisiti

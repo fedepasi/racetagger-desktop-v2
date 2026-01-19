@@ -26,7 +26,7 @@ import { ModelManager, getModelManager, ModelStatus } from './model-manager';
 import { GenericSegmenter, getGenericSegmenter, SegmentationResult, GenericSegmenterOutput } from './generic-segmenter';
 import { parseSegmentationConfig, getDefaultModelId } from './yolo-model-registry';
 import { createComponentLogger } from './utils/logger';
-import { faceDetectionBridge, FaceRecognitionResult } from './face-detection-bridge';
+import { getFaceDetectionBridge, FaceRecognitionResult } from './face-detection-bridge';
 import { consentService } from './consent-service';
 import {
   extractCropContext,
@@ -406,10 +406,10 @@ class UnifiedImageWorker extends EventEmitter {
     }
 
     try {
-      await faceDetectionBridge.initialize();
+      await getFaceDetectionBridge().initialize();
 
       // Load face descriptors from the participant preset
-      const descriptorCount = await faceDetectionBridge.loadDescriptorsForPreset(this.config.presetId);
+      const descriptorCount = await getFaceDetectionBridge().loadDescriptorsForPreset(this.config.presetId);
       log.info(`Face recognition: Loaded ${descriptorCount} descriptors from preset ${this.config.presetId}`);
 
       if (descriptorCount > 0) {
@@ -466,9 +466,9 @@ class UnifiedImageWorker extends EventEmitter {
     }
 
     try {
-      const result = await faceDetectionBridge.detectAndMatch(imagePath, context);
+      const result = await getFaceDetectionBridge().detectAndMatch(imagePath, context);
       if (result.success && result.matches.length > 0) {
-        const matchedCount = result.matches.filter(m => m.matched).length;
+        const matchedCount = result.matches.filter((m: any) => m.matched).length;
         log.info(`Face recognition: ${matchedCount}/${result.matches.length} faces matched in ${result.totalTimeMs}ms`);
       }
       return result;
