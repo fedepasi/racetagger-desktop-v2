@@ -130,7 +130,8 @@ export class SmartMatcher {
   constructor(sport: string = 'motorsport') {
     this.sport = sport;
     this.sportConfig = new SportConfig();
-    this.config = this.sportConfig.getConfig(sport);
+    // Silent mode during initialization - configs will be updated via initializeFromSportCategories()
+    this.config = this.sportConfig.getConfig(sport, true);
     this.evidenceCollector = new EvidenceCollector(this.config);
     this.ocrCorrector = new OCRCorrector();
     this.temporalManager = new TemporalClusterManager();

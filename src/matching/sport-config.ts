@@ -161,11 +161,15 @@ export class SportConfig {
 
   /**
    * Get configuration for a specific sport
+   * @param sport - Sport code (e.g., 'IMSA_WeatherTech', 'motorsport')
+   * @param silent - If true, suppress warning when sport not found (useful during initialization)
    */
-  getConfig(sport: string): MatchingConfig {
+  getConfig(sport: string, silent: boolean = false): MatchingConfig {
     const config = this.configs.get(sport.toLowerCase());
     if (!config) {
-      console.warn(`Unknown sport '${sport}', using motorsport default`);
+      if (!silent) {
+        console.warn(`Unknown sport '${sport}', using motorsport default`);
+      }
       return this.configs.get('motorsport')!;
     }
     return config;

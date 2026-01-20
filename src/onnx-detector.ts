@@ -16,6 +16,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import sharp from 'sharp';
 import { ModelManager, getModelManager } from './model-manager';
+import { safeSend } from './ipc/context';
 
 // ONNX Runtime import (lazy loaded)
 let ort: typeof import('onnxruntime-node') | null = null;
@@ -146,8 +147,31 @@ export class OnnxDetector {
         throw new Error('ONNX Runtime not available');
       }
 
-      // Ensure model is downloaded
-      const modelPath = await this.modelManager.ensureModelAvailable(categoryCode);
+      // Ensure model is downloaded with progress tracking
+      let downloadStarted = false;
+      const modelPath = await this.modelManager.ensureModelAvailable(
+        categoryCode,
+        (percent, downloadedMB, totalMB) => {
+          // Emit download progress to renderer
+          if (!downloadStarted) {
+            downloadStarted = true;
+            safeSend('model-download-start', {
+              categoryCode,
+              totalSizeMB: totalMB
+            });
+          }
+          safeSend('model-download-progress', {
+            percent,
+            downloadedMB,
+            totalMB
+          });
+        }
+      );
+
+      // Notify download complete if it was started
+      if (downloadStarted) {
+        safeSend('model-download-complete', { categoryCode });
+      }
 
       // Skip if same model already loaded
       if (this.session && this.currentModelPath === modelPath) {
@@ -183,6 +207,13 @@ export class OnnxDetector {
       this.loadError = error instanceof Error ? error : new Error(String(error));
       this.session = null;
       this.modelConfig = null;
+
+      // Notify download error to renderer
+      safeSend('model-download-error', {
+        categoryCode,
+        error: this.loadError.message
+      });
+
       return false;
     } finally {
       this.isLoading = false;

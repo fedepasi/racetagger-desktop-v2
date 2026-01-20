@@ -22,7 +22,9 @@
         "<!@(node -p \"require('node-addon-api').include\")",
         "src/cpp",
         "src/cpp/utils",
-        "src/cpp/formats"
+        "src/cpp/formats",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX15.5.sdk/usr/include/c++/v1"
       ],
       "dependencies": [
         "<!(node -p \"require('node-addon-api').gyp\")"
@@ -62,8 +64,10 @@
         }],
         ["OS==\"mac\"", {
           "cflags_cc": [
-            "-std=c++14", 
-            "-stdlib=libc++"
+            "-std=c++14",
+            "-stdlib=libc++",
+            "-isysroot", "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+            "-I/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1"
           ],
           "xcode_settings": {
             "CLANG_CXX_LIBRARY": "libc++",
@@ -79,7 +83,11 @@
             ],
             "GCC_OPTIMIZATION_LEVEL": "3",
             "DEAD_CODE_STRIPPING": "YES",
-            "USE_HEADERMAP": "NO"
+            "USE_HEADERMAP": "NO",
+            "SYSTEM_HEADER_SEARCH_PATHS": [
+              "/Library/Developer/CommandLineTools/SDKs/MacOSX15.5.sdk/usr/include/c++/v1",
+              "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1"
+            ]
           }
         }],
         ["OS==\"linux\"", {

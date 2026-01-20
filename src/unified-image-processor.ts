@@ -4,7 +4,7 @@ import * as fsPromises from 'fs/promises';
 import { EventEmitter } from 'events';
 import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_CONFIG, APP_CONFIG, RESIZE_PRESETS, ResizePreset, DEBUG_MODE } from './config';
-import { getSupabaseClient } from './database-service';
+import { getSupabaseClient, getSportCategories } from './database-service';
 import { authService } from './auth-service';
 import { getSharp, createImageProcessor } from './utils/native-modules';
 import { rawPreviewExtractor } from './utils/raw-preview-native';
@@ -517,6 +517,38 @@ class UnifiedImageWorker extends EventEmitter {
 
       log.info(`[Local ONNX] Detected ${analysis.length} race numbers in ${inferenceMs}ms - ${fileName}`);
 
+      // Check if no detections passed confidence threshold - fallback to Gemini
+      if (analysis.length === 0) {
+        log.warn(`[Local ONNX] No detections above confidence threshold, falling back to Gemini`);
+
+        // Upload image if not already done
+        let fallbackStoragePath: string | null = null;
+        try {
+          fallbackStoragePath = await this.uploadToStorage(fileName, imageBuffer, mimeType);
+          log.info(`[Local ONNX Fallback] Image uploaded for Gemini: ${fallbackStoragePath}`);
+        } catch (uploadError) {
+          log.error(`[Local ONNX Fallback] Upload failed, cannot fallback to Gemini: ${uploadError}`);
+          // Return empty result instead of throwing
+          return {
+            success: false,
+            error: 'No detections above threshold and upload failed for Gemini fallback'
+          };
+        }
+
+        // Call standard Gemini analysis
+        try {
+          const geminiResult = await this.analyzeImage(fileName, fallbackStoragePath, imageBuffer.length, mimeType);
+          log.info(`[Local ONNX Fallback] Gemini analysis succeeded after ONNX returned no detections`);
+          return geminiResult;
+        } catch (geminiError) {
+          log.error(`[Local ONNX Fallback] Gemini also failed: ${geminiError}`);
+          return {
+            success: false,
+            error: `Both ONNX (no detections above threshold) and Gemini failed: ${geminiError}`
+          };
+        }
+      }
+
       // Variables for cloud tracking
       let imageId: string | null = null;
       let storagePath: string | null = null;
@@ -571,6 +603,24 @@ class UnifiedImageWorker extends EventEmitter {
             if ((primaryResult.confidence || 0) >= 0.97) confidenceLevel = 'HIGH';
             else if ((primaryResult.confidence || 0) >= 0.92) confidenceLevel = 'MEDIUM';
 
+            // Build Gemini-compatible vehicles array for management portal
+            const vehicles = analysis.map((result: any, index: number) => ({
+              raceNumber: result.raceNumber || null,
+              confidence: result.confidence || 0,
+              boundingBox: result.boundingBox,
+              drivers: result.drivers || [],
+              teamName: result.teamName || null,
+              category: this.category,
+              sponsors: [],
+              modelSource: 'local-onnx',
+              vehicleIndex: index,
+              corrections: [],
+              finalResult: {
+                raceNumber: result.raceNumber || null,
+                matchedBy: 'onnx-local'
+              }
+            }));
+
             const { error: analysisError } = await this.supabase
               .from('analysis_results')
               .insert({
@@ -581,6 +631,10 @@ class UnifiedImageWorker extends EventEmitter {
                 confidence_score: primaryResult.confidence || 0,
                 confidence_level: confidenceLevel,
                 raw_response: {
+                  // Gemini-compatible format for management portal
+                  vehicles,
+                  totalVehicles: vehicles.length,
+                  // Original ONNX data
                   analysis,
                   inferenceMs,
                   modelSource: 'local-onnx',
@@ -638,7 +692,33 @@ class UnifiedImageWorker extends EventEmitter {
       };
     } catch (error) {
       log.error(`[Local ONNX] Detection failed for ${fileName}`, error);
-      throw error;
+
+      // FALLBACK to Gemini if ONNX fails completely
+      if (this.currentSportCategory?.recognition_method === 'local-onnx') {
+        log.warn(`[Local ONNX] Falling back to Gemini cloud analysis`);
+
+        // Upload image if not already done
+        let fallbackStoragePath: string | null = null;
+        try {
+          fallbackStoragePath = await this.uploadToStorage(fileName, imageBuffer, mimeType);
+          log.info(`[Local ONNX Fallback] Image uploaded for Gemini: ${fallbackStoragePath}`);
+        } catch (uploadError) {
+          log.error(`[Local ONNX Fallback] Upload failed, cannot fallback to Gemini: ${uploadError}`);
+          throw error;  // Re-throw original ONNX error
+        }
+
+        // Call standard Gemini analysis
+        try {
+          const geminiResult = await this.analyzeImage(fileName, fallbackStoragePath, imageBuffer.length, mimeType);
+          log.info(`[Local ONNX Fallback] Gemini analysis succeeded`);
+          return geminiResult;
+        } catch (geminiError) {
+          log.error(`[Local ONNX Fallback] Gemini also failed: ${geminiError}`);
+          throw error;  // Re-throw original ONNX error
+        }
+      }
+
+      throw error;  // If not local-onnx, propagate the error
     }
   }
 
@@ -648,6 +728,11 @@ class UnifiedImageWorker extends EventEmitter {
   private shouldUseLocalOnnx(): boolean {
     // Must have local ONNX enabled and model loaded
     if (!this.onnxDetectorEnabled || !this.onnxModelLoaded) {
+      return false;
+    }
+
+    // If crop-context is active, ONNX is managed there (not here)
+    if (this.shouldUseCropContext()) {
       return false;
     }
 
@@ -684,12 +769,14 @@ class UnifiedImageWorker extends EventEmitter {
       return false;
     }
 
-    // Crop-context only makes sense for Gemini categories (not local-onnx, not rf-detr)
+    // Crop-context compatible with local-onnx AND gemini (only rf-detr excluded)
     const recognitionMethod = this.currentSportCategory?.recognition_method;
-    if (recognitionMethod === 'local-onnx' || recognitionMethod === 'rf-detr') {
-      log.debug(`[CropContext] Disabled for ${recognitionMethod} category - using standard flow`);
+    if (recognitionMethod === 'rf-detr') {
+      log.debug(`[CropContext] Disabled for rf-detr (uses cloud detection+recognition)`);
       return false;
     }
+
+    // local-onnx can use crops for better accuracy
 
     log.info(`[CropContext] Enabled for category ${this.category}`);
     return true;
@@ -862,6 +949,125 @@ class UnifiedImageWorker extends EventEmitter {
    * 1. SEGMENTATION MODE (preferred): Uses YOLOv8-seg to isolate subjects with masks
    * 2. BBOX MODE (fallback): Uses ONNX detector for simple bounding boxes
    */
+
+  /**
+   * Analyze extracted crops using local ONNX inference
+   * Returns results + flag indicating if Gemini fallback is needed
+   */
+  private async analyzeCropsWithOnnx(
+    cropsPayload: any[],
+    extractedCrops: any[],
+    detectionSource: 'yolo-seg' | 'onnx-detr'
+  ): Promise<{
+    results: any[];
+    needsGeminiFallback: boolean;
+    lowConfidenceCrops: number[];
+  }> {
+    const results: any[] = [];
+    const lowConfidenceCrops: number[] = [];
+    const CONFIDENCE_THRESHOLD = 0.7;
+
+    log.info(`[ONNX-Crop] Analyzing ${cropsPayload.length} crops with ONNX detector`);
+
+    for (let i = 0; i < cropsPayload.length; i++) {
+      try {
+        const cropBase64 = cropsPayload[i].imageData;
+        const cropBuffer = Buffer.from(cropBase64, 'base64');
+
+        // ONNX inference on crop
+        const startMs = Date.now();
+        const onnxResult = await this.onnxDetector!.detect(cropBuffer);
+        const inferenceMs = Date.now() - startMs;
+
+        if (onnxResult.results.length === 0) {
+          log.warn(`[ONNX-Crop] Crop ${i + 1}: No detections found`);
+          lowConfidenceCrops.push(i);
+          continue;
+        }
+
+        // Take highest confidence detection
+        const bestDetection = onnxResult.results.reduce((best, curr) =>
+          curr.confidence > best.confidence ? curr : best
+        );
+
+        if (bestDetection.confidence < CONFIDENCE_THRESHOLD) {
+          log.warn(`[ONNX-Crop] Crop ${i + 1}: Low confidence ${bestDetection.confidence.toFixed(3)} < ${CONFIDENCE_THRESHOLD}`);
+          lowConfidenceCrops.push(i);
+          continue;
+        }
+
+        // Map ONNX bbox (relative to crop) back to original image coordinates
+        const cropInfo = extractedCrops[i] || null;
+        const originalBbox = cropInfo?.originalBbox;
+
+        let boundingBox: any = undefined;
+        if (originalBbox && bestDetection.boundingBox) {
+          // ONNX bbox is relative to crop (0-1), map to original image (0-100 percentage)
+          const cropX = originalBbox.x;  // 0-1 normalized (crop position in original image)
+          const cropY = originalBbox.y;
+          const cropW = originalBbox.width;  // 0-1 normalized (crop size)
+          const cropH = originalBbox.height;
+
+          // Convert from crop-relative to image-relative coordinates
+          boundingBox = {
+            x: (cropX + bestDetection.boundingBox.x * cropW) * 100,
+            y: (cropY + bestDetection.boundingBox.y * cropH) * 100,
+            width: bestDetection.boundingBox.width * cropW * 100,
+            height: bestDetection.boundingBox.height * cropH * 100
+          };
+
+          log.info(`[ONNX-Crop] Crop ${i + 1} bbox mapped: crop(${(bestDetection.boundingBox.x * 100).toFixed(1)}%, ${(bestDetection.boundingBox.y * 100).toFixed(1)}%) → image(${boundingBox.x.toFixed(1)}%, ${boundingBox.y.toFixed(1)}%)`);
+        } else {
+          // Fallback: if originalBbox is missing, log warning
+          log.warn(`[ONNX-Crop] Crop ${i + 1}: Missing originalBbox, bbox will not be mapped to full image!`);
+          // Use bbox relative to crop (not ideal, but better than nothing)
+          if (bestDetection.boundingBox) {
+            boundingBox = {
+              x: bestDetection.boundingBox.x * 100,
+              y: bestDetection.boundingBox.y * 100,
+              width: bestDetection.boundingBox.width * 100,
+              height: bestDetection.boundingBox.height * 100
+            };
+          }
+        }
+
+        results.push({
+          raceNumber: bestDetection.raceNumber,
+          confidence: bestDetection.confidence,
+          className: bestDetection.className,
+          boundingBox,
+          drivers: [],  // ONNX doesn't extract drivers
+          teamName: null,
+          otherText: [],
+          modelSource: 'local-onnx-crop',
+          bboxSource: detectionSource,  // Track original detection source
+          inferenceTimeMs: inferenceMs
+        });
+
+        log.info(`[ONNX-Crop] Crop ${i + 1}: Found ${bestDetection.raceNumber} (confidence: ${bestDetection.confidence.toFixed(3)}, ${inferenceMs}ms)`);
+
+      } catch (error) {
+        log.error(`[ONNX-Crop] Crop ${i + 1} failed:`, error);
+        lowConfidenceCrops.push(i);
+      }
+    }
+
+    const needsGeminiFallback = results.length === 0 || lowConfidenceCrops.length > 0;
+
+    log.info(`[ONNX-Crop] Complete: ${results.length}/${cropsPayload.length} crops analyzed successfully`);
+    if (needsGeminiFallback) {
+      log.info(`[ONNX-Crop] ${lowConfidenceCrops.length} crops need Gemini fallback`);
+    }
+
+    return { results, needsGeminiFallback, lowConfidenceCrops };
+  }
+
+  /**
+   * Analyze image using crop-context strategy (V6 edge function)
+   * Now supports two modes:
+   * 1. SEGMENTATION MODE (preferred): Uses YOLOv8-seg to isolate subjects with masks
+   * 2. BBOX MODE (fallback): Uses ONNX detector for simple bounding boxes
+   */
   private async analyzeWithCropContext(
     imageFile: UnifiedImageFile,
     compressedBuffer: Buffer,
@@ -1020,6 +1226,188 @@ class UnifiedImageWorker extends EventEmitter {
       let totalUsage = { inputTokens: 0, outputTokens: 0, estimatedCostUSD: 0 };
       let tokensUsed = 0;
       let v6ImageId: string | undefined;  // DB UUID from V6 response for analysis_log UPDATE
+
+      // ==================== DECIDE: ONNX vs GEMINI ====================
+      const recognitionMethod = this.currentSportCategory?.recognition_method;
+
+      if (recognitionMethod === 'local-onnx' && this.onnxDetectorEnabled && this.onnxModelLoaded) {
+        // ==================== ONNX INFERENCE ON CROPS ====================
+        log.info(`[CropContext] Using local ONNX inference on ${cropsPayload.length} extracted crops`);
+
+        phaseStart = Date.now();
+        const onnxCropResult = await this.analyzeCropsWithOnnx(
+          cropsPayload,
+          extractedCrops,
+          detectionSource === 'gemini' ? 'onnx-detr' : detectionSource  // Default to onnx-detr if gemini
+        );
+        aiTiming['onnxCropInference'] = Date.now() - phaseStart;
+
+        // If ONNX provided high-confidence results for all crops, use them
+        if (onnxCropResult.results.length === cropsPayload.length) {
+          log.info(`[CropContext] ONNX inference successful for all ${cropsPayload.length} crops - skipping Gemini`);
+          allAnalysis = onnxCropResult.results;
+
+          // Still upload to storage and create DB records (same logic as analyzeImageLocal)
+          let imageId: string | null = null;
+          let uploadedStoragePath: string | null = storagePath || null;  // May already be set from earlier upload
+
+          // Upload if not already uploaded
+          if (!uploadedStoragePath) {
+            try {
+              uploadedStoragePath = await this.uploadToStorage(imageFile.fileName, compressedBuffer, mimeType);
+              log.info(`[CropContext-ONNX] Image uploaded to storage: ${uploadedStoragePath}`);
+            } catch (uploadError) {
+              log.error(`[CropContext-ONNX] Upload failed: ${uploadError}`);
+            }
+          }
+
+          // Create image record in database
+          if (uploadedStoragePath && userId) {
+            try {
+              const { data: imageRecord, error: imageError } = await this.supabase
+                .from('images')
+                .insert({
+                  user_id: userId,
+                  original_filename: imageFile.fileName,
+                  storage_path: uploadedStoragePath,
+                  mime_type: mimeType,
+                  size_bytes: compressedBuffer.length,
+                  execution_id: this.config.executionId || null,
+                  status: 'analyzed'
+                })
+                .select('id')
+                .single();
+
+              if (imageError) {
+                log.error(`[CropContext-ONNX] Failed to create image record: ${imageError.message}`);
+              } else if (imageRecord) {
+                imageId = imageRecord.id;
+                log.info(`[CropContext-ONNX] Image record created: ${imageId}`);
+
+                // Save analysis results to database (one per crop/detection)
+                for (const result of allAnalysis) {
+                  let confidenceLevel = 'LOW';
+                  if ((result.confidence || 0) >= 0.97) confidenceLevel = 'HIGH';
+                  else if ((result.confidence || 0) >= 0.92) confidenceLevel = 'MEDIUM';
+
+                  // Build Gemini-compatible vehicle structure for management portal
+                  const vehicleData = {
+                    raceNumber: result.raceNumber || null,
+                    confidence: result.confidence || 0,
+                    boundingBox: result.boundingBox,  // Already mapped to full image coordinates (0-100%)
+                    drivers: result.drivers || [],
+                    teamName: result.teamName || null,
+                    category: this.category,
+                    sponsors: [],
+                    modelSource: 'local-onnx-crop',
+                    vehicleIndex: allAnalysis.indexOf(result),
+                    corrections: [],
+                    finalResult: {
+                      raceNumber: result.raceNumber || null,
+                      matchedBy: 'onnx-local'
+                    }
+                  };
+
+                  // Log bbox for verification
+                  if (result.boundingBox) {
+                    log.info(`[CropContext-ONNX] Saving bbox for ${result.raceNumber}: (${result.boundingBox.x.toFixed(1)}%, ${result.boundingBox.y.toFixed(1)}%, ${result.boundingBox.width.toFixed(1)}% x ${result.boundingBox.height.toFixed(1)}%)`);
+                  } else {
+                    log.warn(`[CropContext-ONNX] No boundingBox for ${result.raceNumber} - will not be visualizable in portal!`);
+                  }
+
+                  const { error: analysisError } = await this.supabase
+                    .from('analysis_results')
+                    .insert({
+                      image_id: imageId,
+                      analysis_provider: `local-onnx-crop_${this.category}`,
+                      recognized_number: result.raceNumber || null,
+                      additional_text: result.otherText || [],
+                      confidence_score: result.confidence || 0,
+                      confidence_level: confidenceLevel,
+                      raw_response: {
+                        // Gemini-compatible format for management portal
+                        vehicles: [vehicleData],
+                        totalVehicles: 1,
+                        // Original ONNX data
+                        ...result,
+                        modelSource: 'local-onnx-crop',
+                        bboxSource: detectionSource,
+                        cropIndex: allAnalysis.indexOf(result),
+                        timestamp: new Date().toISOString()
+                      },
+                      input_tokens: 0,
+                      output_tokens: 0,
+                      estimated_cost_usd: 0,
+                      execution_time_ms: result.inferenceTimeMs || 0,
+                      training_eligible: this.userTrainingConsent,
+                      user_consent_at_analysis: this.userTrainingConsent
+                    });
+
+                  if (analysisError) {
+                    log.error(`[CropContext-ONNX] Failed to save analysis result: ${analysisError.message}`);
+                  }
+                }
+              }
+            } catch (dbError) {
+              log.error(`[CropContext-ONNX] Database tracking failed: ${dbError}`);
+            }
+          }
+
+          // Deduct tokens (1 token per image, even with multiple crops)
+          if (userId && !this.config.usePreAuthSystem) {
+            try {
+              await authService.useTokens(1, imageId || undefined, this.config.onTokenUsed);
+              log.info(`[CropContext-ONNX] Token deducted successfully`);
+            } catch (tokenError) {
+              log.warn(`[CropContext-ONNX] Token deduction failed: ${tokenError}`);
+            }
+          }
+
+          const inferenceTimeMs = Date.now() - startTime;
+          log.info(`[CropContext] Local ONNX analysis complete in ${inferenceTimeMs}ms (0 API cost)`);
+
+          return {
+            success: true,
+            analysis: allAnalysis,
+            usage: {
+              inputTokens: 0,
+              outputTokens: 0,
+              estimatedCostUSD: 0
+            },
+            inferenceTimeMs,
+            recognitionMethod: 'local-onnx',
+            detectionSource,
+            v6ImageId: imageId,
+            processingTimings: aiTiming
+          };
+        }
+
+        // PARTIAL SUCCESS: Some crops worked with ONNX, some need Gemini fallback
+        if (onnxCropResult.results.length > 0 && onnxCropResult.needsGeminiFallback) {
+          log.info(`[CropContext] ONNX: ${onnxCropResult.results.length}/${cropsPayload.length} crops successful, calling Gemini for ${onnxCropResult.lowConfidenceCrops.length} low-confidence crops`);
+
+          // Prepare reduced payload with only low-confidence crops
+          const fallbackCrops = onnxCropResult.lowConfidenceCrops.map(idx => cropsPayload[idx]);
+
+          // Continue to Gemini V6 call below with reduced payload
+          cropsPayload = fallbackCrops;
+          allAnalysis = onnxCropResult.results;  // Keep ONNX results, add Gemini results below
+
+          log.info(`[CropContext] Proceeding with Gemini fallback for ${fallbackCrops.length} crops`);
+        }
+
+        // TOTAL FAILURE: ONNX found nothing with confidence > threshold
+        if (onnxCropResult.results.length === 0) {
+          log.warn(`[CropContext] ONNX inference failed for all crops (low confidence or errors), falling back to Gemini V6`);
+          // Continue to normal Gemini V6 flow below
+        }
+      }
+      // ==================== END ONNX LAYER ====================
+
+      // ==================== GEMINI V6 FLOW ====================
+      // This block executes IF:
+      // 1. recognition_method === 'gemini' (or other)
+      // 2. recognition_method === 'local-onnx' BUT ONNX partially failed (see above)
 
       // Step 4: Call V6 edge function based on strategy
       if (cropContextConfig.strategy === 'sequential') {
@@ -1187,6 +1575,150 @@ class UnifiedImageWorker extends EventEmitter {
           tokensUsed = 1;
         }
       }
+
+      // ==================== FINAL FALLBACK: ONNX on Full Image ====================
+      // If ONNX is enabled but crops didn't work, try full image as last resort
+      if (this.onnxDetectorEnabled &&
+          this.onnxModelLoaded &&
+          allAnalysis.length === 0) {
+
+        log.warn(`[CropContext] All crop-based methods failed, trying ONNX on full image`);
+
+        try {
+          phaseStart = Date.now();
+          const fullImageOnnxResult = await this.onnxDetector!.detect(compressedBuffer);
+          aiTiming['onnxFullImage'] = Date.now() - phaseStart;
+
+          if (fullImageOnnxResult.results.length > 0) {
+            log.info(`[CropContext] ONNX full image found ${fullImageOnnxResult.results.length} results`);
+
+            allAnalysis = fullImageOnnxResult.results.map(r => ({
+              ...r,
+              modelSource: 'local-onnx-full-image',
+              bboxSource: 'full-image',
+              drivers: [],
+              teamName: null,
+              otherText: []
+            }));
+
+            // Upload and create DB records (same logic as ONNX crop success)
+            let imageId: string | null = null;
+            let uploadedStoragePath: string | null = storagePath || null;
+
+            if (!uploadedStoragePath) {
+              try {
+                uploadedStoragePath = await this.uploadToStorage(imageFile.fileName, compressedBuffer, mimeType);
+                log.info(`[CropContext-ONNX-Full] Image uploaded to storage: ${uploadedStoragePath}`);
+              } catch (uploadError) {
+                log.error(`[CropContext-ONNX-Full] Upload failed: ${uploadError}`);
+              }
+            }
+
+            if (uploadedStoragePath && userId) {
+              try {
+                const { data: imageRecord, error: imageError } = await this.supabase
+                  .from('images')
+                  .insert({
+                    user_id: userId,
+                    original_filename: imageFile.fileName,
+                    storage_path: uploadedStoragePath,
+                    mime_type: mimeType,
+                    size_bytes: compressedBuffer.length,
+                    execution_id: this.config.executionId || null,
+                    status: 'analyzed'
+                  })
+                  .select('id')
+                  .single();
+
+                if (imageError) {
+                  log.error(`[CropContext-ONNX-Full] Failed to create image record: ${imageError.message}`);
+                } else if (imageRecord) {
+                  imageId = imageRecord.id;
+                  v6ImageId = imageId || undefined;
+                  log.info(`[CropContext-ONNX-Full] Image record created: ${imageId}`);
+
+                  // Save analysis results
+                  for (const result of allAnalysis) {
+                    let confidenceLevel = 'LOW';
+                    if ((result.confidence || 0) >= 0.97) confidenceLevel = 'HIGH';
+                    else if ((result.confidence || 0) >= 0.92) confidenceLevel = 'MEDIUM';
+
+                    // Build Gemini-compatible vehicle structure for management portal
+                    const vehicleData = {
+                      raceNumber: result.raceNumber || null,
+                      confidence: result.confidence || 0,
+                      boundingBox: result.boundingBox,
+                      drivers: result.drivers || [],
+                      teamName: result.teamName || null,
+                      category: this.category,
+                      sponsors: [],
+                      modelSource: 'local-onnx-full-image',
+                      vehicleIndex: allAnalysis.indexOf(result),
+                      corrections: [],
+                      finalResult: {
+                        raceNumber: result.raceNumber || null,
+                        matchedBy: 'onnx-local-full'
+                      }
+                    };
+
+                    const { error: analysisError } = await this.supabase
+                      .from('analysis_results')
+                      .insert({
+                        image_id: imageId,
+                        analysis_provider: `local-onnx-full_${this.category}`,
+                        recognized_number: result.raceNumber || null,
+                        additional_text: result.otherText || [],
+                        confidence_score: result.confidence || 0,
+                        confidence_level: confidenceLevel,
+                        raw_response: {
+                          // Gemini-compatible format for management portal
+                          vehicles: [vehicleData],
+                          totalVehicles: 1,
+                          // Original ONNX data
+                          ...result,
+                          modelSource: 'local-onnx-full-image',
+                          bboxSource: 'full-image',
+                          timestamp: new Date().toISOString()
+                        },
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        estimated_cost_usd: 0,
+                        execution_time_ms: aiTiming['onnxFullImage'] || undefined,
+                        training_eligible: this.userTrainingConsent,
+                        user_consent_at_analysis: this.userTrainingConsent
+                      });
+
+                    if (analysisError) {
+                      log.error(`[CropContext-ONNX-Full] Failed to save analysis result: ${analysisError.message}`);
+                    }
+                  }
+                }
+              } catch (dbError) {
+                log.error(`[CropContext-ONNX-Full] Database tracking failed: ${dbError}`);
+              }
+            }
+
+            // Deduct token
+            if (userId && !this.config.usePreAuthSystem) {
+              try {
+                await authService.useTokens(1, imageId || undefined, this.config.onTokenUsed);
+                tokensUsed = 1;
+              } catch (tokenError) {
+                log.warn(`[CropContext-ONNX-Full] Token deduction failed: ${tokenError}`);
+              }
+            }
+
+            // Track recognition method
+            if (!this.recognitionMethod) {
+              this.recognitionMethod = 'local-onnx';
+            }
+          }
+        } catch (error) {
+          log.error(`[CropContext] ONNX full image fallback failed:`, error);
+          // Continue to final check below
+        }
+      }
+      // ==================== END FULL IMAGE FALLBACK ====================
 
       // Check if we got any results
       if (allAnalysis.length === 0) {
@@ -1360,13 +1892,10 @@ class UnifiedImageWorker extends EventEmitter {
    */
   private async initializeSportConfigurations() {
     try {
-      // Get sport categories from Supabase
-      const { data: sportCategories, error } = await this.supabase
-        .from('sport_categories')
-        .select('*')
-        .eq('is_active', true);
+      // Get sport categories from Supabase (respects admin privileges)
+      const sportCategories = await getSportCategories();
 
-      if (error || !sportCategories || sportCategories.length === 0) {
+      if (!sportCategories || sportCategories.length === 0) {
         return;
       }
 
@@ -1909,27 +2438,15 @@ class UnifiedImageWorker extends EventEmitter {
       let analysisResult: any;
       let storagePath: string | null = null;
 
-      if (this.shouldUseLocalOnnx()) {
-        // LOCAL ONNX INFERENCE - Now with full cloud tracking for feature parity
-        log.info(`[Local ONNX] Using local inference for ${imageFile.fileName}`);
+      // DEBUG: Log decision path
+      const useCropContext = this.shouldUseCropContext();
+      const useLocalOnnx = this.shouldUseLocalOnnx();
+      log.info(`🔍 [DECISION] crop=${useCropContext}, onnx=${useLocalOnnx}, category=${this.currentSportCategory?.code}, recognition=${this.currentSportCategory?.recognition_method}`);
 
-        analysisResult = await this.analyzeImageLocal(buffer, imageFile.fileName, mimeType);
-
-        // Update storagePath from local ONNX result (for downstream processing)
-        if (analysisResult.storagePath) {
-          storagePath = analysisResult.storagePath;
-        }
-
-        // Track local ONNX usage
-        if (analysisResult.localOnnxUsage) {
-          if (!this.recognitionMethod) {
-            this.recognitionMethod = 'local-onnx';
-          }
-          log.info(`[Local ONNX] Completed: ${analysisResult.localOnnxUsage.detectionsCount} detections in ${analysisResult.localOnnxUsage.inferenceMs}ms`);
-        }
-      } else if (this.shouldUseCropContext()) {
+      if (useCropContext) {
         // CROP-CONTEXT STRATEGY (V6) - High-res crops + context negative
         // BACKWARD COMPATIBLE: Only used if crop_config.enabled = true in sport_categories
+        // PRIORITY 1: Crop-context handles both ONNX and Gemini internally
         log.info(`[CropContext] Using crop-context strategy for ${imageFile.fileName}`);
 
         // ALWAYS upload compressed image to Supabase Storage for reference in management portal
@@ -1977,8 +2494,27 @@ class UnifiedImageWorker extends EventEmitter {
         if (parallelVisualTags) {
           (analysisResult as any)._parallelVisualTags = parallelVisualTags;
         }
+      } else if (this.shouldUseLocalOnnx()) {
+        // PRIORITY 2: LOCAL ONNX INFERENCE on full image (when crop disabled)
+        // Now with full cloud tracking for feature parity
+        log.info(`[Local ONNX] Using local inference on full image for ${imageFile.fileName}`);
+
+        analysisResult = await this.analyzeImageLocal(buffer, imageFile.fileName, mimeType);
+
+        // Update storagePath from local ONNX result (for downstream processing)
+        if (analysisResult.storagePath) {
+          storagePath = analysisResult.storagePath;
+        }
+
+        // Track local ONNX usage
+        if (analysisResult.localOnnxUsage) {
+          if (!this.recognitionMethod) {
+            this.recognitionMethod = 'local-onnx';
+          }
+          log.info(`[Local ONNX] Completed: ${analysisResult.localOnnxUsage.detectionsCount} detections in ${analysisResult.localOnnxUsage.inferenceMs}ms`);
+        }
       } else {
-        // STANDARD CLOUD API - Upload and analyze via Edge Function (V2/V3/V4/V5)
+        // PRIORITY 3: STANDARD CLOUD API - Upload and analyze via Edge Function (V2/V3/V4/V5)
         // Fase 3: Upload su Supabase Storage
         storagePath = await this.uploadToStorage(imageFile.fileName, buffer, mimeType);
 

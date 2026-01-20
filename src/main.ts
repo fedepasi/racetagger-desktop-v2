@@ -129,8 +129,9 @@ import { rawConverter } from './utils/raw-converter'; // Import the singleton in
 import { unifiedImageProcessor, UnifiedImageFile, UnifiedProcessingResult, UnifiedProcessorConfig } from './unified-image-processor';
 import { FolderOrganizerConfig } from './utils/folder-organizer';
 import { getFaceDetectionBridge } from './face-detection-bridge';
+import { getModelManager } from './model-manager';
 // Modular IPC handlers
-import { registerAllHandlers, initializeIpcContext, isForceUpdateRequired, checkAppVersion } from './ipc';
+import { registerAllHandlers, initializeIpcContext, isForceUpdateRequired, checkAppVersion, isBatchProcessingCancelled, setBatchProcessingCancelled } from './ipc';
 
 // Definisci le estensioni supportate a livello globale per riutilizzo
 const RAW_EXTENSIONS = ['.nef', '.arw', '.cr2', '.cr3', '.orf', '.raw', '.rw2', '.dng'];
@@ -743,9 +744,6 @@ async function getImagesFromFolder(folderPath: string): Promise<{ path: string; 
 
 // Variabile globale per i dati CSV standalone
 let csvData: CsvEntry[] = [];
-
-// Variabile globale per il controllo della cancellazione
-let batchProcessingCancelled = false;
 
 // Funzione originale per il caricamento CSV standalone
 async function handleStandaloneCSVLoading(event: IpcMainEvent, fileData: any) {
@@ -1486,7 +1484,7 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
       // Apply resize configuration if provided
       ...(resizeConfig && resizeConfig),
       // Add cancellation support
-      isCancelled: () => batchProcessingCancelled,
+      isCancelled: () => isBatchProcessingCancelled(),
       onTokenUsed: (tokenBalance: any) => {
         if (mainWindow) {
           mainWindow.webContents.send('token-used', tokenBalance);
@@ -1679,7 +1677,7 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
 
 async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessConfig) {
   // Reset cancellation flag
-  batchProcessingCancelled = false;
+  setBatchProcessingCancelled(false);
   
   // Statistiche per il tracciamento
   let executionStats = {
@@ -1782,7 +1780,7 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
     // Processa ogni immagine
     for (const imageInfo of imageFiles) {
       // Controlla se il processing è stato cancellato
-      if (batchProcessingCancelled) {
+      if (isBatchProcessingCancelled()) {
         break;
       }
       
@@ -2496,6 +2494,67 @@ async function handleFeedbackSubmission(event: IpcMainEvent, feedbackData: any) 
 }
 
 /**
+ * Check and download ONNX models at app startup
+ * Shows progress modal in renderer if downloads are needed
+ */
+async function checkAndDownloadModels(): Promise<void> {
+  console.log('[Main Process] checkAndDownloadModels() called');
+  try {
+    const modelManager = getModelManager();
+    console.log('[Main Process] ModelManager instance obtained');
+
+    // Set the authenticated Supabase client
+    console.log('[Main Process] Getting Supabase client...');
+    const supabaseClient = getSupabaseClient();
+    modelManager.setSupabaseClient(supabaseClient);
+    console.log('[Main Process] Supabase client set');
+
+    // Check which models need to be downloaded
+    console.log('[Main Process] Checking models to download...');
+    const { models, totalSizeMB } = await modelManager.getModelsToDownload();
+    console.log('[Main Process] Models to download:', models.length, 'Total size:', totalSizeMB, 'MB');
+
+    if (models.length === 0) {
+      console.log('[Main Process] No models need download, all up to date');
+      return;
+    }
+
+    // Notify renderer to show download modal
+    safeSend('model-download-start', {
+      totalModels: models.length,
+      totalSizeMB
+    });
+
+    // Download each model with progress tracking
+    let downloadedTotal = 0;
+    for (let i = 0; i < models.length; i++) {
+      const model = models[i];
+
+      await modelManager.downloadModel(model.code, (percent, downloadedMB, totalMB) => {
+        safeSend('model-download-progress', {
+          currentModel: i + 1,
+          totalModels: models.length,
+          modelPercent: percent,
+          downloadedMB: downloadedTotal + downloadedMB,
+          totalMB: totalSizeMB
+        });
+      });
+
+      downloadedTotal += model.sizeMB;
+    }
+
+    // Notify renderer that download is complete
+    safeSend('model-download-complete');
+  } catch (error) {
+    console.error('[Main Process] Error downloading models:', error);
+    safeSend('model-download-error', {
+      message: error instanceof Error ? error.message : 'Unknown error'
+    });
+    throw error;
+  }
+}
+
+/**
  * Track app launch for analytics
  * Sends device info to Supabase to track user engagement funnel
  */
@@ -2666,6 +2725,14 @@ app.whenReady().then(async () => { // Added async here
   } catch (cacheError) {
     console.error('[Main Process] Error caching Supabase data:', cacheError);
     // Don't fail startup if cache fails, data will be loaded on-demand
+  }
+
+  // Check and download ONNX models at startup
+  try {
+    await checkAndDownloadModels();
+  } catch (modelError) {
+    console.error('[Main Process] Error checking/downloading models:', modelError);
+    // Don't fail startup if model download fails
   }
 
   // NOTE: The test code has been removed from startup to prevent conflicts with UI events.
@@ -3349,7 +3416,7 @@ async function performCleanup(): Promise<void> {
 
   try {
     // Cancel any running batch processing
-    batchProcessingCancelled = true;
+    setBatchProcessingCancelled(true);
 
     // Cleanup auth service resources
     authService.cleanup();
