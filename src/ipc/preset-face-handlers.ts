@@ -37,7 +37,7 @@ export function registerPresetFaceHandlers(): void {
 
   /**
    * Upload a face photo for a participant
-   * Expects: { participantId, presetId, userId, photoData (base64), fileName, faceDescriptor?, detectionConfidence?, photoType?, isPrimary? }
+   * Expects: { participantId, presetId, userId, photoData (base64), fileName, faceDescriptor?, detectionConfidence?, photoType?, isPrimary?, driverName? }
    */
   ipcMain.handle('preset-face-upload-photo', async (_, params: {
     participantId: string;
@@ -49,6 +49,7 @@ export function registerPresetFaceHandlers(): void {
     detectionConfidence?: number;
     photoType?: 'reference' | 'action' | 'podium' | 'helmet_off';
     isPrimary?: boolean;
+    driverName?: string;
   }) => {
     try {
       // Use authenticated Supabase client from authService for RLS policy compliance
@@ -99,7 +100,8 @@ export function registerPresetFaceHandlers(): void {
         face_descriptor: params.faceDescriptor,
         photo_type: params.photoType || 'reference',
         detection_confidence: params.detectionConfidence,
-        is_primary: params.isPrimary || (currentCount === 0) // First photo is primary by default
+        is_primary: params.isPrimary || (currentCount === 0), // First photo is primary by default
+        driver_name: params.driverName
       };
 
       const savedPhoto = await addPresetParticipantFacePhoto(createParams);

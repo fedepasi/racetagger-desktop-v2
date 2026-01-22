@@ -2384,6 +2384,7 @@ export interface PresetParticipantSupabase {
   sort_order?: number;
   created_at?: string;
   face_photo_count?: number; // Cached count of face photos
+  driver_specific_metatags?: Record<string, string>; // Custom metatags per driver (e.g., {"Molina": "Ferrari Driver", "Fuoco": "Italian Star"})
 }
 
 /**
@@ -2398,6 +2399,7 @@ export interface PresetParticipantFacePhoto {
   photo_type: 'reference' | 'action' | 'podium' | 'helmet_off';
   detection_confidence: number | null;
   is_primary: boolean;
+  driver_name?: string; // Name of specific driver for multi-driver vehicles
   created_at: string;
 }
 
@@ -2413,6 +2415,7 @@ export interface CreatePresetFacePhotoParams {
   photo_type?: 'reference' | 'action' | 'podium' | 'helmet_off';
   detection_confidence?: number;
   is_primary?: boolean;
+  driver_name?: string; // Name of specific driver for multi-driver vehicles
 }
 
 // Cache locale per categorie

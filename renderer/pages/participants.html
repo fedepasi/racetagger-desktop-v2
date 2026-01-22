@@ -402,45 +402,12 @@
             Face Recognition Photos
             <span class="badge badge-beta" title="Experimental feature">BETA</span>
           </h3>
-          <p class="section-description">Upload up to 5 reference photos for face recognition. Best results with clear, front-facing photos.</p>
+          <p class="section-description" id="face-photos-description">Upload up to 3 reference photos per driver. Best results with clear, front-facing photos.</p>
 
-          <div class="face-photos-grid" id="face-photos-grid">
-            <!-- Face photos will be rendered here dynamically -->
-            <div class="face-photo-placeholder" id="face-photo-placeholder-0">
-              <div class="placeholder-content">
-                <span class="placeholder-icon">📷</span>
-                <span class="placeholder-text">Add Photo</span>
-              </div>
-            </div>
-            <div class="face-photo-placeholder" id="face-photo-placeholder-1">
-              <div class="placeholder-content">
-                <span class="placeholder-icon">+</span>
-              </div>
-            </div>
-            <div class="face-photo-placeholder" id="face-photo-placeholder-2">
-              <div class="placeholder-content">
-                <span class="placeholder-icon">+</span>
-              </div>
-            </div>
-            <div class="face-photo-placeholder" id="face-photo-placeholder-3">
-              <div class="placeholder-content">
-                <span class="placeholder-icon">+</span>
-              </div>
-            </div>
-            <div class="face-photo-placeholder" id="face-photo-placeholder-4">
-              <div class="placeholder-content">
-                <span class="placeholder-icon">+</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="face-photos-actions">
-            <input type="file" id="face-photo-input" accept="image/*" style="display: none;" onchange="handleFacePhotoSelect(event)">
-            <button type="button" class="btn btn-secondary btn-sm" id="add-face-photo-btn" onclick="triggerFacePhotoUpload()">
-              <span class="btn-icon">📷</span>
-              Add Photo
-            </button>
-            <span class="photo-count-label" id="face-photo-count">0/5 photos</span>
+          <!-- Driver-specific sections will be rendered here dynamically -->
+          <div id="driver-face-sections-container">
+            <!-- For single driver or legacy: show single section -->
+            <!-- For multiple drivers: show one section per driver with metatag field -->
           </div>
 
           <div class="face-photos-info">

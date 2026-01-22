@@ -20,9 +20,15 @@ async function initParticipantsManager() {
   // Setup event listeners
   setupEventListeners();
 
-  // Initialize face manager if available
-  if (typeof presetFaceManager !== 'undefined' && presetFaceManager.initialize) {
+  // Initialize face manager V2 if available (per-driver organization)
+  if (typeof presetFaceManagerV2 !== 'undefined' && presetFaceManagerV2.initialize) {
+    presetFaceManagerV2.initialize();
+    console.log('[Participants] Initialized PresetFaceManagerV2 (per-driver)');
+  }
+  // Fallback to V1 for backward compatibility
+  else if (typeof presetFaceManager !== 'undefined' && presetFaceManager.initialize) {
     presetFaceManager.initialize();
+    console.log('[Participants] Initialized PresetFaceManager (legacy)');
   }
 
   // Load sport categories for dropdown
@@ -697,10 +703,16 @@ async function openParticipantEditModal(rowIndex = -1) {
     document.getElementById('edit-folder-2').value = participant.folder_2 || '';
     document.getElementById('edit-folder-3').value = participant.folder_3 || '';
 
-    // Load face photos for participant
-    if (typeof presetFaceManager !== 'undefined' && currentPreset) {
+    // Load face photos for participant (V2 for per-driver organization)
+    if (typeof presetFaceManagerV2 !== 'undefined' && currentPreset) {
       const isOfficial = currentPreset.is_official === true;
-      // Pass participant.id (may be null for new participants - will show empty state with add button)
+      const drivers = getDriversTagsArray();
+      const driverMetatags = participant.driver_specific_metatags || {};
+      await presetFaceManagerV2.loadPhotos(participant.id || null, currentPreset.id, currentUserId, drivers, driverMetatags, isOfficial);
+    }
+    // Fallback to V1
+    else if (typeof presetFaceManager !== 'undefined' && currentPreset) {
+      const isOfficial = currentPreset.is_official === true;
       await presetFaceManager.loadPhotos(participant.id || null, currentPreset.id, currentUserId, isOfficial);
     }
   } else {
@@ -721,7 +733,13 @@ async function openParticipantEditModal(rowIndex = -1) {
     document.getElementById('edit-folder-3').value = '';
 
     // Show face photos section for new participants (will auto-save when adding photos)
-    if (typeof presetFaceManager !== 'undefined' && currentPreset) {
+    if (typeof presetFaceManagerV2 !== 'undefined' && currentPreset) {
+      const isOfficial = currentPreset?.is_official === true;
+      const drivers = getDriversTagsArray();
+      await presetFaceManagerV2.loadPhotos(null, currentPreset.id, currentUserId, drivers, {}, isOfficial);
+    }
+    // Fallback to V1
+    else if (typeof presetFaceManager !== 'undefined' && currentPreset) {
       const isOfficial = currentPreset?.is_official === true;
       await presetFaceManager.loadPhotos(null, currentPreset.id, currentUserId, isOfficial);
     }
@@ -793,6 +811,12 @@ async function saveParticipantEdit(closeAfterSave = true) {
   // Comma-separated for nome_pilota compatibility
   const nome = driversArray.join(', ');
 
+  // Collect driver-specific metatags from face manager V2
+  let driverSpecificMetatags = {};
+  if (typeof presetFaceManagerV2 !== 'undefined') {
+    driverSpecificMetatags = presetFaceManagerV2.getDriverMetatags();
+  }
+
   const participant = {
     numero,
     nome,
@@ -803,6 +827,7 @@ async function saveParticipantEdit(closeAfterSave = true) {
     plate_number: document.getElementById('edit-plate-number').value.trim().toUpperCase(),
     sponsor: document.getElementById('edit-sponsor').value.trim(),
     metatag: document.getElementById('edit-metatag').value.trim(),
+    driver_specific_metatags: driverSpecificMetatags, // Per-driver custom metatags
     folder_1: document.getElementById('edit-folder-1').value,
     folder_2: document.getElementById('edit-folder-2').value,
     folder_3: document.getElementById('edit-folder-3').value
@@ -908,7 +933,15 @@ async function saveParticipantAndStay() {
       // Find the participant we just saved by numero
       const savedParticipant = participantsData.find(p => p.numero === document.getElementById('edit-numero').value.trim());
 
-      if (savedParticipant?.id && typeof presetFaceManager !== 'undefined') {
+      if (savedParticipant?.id && typeof presetFaceManagerV2 !== 'undefined') {
+        const isOfficial = currentPreset.is_official === true;
+        const drivers = getDriversTagsArray();
+        const driverMetatags = savedParticipant.driver_specific_metatags || {};
+        await presetFaceManagerV2.loadPhotos(savedParticipant.id, currentPreset.id, currentUserId, drivers, driverMetatags, isOfficial);
+        showNotification('Participant saved! You can now add face photos.', 'success');
+      }
+      // Fallback to V1
+      else if (savedParticipant?.id && typeof presetFaceManager !== 'undefined') {
         const isOfficial = currentPreset.is_official === true;
         await presetFaceManager.loadPhotos(savedParticipant.id, currentPreset.id, currentUserId, isOfficial);
         showNotification('Participant saved! You can now add face photos.', 'success');
@@ -3144,3 +3177,48 @@ document.addEventListener('DOMContentLoaded', function() {
     showNotification('CSV template saved successfully', 'success');
   });
 });
+
+// ========================================
+// Face Manager V2 Integration
+// ========================================
+
+/**
+ * Refresh face manager when drivers list changes
+ * This ensures the UI shows the correct number of driver sections
+ */
+function refreshFaceManagerForDrivers() {
+  if (typeof presetFaceManagerV2 === 'undefined') return;
+
+  // Get current driver metatags from driver-specific inputs (if they exist)
+  const currentDriverMetatags = presetFaceManagerV2.getDriverMetatags();
+
+  // Reload with new drivers list
+  presetFaceManagerV2.loadPhotos(
+    presetFaceManagerV2.currentParticipantId,
+    presetFaceManagerV2.currentPresetId,
+    presetFaceManagerV2.currentUserId,
+    getDriversTagsArray(),
+    currentDriverMetatags,
+    presetFaceManagerV2.isOfficial
+  );
+}
+
+// Monkey-patch addDriverTag to refresh face manager
+const originalAddDriverTag = addDriverTag;
+function addDriverTag(name) {
+  originalAddDriverTag(name);
+  // Refresh face manager after adding driver
+  setTimeout(refreshFaceManagerForDrivers, 50);
+}
+
+// Monkey-patch removeDriverTag to refresh face manager
+const originalRemoveDriverTag = removeDriverTag;
+function removeDriverTag(index) {
+  originalRemoveDriverTag(index);
+  // Refresh face manager after removing driver
+  setTimeout(refreshFaceManagerForDrivers, 50);
+}
+
+// Override window exports
+window.addDriverTag = addDriverTag;
+window.removeDriverTag = removeDriverTag;
