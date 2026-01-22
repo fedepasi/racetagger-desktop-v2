@@ -10,6 +10,11 @@ import * as fs from 'fs';
 import * as fsPromises from 'fs/promises';
 import * as path from 'path';
 
+export interface CustomFolderDef {
+  name: string;  // Folder name/template (e.g., "Ferrari", "{number}-{name}")
+  path?: string; // Optional absolute/relative path. If empty, uses base export path
+}
+
 // Configuration interface for folder organization
 export interface FolderOrganizerConfig {
   enabled: boolean;
@@ -21,6 +26,7 @@ export interface FolderOrganizerConfig {
   includeXmpFiles?: boolean; // Include XMP sidecar files for RAW images
   destinationPath?: string; // If not provided, uses source directory
   conflictStrategy?: 'rename' | 'skip' | 'overwrite'; // How to handle file conflicts
+  folderDefinitions?: CustomFolderDef[]; // Optional folder definitions with custom paths
 }
 
 // Operation result for tracking
@@ -214,7 +220,18 @@ export class FolderOrganizer {
       // COPY FILE TO ALL FOLDERS
       for (let i = 0; i < foldersToCreate.length; i++) {
         const folderName = foldersToCreate[i];
-        const targetFolder = path.join(baseDir, folderName);
+
+        // Check if this folder has a custom path defined
+        const folderDef = this.config.folderDefinitions?.find(def =>
+          typeof def === 'object' ? def.name === folderName : def === folderName
+        );
+
+        const customPath = typeof folderDef === 'object' ? folderDef.path : undefined;
+
+        // Use custom path if specified, otherwise join with baseDir
+        const targetFolder = customPath && customPath.trim()
+          ? path.join(customPath, folderName) // Custom path: use it as base
+          : path.join(baseDir, folderName);    // Default: use baseDir
 
         await this.ensureFolderExists(targetFolder);
 

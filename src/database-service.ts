@@ -2349,6 +2349,11 @@ export interface SportCategory {
   save_segmentation_masks?: boolean;      // Save full RLE mask data in JSONL logs for debugging/training
 }
 
+export interface CustomFolderDefinition {
+  name: string;  // Folder name/template (e.g., "Ferrari", "{number}-{name}")
+  path?: string; // Optional absolute/relative path. If empty, uses base export path
+}
+
 export interface ParticipantPresetSupabase {
   id?: string;
   user_id: string;
@@ -2357,7 +2362,7 @@ export interface ParticipantPresetSupabase {
   description?: string;
   is_template?: boolean;
   is_public?: boolean;
-  custom_folders?: string[]; // Array di nomi folder personalizzate create dall'utente
+  custom_folders?: string[] | CustomFolderDefinition[]; // Legacy support: string[] or new format
   created_at?: string;
   updated_at?: string;
   last_used_at?: string;

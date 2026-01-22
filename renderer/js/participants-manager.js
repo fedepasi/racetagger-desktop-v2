@@ -6,7 +6,7 @@
 var currentPreset = null;
 var participantsData = [];
 var isEditingPreset = false;
-var customFolders = []; // Array di nomi folder personalizzate
+var customFolders = []; // Array of folder objects: [{name, path}, ...] or legacy strings
 var editingRowIndex = -1; // -1 = new participant, >=0 = editing existing
 var currentSortColumn = 0; // Colonna corrente di ordinamento (0 = numero)
 var currentSortDirection = 'asc'; // Direzione: 'asc' o 'desc'
@@ -125,6 +125,36 @@ function setupEventListeners() {
 }
 
 /**
+ * Normalize custom folders from legacy string[] to new format {name, path}[]
+ * Ensures backward compatibility
+ */
+function normalizeFolders(folders) {
+  if (!folders || folders.length === 0) return [];
+
+  // Check if already in new format
+  if (typeof folders[0] === 'object' && folders[0].hasOwnProperty('name')) {
+    return folders;
+  }
+
+  // Convert legacy string[] to new format
+  return folders.map(name => ({ name, path: '' }));
+}
+
+/**
+ * Get folder name from folder object (handles both legacy and new format)
+ */
+function getFolderName(folder) {
+  return typeof folder === 'string' ? folder : folder.name;
+}
+
+/**
+ * Get folder path from folder object (new format only)
+ */
+function getFolderPath(folder) {
+  return typeof folder === 'object' && folder.path ? folder.path : '';
+}
+
+/**
  * Keyword Autocomplete System
  */
 const KEYWORDS = [
@@ -136,6 +166,34 @@ const KEYWORDS = [
 ];
 
 let selectedKeywordIndex = -1;
+
+/**
+ * Browse for folder path (Add Folder modal)
+ */
+async function browseFolderPath() {
+  try {
+    const result = await window.api.invoke('file-select-folder');
+    if (result.success && result.path) {
+      document.getElementById('folder-path-input').value = result.path;
+    }
+  } catch (error) {
+    console.error('[Participants] Error browsing folder:', error);
+  }
+}
+
+/**
+ * Browse for folder path (Edit Folder modal)
+ */
+async function browseEditFolderPath() {
+  try {
+    const result = await window.api.invoke('file-select-folder');
+    if (result.success && result.path) {
+      document.getElementById('edit-folder-path-input').value = result.path;
+    }
+  } catch (error) {
+    console.error('[Participants] Error browsing folder:', error);
+  }
+}
 
 /**
  * Setup keyword autocomplete for folder name input
@@ -620,6 +678,11 @@ function closeFolderNameModal() {
   modal.classList.remove('show');
   document.getElementById('folder-name-input').value = '';
 
+  const pathInput = document.getElementById('folder-path-input');
+  if (pathInput) {
+    pathInput.value = '';
+  }
+
   // Hide dropdown when closing modal
   hideKeywordDropdown();
 }
@@ -629,7 +692,9 @@ function closeFolderNameModal() {
  */
 function confirmAddFolder() {
   const folderNameInput = document.getElementById('folder-name-input');
+  const folderPathInput = document.getElementById('folder-path-input');
   const folderName = folderNameInput.value.trim();
+  const folderPath = folderPathInput ? folderPathInput.value.trim() : '';
 
   if (!folderName) {
     alert('Please enter a folder name');
@@ -637,15 +702,18 @@ function confirmAddFolder() {
     return;
   }
 
-  // Check for duplicates
-  if (customFolders.includes(folderName)) {
+  // Normalize existing folders for comparison
+  const normalized = normalizeFolders(customFolders);
+
+  // Check for duplicates by name
+  if (normalized.some(f => f.name === folderName)) {
     alert('A folder with this name already exists');
     folderNameInput.focus();
     return;
   }
 
-  // Add folder
-  customFolders.push(folderName);
+  // Add folder in new format
+  customFolders.push({ name: folderName, path: folderPath || '' });
   renderCustomFolders();
   updateFolderSelects();
 
@@ -759,14 +827,16 @@ function populateFolderSelects() {
     document.getElementById('edit-folder-3')
   ];
 
+  const normalized = normalizeFolders(customFolders);
+
   selects.forEach((select, index) => {
     if (!select) return;
 
     select.innerHTML = `<option value="">Folder ${index + 1}: None</option>`;
-    customFolders.forEach(folderName => {
+    normalized.forEach(folder => {
       const option = document.createElement('option');
-      option.value = folderName;
-      option.textContent = folderName;
+      option.value = folder.name;
+      option.textContent = folder.name;
       select.appendChild(option);
     });
   });
@@ -1020,10 +1090,22 @@ function scrollToParticipant(numero) {
 }
 
 /**
- * Remove a custom folder
+ * Remove a custom folder by index
+ */
+function removeCustomFolderByIndex(index) {
+  if (index >= 0 && index < customFolders.length) {
+    customFolders.splice(index, 1);
+    renderCustomFolders();
+    updateFolderSelects();
+  }
+}
+
+/**
+ * Remove a custom folder by name (legacy support)
  */
 function removeCustomFolder(folderName) {
-  const index = customFolders.indexOf(folderName);
+  const normalized = normalizeFolders(customFolders);
+  const index = normalized.findIndex(f => f.name === folderName);
   if (index > -1) {
     customFolders.splice(index, 1);
     renderCustomFolders();
@@ -1042,10 +1124,17 @@ function editCustomFolder(index) {
   }
 
   editingFolderIndex = index;
-  const oldFolderName = customFolders[index];
+  const normalized = normalizeFolders(customFolders);
+  const folder = normalized[index];
 
-  // Open modal and populate with current name
-  document.getElementById('edit-folder-name-input').value = oldFolderName;
+  // Open modal and populate with current name and path
+  document.getElementById('edit-folder-name-input').value = folder.name;
+
+  const pathInput = document.getElementById('edit-folder-path-input');
+  if (pathInput) {
+    pathInput.value = folder.path || '';
+  }
+
   document.getElementById('edit-folder-modal').classList.add('show');
 
   // Focus on input
@@ -1067,6 +1156,8 @@ function saveEditedFolderName() {
   }
 
   const newFolderName = document.getElementById('edit-folder-name-input').value.trim();
+  const pathInput = document.getElementById('edit-folder-path-input');
+  const newFolderPath = pathInput ? pathInput.value.trim() : '';
 
   if (!newFolderName) {
     alert('Folder name cannot be empty!');
@@ -1074,19 +1165,24 @@ function saveEditedFolderName() {
     return;
   }
 
-  const oldFolderName = customFolders[editingFolderIndex];
+  const normalized = normalizeFolders(customFolders);
+  const oldFolder = normalized[editingFolderIndex];
+  const oldFolderName = oldFolder.name;
 
   // Check if the new name already exists (and it's not the same folder)
-  if (customFolders.includes(newFolderName) && newFolderName !== oldFolderName) {
+  if (normalized.some((f, i) => f.name === newFolderName && i !== editingFolderIndex)) {
     alert('A folder with this name already exists!');
     document.getElementById('edit-folder-name-input').focus();
     return;
   }
 
-  // Update folder name
-  customFolders[editingFolderIndex] = newFolderName;
+  // Update folder with new name and path
+  customFolders[editingFolderIndex] = {
+    name: newFolderName,
+    path: newFolderPath || ''
+  };
 
-  // Update all participants that have this folder assigned
+  // Update all participants that have this folder assigned (by old name)
   participantsData.forEach(participant => {
     if (participant.folder_1 === oldFolderName) {
       participant.folder_1 = newFolderName;
@@ -1133,21 +1229,40 @@ function renderCustomFolders() {
   const existingChips = foldersList.querySelectorAll('.folder-chip');
   existingChips.forEach(chip => chip.remove());
 
+  // Normalize folders to handle both legacy and new format
+  const normalized = normalizeFolders(customFolders);
+
   // Add folder chips
-  customFolders.forEach((folderName, index) => {
+  normalized.forEach((folder, index) => {
     const chip = document.createElement('div');
     chip.className = 'folder-chip';
+
+    const folderName = folder.name;
+    const folderPath = folder.path || '';
+    const hasPath = folderPath.length > 0;
+
+    // Show path info if present
+    const pathInfo = hasPath
+      ? `<small class="folder-chip-path" title="${escapeHtml(folderPath)}" style="display: block; color: #888; font-size: 0.85em; margin-top: 2px;">🗂️ ${escapeHtml(folderPath.length > 30 ? '...' + folderPath.slice(-30) : folderPath)}</small>`
+      : '';
+
     chip.innerHTML = `
-      <span class="folder-chip-name">📁 ${escapeHtml(folderName)}</span>
+      <span class="folder-chip-name">
+        📁 ${escapeHtml(folderName)}
+        ${pathInfo}
+      </span>
       <button type="button" class="folder-chip-edit" onclick="editCustomFolder(${index})" title="Edit folder">
         ✏️
       </button>
-      <button type="button" class="folder-chip-remove" onclick="removeCustomFolder('${escapeHtml(folderName)}')" title="Remove folder">
+      <button type="button" class="folder-chip-remove" onclick="removeCustomFolderByIndex(${index})" title="Remove folder">
         ×
       </button>
     `;
     foldersList.appendChild(chip);
   });
+
+  // Update customFolders with normalized data
+  customFolders = normalized;
 }
 
 /**
@@ -1166,6 +1281,8 @@ function updateFolderSelects() {
   const tbody = document.getElementById('participants-tbody');
   if (!tbody) return;
 
+  const normalized = normalizeFolders(customFolders);
+
   const rows = tbody.querySelectorAll('tr');
   rows.forEach(row => {
     const folderSelects = row.querySelectorAll('select[data-field^="folder_"]');
@@ -1174,11 +1291,11 @@ function updateFolderSelects() {
 
       // Rebuild options
       select.innerHTML = '<option value="">-- None --</option>';
-      customFolders.forEach(folderName => {
+      normalized.forEach(folder => {
         const option = document.createElement('option');
-        option.value = folderName;
-        option.textContent = folderName;
-        if (currentValue === folderName) {
+        option.value = folder.name;
+        option.textContent = folder.name;
+        if (currentValue === folder.name) {
           option.selected = true;
         }
         select.appendChild(option);
@@ -3080,8 +3197,11 @@ window.navigateToParticipants = navigateToParticipants;
 window.downloadCsvTemplate = downloadCsvTemplate;
 window.addCustomFolder = addCustomFolder;
 window.removeCustomFolder = removeCustomFolder;
+window.removeCustomFolderByIndex = removeCustomFolderByIndex;
 window.closeFolderNameModal = closeFolderNameModal;
 window.confirmAddFolder = confirmAddFolder;
+window.browseFolderPath = browseFolderPath;
+window.browseEditFolderPath = browseEditFolderPath;
 window.openParticipantEditModal = openParticipantEditModal;
 window.closeParticipantEditModal = closeParticipantEditModal;
 window.saveParticipantEdit = saveParticipantEdit;

@@ -176,7 +176,7 @@
       </div>
       <div class="modal-body">
         <div class="form-group">
-          <label for="folder-name-input text-white">Folder Name *</label>
+          <label for="folder-name-input" class="text-white">Folder Name *</label>
           <div class="folder-input-container">
             <input type="text" id="folder-name-input" class="form-input" placeholder="e.g., Ferrari  or  {number}-{name}" autofocus autocomplete="off">
             <datalist id="keyword-suggestions">
@@ -188,6 +188,22 @@
             </datalist>
             <div id="keyword-dropdown" class="keyword-dropdown" style="display: none;"></div>
           </div>
+        </div>
+
+        <div class="form-group">
+          <label for="folder-path-input" class="text-white">
+            Custom Path (Optional)
+            <span class="label-hint" title="Leave empty to use base export path">ℹ️</span>
+          </label>
+          <div class="folder-path-input-container" style="display: flex; gap: 0.5rem;">
+            <input type="text" id="folder-path-input" class="form-input" placeholder="Leave empty for default structure">
+            <button type="button" class="btn btn-secondary" onclick="browseFolderPath()" title="Browse folder">
+              📁
+            </button>
+          </div>
+          <small class="form-hint">
+            Specify an absolute path to export files directly to a client folder. If empty, uses the base export path.
+          </small>
         </div>
 
         <div class="folder-modal-tip">
@@ -479,12 +495,12 @@
   <div id="edit-folder-modal" class="modal">
     <div class="modal-content" style="max-width: 500px;">
       <div class="modal-header">
-        <h2>Edit Folder Name</h2>
+        <h2>Edit Folder</h2>
         <button class="modal-close" onclick="closeEditFolderModal()">&times;</button>
       </div>
       <div class="modal-body">
         <div class="form-group">
-          <label for="edit-folder-name-input">Folder Name *</label>
+          <label for="edit-folder-name-input" class="text-white">Folder Name *</label>
           <input
             type="text"
             id="edit-folder-name-input"
@@ -492,6 +508,21 @@
             placeholder="Enter folder name"
             onkeypress="if(event.key === 'Enter') saveEditedFolderName()"
           >
+        </div>
+        <div class="form-group">
+          <label for="edit-folder-path-input" class="text-white">
+            Custom Path (Optional)
+            <span class="label-hint" title="Leave empty to use base export path">ℹ️</span>
+          </label>
+          <div class="folder-path-input-container" style="display: flex; gap: 0.5rem;">
+            <input type="text" id="edit-folder-path-input" class="form-input" placeholder="Leave empty for default structure">
+            <button type="button" class="btn btn-secondary" onclick="browseEditFolderPath()" title="Browse folder">
+              📁
+            </button>
+          </div>
+          <small class="form-hint">
+            Specify an absolute path to export files directly to a client folder
+          </small>
         </div>
       </div>
       <div class="modal-footer">
