@@ -46,6 +46,10 @@ class LogVisualizer {
     // Folder organization status
     this.wasAlreadyOrganized = false; // Will be set during init
 
+    // Participant preset data for autocomplete
+    this.participantPresetData = null;
+    this.presetParticipants = [];
+
     console.log('[LogVisualizer] Initialized');
   }
 
@@ -66,6 +70,9 @@ class LogVisualizer {
       console.log(`[LogVisualizer] Folder organization was ${this.wasAlreadyOrganized ? 'ENABLED' : 'NOT enabled'} during analysis`);
     }
 
+    // Load participant preset data for autocomplete if available
+    await this.loadParticipantPresetData();
+
     // Load detailed log data if available
     if (executionId) {
       try {
@@ -85,6 +92,49 @@ class LogVisualizer {
     this.updateStatistics();
 
     console.log('[LogVisualizer] Initialization complete');
+  }
+
+  /**
+   * Load participant preset data for autocomplete feature
+   */
+  async loadParticipantPresetData() {
+    try {
+      // Check if execution has preset information
+      if (!this.execution || !this.execution.execution_settings) {
+        console.log('[LogVisualizer] No execution settings available for preset data');
+        return;
+      }
+
+      const executionSettings = this.execution.execution_settings;
+
+      // Check if preset was used during analysis
+      // The preset data might be stored in different formats depending on the version
+      const presetId = executionSettings.participantPresetId ||
+                      executionSettings.preset_id ||
+                      (executionSettings.participantPreset && executionSettings.participantPreset.id);
+
+      if (!presetId) {
+        console.log('[LogVisualizer] No participant preset was used during this analysis');
+        return;
+      }
+
+      console.log(`[LogVisualizer] Loading preset data for preset ID: ${presetId}`);
+
+      // Fetch preset data from Supabase
+      const response = await window.api.invoke('supabase-get-participant-preset-by-id', presetId);
+
+      if (response && response.success && response.data) {
+        this.participantPresetData = response.data;
+        this.presetParticipants = response.data.participants || [];
+
+        console.log(`[LogVisualizer] Loaded ${this.presetParticipants.length} participants for autocomplete`);
+      } else {
+        console.warn('[LogVisualizer] Could not load preset data:', response);
+      }
+    } catch (error) {
+      console.warn('[LogVisualizer] Error loading participant preset data:', error);
+      // Continue without autocomplete - not a critical error
+    }
   }
 
   /**
@@ -1745,11 +1795,65 @@ class LogVisualizer {
   createVehicleEditorHTML(vehicle, vehicleIndex, fileName, imageIndex) {
     const isModified = this.manualCorrections.has(`${fileName}_${vehicleIndex}`);
 
+    // Generate unique IDs for datalists
+    const raceNumberListId = `racenumber-list-${fileName}-${vehicleIndex}`;
+    const teamListId = `team-list-${fileName}-${vehicleIndex}`;
+    const driverListId = `driver-list-${fileName}-${vehicleIndex}`;
+
+    // Build datalist options if preset data is available
+    const hasPresetData = this.presetParticipants && this.presetParticipants.length > 0;
+
+    let raceNumberOptions = '';
+    let teamOptions = '';
+    let driverOptions = '';
+
+    if (hasPresetData) {
+      // Create unique sets for each field to avoid duplicates
+      const raceNumbers = new Set();
+      const teams = new Set();
+      const drivers = new Set();
+
+      this.presetParticipants.forEach(participant => {
+        // Race numbers
+        if (participant.numero) {
+          raceNumbers.add(participant.numero);
+        }
+
+        // Teams
+        if (participant.squadra) {
+          teams.add(participant.squadra);
+        }
+
+        // Drivers/Names
+        if (participant.nome) {
+          drivers.add(participant.nome);
+        }
+        // Support for navigatore field (rally)
+        if (participant.navigatore) {
+          drivers.add(participant.navigatore);
+        }
+      });
+
+      // Build options HTML
+      raceNumberOptions = Array.from(raceNumbers).map(num =>
+        `<option value="${this.escapeHtml(num)}">`
+      ).join('');
+
+      teamOptions = Array.from(teams).map(team =>
+        `<option value="${this.escapeHtml(team)}">`
+      ).join('');
+
+      driverOptions = Array.from(drivers).map(driver =>
+        `<option value="${this.escapeHtml(driver)}">`
+      ).join('');
+    }
+
     return `
       <div class="lv-vehicle-editor ${isModified ? 'modified' : ''}" data-vehicle-index="${vehicleIndex}" data-image-index="${imageIndex}" data-file-name="${fileName}">
         <div class="lv-vehicle-header">
           <h5>Vehicle ${vehicleIndex + 1}</h5>
           ${isModified ? '<span class="lv-modified-indicator">✏️ Modified</span>' : ''}
+          ${hasPresetData ? '<span class="lv-autocomplete-indicator" title="Autocomplete enabled from participant preset">🎯</span>' : ''}
           <button class="lv-delete-vehicle" data-action="delete" data-vehicle-index="${vehicleIndex}" data-file-name="${fileName}">🗑️</button>
         </div>
 
@@ -1757,28 +1861,37 @@ class LogVisualizer {
           <div class="lv-field-group">
             <label>Race Number:</label>
             <input type="text"
-                   class="lv-edit-input"
+                   class="lv-edit-input lv-autocomplete-input"
                    data-field="raceNumber"
                    value="${vehicle.raceNumber || ''}"
-                   placeholder="Enter number..." />
+                   placeholder="Enter number..."
+                   ${hasPresetData ? `list="${raceNumberListId}"` : ''}
+                   autocomplete="off" />
+            ${hasPresetData ? `<datalist id="${raceNumberListId}">${raceNumberOptions}</datalist>` : ''}
           </div>
 
           <div class="lv-field-group">
             <label>Team:</label>
             <input type="text"
-                   class="lv-edit-input"
+                   class="lv-edit-input lv-autocomplete-input"
                    data-field="team"
                    value="${vehicle.team || ''}"
-                   placeholder="Enter team name..." />
+                   placeholder="Enter team name..."
+                   ${hasPresetData ? `list="${teamListId}"` : ''}
+                   autocomplete="off" />
+            ${hasPresetData ? `<datalist id="${teamListId}">${teamOptions}</datalist>` : ''}
           </div>
 
           <div class="lv-field-group">
             <label>Drivers:</label>
             <input type="text"
-                   class="lv-edit-input"
+                   class="lv-edit-input lv-autocomplete-input"
                    data-field="drivers"
                    value="${(vehicle.drivers || []).join(', ')}"
-                   placeholder="Enter driver names..." />
+                   placeholder="Enter driver names..."
+                   ${hasPresetData ? `list="${driverListId}"` : ''}
+                   autocomplete="off" />
+            ${hasPresetData ? `<datalist id="${driverListId}">${driverOptions}</datalist>` : ''}
           </div>
 
           <div class="lv-field-group">
@@ -2240,6 +2353,21 @@ class LogVisualizer {
       }
     }
     return cleaned;
+  }
+
+  /**
+   * Escape HTML special characters to prevent XSS
+   */
+  escapeHtml(text) {
+    if (!text) return '';
+    const map = {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#039;'
+    };
+    return text.toString().replace(/[&<>"']/g, m => map[m]);
   }
 
   /**
