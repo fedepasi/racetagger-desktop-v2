@@ -15,6 +15,7 @@
 class PresetFaceManager {
   constructor() {
     this.currentParticipantId = null;
+    this.currentDriverId = null; // NEW: Support for driver-specific photos
     this.currentPresetId = null;
     this.currentUserId = null;
     this.photos = [];
@@ -54,27 +55,49 @@ class PresetFaceManager {
   }
 
   /**
-   * Load face photos for a participant
+   * Load face photos for a participant or driver
+   * @param {string|null} participantId - Participant ID (for backward compatibility)
+   * @param {string} presetId - Preset ID
+   * @param {string} userId - User ID
+   * @param {boolean} isOfficial - Whether preset is official (read-only)
+   * @param {string|null} driverId - Driver ID (for per-driver photos)
    */
-  async loadPhotos(participantId, presetId, userId, isOfficial = false) {
+  async loadPhotos(participantId, presetId, userId, isOfficial = false, driverId = null) {
+    console.log('[PresetFaceManager] loadPhotos called:', {
+      participantId,
+      driverId,
+      presetId
+    });
+
     this.currentParticipantId = participantId;
+    this.currentDriverId = driverId;
     this.currentPresetId = presetId;
     this.currentUserId = userId;
     this.isOfficial = isOfficial;
     this.photos = [];
 
-    // For new participants (no ID yet), show section with message
-    if (!participantId) {
+    // For new participants/drivers (no ID yet), show section with message
+    if (!participantId && !driverId) {
+      console.log('[PresetFaceManager] No ID yet, showing empty state');
       this.render(); // Show empty state with add button
       this.showSection();
       return;
     }
 
     try {
-      const result = await window.api.invoke('preset-face-get-photos', participantId);
+      const params = {};
+      if (driverId) {
+        params.driverId = driverId;
+      } else if (participantId) {
+        params.participantId = participantId;
+      }
+
+      console.log('[PresetFaceManager] Fetching photos with params:', params);
+      const result = await window.api.invoke('preset-face-get-photos', params);
 
       if (result.success) {
         this.photos = result.photos || [];
+        console.log(`[PresetFaceManager] Loaded ${this.photos.length} photos for driver ${driverId || 'N/A'}`);
       } else {
         console.error('[PresetFaceManager] Failed to load photos:', result.error);
         this.photos = [];
@@ -91,10 +114,21 @@ class PresetFaceManager {
   }
 
   /**
+   * Check if we're in a driver-specific context (per-driver face recognition)
+   * @returns {boolean} True if this manager instance is used for per-driver photos
+   */
+  isDriverContext() {
+    // If driverFaceManagerMulti exists and has drivers, we're in driver context
+    // In this mode, EVERY face manager instance should have a driver ID
+    return window.driverFaceManagerMulti?.drivers?.length > 0;
+  }
+
+  /**
    * Reset state (called when closing modal or switching participants)
    */
   reset() {
     this.currentParticipantId = null;
+    this.currentDriverId = null;
     this.currentPresetId = null;
     this.photos = [];
     this.isUploading = false;
@@ -172,9 +206,28 @@ class PresetFaceManager {
    * Upload a photo with face detection
    */
   async uploadPhoto(file) {
-    // Auto-save participant if no ID yet
-    if (!this.currentParticipantId || !this.currentPresetId) {
-      console.log('[PresetFaceManager] No participant ID, triggering auto-save...');
+    console.log('[PresetFaceManager] Upload started:', {
+      participantId: this.currentParticipantId,
+      driverId: this.currentDriverId,
+      presetId: this.currentPresetId,
+      userId: this.currentUserId
+    });
+
+    // Auto-save if we don't have the required IDs yet
+    // Note: participantId is ALWAYS required (even for drivers)
+    // CRITICAL FIX: For per-driver photos, driverId MUST exist before upload
+    // Otherwise photos get associated with null driver ID and become orphaned
+    // when syncDrivers() creates new drivers with different IDs
+    const needsAutoSave = !this.currentParticipantId || !this.currentPresetId ||
+                           (this.currentDriverId === null && this.isDriverContext());
+
+    if (needsAutoSave) {
+      console.log('[PresetFaceManager] Missing required IDs, triggering auto-save...', {
+        hasParticipantId: !!this.currentParticipantId,
+        hasPresetId: !!this.currentPresetId,
+        hasDriverId: !!this.currentDriverId,
+        isDriverContext: this.isDriverContext()
+      });
       this.showNotification('Saving participant...', 'info');
 
       try {
@@ -183,11 +236,28 @@ class PresetFaceManager {
           await window.saveParticipantAndStay();
 
           // Wait a bit for the IDs to be updated
-          await new Promise(resolve => setTimeout(resolve, 300));
+          await new Promise(resolve => setTimeout(resolve, 500));
 
-          // Check if we now have the IDs
-          if (!this.currentParticipantId) {
-            this.showNotification('Could not save participant. Please try again.', 'error');
+          console.log('[PresetFaceManager] After auto-save:', {
+            participantId: this.currentParticipantId,
+            driverId: this.currentDriverId,
+            presetId: this.currentPresetId,
+            isDriverContext: this.isDriverContext()
+          });
+
+          // Check if we now have the required IDs
+          // For driver context, we MUST have a driver ID at this point
+          const stillMissingIds = !this.currentParticipantId || !this.currentPresetId ||
+                                   (this.isDriverContext() && !this.currentDriverId);
+
+          if (stillMissingIds) {
+            console.error('[PresetFaceManager] Still missing IDs after save:', {
+              hasParticipantId: !!this.currentParticipantId,
+              hasPresetId: !!this.currentPresetId,
+              hasDriverId: !!this.currentDriverId,
+              needsDriverId: this.isDriverContext()
+            });
+            this.showNotification('Could not save participant/driver. Please try again.', 'error');
             return;
           }
         } else {
@@ -272,8 +342,7 @@ class PresetFaceManager {
       }
 
       // Upload to backend
-      const result = await window.api.invoke('preset-face-upload-photo', {
-        participantId: this.currentParticipantId,
+      const uploadParams = {
         presetId: this.currentPresetId,
         userId: this.currentUserId,
         photoData: base64Data,
@@ -282,13 +351,32 @@ class PresetFaceManager {
         detectionConfidence: detectionConfidence,
         photoType: 'reference',
         isPrimary: this.photos.length === 0 // First photo is primary
-      });
+      };
+
+      // Set either participantId or driverId
+      if (this.currentDriverId) {
+        uploadParams.driverId = this.currentDriverId;
+        console.log('[PresetFaceManager] Uploading for driver:', this.currentDriverId);
+      } else {
+        uploadParams.participantId = this.currentParticipantId;
+        console.log('[PresetFaceManager] Uploading for participant:', this.currentParticipantId);
+      }
+
+      const result = await window.api.invoke('preset-face-upload-photo', uploadParams);
+      console.log('[PresetFaceManager] Upload result:', result);
+      console.log('[PresetFaceManager] Upload success:', result.success);
+      console.log('[PresetFaceManager] Upload photo data:', result.photo);
 
       if (result.success) {
+        console.log('[PresetFaceManager] Adding photo to array. Current count:', this.photos.length);
         this.photos.push(result.photo);
+        console.log('[PresetFaceManager] New photo count:', this.photos.length);
+        console.log('[PresetFaceManager] Rendering grid with photos:', this.photos);
+        console.log('[PresetFaceManager] Grid element:', this.gridElement);
         this.render();
         this.showNotification('Photo uploaded successfully', 'success');
       } else {
+        console.error('[PresetFaceManager] Upload failed:', result.error);
         this.showNotification(`Upload failed: ${result.error}`, 'error');
       }
 
@@ -371,7 +459,12 @@ class PresetFaceManager {
    * Render the photo grid
    */
   render() {
-    if (!this.gridElement) return;
+    if (!this.gridElement) {
+      console.warn('[PresetFaceManager] Cannot render - no grid element');
+      return;
+    }
+
+    console.log(`[PresetFaceManager] Rendering grid with ${this.photos.length} photos for driver ${this.currentDriverId || 'N/A'}`);
 
     // Clear grid
     this.gridElement.innerHTML = '';
@@ -394,6 +487,8 @@ class PresetFaceManager {
 
     // Update add button state
     this.updateUploadButton(this.isUploading);
+
+    console.log(`[PresetFaceManager] Render complete. Grid element:`, this.gridElement);
   }
 
   /**

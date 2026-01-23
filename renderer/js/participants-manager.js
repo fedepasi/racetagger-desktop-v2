@@ -25,6 +25,11 @@ async function initParticipantsManager() {
     presetFaceManager.initialize();
   }
 
+  // Initialize driver face manager if available
+  if (typeof driverFaceManagerMulti !== 'undefined' && driverFaceManagerMulti.initialize) {
+    driverFaceManagerMulti.initialize();
+  }
+
   // Load sport categories for dropdown
   await loadSportCategoriesForDropdown();
 
@@ -687,9 +692,26 @@ async function openParticipantEditModal(rowIndex = -1) {
     document.getElementById('edit-sponsor').value = participant.sponsor || '';
     document.getElementById('edit-metatag').value = participant.metatag || '';
 
-    // Populate drivers tag input - prefer drivers array, fallback to nome/nome_pilota string
-    const driversData = participant.drivers || participant.nome || participant.nome_pilota || '';
-    setDriversTags(driversData);
+    // Populate drivers tag input
+    // Use driver records from database if available, otherwise fallback to nome field
+    let existingDriverRecords = null;
+
+    if (participant.preset_participant_drivers && participant.preset_participant_drivers.length > 0) {
+      // Use driver records from database (sorted by driver_order)
+      existingDriverRecords = [...participant.preset_participant_drivers].sort((a, b) => a.driver_order - b.driver_order);
+      const driverNames = existingDriverRecords.map(d => d.driver_name);
+      setDriversTags(driverNames);
+
+      // Store driver records for later use
+      participant.drivers = existingDriverRecords;
+
+      console.log('[Participants] Loaded', existingDriverRecords.length, 'existing drivers from DB');
+    } else {
+      // Fallback: parse nome field for backwards compatibility
+      const driversData = participant.drivers || participant.nome || participant.nome_pilota || '';
+      setDriversTags(driversData);
+      console.log('[Participants] No driver records in DB, using nome field fallback');
+    }
 
     // Populate folder selects
     populateFolderSelects();
@@ -697,11 +719,27 @@ async function openParticipantEditModal(rowIndex = -1) {
     document.getElementById('edit-folder-2').value = participant.folder_2 || '';
     document.getElementById('edit-folder-3').value = participant.folder_3 || '';
 
-    // Load face photos for participant
-    if (typeof presetFaceManager !== 'undefined' && currentPreset) {
+    // Load driver face panels (replaces old presetFaceManager)
+    if (typeof driverFaceManagerMulti !== 'undefined' && currentPreset) {
       const isOfficial = currentPreset.is_official === true;
-      // Pass participant.id (may be null for new participants - will show empty state with add button)
-      await presetFaceManager.loadPhotos(participant.id || null, currentPreset.id, currentUserId, isOfficial);
+      const driverNames = getDriversTagsArray(); // Get current drivers from tag input
+
+      // Pass existing driver records to avoid re-creating drivers
+      await driverFaceManagerMulti.load(
+        participant.id || null,
+        currentPreset.id,
+        currentUserId,
+        isOfficial,
+        driverNames,
+        existingDriverRecords  // NEW: Pass driver records with IDs
+      );
+
+      // Only sync drivers if we don't have existing records from DB
+      // This prevents race condition where photo upload happens before drivers are created
+      if (participant.id && driverNames.length > 0 && !existingDriverRecords) {
+        console.log('[Participants] Syncing drivers to DB (no existing records)');
+        await driverFaceManagerMulti.syncDrivers(driverNames);
+      }
     }
   } else {
     // Create mode: clear all fields
@@ -720,10 +758,11 @@ async function openParticipantEditModal(rowIndex = -1) {
     document.getElementById('edit-folder-2').value = '';
     document.getElementById('edit-folder-3').value = '';
 
-    // Show face photos section for new participants (will auto-save when adding photos)
-    if (typeof presetFaceManager !== 'undefined' && currentPreset) {
+    // Show driver face panels for new participants
+    if (typeof driverFaceManagerMulti !== 'undefined' && currentPreset) {
       const isOfficial = currentPreset?.is_official === true;
-      await presetFaceManager.loadPhotos(null, currentPreset.id, currentUserId, isOfficial);
+      const driverNames = []; // New participant has no drivers yet
+      await driverFaceManagerMulti.load(null, currentPreset.id, currentUserId, isOfficial, driverNames);
     }
   }
 
@@ -743,9 +782,9 @@ function closeParticipantEditModal() {
   document.getElementById('participant-edit-modal').classList.remove('show');
   editingRowIndex = -1;
 
-  // Reset face manager state
-  if (typeof presetFaceManager !== 'undefined' && presetFaceManager.reset) {
-    presetFaceManager.reset();
+  // Reset driver face manager state
+  if (typeof driverFaceManagerMulti !== 'undefined' && driverFaceManagerMulti.reset) {
+    driverFaceManagerMulti.reset();
   }
 }
 
@@ -908,10 +947,19 @@ async function saveParticipantAndStay() {
       // Find the participant we just saved by numero
       const savedParticipant = participantsData.find(p => p.numero === document.getElementById('edit-numero').value.trim());
 
-      if (savedParticipant?.id && typeof presetFaceManager !== 'undefined') {
+      if (savedParticipant?.id) {
         const isOfficial = currentPreset.is_official === true;
-        await presetFaceManager.loadPhotos(savedParticipant.id, currentPreset.id, currentUserId, isOfficial);
-        showNotification('Participant saved! You can now add face photos.', 'success');
+
+        // Update driver face managers with new participant and driver IDs
+        if (typeof driverFaceManagerMulti !== 'undefined') {
+          const driverNames = getDriversTagsArray();
+          await driverFaceManagerMulti.load(savedParticipant.id, currentPreset.id, currentUserId, isOfficial, driverNames);
+          showNotification('Participant saved! You can now add face photos.', 'success');
+        } else if (typeof presetFaceManager !== 'undefined') {
+          // Fallback to old face manager if driver manager not available
+          await presetFaceManager.loadPhotos(savedParticipant.id, currentPreset.id, currentUserId, isOfficial);
+          showNotification('Participant saved! You can now add face photos.', 'success');
+        }
       }
     }
 
@@ -2400,7 +2448,7 @@ function initDriversTagInput() {
  * Add a driver tag
  * @param {string} name - Driver name to add
  */
-function addDriverTag(name) {
+async function addDriverTag(name) {
   const trimmedName = name.trim();
   if (!trimmedName) return;
 
@@ -2412,17 +2460,23 @@ function addDriverTag(name) {
   editDriversTags.push(trimmedName);
   renderDriversTags();
   syncDriversToHiddenInput();
+
+  // Sync driver panels
+  await syncDriverPanels();
 }
 
 /**
  * Remove a driver tag by index
  * @param {number} index - Index of tag to remove
  */
-function removeDriverTag(index) {
+async function removeDriverTag(index) {
   if (index >= 0 && index < editDriversTags.length) {
     editDriversTags.splice(index, 1);
     renderDriversTags();
     syncDriversToHiddenInput();
+
+    // Sync driver panels
+    await syncDriverPanels();
   }
 }
 
@@ -2503,10 +2557,52 @@ function getDriversTagsArray() {
 /**
  * Clear all driver tags
  */
-function clearDriversTags() {
+async function clearDriversTags() {
   editDriversTags = [];
   renderDriversTags();
   syncDriversToHiddenInput();
+
+  // Sync driver panels
+  await syncDriverPanels();
+}
+
+/**
+ * Sync driver panels with current driver tags
+ * Called whenever drivers are added/removed/reordered
+ */
+async function syncDriverPanels() {
+  if (typeof driverFaceManagerMulti === 'undefined') {
+    return;
+  }
+
+  // Get current state
+  const driverNames = getDriversTagsArray();
+
+  // Get user session for new drivers
+  let currentUserId = driverFaceManagerMulti.currentUserId;
+  if (!currentUserId) {
+    try {
+      const sessionResult = await window.api.invoke('auth-get-session');
+      if (sessionResult.success && sessionResult.session?.user) {
+        currentUserId = sessionResult.session.user.id;
+      }
+    } catch (e) {
+      console.warn('[Participants] Could not get session for driver panels:', e);
+    }
+  }
+
+  const participantId = driverFaceManagerMulti.currentParticipantId;
+  const presetId = driverFaceManagerMulti.currentPresetId || currentPreset?.id;
+  const isOfficial = driverFaceManagerMulti.isOfficial || (currentPreset?.is_official === true);
+
+  // Reload driver panels with new names
+  await driverFaceManagerMulti.load(
+    participantId,
+    presetId,
+    currentUserId,
+    isOfficial,
+    driverNames
+  );
 }
 
 // Export for global access

@@ -551,11 +551,46 @@ function initializeLocalCacheSchema(): void {
       );
     `;
 
+    // Tabella per drivers individuali (multi-driver vehicles come WEC)
+    const createPresetParticipantDriversTable = `
+      CREATE TABLE IF NOT EXISTS PresetParticipantDrivers (
+        id TEXT PRIMARY KEY,
+        participant_id TEXT NOT NULL,
+        driver_name TEXT NOT NULL,
+        driver_metatag TEXT,
+        driver_order INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (participant_id) REFERENCES PresetParticipants(id) ON DELETE CASCADE
+      );
+    `;
+
+    // Tabella per face photos (supporta sia participant_id che driver_id)
+    const createPresetParticipantFacePhotosTable = `
+      CREATE TABLE IF NOT EXISTS PresetParticipantFacePhotos (
+        id TEXT PRIMARY KEY,
+        participant_id TEXT,
+        driver_id TEXT,
+        photo_url TEXT NOT NULL,
+        storage_path TEXT NOT NULL,
+        face_descriptor TEXT,
+        photo_type TEXT DEFAULT 'reference',
+        detection_confidence REAL,
+        is_primary INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (participant_id) REFERENCES PresetParticipants(id) ON DELETE CASCADE,
+        FOREIGN KEY (driver_id) REFERENCES PresetParticipantDrivers(id) ON DELETE CASCADE,
+        CHECK ((participant_id IS NOT NULL AND driver_id IS NULL) OR (participant_id IS NULL AND driver_id IS NOT NULL))
+      );
+    `;
+
     // Initialize schema on primary connection
     localDB.exec(createProjectsCacheTable);
     localDB.exec(createExecutionsCacheTable);
     localDB.exec(createParticipantPresetsTable);
     localDB.exec(createPresetParticipantsTable);
+    localDB.exec(createPresetParticipantDriversTable);
+    localDB.exec(createPresetParticipantFacePhotosTable);
 
     // Migration: Add new columns if they don't exist (for existing databases)
     try {
@@ -2391,7 +2426,8 @@ export interface PresetParticipantSupabase {
  */
 export interface PresetParticipantFacePhoto {
   id: string;
-  participant_id: string;
+  participant_id: string | null;
+  driver_id: string | null;
   photo_url: string;
   storage_path: string;
   face_descriptor: number[] | null;
@@ -2405,7 +2441,8 @@ export interface PresetParticipantFacePhoto {
  * Interface for creating a new face photo
  */
 export interface CreatePresetFacePhotoParams {
-  participant_id: string;
+  participant_id: string | null;
+  driver_id: string | null;
   user_id: string; // Required for RLS policy
   photo_url: string;
   storage_path: string;
@@ -2798,7 +2835,16 @@ export async function getParticipantPresetByIdSupabase(presetId: string): Promis
       .select(`
         *,
         sport_categories(code, name, ai_prompt),
-        preset_participants(*)
+        preset_participants(
+          *,
+          preset_participant_drivers(
+            id,
+            driver_name,
+            driver_metatag,
+            driver_order,
+            created_at
+          )
+        )
       `)
       .eq('id', presetId)
       .or(`user_id.eq.${userId},is_public.eq.true,is_official.eq.true`)
@@ -3679,18 +3725,27 @@ export async function isFeatureEnabled(featureName: string): Promise<boolean> {
 // =====================================================
 
 /**
- * Get all face photos for a participant
+ * Get all face photos for a participant or driver
  * Uses authenticated Supabase client for RLS policy compliance
  */
-export async function getPresetParticipantFacePhotos(participantId: string): Promise<PresetParticipantFacePhoto[]> {
+export async function getPresetParticipantFacePhotos(participantId?: string, driverId?: string): Promise<PresetParticipantFacePhoto[]> {
   try {
     // Use authenticated client from authService for RLS policy compliance
     const authenticatedClient = authService.getSupabaseClient();
 
-    const { data, error } = await authenticatedClient
+    let query = authenticatedClient
       .from('preset_participant_face_photos')
-      .select('*')
-      .eq('participant_id', participantId)
+      .select('*');
+
+    if (participantId) {
+      query = query.eq('participant_id', participantId);
+    } else if (driverId) {
+      query = query.eq('driver_id', driverId);
+    } else {
+      throw new Error('Either participantId or driverId must be provided');
+    }
+
+    const { data, error } = await query
       .order('is_primary', { ascending: false })
       .order('created_at', { ascending: false });
 
@@ -3710,7 +3765,7 @@ export async function getPresetParticipantFacePhotos(participantId: string): Pro
 }
 
 /**
- * Add a new face photo for a participant
+ * Add a new face photo for a participant or driver
  * Uses authenticated Supabase client for RLS policy compliance
  */
 export async function addPresetParticipantFacePhoto(params: CreatePresetFacePhotoParams): Promise<PresetParticipantFacePhoto> {
@@ -3722,6 +3777,7 @@ export async function addPresetParticipantFacePhoto(params: CreatePresetFacePhot
       .from('preset_participant_face_photos')
       .insert({
         participant_id: params.participant_id,
+        driver_id: params.driver_id,
         user_id: params.user_id,
         photo_url: params.photo_url,
         storage_path: params.storage_path,
@@ -3809,11 +3865,13 @@ export async function updatePresetParticipantFacePhoto(
 /**
  * Load all face descriptors for a preset (for face recognition during analysis)
  * Returns descriptors in the format expected by FaceRecognitionProcessor
+ * Includes both participant-level and driver-level face photos
  * Uses authenticated Supabase client for RLS policy compliance
  */
 export async function loadPresetFaceDescriptors(presetId: string): Promise<Array<{
   personId: string;
   personName: string;
+  personMetatag?: string; // Driver-specific metatag (for drivers only)
   team: string;
   carNumber: string;
   descriptor: number[];
@@ -3821,12 +3879,27 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
   source: 'preset';
   photoType: string;
   isPrimary: boolean;
+  isDriver?: boolean; // True if this is a driver-specific descriptor
 }>> {
   try {
     // Use authenticated client from authService for RLS policy compliance
     const authenticatedClient = authService.getSupabaseClient();
 
-    // Get all participants with their face photos
+    const descriptors: Array<{
+      personId: string;
+      personName: string;
+      personMetatag?: string;
+      team: string;
+      carNumber: string;
+      descriptor: number[];
+      referencePhotoUrl: string;
+      source: 'preset';
+      photoType: string;
+      isPrimary: boolean;
+      isDriver?: boolean;
+    }> = [];
+
+    // 1. Get all participants with their direct face photos (backward compatibility)
     const { data: participants, error: participantsError } = await authenticatedClient
       .from('preset_participants')
       .select(`
@@ -3834,7 +3907,7 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
         numero,
         nome,
         squadra,
-        preset_participant_face_photos (
+        preset_participant_face_photos!participant_id (
           id,
           photo_url,
           face_descriptor,
@@ -3846,22 +3919,11 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
       .eq('preset_id', presetId);
 
     if (participantsError) {
-      console.error('[DB] Error loading preset face descriptors:', participantsError);
+      console.error('[DB] Error loading preset face descriptors (participants):', participantsError);
       throw participantsError;
     }
 
-    const descriptors: Array<{
-      personId: string;
-      personName: string;
-      team: string;
-      carNumber: string;
-      descriptor: number[];
-      referencePhotoUrl: string;
-      source: 'preset';
-      photoType: string;
-      isPrimary: boolean;
-    }> = [];
-
+    // Add participant-level descriptors
     for (const participant of participants || []) {
       const facePhotos = (participant as any).preset_participant_face_photos || [];
 
@@ -3880,13 +3942,89 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
           referencePhotoUrl: photo.photo_url,
           source: 'preset',
           photoType: photo.photo_type || 'reference',
-          isPrimary: photo.is_primary || false
+          isPrimary: photo.is_primary || false,
+          isDriver: false
         });
       }
     }
 
+    // 2. Get all drivers with their specific face photos
+    // OPTIMIZATION: Split into 2 queries to avoid complex joins and statement timeout
+
+    // 2a. First get all participant IDs for this preset (simple, fast query)
+    const participantIds = (participants || []).map(p => p.id);
+
+    if (participantIds.length > 0) {
+      // 2b. Get drivers for these participants (no join on preset_participants needed)
+      const { data: drivers, error: driversError } = await authenticatedClient
+        .from('preset_participant_drivers')
+        .select(`
+          id,
+          driver_name,
+          driver_metatag,
+          participant_id
+        `)
+        .in('participant_id', participantIds);
+
+      if (driversError) {
+        console.error('[DB] Error loading preset drivers:', driversError);
+        // Don't throw - this is optional (for new feature)
+      } else if (drivers && drivers.length > 0) {
+        // 2c. Get face photos for all drivers (separate query, avoids nested joins)
+        const driverIds = drivers.map(d => d.id);
+
+        const { data: driverPhotos, error: photosError } = await authenticatedClient
+          .from('preset_participant_face_photos')
+          .select(`
+            id,
+            driver_id,
+            photo_url,
+            face_descriptor,
+            photo_type,
+            is_primary,
+            detection_confidence
+          `)
+          .in('driver_id', driverIds)
+          .not('face_descriptor', 'is', null);
+
+        if (photosError) {
+          console.error('[DB] Error loading driver face photos:', photosError);
+        } else {
+          // Match photos to drivers
+          for (const driver of drivers) {
+            // Find participant data for this driver
+            const participant = participants?.find(p => p.id === driver.participant_id);
+
+            // Find all photos for this driver
+            const facePhotos = (driverPhotos || []).filter(p => p.driver_id === driver.id);
+
+            for (const photo of facePhotos) {
+              // Skip photos without valid descriptors
+              if (!photo.face_descriptor || !Array.isArray(photo.face_descriptor) || photo.face_descriptor.length !== 128) {
+                continue;
+              }
+
+              descriptors.push({
+                personId: driver.id,
+                personName: driver.driver_name,
+                personMetatag: driver.driver_metatag || undefined,
+                team: participant?.squadra || '',
+                carNumber: participant?.numero || '',
+                descriptor: Array.from(photo.face_descriptor),
+                referencePhotoUrl: photo.photo_url,
+                source: 'preset',
+                photoType: photo.photo_type || 'reference',
+                isPrimary: photo.is_primary || false,
+                isDriver: true
+              });
+            }
+          }
+        }
+      }
+    }
+
     if (DEBUG_MODE) {
-      console.log(`[DB] Loaded ${descriptors.length} face descriptors from preset ${presetId}`);
+      console.log(`[DB] Loaded ${descriptors.length} face descriptors from preset ${presetId} (${descriptors.filter(d => d.isDriver).length} from drivers)`);
     }
 
     return descriptors;
@@ -3897,18 +4035,25 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
 }
 
 /**
- * Get face photo count for a participant
+ * Get face photo count for a participant or driver
  * Uses authenticated Supabase client for RLS policy compliance
  */
-export async function getPresetParticipantFacePhotoCount(participantId: string): Promise<number> {
+export async function getPresetParticipantFacePhotoCount(targetId: string, isDriver: boolean = false): Promise<number> {
   try {
     // Use authenticated client from authService for RLS policy compliance
     const authenticatedClient = authService.getSupabaseClient();
 
-    const { count, error } = await authenticatedClient
+    let query = authenticatedClient
       .from('preset_participant_face_photos')
-      .select('*', { count: 'exact', head: true })
-      .eq('participant_id', participantId);
+      .select('*', { count: 'exact', head: true });
+
+    if (isDriver) {
+      query = query.eq('driver_id', targetId);
+    } else {
+      query = query.eq('participant_id', targetId);
+    }
+
+    const { count, error } = await query;
 
     if (error) {
       console.error('[DB] Error counting face photos:', error);

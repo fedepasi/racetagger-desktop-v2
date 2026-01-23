@@ -396,62 +396,37 @@
 
         </div>
 
-        <!-- FACE RECOGNITION SECTION -->
-        <div class="form-section face-photos-section" id="face-photos-section">
+        <!-- FACE RECOGNITION & DRIVER METADATA SECTION -->
+        <div class="form-section driver-face-section" id="driver-face-section">
           <h3 class="section-title">
-            Face Recognition Photos
+            Face Recognition & Driver Metadata
             <span class="badge badge-beta" title="Experimental feature">BETA</span>
           </h3>
-          <p class="section-description">Upload up to 5 reference photos for face recognition. Best results with clear, front-facing photos.</p>
+          <p class="section-description">
+            For each driver, set a specific metatag and upload reference photos for face recognition.
+          </p>
 
-          <div class="face-photos-grid" id="face-photos-grid">
-            <!-- Face photos will be rendered here dynamically -->
-            <div class="face-photo-placeholder" id="face-photo-placeholder-0">
-              <div class="placeholder-content">
-                <span class="placeholder-icon">📷</span>
-                <span class="placeholder-text">Add Photo</span>
-              </div>
-            </div>
-            <div class="face-photo-placeholder" id="face-photo-placeholder-1">
-              <div class="placeholder-content">
-                <span class="placeholder-icon">+</span>
-              </div>
-            </div>
-            <div class="face-photo-placeholder" id="face-photo-placeholder-2">
-              <div class="placeholder-content">
-                <span class="placeholder-icon">+</span>
-              </div>
-            </div>
-            <div class="face-photo-placeholder" id="face-photo-placeholder-3">
-              <div class="placeholder-content">
-                <span class="placeholder-icon">+</span>
-              </div>
-            </div>
-            <div class="face-photo-placeholder" id="face-photo-placeholder-4">
-              <div class="placeholder-content">
-                <span class="placeholder-icon">+</span>
-              </div>
-            </div>
+          <!-- Empty state (shown when no drivers) -->
+          <div class="driver-panels-empty-state" id="driver-panels-empty-state" style="display: block;">
+            <div class="empty-state-icon">👥</div>
+            <h4>No Drivers Yet</h4>
+            <p>Add drivers in the "Drivers" field above to enable face recognition and driver-specific metadata.</p>
           </div>
 
-          <div class="face-photos-actions">
-            <input type="file" id="face-photo-input" accept="image/*" style="display: none;" onchange="handleFacePhotoSelect(event)">
-            <button type="button" class="btn btn-secondary btn-sm" id="add-face-photo-btn" onclick="triggerFacePhotoUpload()">
-              <span class="btn-icon">📷</span>
-              Add Photo
-            </button>
-            <span class="photo-count-label" id="face-photo-count">0/5 photos</span>
+          <!-- Driver panels container (shown when drivers exist) -->
+          <div class="driver-panels-container" id="driver-panels-container" style="display: none;">
+            <!-- Driver panels will be rendered here dynamically by driver-face-manager.js -->
           </div>
 
-          <div class="face-photos-info">
+          <div class="driver-face-info">
             <span class="info-icon">💡</span>
             <div class="info-text">
-              <strong>Tips for best results:</strong>
+              <strong>How it works:</strong>
               <ul>
-                <li>Use clear, well-lit photos</li>
-                <li>Front-facing portraits work best</li>
-                <li>Include photos without helmet for motorsport</li>
-                <li>Variety helps: podium, portrait, action shots</li>
+                <li>Each driver gets their own metatag written to IPTC only when their face is recognized</li>
+                <li>Upload up to 5 photos per driver for best recognition accuracy</li>
+                <li>Use clear, front-facing photos for optimal results</li>
+                <li>Perfect for multi-driver vehicles (e.g., WEC endurance racing)</li>
               </ul>
             </div>
           </div>

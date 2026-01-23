@@ -36,11 +36,13 @@ const STORAGE_BUCKET = 'preset-participant-photos';
 export function registerPresetFaceHandlers(): void {
 
   /**
-   * Upload a face photo for a participant
-   * Expects: { participantId, presetId, userId, photoData (base64), fileName, faceDescriptor?, detectionConfidence?, photoType?, isPrimary? }
+   * Upload a face photo for a participant or driver
+   * Expects: { participantId?, driverId?, presetId, userId, photoData (base64), fileName, faceDescriptor?, detectionConfidence?, photoType?, isPrimary? }
+   * Note: Either participantId OR driverId must be provided (not both)
    */
   ipcMain.handle('preset-face-upload-photo', async (_, params: {
-    participantId: string;
+    participantId?: string;
+    driverId?: string;
     presetId: string;
     userId: string;
     photoData: string; // base64 encoded
@@ -51,19 +53,29 @@ export function registerPresetFaceHandlers(): void {
     isPrimary?: boolean;
   }) => {
     try {
+      // Validate: either participantId or driverId must be provided
+      if (!params.participantId && !params.driverId) {
+        return { success: false, error: 'Either participantId or driverId must be provided' };
+      }
+      if (params.participantId && params.driverId) {
+        return { success: false, error: 'Cannot specify both participantId and driverId' };
+      }
+
       // Use authenticated Supabase client from authService for RLS policy compliance
       const supabase = authService.getSupabaseClient();
 
-      // Check if participant already has 5 photos
-      const currentCount = await getPresetParticipantFacePhotoCount(params.participantId);
+      // Check if participant/driver already has 5 photos
+      const targetId = params.participantId || params.driverId!;
+      const currentCount = await getPresetParticipantFacePhotoCount(targetId, !!params.driverId);
       if (currentCount >= 5) {
-        return { success: false, error: 'Maximum 5 face photos per participant allowed' };
+        return { success: false, error: 'Maximum 5 face photos per driver allowed' };
       }
 
       // Generate unique file path
       const fileExt = path.extname(params.fileName) || '.jpg';
       const uniqueId = uuidv4();
-      const storagePath = `${params.userId}/${params.presetId}/${params.participantId}/${uniqueId}${fileExt}`;
+      const targetFolder = params.participantId || params.driverId;
+      const storagePath = `${params.userId}/${params.presetId}/${targetFolder}/${uniqueId}${fileExt}`;
 
       // Convert base64 to buffer
       const base64Data = params.photoData.replace(/^data:image\/\w+;base64,/, '');
@@ -92,7 +104,8 @@ export function registerPresetFaceHandlers(): void {
 
       // Save to database
       const createParams: CreatePresetFacePhotoParams = {
-        participant_id: params.participantId,
+        participant_id: params.participantId || null,
+        driver_id: params.driverId || null,
         user_id: params.userId, // Required for RLS policy
         photo_url: photoUrl,
         storage_path: storagePath,
@@ -149,12 +162,17 @@ export function registerPresetFaceHandlers(): void {
   });
 
   /**
-   * Get all face photos for a participant
-   * Expects: participantId
+   * Get all face photos for a participant or driver
+   * Expects: { participantId?, driverId? }
+   * Note: Either participantId OR driverId must be provided
    */
-  ipcMain.handle('preset-face-get-photos', async (_, participantId: string) => {
+  ipcMain.handle('preset-face-get-photos', async (_, params: { participantId?: string; driverId?: string }) => {
     try {
-      const photos = await getPresetParticipantFacePhotos(participantId);
+      if (!params.participantId && !params.driverId) {
+        return { success: false, error: 'Either participantId or driverId must be provided', photos: [] };
+      }
+
+      const photos = await getPresetParticipantFacePhotos(params.participantId, params.driverId);
       return { success: true, photos };
     } catch (error) {
       console.error('[PresetFace IPC] Get photos error:', error);
@@ -220,5 +238,329 @@ export function registerPresetFaceHandlers(): void {
     }
   });
 
-  console.log('[PresetFace IPC] Registered 6 preset face handlers');
+  // ==================== Driver Management Handlers ====================
+
+  /**
+   * Get all drivers for a participant
+   * Expects: participantId
+   */
+  ipcMain.handle('preset-driver-get-all', async (_, participantId: string) => {
+    try {
+      const supabase = authService.getSupabaseClient();
+
+      const { data: drivers, error } = await supabase
+        .from('preset_participant_drivers')
+        .select('*')
+        .eq('participant_id', participantId)
+        .order('driver_order', { ascending: true });
+
+      if (error) {
+        console.error('[PresetDriver IPC] Get all error:', error);
+        return { success: false, error: error.message, drivers: [] };
+      }
+
+      return { success: true, drivers: drivers || [] };
+    } catch (error) {
+      console.error('[PresetDriver IPC] Get all error:', error);
+      return { success: false, error: (error as Error).message, drivers: [] };
+    }
+  });
+
+  /**
+   * Create a new driver for a participant
+   * Expects: { participantId, driverName, driverMetatag?, driverOrder }
+   */
+  ipcMain.handle('preset-driver-create', async (_, params: {
+    participantId: string;
+    driverName: string;
+    driverMetatag?: string;
+    driverOrder: number;
+  }) => {
+    try {
+      const supabase = authService.getSupabaseClient();
+
+      const newDriver = {
+        id: uuidv4(),
+        participant_id: params.participantId,
+        driver_name: params.driverName,
+        driver_metatag: params.driverMetatag || null,
+        driver_order: params.driverOrder,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+
+      const { data: driver, error } = await supabase
+        .from('preset_participant_drivers')
+        .insert(newDriver)
+        .select()
+        .single();
+
+      if (error) {
+        console.error('[PresetDriver IPC] Create error:', error);
+        return { success: false, error: error.message };
+      }
+
+      return { success: true, driver };
+    } catch (error) {
+      console.error('[PresetDriver IPC] Create error:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  /**
+   * Update a driver
+   * Expects: { driverId, driverName?, driverMetatag?, driverOrder? }
+   */
+  ipcMain.handle('preset-driver-update', async (_, params: {
+    driverId: string;
+    driverName?: string;
+    driverMetatag?: string;
+    driverOrder?: number;
+  }) => {
+    try {
+      const supabase = authService.getSupabaseClient();
+
+      const updates: any = {
+        updated_at: new Date().toISOString()
+      };
+
+      if (params.driverName !== undefined) updates.driver_name = params.driverName;
+      if (params.driverMetatag !== undefined) updates.driver_metatag = params.driverMetatag;
+      if (params.driverOrder !== undefined) updates.driver_order = params.driverOrder;
+
+      const { data: driver, error } = await supabase
+        .from('preset_participant_drivers')
+        .update(updates)
+        .eq('id', params.driverId)
+        .select()
+        .single();
+
+      if (error) {
+        console.error('[PresetDriver IPC] Update error:', error);
+        return { success: false, error: error.message };
+      }
+
+      return { success: true, driver };
+    } catch (error) {
+      console.error('[PresetDriver IPC] Update error:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  /**
+   * Delete a driver
+   * Expects: driverId
+   */
+  ipcMain.handle('preset-driver-delete', async (_, driverId: string) => {
+    try {
+      const supabase = authService.getSupabaseClient();
+
+      // Delete will cascade to face photos automatically (ON DELETE CASCADE)
+      const { error } = await supabase
+        .from('preset_participant_drivers')
+        .delete()
+        .eq('id', driverId);
+
+      if (error) {
+        console.error('[PresetDriver IPC] Delete error:', error);
+        return { success: false, error: error.message };
+      }
+
+      return { success: true };
+    } catch (error) {
+      console.error('[PresetDriver IPC] Delete error:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  /**
+   * Sync drivers from participant's nome field (comma-separated driver names)
+   * This creates/updates/deletes drivers to match the participant's nome field
+   * Expects: { participantId, driverNames: string[] }
+   */
+  ipcMain.handle('preset-driver-sync', async (_, params: {
+    participantId: string;
+    driverNames: string[];
+  }) => {
+    try {
+      const supabase = authService.getSupabaseClient();
+
+      console.log('[PresetDriver IPC] Sync called:', {
+        participantId: params.participantId,
+        driverNames: params.driverNames,
+        driverCount: params.driverNames.length
+      });
+
+      // Get existing drivers
+      const { data: existingDrivers, error: fetchError } = await supabase
+        .from('preset_participant_drivers')
+        .select('*')
+        .eq('participant_id', params.participantId)
+        .order('driver_order', { ascending: true });
+
+      if (fetchError) {
+        console.error('[PresetDriver IPC] Sync fetch error:', fetchError);
+        return { success: false, error: fetchError.message };
+      }
+
+      const existing = existingDrivers || [];
+      const newNames = params.driverNames;
+
+      console.log('[PresetDriver IPC] Existing drivers:', existing.map(d => ({
+        id: d.id,
+        name: d.driver_name,
+        order: d.driver_order
+      })));
+
+      // Determine what needs to be created, updated, or deleted
+      const toCreate: string[] = [];
+      const toUpdate: { id: string; name: string; order: number }[] = [];
+      const toDelete: string[] = [];
+
+      // Normalize name for comparison (case-insensitive, whitespace-tolerant)
+      const normalizeName = (name: string) => name.trim().toLowerCase();
+
+      // Check which new names don't exist
+      // Match by driver_name first (stable identifier), then fall back to order
+      newNames.forEach((name, index) => {
+        const normalizedName = normalizeName(name);
+
+        // First try to find by normalized name (case-insensitive, whitespace-tolerant)
+        let existingDriver = existing.find(d => normalizeName(d.driver_name) === normalizedName);
+
+        // If not found by name, check if there's a driver at this position
+        if (!existingDriver) {
+          const driverAtPosition = existing.find(d => d.driver_order === index);
+          // Only use position match if name doesn't exist anywhere
+          if (driverAtPosition && !newNames.some(n => normalizeName(n) === normalizeName(driverAtPosition.driver_name))) {
+            existingDriver = driverAtPosition;
+          }
+        }
+
+        if (!existingDriver) {
+          toCreate.push(name);
+        } else if (existingDriver.driver_name !== name || existingDriver.driver_order !== index) {
+          // Update if name or order changed
+          toUpdate.push({ id: existingDriver.id, name, order: index });
+        }
+      });
+
+      // Check which existing drivers are no longer needed (case-insensitive comparison)
+      existing.forEach((driver) => {
+        const normalizedDriverName = normalizeName(driver.driver_name);
+        if (!newNames.some(n => normalizeName(n) === normalizedDriverName)) {
+          toDelete.push(driver.id);
+        }
+      });
+
+      // Execute operations sequentially (Supabase doesn't support true parallel operations)
+
+      // Create new drivers
+      for (const name of toCreate) {
+        await supabase.from('preset_participant_drivers').insert({
+          id: uuidv4(),
+          participant_id: params.participantId,
+          driver_name: name,
+          driver_order: newNames.indexOf(name),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        });
+      }
+
+      // Update existing drivers
+      for (const { id, name, order } of toUpdate) {
+        await supabase.from('preset_participant_drivers')
+          .update({ driver_name: name, driver_order: order, updated_at: new Date().toISOString() })
+          .eq('id', id);
+      }
+
+      // Delete removed drivers
+      if (toDelete.length > 0) {
+        await supabase.from('preset_participant_drivers').delete().in('id', toDelete);
+      }
+
+      console.log('[PresetDriver IPC] Sync results:', {
+        created: toCreate.length,
+        createdNames: toCreate,
+        updated: toUpdate.length,
+        updatedDrivers: toUpdate.map(u => ({ name: u.name, order: u.order })),
+        deleted: toDelete.length
+      });
+
+      // Fetch updated drivers
+      const { data: updatedDrivers } = await supabase
+        .from('preset_participant_drivers')
+        .select('*')
+        .eq('participant_id', params.participantId)
+        .order('driver_order', { ascending: true });
+
+      console.log('[PresetDriver IPC] Final driver IDs:', updatedDrivers?.map(d => ({ id: d.id, name: d.driver_name })));
+
+      return {
+        success: true,
+        drivers: updatedDrivers || [],
+        created: toCreate.length,
+        updated: toUpdate.length,
+        deleted: toDelete.length
+      };
+
+    } catch (error) {
+      console.error('[PresetDriver IPC] Sync error:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  // Migrate orphaned photos (diagnostic tool)
+  ipcMain.handle('preset-driver-migrate-orphaned-photos', async (_, params: {
+    participantId: string;
+  }) => {
+    try {
+      const supabase = authService.getSupabaseClient();
+
+      // Get all current drivers for this participant
+      const { data: currentDrivers } = await supabase
+        .from('preset_participant_drivers')
+        .select('*')
+        .eq('participant_id', params.participantId);
+
+      if (!currentDrivers || currentDrivers.length === 0) {
+        return { success: true, migrated: 0, orphanedCount: 0 };
+      }
+
+      // Get all photos that might be orphaned (driver_id not in current drivers)
+      const currentDriverIds = currentDrivers.map(d => d.id);
+      const { data: allPhotos } = await supabase
+        .from('preset_participant_face_photos')
+        .select('*')
+        .not('driver_id', 'is', null);
+
+      // Find orphaned photos
+      const orphanedPhotos = allPhotos?.filter(photo =>
+        photo.driver_id && !currentDriverIds.includes(photo.driver_id)
+      ) || [];
+
+      console.log(`[PresetDriver IPC] Found ${orphanedPhotos.length} orphaned photos for participant ${params.participantId}`);
+
+      // NOTE: We can't automatically reassign photos without knowing
+      // which driver they belong to. This would require AI or manual intervention.
+      // For now, just return the count for manual review.
+
+      return {
+        success: true,
+        orphanedCount: orphanedPhotos.length,
+        orphanedPhotos: orphanedPhotos.map(p => ({
+          id: p.id,
+          driverId: p.driver_id,
+          photoUrl: p.photo_url,
+          createdAt: p.created_at
+        }))
+      };
+
+    } catch (error) {
+      console.error('[PresetDriver IPC] Migration error:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  console.log('[PresetFace IPC] Registered 12 preset face & driver handlers');
 }

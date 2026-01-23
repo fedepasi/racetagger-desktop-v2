@@ -2945,3 +2945,267 @@
     animation: none;
   }
 }
+/* ============================================
+   DRIVER FACE PANELS - Per-Driver Face Recognition
+   ============================================ */
+
+/* Driver face section container */
+.driver-face-section {
+  margin-top: 2rem;
+  padding: 1.5rem;
+  background: var(--surface-color-light);
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+}
+
+.driver-face-section .section-title {
+  margin-top: 0;
+  margin-bottom: 0.75rem;
+  color: var(--text-primary);
+  font-size: 1.125rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.driver-face-section .section-description {
+  margin-bottom: 1.25rem;
+  color: var(--text-secondary);
+  font-size: 0.9375rem;
+  line-height: 1.5;
+}
+
+/* Empty state */
+.driver-panels-empty-state {
+  text-align: center;
+  padding: 2.5rem 1.5rem;
+  background: var(--surface-color);
+  border-radius: 6px;
+  border: 2px dashed var(--border-color);
+}
+
+.driver-panels-empty-state .empty-state-icon {
+  font-size: 3rem;
+  margin-bottom: 1rem;
+  opacity: 0.5;
+}
+
+.driver-panels-empty-state h4 {
+  margin: 0 0 0.5rem 0;
+  color: var(--text-primary);
+  font-size: 1.0625rem;
+  font-weight: 600;
+}
+
+.driver-panels-empty-state p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.9375rem;
+  line-height: 1.5;
+}
+
+/* Driver panels container */
+.driver-panels-container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+/* Individual driver panel */
+.driver-panel {
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 1.25rem;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.driver-panel:hover {
+  border-color: var(--primary-color-light);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.1);
+}
+
+/* Driver panel header */
+.driver-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border-color-light);
+}
+
+.driver-panel-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 1.0625rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.driver-panel-order {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  background: var(--surface-color-light);
+  padding: 0.25rem 0.625rem;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+/* Driver metatag input */
+.driver-panel .form-group {
+  margin-bottom: 1rem;
+}
+
+.driver-panel .driver-metatag-input {
+  width: 100%;
+  padding: 0.625rem 0.875rem;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--surface-color);
+  color: var(--text-primary);
+  font-size: 0.9375rem;
+  transition: all 0.2s ease;
+}
+
+.driver-panel .driver-metatag-input:focus {
+  outline: none;
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+
+.driver-panel .driver-metatag-input:disabled {
+  background: var(--surface-color-light);
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Driver photos section */
+.driver-photos-section {
+  margin-top: 0.75rem;
+}
+
+.driver-photos-title {
+  margin: 0 0 0.75rem 0;
+  color: var(--text-primary);
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.driver-photos-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+/* Responsive grid for driver photos */
+@media (max-width: 900px) {
+  .driver-photos-grid {
+    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  }
+}
+
+/* Driver photo actions */
+.driver-photos-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-color-light);
+}
+
+.driver-add-photo-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+}
+
+.driver-photo-count {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+/* Driver face info box */
+.driver-face-info {
+  margin-top: 1.25rem;
+  padding: 1rem;
+  background: rgba(99, 102, 241, 0.05);
+  border: 1px solid rgba(99, 102, 241, 0.15);
+  border-radius: 6px;
+  display: flex;
+  gap: 0.75rem;
+}
+
+.driver-face-info .info-icon {
+  font-size: 1.25rem;
+  flex-shrink: 0;
+  margin-top: 0.125rem;
+}
+
+.driver-face-info .info-text {
+  flex: 1;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.driver-face-info .info-text strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.driver-face-info .info-text ul {
+  margin: 0.5rem 0 0 0;
+  padding-left: 1.25rem;
+}
+
+.driver-face-info .info-text li {
+  margin-bottom: 0.375rem;
+}
+
+.driver-face-info .info-text li:last-child {
+  margin-bottom: 0;
+}
+
+/* Dark mode adjustments for driver panels */
+@media (prefers-color-scheme: dark) {
+  .driver-panel:hover {
+    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.2);
+  }
+
+  .driver-face-info {
+    background: rgba(99, 102, 241, 0.1);
+    border-color: rgba(99, 102, 241, 0.25);
+  }
+}
+
+/* Animation for driver panel appear */
+@keyframes driverPanelAppear {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.driver-panel {
+  animation: driverPanelAppear 0.3s ease-out;
+}
+
+/* Respect reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  .driver-panel {
+    animation: none;
+  }
+}

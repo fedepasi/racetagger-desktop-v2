@@ -101,7 +101,7 @@ export class SportConfig {
         };
 
         this.configs.set(category.code.toLowerCase(), matchingConfig);
-        console.log(`[SportConfig] Updated matching config for ${category.code}:`, matchingConfig);
+        //console.log(`[SportConfig] Updated matching config for ${category.code}:`, matchingConfig);
       }
     }
 

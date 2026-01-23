@@ -188,6 +188,14 @@ const validInvokeChannels: string[] = [
   'preset-face-update-descriptor',
   'preset-face-load-for-preset',
 
+  // Preset Participant Drivers Operations
+  'preset-driver-get-all',
+  'preset-driver-create',
+  'preset-driver-update',
+  'preset-driver-delete',
+  'preset-driver-sync',
+  'preset-driver-migrate-orphaned-photos',
+
   'get-app-path',
 
   // User Settings & Consent
