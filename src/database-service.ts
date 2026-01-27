@@ -2767,7 +2767,7 @@ export async function getUserParticipantPresetsSupabase(includeAllForAdmin: bool
     // Map preset_participants to participants for UI compatibility
     const mappedData = (data || []).map(preset => {
       const participantCount = preset.preset_participants?.length || 0;
-      console.log(`[DB] Preset "${preset.name}" has ${participantCount} participants`);
+      //console.log(`[DB] Preset "${preset.name}" has ${participantCount} participants`);
       return {
         ...preset,
         participants: preset.preset_participants || []

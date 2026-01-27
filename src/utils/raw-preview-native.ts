@@ -2,7 +2,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as fsPromises from 'fs/promises';
 import * as os from 'os';
-import { CleanupManager } from './cleanup-manager';
+import { CleanupManager, getCleanupManager } from './cleanup-manager';
 
 /**
  * Opzioni per l'estrazione preview nativa
@@ -60,7 +60,7 @@ export class RawPreviewExtractor {
   private nativeLibraryAvailable: boolean = false;
 
   constructor() {
-    this.cleanupManager = new CleanupManager();
+    this.cleanupManager = getCleanupManager(); // PERFORMANCE: Use singleton to avoid memory leak
     this.stats = {
       totalExtractions: 0,
       nativeSuccesses: 0,

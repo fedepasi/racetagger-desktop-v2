@@ -13,7 +13,7 @@ export interface SportCategoryConfig {
   aiPrompt: string;
   fallbackPrompt: string | null;
   recognitionConfig: RecognitionConfig;
-  cropConfig: CropConfig;
+  cropConfig: CropConfig | null;  // V6 2026: OPTIONAL - supports both crop and full-image modes
 }
 
 export interface RecognitionConfig {

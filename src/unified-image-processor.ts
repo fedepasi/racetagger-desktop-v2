@@ -4,13 +4,13 @@ import * as fsPromises from 'fs/promises';
 import { EventEmitter } from 'events';
 import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_CONFIG, APP_CONFIG, RESIZE_PRESETS, ResizePreset, DEBUG_MODE } from './config';
-import { getSupabaseClient, getSportCategories } from './database-service';
+import { getSupabaseClient, getSportCategories, db } from './database-service';
 import { authService } from './auth-service';
 import { getSharp, createImageProcessor } from './utils/native-modules';
 import { rawPreviewExtractor } from './utils/raw-preview-native';
 import { createXmpSidecar } from './utils/xmp-manager';
 import { writeDescriptionToImage, writeKeywordsToImage, writeSpecialInstructions, writeExtendedDescription, writePersonInImage, buildPersonShownString } from './utils/metadata-writer';
-import { CleanupManager } from './utils/cleanup-manager';
+import { CleanupManager, getCleanupManager } from './utils/cleanup-manager';
 import { SmartMatcher, MatchResult, AnalysisResult as SmartMatcherAnalysisResult } from './matching/smart-matcher';
 import { CacheManager } from './matching/cache-manager';
 import { AnalysisLogger, CorrectionData } from './utils/analysis-logger';
@@ -137,6 +137,8 @@ export interface UnifiedProcessorConfig {
   };
   // Pre-auth system flag (v1.1.0+) - quando true, i worker NON chiamano useTokens
   usePreAuthSystem?: boolean;
+  // PERFORMANCE: Pre-fetched sport categories (batch optimization - avoids repeated Supabase calls)
+  sportCategories?: any[];
 }
 
 /**
@@ -170,10 +172,17 @@ class UnifiedImageWorker extends EventEmitter {
   private onnxDetector: OnnxDetector | null = null;
   private onnxDetectorEnabled: boolean = false;
   private onnxModelLoaded: boolean = false;
+  // ONNX Circuit Breaker (PERFORMANCE: Auto-disable after consecutive failures)
+  private onnxConsecutiveFailures: number = 0;
+  private onnxCircuitBreakerThreshold: number = 5;
+  private onnxCircuitOpen: boolean = false;
+  private onnxCircuitBreakerLogged: boolean = false;
   // Generic Segmenter (YOLOv8-seg for universal subject isolation before recognition)
   private genericSegmenter: GenericSegmenter | null = null;
   private genericSegmenterEnabled: boolean = false;
   private genericSegmenterLoaded: boolean = false;
+  // Cache for segmentation results (avoid running segmentation twice per image)
+  private cachedSegmentationResults: SegmentedDetection[] | null = null;
   // Face Recognition (browser-based detection via IPC bridge)
   private faceRecognitionEnabled: boolean = false;
   private faceDescriptorsLoaded: boolean = false;
@@ -193,7 +202,7 @@ class UnifiedImageWorker extends EventEmitter {
     this.csvData = config.csvData || []; // Legacy support
     this.participantsData = [];
     this.category = config.category || 'motorsport';
-    this.cleanupManager = new CleanupManager();
+    this.cleanupManager = getCleanupManager(); // PERFORMANCE: Use singleton to avoid memory leak
     // Use authenticated client from database-service (includes user session)
     this.supabase = getSupabaseClient();
     this.analysisLogger = analysisLogger;
@@ -282,15 +291,23 @@ class UnifiedImageWorker extends EventEmitter {
    * Called after sport configurations are loaded (needs category code for model selection)
    */
   private async initializeOnnxDetector(): Promise<void> {
+    // DEBUG: Log sport category configuration
+    console.log(`[ONNX-Init] Current category: ${this.category}, sportCategory exists: ${!!this.currentSportCategory}`);
+    if (this.currentSportCategory) {
+      console.log(`[ONNX-Init] Category config: use_local_onnx=${this.currentSportCategory.use_local_onnx}, recognition_method=${this.currentSportCategory.recognition_method}`);
+      console.log(`[ONNX-Init] Recognition config:`, JSON.stringify(this.currentSportCategory.recognition_config));
+      console.log(`[ONNX-Init] Crop config:`, JSON.stringify(this.currentSportCategory.crop_config));
+    }
+
     // Check if local ONNX is enabled for this sport category
     if (!this.currentSportCategory?.use_local_onnx) {
-      log.info(`Local ONNX detection disabled for category ${this.category}`);
+      console.log(`[ONNX-Init] Local ONNX detection DISABLED for category ${this.category} (use_local_onnx=false or undefined)`);
       this.onnxDetectorEnabled = false;
       return;
     }
 
     try {
-      log.info(`Initializing ONNX detector for category: ${this.category}`);
+      console.log(`[ONNX-Init] ✅ Local ONNX ENABLED - Initializing detector for category: ${this.category}`);
       this.onnxDetector = getOnnxDetector();
 
       // Set the authenticated Supabase client for model downloads
@@ -298,18 +315,19 @@ class UnifiedImageWorker extends EventEmitter {
       modelManager.setSupabaseClient(this.supabase);
 
       // Load model for this category
+      console.log(`[ONNX-Init] Loading model for ${this.category}...`);
       const loaded = await this.onnxDetector.loadModel(this.category);
 
       if (loaded) {
         this.onnxDetectorEnabled = true;
         this.onnxModelLoaded = true;
-        log.info(`ONNX detector initialized for ${this.category} - local inference enabled`);
+        console.log(`[ONNX-Init] ✅ SUCCESS: ONNX detector initialized for ${this.category} - local inference enabled`);
       } else {
-        log.warn(`ONNX model not available for ${this.category} - falling back to API`);
+        log.warn(`[ONNX-Init] ⚠️ FAILED: ONNX model not available for ${this.category} - falling back to API`);
         this.onnxDetectorEnabled = false;
       }
     } catch (error) {
-      log.warn(`ONNX detector initialization failed for ${this.category}`, error);
+      log.warn(`[ONNX-Init] ❌ ERROR: ONNX detector initialization failed for ${this.category}`, error);
       this.onnxDetectorEnabled = false;
       this.onnxModelLoaded = false;
     }
@@ -391,6 +409,30 @@ class UnifiedImageWorker extends EventEmitter {
   }
 
   /**
+   * PERFORMANCE: Quick check descriptor count without initializing bridge
+   * Saves 200-500ms when preset has no face descriptors
+   */
+  private async checkPresetDescriptorCount(presetId: string): Promise<number> {
+    try {
+      const result = db.prepare(`
+        SELECT COUNT(*) as count
+        FROM driver_face_descriptors
+        WHERE preset_id = ?
+      `).get(presetId) as { count: number } | undefined;
+
+      return result?.count || 0;
+    } catch (error: any) {
+      // Silently handle "table doesn't exist" error (safe fallback to full init)
+      if (error?.code === 'SQLITE_ERROR' && error?.message?.includes('no such table')) {
+        return -1; // Table doesn't exist yet, proceed with full initialization
+      }
+      // Log other errors
+      log.warn('Failed to pre-check descriptor count:', error);
+      return -1; // Proceed with full initialization on error (safe fallback)
+    }
+  }
+
+  /**
    * Initialize Face Recognition for driver identification
    * Uses face-api.js in renderer (via IPC bridge) for detection + main process matching
    *
@@ -406,6 +448,20 @@ class UnifiedImageWorker extends EventEmitter {
     }
 
     try {
+      // OPTIMIZATION: Pre-check descriptor count (saves 200-500ms if none)
+      const preCheckCount = await this.checkPresetDescriptorCount(this.config.presetId);
+
+      if (preCheckCount === 0) {
+        log.info('Face recognition: No descriptors - skipping initialization');
+        this.faceRecognitionEnabled = false;
+        return;
+      }
+
+      if (preCheckCount > 0) {
+        log.info(`Face recognition: ${preCheckCount} descriptors found, initializing bridge...`);
+      }
+      // If -1 (error), proceed with full initialization (safe fallback)
+
       await getFaceDetectionBridge().initialize();
 
       // Load face descriptors from the participant preset
@@ -428,11 +484,49 @@ class UnifiedImageWorker extends EventEmitter {
   }
 
   /**
-   * Determine recognition strategy based on scene classification
+   * Determine recognition strategy based on scene classification AND segmentation results
+   * @param sceneCategory Scene classification category (optional)
+   * @param segmentationResults YOLOv8 segmentation results (optional) - used to detect subjects
    */
-  private getRecognitionStrategy(sceneCategory: SceneCategory | null): { useFaceRecognition: boolean; useNumberRecognition: boolean; context: 'portrait' | 'action' | 'podium' | 'auto' } {
-    // Face recognition always active when preset has face descriptors
-    // Scene classification only affects context (threshold/maxFaces), not whether to use face recognition
+  private getRecognitionStrategy(
+    sceneCategory: SceneCategory | null,
+    segmentationResults?: SegmentedDetection[]
+  ): { useFaceRecognition: boolean; useNumberRecognition: boolean; context: 'portrait' | 'action' | 'podium' | 'auto' } {
+
+    // PRIORITY 1: Use segmentation results if available (most accurate)
+    if (segmentationResults && segmentationResults.length > 0) {
+      const hasPerson = segmentationResults.some(det => det.classId === 0); // COCO class 0 = PERSON
+      const hasVehicles = segmentationResults.some(det =>
+        [2, 3, 5, 7].includes(det.classId) // CAR, MOTORCYCLE, BUS, TRUCK
+      );
+
+      log.info(`[RecognitionStrategy] Segmentation: ${segmentationResults.length} subjects (PERSON: ${hasPerson}, VEHICLES: ${hasVehicles})`);
+
+      // Only vehicles detected → Skip face recognition
+      if (hasVehicles && !hasPerson) {
+        log.info(`[RecognitionStrategy] Only vehicles detected → Face recognition DISABLED`);
+        return {
+          useFaceRecognition: false,  // ✅ SKIP face recognition
+          useNumberRecognition: true,
+          context: 'action'
+        };
+      }
+
+      // Persons detected → Enable face recognition
+      if (hasPerson) {
+        log.info(`[RecognitionStrategy] Persons detected → Face recognition ENABLED`);
+        return {
+          useFaceRecognition: this.faceRecognitionEnabled,  // ✅ Enable if preset has descriptors
+          useNumberRecognition: true,
+          context: hasVehicles ? 'action' : 'auto' // 'action' if mixed person+vehicle
+        };
+      }
+
+      // Other subjects (bicycle, etc.) → Use face recognition as fallback
+      log.info(`[RecognitionStrategy] Other subjects detected → Face recognition as configured`);
+    }
+
+    // PRIORITY 2: Fall back to scene classification if no segmentation
     const useFaceRecognition = this.faceRecognitionEnabled;
 
     if (!sceneCategory) {
@@ -724,10 +818,20 @@ class UnifiedImageWorker extends EventEmitter {
 
   /**
    * Check if local ONNX should be used for analysis
+   * PERFORMANCE: Circuit breaker prevents wasted inference after consecutive failures
    */
   private shouldUseLocalOnnx(): boolean {
     // Must have local ONNX enabled and model loaded
     if (!this.onnxDetectorEnabled || !this.onnxModelLoaded) {
+      return false;
+    }
+
+    // PERFORMANCE: Circuit breaker - auto-disable after repeated failures
+    if (this.onnxCircuitOpen) {
+      if (!this.onnxCircuitBreakerLogged) {
+        log.warn(`[ONNX] Circuit breaker OPEN: Auto-disabled after ${this.onnxConsecutiveFailures} consecutive failures. Consider different model or configuration.`);
+        this.onnxCircuitBreakerLogged = true;
+      }
       return false;
     }
 
@@ -881,7 +985,18 @@ class UnifiedImageWorker extends EventEmitter {
 
     try {
       const startTime = Date.now();
-      const result: GenericSegmenterOutput = await this.genericSegmenter.detect(imageBuffer);
+
+      // PERFORMANCE: Timeout segmentation to prevent hanging (30s max)
+      const SEGMENTATION_TIMEOUT_MS = 30000;
+      const result: GenericSegmenterOutput = await Promise.race([
+        this.genericSegmenter.detect(imageBuffer),
+        new Promise<GenericSegmenterOutput>((_, reject) =>
+          setTimeout(() => reject(new Error('Segmentation timeout')), SEGMENTATION_TIMEOUT_MS)
+        )
+      ]).catch((error) => {
+        log.warn(`[Segmentation] Timeout after ${SEGMENTATION_TIMEOUT_MS}ms:`, error);
+        return { detections: [], imageSize: { width: 0, height: 0 }, inferenceTimeMs: Date.now() - startTime };
+      });
 
       const modelId = this.genericSegmenter?.getModelId() || 'unknown';
 
@@ -965,9 +1080,15 @@ class UnifiedImageWorker extends EventEmitter {
   }> {
     const results: any[] = [];
     const lowConfidenceCrops: number[] = [];
-    const CONFIDENCE_THRESHOLD = 0.7;
 
-    log.info(`[ONNX-Crop] Analyzing ${cropsPayload.length} crops with ONNX detector`);
+    // Use sport category's recognition_config.minConfidence (same as Gemini flow)
+    // This ensures consistent confidence thresholds across all recognition methods
+    const recognitionConfig = this.currentSportCategory?.recognition_config || {
+      minConfidence: 0.35  // Default for RF-DETR small models
+    };
+    const CONFIDENCE_THRESHOLD = recognitionConfig.minConfidence || 0.35;
+
+    console.log(`[ONNX-Crop] Analyzing ${cropsPayload.length} crops with ONNX detector (confidence threshold: ${CONFIDENCE_THRESHOLD})`);
 
     for (let i = 0; i < cropsPayload.length; i++) {
       try {
@@ -982,6 +1103,7 @@ class UnifiedImageWorker extends EventEmitter {
         if (onnxResult.results.length === 0) {
           log.warn(`[ONNX-Crop] Crop ${i + 1}: No detections found`);
           lowConfidenceCrops.push(i);
+          this.onnxConsecutiveFailures++; // PERFORMANCE: Track for circuit breaker
           continue;
         }
 
@@ -993,6 +1115,7 @@ class UnifiedImageWorker extends EventEmitter {
         if (bestDetection.confidence < CONFIDENCE_THRESHOLD) {
           log.warn(`[ONNX-Crop] Crop ${i + 1}: Low confidence ${bestDetection.confidence.toFixed(3)} < ${CONFIDENCE_THRESHOLD}`);
           lowConfidenceCrops.push(i);
+          this.onnxConsecutiveFailures++; // PERFORMANCE: Track for circuit breaker
           continue;
         }
 
@@ -1046,6 +1169,9 @@ class UnifiedImageWorker extends EventEmitter {
 
         log.info(`[ONNX-Crop] Crop ${i + 1}: Found ${bestDetection.raceNumber} (confidence: ${bestDetection.confidence.toFixed(3)}, ${inferenceMs}ms)`);
 
+        // PERFORMANCE: Reset circuit breaker on success
+        this.onnxConsecutiveFailures = 0;
+
       } catch (error) {
         log.error(`[ONNX-Crop] Crop ${i + 1} failed:`, error);
         lowConfidenceCrops.push(i);
@@ -1057,6 +1183,12 @@ class UnifiedImageWorker extends EventEmitter {
     log.info(`[ONNX-Crop] Complete: ${results.length}/${cropsPayload.length} crops analyzed successfully`);
     if (needsGeminiFallback) {
       log.info(`[ONNX-Crop] ${lowConfidenceCrops.length} crops need Gemini fallback`);
+    }
+
+    // PERFORMANCE: Trigger circuit breaker if too many consecutive failures
+    if (this.onnxConsecutiveFailures >= this.onnxCircuitBreakerThreshold && !this.onnxCircuitOpen) {
+      this.onnxCircuitOpen = true;
+      log.warn(`[ONNX] Circuit breaker TRIGGERED: ${this.onnxConsecutiveFailures} consecutive failures. Auto-disabled for remainder of batch.`);
     }
 
     return { results, needsGeminiFallback, lowConfidenceCrops };
@@ -1089,6 +1221,159 @@ class UnifiedImageWorker extends EventEmitter {
 
     try {
       const cropContextConfig = this.getCropContextConfig();
+
+      // ==================== ONNX FULL-IMAGE FIRST (FIX 2026) ====================
+      // CRITICAL: ONNX models were trained on FULL generic images (640x640px)
+      // where cars are a portion of the frame, NOT on crops.
+      // Try ONNX on full image BEFORE extracting crops.
+      // Only extract crops for Gemini if ONNX fails.
+      const currentRecognitionMethod = this.currentSportCategory?.recognition_method;
+      const recognitionConfig = this.currentSportCategory?.recognition_config || {};
+      const CONFIDENCE_THRESHOLD = recognitionConfig.minConfidence || 0.35;
+
+      if (currentRecognitionMethod === 'local-onnx' && this.onnxDetectorEnabled && this.onnxModelLoaded) {
+        log.info(`[CropContext] Trying local ONNX on FULL IMAGE first (threshold: ${CONFIDENCE_THRESHOLD})`);
+
+        try {
+          const fullImageStartTime = Date.now();
+          const { results: detections, imageSize } = await this.onnxDetector!.detect(compressedBuffer);
+          const inferenceMs = Date.now() - fullImageStartTime;
+
+          // Filter by confidence threshold
+          const validDetections = detections.filter(d => d.confidence >= CONFIDENCE_THRESHOLD);
+
+          if (validDetections.length > 0) {
+            log.info(`[CropContext] ✓ ONNX full-image SUCCESS: ${validDetections.length} detections in ${inferenceMs}ms - SKIPPING crop extraction and Gemini`);
+
+            // Reset circuit breaker on success
+            this.onnxConsecutiveFailures = 0;
+
+            // Convert to edge function format
+            const analysis = validDetections.map((d, index) => ({
+              raceNumber: d.raceNumber,
+              confidence: d.confidence,
+              drivers: [],
+              teamName: null,
+              otherText: [],
+              boundingBox: d.boundingBox,
+              vehicleIndex: index,
+              modelSource: 'local-onnx' as const,
+              bboxSource: 'full-image' as const
+            }));
+
+            // Upload to storage and save to database (same as analyzeImageLocal)
+            const authState = authService.getAuthState();
+            const userId = authState.isAuthenticated ? authState.user?.id : null;
+
+            let imageId: string | null = null;
+            let uploadedStoragePath: string | null = storagePath || null;
+
+            // Upload if not already uploaded
+            if (!uploadedStoragePath) {
+              try {
+                uploadedStoragePath = await this.uploadToStorage(imageFile.fileName, compressedBuffer, mimeType);
+                log.info(`[CropContext-ONNX-Full] Image uploaded to storage: ${uploadedStoragePath}`);
+              } catch (uploadError) {
+                log.error(`[CropContext-ONNX-Full] Upload failed: ${uploadError}`);
+              }
+            }
+
+            // Create image record in database
+            if (uploadedStoragePath && userId) {
+              try {
+                const { data: imageRecord, error: imageError } = await this.supabase
+                  .from('images')
+                  .insert({
+                    user_id: userId,
+                    original_filename: imageFile.fileName,
+                    storage_path: uploadedStoragePath,
+                    mime_type: mimeType,
+                    size_bytes: compressedBuffer.length,
+                    execution_id: this.config.executionId || null,
+                    status: 'analyzed'
+                  })
+                  .select('id')
+                  .single();
+
+                if (imageError) {
+                  log.error(`[CropContext-ONNX-Full] Failed to create image record: ${imageError.message}`);
+                } else if (imageRecord) {
+                  imageId = imageRecord.id;
+                  log.info(`[CropContext-ONNX-Full] Image record created: ${imageId}`);
+
+                  // Save analysis results to database
+                  for (const result of analysis) {
+                    let confidenceLevel = 'LOW';
+                    if ((result.confidence || 0) >= 0.97) confidenceLevel = 'HIGH';
+                    else if ((result.confidence || 0) >= 0.92) confidenceLevel = 'MEDIUM';
+
+                    const vehicleData = {
+                      raceNumber: result.raceNumber || null,
+                      confidence: result.confidence || 0,
+                      boundingBox: result.boundingBox,
+                      drivers: result.drivers || [],
+                      teamName: result.teamName || null,
+                      category: this.category,
+                      sponsors: [],
+                      modelSource: 'local-onnx-full',
+                      vehicleIndex: analysis.indexOf(result),
+                      corrections: [],
+                      finalResult: {
+                        raceNumber: result.raceNumber || null,
+                        matchedBy: 'onnx-local-full'
+                      }
+                    };
+
+                    await this.supabase.from('analysis_results').insert({
+                      image_id: imageId,
+                      execution_id: this.config.executionId || null,
+                      detected_numbers: result.raceNumber ? [result.raceNumber] : [],
+                      confidence_scores: [result.confidence || 0],
+                      confidence_level: confidenceLevel,
+                      raw_response: { vehicle: vehicleData },
+                      processing_time_ms: inferenceMs,
+                      model_used: 'local-onnx-full'
+                    });
+                  }
+
+                  log.info(`[CropContext-ONNX-Full] Saved ${analysis.length} analysis results to database`);
+                }
+              } catch (dbError) {
+                log.error(`[CropContext-ONNX-Full] Database error: ${dbError}`);
+              }
+            }
+
+            // Return success immediately (skip crop extraction and Gemini)
+            return {
+              success: true,
+              analysis,
+              imageId,
+              storagePath: uploadedStoragePath,
+              tokensConsumed: 0,  // Local ONNX doesn't consume tokens
+              inferenceTimeMs: inferenceMs,
+              bboxSource: 'full-image',
+              modelSource: 'local-onnx-full'
+            };
+          } else {
+            log.warn(`[CropContext] ✗ ONNX full-image FAILED: ${detections.length} detections, ${validDetections.length} above threshold ${CONFIDENCE_THRESHOLD} - falling back to Gemini with crops`);
+            this.onnxConsecutiveFailures++;
+
+            // CIRCUIT BREAKER: Disable ONNX after 5 consecutive failures
+            if (this.onnxConsecutiveFailures >= 5) {
+              log.error(`[CropContext] CIRCUIT BREAKER: Disabling ONNX after ${this.onnxConsecutiveFailures} consecutive failures`);
+              this.onnxDetectorEnabled = false;
+            }
+
+            // Continue to crop extraction + Gemini fallback below
+          }
+        } catch (onnxError) {
+          log.error(`[CropContext] ONNX full-image error: ${onnxError} - falling back to Gemini with crops`);
+          this.onnxConsecutiveFailures++;
+          // Continue to crop extraction + Gemini fallback below
+        }
+      }
+
+      // ==================== CROP EXTRACTION (for Gemini fallback) ====================
       let cropsPayload: any[] = [];
       let negativePayload: any | undefined;
       let extractedCrops: any[] = [];
@@ -1101,8 +1386,17 @@ class UnifiedImageWorker extends EventEmitter {
         const segModelId = this.genericSegmenter?.getModelId() || 'yolo-seg';
         log.info(`[CropContext] Using SEGMENTATION mode (${segModelId} with masks)`);
 
-        const segmentations = await this.runGenericSegmentation(compressedBuffer);
-        aiTiming['segmentation'] = Date.now() - phaseStart;
+        // PERFORMANCE: Reuse cached segmentation results if available (avoid running twice)
+        let segmentations: SegmentedDetection[];
+        if (this.cachedSegmentationResults !== null) {
+          log.info(`[CropContext] Reusing cached segmentation results (${this.cachedSegmentationResults.length} subjects)`);
+          segmentations = this.cachedSegmentationResults;
+          aiTiming['segmentation'] = 0; // Already executed earlier
+        } else {
+          log.info(`[CropContext] Running fresh segmentation`);
+          segmentations = await this.runGenericSegmentation(compressedBuffer);
+          aiTiming['segmentation'] = Date.now() - phaseStart;
+        }
 
         if (segmentations.length > 0) {
           // Use mask-based crop extraction
@@ -1892,8 +2186,17 @@ class UnifiedImageWorker extends EventEmitter {
    */
   private async initializeSportConfigurations() {
     try {
-      // Get sport categories from Supabase (respects admin privileges)
-      const sportCategories = await getSportCategories();
+      // PERFORMANCE: Use pre-fetched categories if available (batch optimization)
+      // This avoids redundant Supabase calls when processing multiple images
+      let sportCategories: any[];
+
+      if (this.config.sportCategories && this.config.sportCategories.length > 0) {
+        console.log(`[Worker] 🚀 Using cached sport categories (${this.config.sportCategories.length} categories)`);
+        sportCategories = this.config.sportCategories;
+      } else {
+        console.log(`[Worker] ⚠️ No cached categories, fetching from Supabase...`);
+        sportCategories = await getSportCategories();
+      }
 
       if (!sportCategories || sportCategories.length === 0) {
         return;
@@ -1928,7 +2231,7 @@ class UnifiedImageWorker extends EventEmitter {
     // Get recognition configuration from current sport category
     const recognitionConfig = this.currentSportCategory?.recognition_config || {
       maxResults: 5,
-      minConfidence: 0.7,
+      minConfidence: 0.35,  // Lowered for RF-DETR small models (was 0.7)
       confidenceDecayFactor: 0.9,
       relativeConfidenceGap: 0.3,
       focusMode: 'auto',
@@ -2001,6 +2304,9 @@ class UnifiedImageWorker extends EventEmitter {
     // Timing tracker for performance analysis
     const timing: Record<string, number> = {};
     let phaseStart = Date.now();
+
+    // Reset segmentation cache for this image
+    this.cachedSegmentationResults = null;
 
     // Check for cancellation before starting
     if (this.checkCancellation()) {
@@ -2153,19 +2459,49 @@ class UnifiedImageWorker extends EventEmitter {
       }
 
       // ============================================
-      // Fase 2.8: Determine Recognition Strategy based on Scene
+      // Fase 2.8: Determine Recognition Strategy based on Scene + Segmentation
       // ============================================
       phaseStart = Date.now();
-      const recognitionStrategy = this.getRecognitionStrategy(sceneClassification?.category || null);
+
+      // STEP 1: Run segmentation FIRST if available (to detect subjects)
+      // This allows us to intelligently skip face recognition for vehicle-only images
+      let segmentationForStrategy: SegmentedDetection[] | null = null;
+      if (this.genericSegmenterEnabled && this.genericSegmenterLoaded) {
+        try {
+          workerLog.info(`Running segmentation to determine recognition strategy...`);
+          segmentationForStrategy = await this.runGenericSegmentation(buffer);
+
+          // Cache results for later reuse in crop-context V6
+          this.cachedSegmentationResults = segmentationForStrategy;
+
+          if (segmentationForStrategy.length > 0) {
+            const detectedClasses = segmentationForStrategy.map(d => `${d.className}(${d.classId})`).join(', ');
+            workerLog.info(`Segmentation found ${segmentationForStrategy.length} subjects: ${detectedClasses}`);
+          } else {
+            workerLog.info(`Segmentation found no subjects`);
+          }
+        } catch (segError: any) {
+          workerLog.warn(`Segmentation failed, using fallback strategy: ${segError.message}`);
+          segmentationForStrategy = null;
+        }
+      }
+
+      // STEP 2: Determine recognition strategy (using segmentation results if available)
+      const recognitionStrategy = this.getRecognitionStrategy(
+        sceneClassification?.category || null,
+        segmentationForStrategy || undefined
+      );
       let faceRecognitionResult: FaceRecognitionResult | null = null;
 
-      // Perform face recognition if strategy dictates
+      // STEP 3: Perform face recognition if strategy dictates
       if (recognitionStrategy.useFaceRecognition) {
         workerLog.info(`Face recognition enabled for ${sceneClassification?.category || 'unknown'} scene`);
         faceRecognitionResult = await this.performFaceRecognition(
           uploadReadyPath,
           recognitionStrategy.context
         );
+      } else {
+        workerLog.info(`Face recognition DISABLED (segmentation detected only vehicles)`);
       }
 
       // Check if we should skip number recognition (portrait/podium scenes)
@@ -2442,10 +2778,12 @@ class UnifiedImageWorker extends EventEmitter {
       let analysisResult: any;
       let storagePath: string | null = null;
 
-      // DEBUG: Log decision path
+      // DEBUG: Log decision path with detailed configuration
       const useCropContext = this.shouldUseCropContext();
       const useLocalOnnx = this.shouldUseLocalOnnx();
-      log.info(`🔍 [DECISION] crop=${useCropContext}, onnx=${useLocalOnnx}, category=${this.currentSportCategory?.code}, recognition=${this.currentSportCategory?.recognition_method}`);
+      const cropConfig = this.currentSportCategory?.crop_config;
+      const cropEnabled = typeof cropConfig === 'string' ? JSON.parse(cropConfig)?.enabled : cropConfig?.enabled;
+      log.info(`🔍 [DECISION] crop=${useCropContext}, onnx=${useLocalOnnx}, category=${this.currentSportCategory?.code}, recognition=${this.currentSportCategory?.recognition_method}, crop_config.enabled=${cropEnabled}, onnxEnabled=${this.onnxDetectorEnabled}, onnxLoaded=${this.onnxModelLoaded}`);
 
       if (useCropContext) {
         // CROP-CONTEXT STRATEGY (V6) - High-res crops + context negative
@@ -2787,8 +3125,17 @@ class UnifiedImageWorker extends EventEmitter {
                   enrichedByDesktop: true, // Flag to indicate SmartMatcher enrichment
                   enrichedAt: new Date().toISOString()
                 },
-                // Save the complete analysis event (same as JSONL) for SQL queries
-                analysis_log: imageAnalysisEvent
+                // PERFORMANCE: Save only essential data (NOT full imageAnalysisEvent - too large, causes timeout)
+                // Full event is already logged to JSONL file for debugging
+                analysis_log: {
+                  imageId: imageFile.id,
+                  fileName: imageFile.fileName,
+                  vehicles: vehicles,
+                  recognitionMethod: analysisResult.recognitionMethod || undefined,
+                  temporalContext: temporalContextLog || null,
+                  visualTags: visualTagsResult?.tags || undefined
+                  // ❌ NO: thumbnailPath, compressedPath, aiResponse.rawText (too large)
+                }
               })
               .eq('image_id', dbImageId)
               .select('id, image_id');
@@ -4648,6 +4995,13 @@ export class UnifiedImageProcessor extends EventEmitter {
   private totalRfDetrCost: number = 0;
   private recognitionMethod: 'gemini' | 'rf-detr' | 'local-onnx' | null = null;
   private currentSportCategory: any = null; // Current category config from Supabase
+  // PERFORMANCE: Cache sport categories once per batch (avoids 12-13 redundant Supabase calls per 100 images)
+  private batchSportCategories: any[] | undefined = undefined;
+  // PERFORMANCE: ONNX Circuit Breaker (shared across all workers in batch)
+  private onnxConsecutiveFailures: number = 0;
+  private onnxCircuitBreakerThreshold: number = 5;
+  private onnxCircuitOpen: boolean = false;
+  private onnxCircuitBreakerLogged: boolean = false;
 
   // ============================================================================
   // BATCH TOKEN PRE-AUTHORIZATION (v1.1.0+)
@@ -4882,6 +5236,19 @@ export class UnifiedImageProcessor extends EventEmitter {
       };
 
       if (DEBUG_MODE) console.log(`[UnifiedProcessor] Pre-authorized ${tokensNeeded} tokens, reservation: ${this.currentReservationId}`);
+    }
+    // ========================================================================
+
+    // ========================================================================
+    // PERFORMANCE OPTIMIZATION: Cache sport categories once per batch
+    // ========================================================================
+    // This avoids 12-13 redundant Supabase calls per 100 images (one per worker)
+    // Expected impact: 600-2600ms saved per batch
+    if (!this.batchSportCategories) {
+      this.batchSportCategories = await getSportCategories();
+      console.log(`[UnifiedProcessor] 🚀 Cached ${this.batchSportCategories?.length || 0} sport categories for batch`);
+    } else {
+      console.log(`[UnifiedProcessor] ♻️  Reusing cached sport categories (${this.batchSportCategories?.length || 0} categories)`);
     }
     // ========================================================================
 
@@ -5631,7 +5998,10 @@ export class UnifiedImageProcessor extends EventEmitter {
   private async processWithWorker(imageFile: UnifiedImageFile): Promise<UnifiedProcessingResult> {
     this.activeWorkers++;
 
-    const worker = await UnifiedImageWorker.create(this.config, this.analysisLogger, this.networkMonitor);
+    // Pass cached sport categories to worker (avoid redundant Supabase fetch)
+    const workerConfig = { ...this.config, sportCategories: this.batchSportCategories };
+    if (DEBUG_MODE) console.log(`[UnifiedProcessor] Passing ${workerConfig.sportCategories?.length || 0} cached categories to worker`);
+    const worker = await UnifiedImageWorker.create(workerConfig, this.analysisLogger, this.networkMonitor);
 
     try {
       // Calculate temporal context in main process and pass to worker
@@ -5658,6 +6028,11 @@ export class UnifiedImageProcessor extends EventEmitter {
     this.processedImages = 0;
     this.ghostVehicleCount = 0;
     this.processingQueue = [];
+
+    // PERFORMANCE: Reset ONNX circuit breaker for new batch
+    this.onnxConsecutiveFailures = 0;
+    this.onnxCircuitOpen = false;
+    this.onnxCircuitBreakerLogged = false;
 
     if (DEBUG_MODE) console.log(`[UnifiedProcessor] Configuration updated with participantPresetData length: ${this.config.participantPresetData?.length || 0}`);
   }

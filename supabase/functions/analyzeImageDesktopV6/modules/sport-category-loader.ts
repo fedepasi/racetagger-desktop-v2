@@ -46,14 +46,11 @@ export async function loadSportCategory(
     return DEFAULT_SPORT_CONFIG;
   }
 
-  // Validate: V6 requires crop_config.enabled = true
+  // V6 2026: crop_config is OPTIONAL - supports both crop and full-image modes
   const cropConfig = data.crop_config as CropConfig | null;
-  if (!cropConfig?.enabled) {
-    throw new Error(
-      `Sport category '${categoryCode}' does not have crop_config enabled. ` +
-      `V6 requires crop mode. Use V4/V5 for single-image analysis.`
-    );
-  }
+  const hasCropMode = cropConfig?.enabled === true;
+
+  console.log(`${LOG_PREFIX} Category '${categoryCode}': crop_config ${hasCropMode ? 'enabled' : 'disabled/null'} (supports both modes)`);
 
   // Map database fields to TypeScript interface
   const config: SportCategoryConfig = {
@@ -63,7 +60,7 @@ export async function loadSportCategory(
     aiPrompt: data.ai_prompt || DEFAULT_SPORT_CONFIG.aiPrompt,
     fallbackPrompt: data.fallback_prompt || null,
     recognitionConfig: mapRecognitionConfig(data.recognition_config),
-    cropConfig: cropConfig
+    cropConfig: hasCropMode ? cropConfig : null  // null if disabled or missing
   };
 
   console.log(`${LOG_PREFIX} Loaded category '${config.name}' (version: ${data.edge_function_version || 6})`);
@@ -93,19 +90,21 @@ function mapRecognitionConfig(dbConfig: any): RecognitionConfig {
 
 /**
  * Validate that the loaded config is suitable for V6
+ * V6 2026: crop_config is OPTIONAL - supports both crop and full-image modes
  */
 export function validateV6Config(config: SportCategoryConfig): void {
   if (!config.aiPrompt || config.aiPrompt.trim().length === 0) {
     throw new Error('Sport category ai_prompt is empty or missing');
   }
 
-  if (!config.cropConfig?.enabled) {
-    throw new Error('V6 requires crop_config.enabled = true');
-  }
-
-  // Validate crop dimensions
-  const crop = config.cropConfig.crop;
-  if (crop.maxDimension < crop.minDimension) {
-    console.warn(`${LOG_PREFIX} Warning: crop.maxDimension < crop.minDimension, may cause issues`);
+  // V6 2026: crop_config is optional - validate only if enabled
+  if (config.cropConfig?.enabled) {
+    const crop = config.cropConfig.crop;
+    if (crop.maxDimension < crop.minDimension) {
+      console.warn(`${LOG_PREFIX} Warning: crop.maxDimension < crop.minDimension, may cause issues`);
+    }
+    console.log(`${LOG_PREFIX} Crop mode validated: minDim=${crop.minDimension}px, maxDim=${crop.maxDimension}px`);
+  } else {
+    console.log(`${LOG_PREFIX} Full-image mode (no crop_config)`);
   }
 }

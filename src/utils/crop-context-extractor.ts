@@ -63,7 +63,7 @@ export interface NegativeConfig {
 export const DEFAULT_CROP_CONFIG: CropConfig = {
   paddingPercent: 0.15,
   minPaddingPx: 50,
-  minDimension: 640,
+  minDimension: 256,  // Lowered from 640px to support smaller/distant vehicles (IMSA, endurance racing)
   maxDimension: 1024,
   jpegQuality: 90,
 };
@@ -193,8 +193,9 @@ export async function extractSingleCrop(
 ): Promise<CropResult> {
   const cfg = { ...DEFAULT_CROP_CONFIG, ...config };
 
-  // Get image metadata without loading full image
-  const metadata = await sharp(originalPath).metadata();
+  // Reuse Sharp instance for metadata and extraction
+  const sharpInstance = sharp(originalPath);
+  const metadata = await sharpInstance.metadata();
   const imageWidth = metadata.width!;
   const imageHeight = metadata.height!;
 
@@ -221,11 +222,11 @@ export async function extractSingleCrop(
     outputHeight = Math.round(height * scale);
   }
 
-  // Extract and compress
+  // Extract and compress (disable mozjpeg for speed - crops sent to AI, not displayed)
   const buffer = await sharp(originalPath)
     .extract({ left: x, top: y, width, height })
     .resize(outputWidth, outputHeight, { fit: 'inside', withoutEnlargement: true })
-    .jpeg({ quality: cfg.jpegQuality, mozjpeg: true })
+    .jpeg({ quality: 85, mozjpeg: false })
     .toBuffer();
 
   return {
@@ -274,9 +275,12 @@ export async function extractCropsFromOriginal(
     return [result];
   }
 
-  // For multiple bboxes: read original into memory once
-  const originalBuffer = await sharp(originalPath).toBuffer();
-  const metadata = await sharp(originalBuffer).metadata();
+  // For multiple bboxes: read original into memory once and get metadata in parallel
+  const sharpInstance = sharp(originalPath);
+  const [metadata, originalBuffer] = await Promise.all([
+    sharpInstance.metadata(),
+    sharpInstance.clone().toBuffer()
+  ]);
   const imageWidth = metadata.width!;
   const imageHeight = metadata.height!;
 
@@ -307,11 +311,11 @@ export async function extractCropsFromOriginal(
           outputHeight = Math.round(height * scale);
         }
 
-        // Extract from in-memory buffer
+        // Extract from in-memory buffer (disable mozjpeg for speed)
         const buffer = await sharp(originalBuffer)
           .extract({ left: x, top: y, width, height })
           .resize(outputWidth, outputHeight, { fit: 'inside', withoutEnlargement: true })
-          .jpeg({ quality: cfg.jpegQuality, mozjpeg: true })
+          .jpeg({ quality: 85, mozjpeg: false })
           .toBuffer();
 
         return {
@@ -619,8 +623,8 @@ export async function applyMaskToCrop(
     let minX = otherMask.width, maxX = 0, minY = otherMask.height, maxY = 0;
     let hasPixels = false;
 
-    // Downsample mask for faster bbox calculation (sample every 4 pixels)
-    const sampleRate = 4;
+    // PERFORMANCE: Downsample mask for faster bbox calculation (sample every 8 pixels = 4x faster)
+    const sampleRate = 8; // Increased from 4 to 8 for 4x speedup
     for (let y = 0; y < otherMask.height; y += sampleRate) {
       for (let x = 0; x < otherMask.width; x += sampleRate) {
         const idx = y * otherMask.width + x;
@@ -739,8 +743,13 @@ export async function extractCropsWithMasks(
   const cfg = { ...DEFAULT_CROP_CONFIG, ...cropConfig };
   const maskCfg = { ...DEFAULT_MASK_CROP_CONFIG, ...maskConfig };
 
-  // Get original dimensions
-  const originalMetadata = await sharp(originalPath).metadata();
+  // Load original image and metadata in parallel
+  const sharpInstance = sharp(originalPath);
+  const [originalMetadata, originalBuffer] = await Promise.all([
+    sharpInstance.metadata(),
+    sharpInstance.clone().toBuffer()
+  ]);
+
   const originalDimensions = {
     width: originalMetadata.width || 0,
     height: originalMetadata.height || 0,
@@ -761,17 +770,19 @@ export async function extractCropsWithMasks(
     log.warn(`Limited detections from ${detections.length} to ${maxCrops}`);
   }
 
-  // Load original image once
-  const originalBuffer = await sharp(originalPath).toBuffer();
   const imageWidth = originalDimensions.width;
   const imageHeight = originalDimensions.height;
 
-  // Process each detection
+  // PERFORMANCE: Process crops with controlled concurrency to avoid CPU overload
+  const MAX_CONCURRENT_CROPS = 3;
   const crops: MaskedCropResult[] = [];
 
-  for (let i = 0; i < limitedDetections.length; i++) {
-    const detection = limitedDetections[i];
-
+  // Process in batches of MAX_CONCURRENT_CROPS
+  for (let i = 0; i < limitedDetections.length; i += MAX_CONCURRENT_CROPS) {
+    const batch = limitedDetections.slice(i, i + MAX_CONCURRENT_CROPS);
+    const batchResults = await Promise.all(
+      batch.map(async (detection, batchIdx) => {
+        const idx = i + batchIdx;
     try {
       // Calculate pixel region with padding
       const { x, y, width, height, paddedBbox, edgeFlags } = calculatePixelRegion(
@@ -784,7 +795,7 @@ export async function extractCropsWithMasks(
       // Skip tiny crops
       if (width < cfg.minDimension / 2 || height < cfg.minDimension / 2) {
         log.warn(`Skipping small crop: ${width}x${height}px for ${detection.detectionId}`);
-        continue;
+        return null;
       }
 
       // Calculate output dimensions
@@ -796,11 +807,11 @@ export async function extractCropsWithMasks(
         outputHeight = Math.round(height * scale);
       }
 
-      // Extract basic crop
+      // Extract basic crop (disable mozjpeg for speed)
       let cropBuffer = await sharp(originalBuffer)
         .extract({ left: x, top: y, width, height })
         .resize(outputWidth, outputHeight, { fit: 'inside', withoutEnlargement: true })
-        .jpeg({ quality: cfg.jpegQuality, mozjpeg: true })
+        .jpeg({ quality: 85, mozjpeg: false })
         .toBuffer();
 
       // Find overlapping detections
@@ -808,7 +819,7 @@ export async function extractCropsWithMasks(
 
       if (maskCfg.enabled && maskCfg.maskOtherSubjects) {
         const overlappingDetections = limitedDetections.filter((d, j) =>
-          j !== i && bboxesOverlap(paddedBbox, d.bbox)
+          j !== idx && bboxesOverlap(paddedBbox, d.bbox)
         );
 
         if (overlappingDetections.length > 0) {
@@ -848,10 +859,17 @@ export async function extractCropsWithMasks(
         };
       }
 
-      crops.push(cropResult);
+      return cropResult;
     } catch (error) {
       log.error(`Failed to extract masked crop for ${detection.detectionId}:`, error);
+      return null;
     }
+      })
+    );
+
+    // Accumulate results from this batch
+    const validResults = batchResults.filter((c): c is MaskedCropResult => c !== null);
+    crops.push(...validResults);
   }
 
   const processingTimeMs = Date.now() - startTime;

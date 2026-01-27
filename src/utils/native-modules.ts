@@ -31,6 +31,121 @@ export interface ImageProcessor {
   metadata(): Promise<{ width?: number; height?: number; format?: string }>;
 }
 
+// ============================================================================
+// GLOBAL CACHE per evitare test ripetuti
+// ============================================================================
+interface SharpCache {
+  instance: any | null;
+  isWorking: boolean;
+  tested: boolean;
+}
+
+const sharpCache: SharpCache = {
+  instance: null,
+  isWorking: false,
+  tested: false
+};
+
+/**
+ * Inizializza e testa Sharp UNA VOLTA all'avvio dell'applicazione
+ * Deve essere chiamato da main.ts durante l'avvio
+ */
+export async function initializeImageProcessor(): Promise<void> {
+  if (sharpCache.tested) {
+    return; // Già inizializzato
+  }
+
+  const forceJimp = process.env.FORCE_JIMP_FALLBACK === 'true';
+
+  if (forceJimp) {
+    console.log('[ImageProcessor] FORCE_JIMP_FALLBACK enabled, skipping Sharp test');
+    sharpCache.tested = true;
+    sharpCache.isWorking = false;
+    return;
+  }
+
+  try {
+    const { app } = require('electron');
+    const isPackaged = app?.isPackaged || false;
+
+    let sharp: any;
+
+    if (isPackaged) {
+      const path = require('path');
+      const fs = require('fs');
+
+      const unpackedPath = path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules');
+      const sharpPath = path.join(unpackedPath, 'sharp');
+
+      // Verifica che Sharp esista
+      if (!fs.existsSync(sharpPath)) {
+        throw new Error(`Sharp not found at ${sharpPath}`);
+      }
+
+      // Verifica binari nativi
+      const darwinArm64Path = path.join(unpackedPath, '@img', 'sharp-darwin-arm64');
+      const binaryPath = path.join(darwinArm64Path, 'lib', 'sharp-darwin-arm64.node');
+
+      const libvipsDir = path.join(unpackedPath, '@img', 'sharp-libvips-darwin-arm64', 'lib');
+      let libvipsPath: string | null = null;
+
+      if (fs.existsSync(libvipsDir)) {
+        const files = fs.readdirSync(libvipsDir);
+        const libvipsFile = files.find((f: string) => f.startsWith('libvips-cpp.') && f.endsWith('.dylib'));
+        if (libvipsFile) {
+          libvipsPath = path.join(libvipsDir, libvipsFile);
+        }
+      }
+
+      if (!fs.existsSync(binaryPath)) {
+        throw new Error(`Sharp native binary not found at ${binaryPath}`);
+      }
+
+      if (!libvipsPath || !fs.existsSync(libvipsPath)) {
+        throw new Error(`Sharp libvips not found in: ${libvipsDir}`);
+      }
+
+      // Imposta DYLD_LIBRARY_PATH
+      process.env.DYLD_LIBRARY_PATH = `${libvipsDir}:${process.env.DYLD_LIBRARY_PATH || ''}`;
+
+      // Cambia directory temporaneamente
+      const originalCwd = process.cwd();
+      try {
+        process.chdir(path.join(process.resourcesPath, 'app.asar.unpacked'));
+        const sharpCacheKey = require.resolve(sharpPath);
+        if (require.cache[sharpCacheKey]) {
+          delete require.cache[sharpCacheKey];
+        }
+        sharp = require(sharpPath);
+      } finally {
+        process.chdir(originalCwd);
+      }
+    } else {
+      // Development mode
+      sharp = require('sharp');
+    }
+
+    // Test Sharp
+    const isWorking = await testSharp(sharp);
+
+    sharpCache.instance = sharp;
+    sharpCache.isWorking = isWorking;
+    sharpCache.tested = true;
+
+    if (isWorking) {
+      console.log('[ImageProcessor] ✅ Sharp initialized and tested successfully (FAST mode enabled)');
+    } else {
+      console.log('[ImageProcessor] ⚠️ Sharp test failed, will use Jimp fallback (SLOW mode)');
+    }
+
+  } catch (error) {
+    console.log('[ImageProcessor] ⚠️ Sharp initialization failed:', error instanceof Error ? error.message : String(error));
+    sharpCache.tested = true;
+    sharpCache.isWorking = false;
+    sharpCache.instance = null;
+  }
+}
+
 /**
  * Implementazione Jimp per il resize delle immagini
  */
@@ -271,45 +386,23 @@ class SharpProcessor implements ImageProcessor {
  */
 async function testSharp(sharp: any): Promise<boolean> {
   try {
-    // Minimal valid JPEG buffer (1x1 pixel)
-    const testBuffer = Buffer.from([
-      0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01,
-      0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xDB, 0x00, 0x43,
-      0x00, 0x10, 0x0B, 0x0C, 0x0E, 0x0C, 0x0A, 0x10, 0x0E, 0x0D, 0x0E, 0x12,
-      0x11, 0x10, 0x13, 0x18, 0x28, 0x1A, 0x18, 0x16, 0x16, 0x18, 0x31, 0x23,
-      0x25, 0x1D, 0x28, 0x3A, 0x33, 0x3D, 0x3C, 0x39, 0x33, 0x38, 0x37, 0x40,
-      0x48, 0x5C, 0x4E, 0x40, 0x44, 0x57, 0x45, 0x37, 0x38, 0x50, 0x6D, 0x51,
-      0x57, 0x5F, 0x62, 0x67, 0x68, 0x67, 0x3E, 0x4D, 0x71, 0x79, 0x70, 0x64,
-      0x78, 0x5C, 0x65, 0x67, 0x63, 0xFF, 0xC0, 0x00, 0x11, 0x08, 0x00, 0x01,
-      0x00, 0x01, 0x01, 0x01, 0x11, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01,
-      0xFF, 0xC4, 0x00, 0x1F, 0x00, 0x00, 0x01, 0x05, 0x01, 0x01, 0x01, 0x01,
-      0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02,
-      0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0xFF, 0xC4, 0x00,
-      0xB5, 0x10, 0x00, 0x02, 0x01, 0x03, 0x03, 0x02, 0x04, 0x03, 0x05, 0x05,
-      0x04, 0x04, 0x00, 0x00, 0x01, 0x7D, 0x01, 0x02, 0x03, 0x00, 0x04, 0x11,
-      0x05, 0x12, 0x21, 0x31, 0x41, 0x06, 0x13, 0x51, 0x61, 0x07, 0x22, 0x71,
-      0x14, 0x32, 0x81, 0x91, 0xA1, 0x08, 0x23, 0x42, 0xB1, 0xC1, 0x15, 0x52,
-      0xD1, 0xF0, 0x24, 0x33, 0x62, 0x72, 0x82, 0x09, 0x0A, 0x16, 0x17, 0x18,
-      0x19, 0x1A, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x34, 0x35, 0x36, 0x37,
-      0x38, 0x39, 0x3A, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x53,
-      0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5A, 0x63, 0x64, 0x65, 0x66, 0x67,
-      0x68, 0x69, 0x6A, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7A, 0x83,
-      0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8A, 0x92, 0x93, 0x94, 0x95, 0x96,
-      0x97, 0x98, 0x99, 0x9A, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9,
-      0xAA, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xC2, 0xC3,
-      0xC4, 0xC5, 0xC6, 0xC7, 0xC8, 0xC9, 0xCA, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6,
-      0xD7, 0xD8, 0xD9, 0xDA, 0xE1, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7, 0xE8,
-      0xE9, 0xEA, 0xF1, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8, 0xF9, 0xFA,
-      0xFF, 0xDA, 0x00, 0x0C, 0x03, 0x01, 0x00, 0x02, 0x11, 0x03, 0x11, 0x00,
-      0x3F, 0x00, 0xAA, 0xFF, 0xD9
-    ]);
+    // Test con immagine generata (più affidabile del buffer JPEG statico)
+    const testBuffer = await sharp({
+      create: {
+        width: 10,
+        height: 10,
+        channels: 3,
+        background: { r: 255, g: 0, b: 0 }
+      }
+    }).png().toBuffer();
 
-    const instance = sharp(testBuffer);
-    await instance.metadata();
-    await instance.resize(10, 10).jpeg({ quality: 80 }).toBuffer();
+    // Test metadata e resize con nuove istanze
+    await sharp(testBuffer).metadata();
+    await sharp(testBuffer).resize(5, 5).jpeg({ quality: 80 }).toBuffer();
 
     return true;
   } catch (error) {
+    console.log('[ImageProcessor] Sharp test failed with error:', error instanceof Error ? error.message : String(error));
     return false;
   }
 }
@@ -339,128 +432,23 @@ export function debugSharp(): void {
 
 /**
  * Factory per creare un image processor (Sharp o Jimp)
+ * Usa la cache globale per evitare test ripetuti
  */
 export async function createImageProcessor(input: string | Buffer): Promise<ImageProcessor> {
-  // Check if we should force Jimp for stability
-  const forceJimp = process.env.FORCE_JIMP_FALLBACK === 'true';
-
-  if (!forceJimp) {
-    // Prova prima Sharp
-    try {
-      // Determina se siamo in un'app pacchettizzata
-      const { app } = require('electron');
-      const isPackaged = app?.isPackaged || false;
-
-      let sharp: any;
-      if (isPackaged) {
-      // In produzione, Sharp è in app.asar.unpacked
-      const path = require('path');
-      const fs = require('fs');
-
-      const unpackedPath = path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules');
-      const sharpPath = path.join(unpackedPath, 'sharp');
-
-      // Verifica che Sharp esista
-      if (!fs.existsSync(sharpPath)) {
-        throw new Error(`Sharp not found at ${sharpPath}`);
-      }
-
-      // Verifica che i binari nativi esistano
-      const darwinArm64Path = path.join(unpackedPath, '@img', 'sharp-darwin-arm64');
-      const binaryPath = path.join(darwinArm64Path, 'lib', 'sharp-darwin-arm64.node');
-
-      // Trova dinamicamente la versione di libvips
-      const libvipsDir = path.join(unpackedPath, '@img', 'sharp-libvips-darwin-arm64', 'lib');
-      let libvipsPath: string | null = null;
-
-      if (fs.existsSync(libvipsDir)) {
-        const files = fs.readdirSync(libvipsDir);
-        const libvipsFile = files.find((f: string) => f.startsWith('libvips-cpp.') && f.endsWith('.dylib'));
-        if (libvipsFile) {
-          libvipsPath = path.join(libvipsDir, libvipsFile);
-        }
-      }
-
-      if (!fs.existsSync(binaryPath)) {
-        throw new Error(`Sharp native binary not found at ${binaryPath}`);
-      }
-
-      if (!libvipsPath || !fs.existsSync(libvipsPath)) {
-        throw new Error(`Sharp libvips not found in: ${libvipsDir}`);
-      }
-
-      // Crea il symlink mancante per sharp.node se non esiste
-      const symlinkPath = path.join(darwinArm64Path, 'sharp.node');
-      if (!fs.existsSync(symlinkPath)) {
-        try {
-          fs.symlinkSync('./lib/sharp-darwin-arm64.node', symlinkPath);
-        } catch (symlinkError: any) {
-          try {
-            fs.copyFileSync(binaryPath, symlinkPath);
-          } catch (copyError: any) {
-            // Silently continue - may still work
-          }
-        }
-      }
-
-      // Configura l'ambiente per Sharp con impostazioni ottimizzate per produzione
-      process.env.SHARP_IGNORE_GLOBAL_LIBVIPS = '1';
-      process.env.SHARP_FORCE_GLOBAL_LIBVIPS = '0';
-      process.env.SHARP_VENDOR_LIBVIPS_PATH = path.join(unpackedPath, '@img', 'sharp-libvips-darwin-arm64', 'lib');
-      process.env.SHARP_VENDOR_PATH = path.join(unpackedPath, '@img', 'sharp-darwin-arm64', 'lib');
-
-      // Su macOS, configura i percorsi delle librerie dinamiche
-      if (process.platform === 'darwin') {
-        const vendorPath = path.join(sharpPath, 'vendor');
-        const libPath = path.join(vendorPath, 'lib');
-        const imgLibPath = path.join(darwinArm64Path, 'lib');
-
-        // Configura DYLD_LIBRARY_PATH con tutti i percorsi necessari
-        const libraryPaths = [libPath, imgLibPath, vendorPath].filter(p => fs.existsSync(p));
-        if (libraryPaths.length > 0) {
-          process.env.DYLD_LIBRARY_PATH = libraryPaths.join(':');
-        }
-      }
-
-      // Cambia temporaneamente la directory di lavoro per aiutare la risoluzione dei moduli
-      const originalCwd = process.cwd();
-      try {
-        process.chdir(path.join(process.resourcesPath, 'app.asar.unpacked'));
-
-        // Pulisce la cache dei require per Sharp
-        const sharpCacheKey = require.resolve(sharpPath);
-        if (require.cache[sharpCacheKey]) {
-          delete require.cache[sharpCacheKey];
-        }
-
-        // Carica Sharp
-        sharp = require(sharpPath);
-
-      } finally {
-        // Ripristina la directory di lavoro
-        process.chdir(originalCwd);
-      }
-    } else {
-      // In sviluppo, usa il percorso normale
-      sharp = require('sharp');
-    }
-
-    const isSharpWorking = await testSharp(sharp);
-    if (isSharpWorking) {
-      return new SharpProcessor(sharp, input);
-    } else {
-      try {
-        // Try to create a Sharp processor with the actual input
-        const processor = new SharpProcessor(sharp, input);
-        return processor;
-      } catch (processorError) {
-        // Fall through to Jimp
-      }
-    }
-  } catch (error) {
-    // Fall through to Jimp
+  // Inizializza se non ancora fatto (fallback per chiamate prima dell'init)
+  if (!sharpCache.tested) {
+    await initializeImageProcessor();
   }
-  } // Close the else block for forceJimp check
+
+  // Usa Sharp dalla cache se disponibile e funzionante
+  if (sharpCache.isWorking && sharpCache.instance) {
+    try {
+      return new SharpProcessor(sharpCache.instance, input);
+    } catch (error) {
+      console.log('[ImageProcessor] ⚠️ Sharp processor creation failed, falling back to Jimp');
+      // Fall through to Jimp
+    }
+  }
 
   // Fallback a Jimp
   try {

@@ -6,7 +6,7 @@ import { execFile } from 'child_process';
 import * as piexif from 'piexifjs';
 import { createImageProcessor } from './native-modules';
 import { ResizePreset, RESIZE_PRESETS, ResizeConfig, DEBUG_MODE } from '../config';
-import { CleanupManager } from './cleanup-manager';
+import { CleanupManager, getCleanupManager } from './cleanup-manager';
 import { nativeToolManager } from './native-tool-manager';
 import { rawPreviewExtractor, NativePreviewOptions } from './raw-preview-native';
 
@@ -24,7 +24,7 @@ export class RawConverter {
     // Crea directory temporanea dedicata per i DNG nella home directory
     // Adobe DNG Converter ha problemi con /var/folders su macOS
     this.tempDngDirectory = path.join(os.homedir(), '.racetagger-temp', 'dng-processing');
-    this.cleanupManager = new CleanupManager();
+    this.cleanupManager = getCleanupManager(); // PERFORMANCE: Use singleton to avoid memory leak
     this.ensureTempDirectory();
   }
 

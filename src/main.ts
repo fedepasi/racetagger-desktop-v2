@@ -122,7 +122,7 @@ import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_CONFIG, APP_CONFIG, ResizePreset, RESIZE_PRESETS, PIPELINE_CONFIG, DEBUG_MODE } from './config';
 import { authService } from './auth-service';
 import * as piexif from 'piexifjs';
-import { createImageProcessor } from './utils/native-modules';
+import { createImageProcessor, initializeImageProcessor } from './utils/native-modules';
 import { createXmpSidecar, xmpSidecarExists } from './utils/xmp-manager';
 import { writeKeywordsToImage } from './utils/metadata-writer';
 import { rawConverter } from './utils/raw-converter'; // Import the singleton instance
@@ -2672,6 +2672,10 @@ app.whenReady().then(async () => { // Added async here
     isDev = true; // Default to dev mode if check fails
   }
 
+  // Initialize image processor (Sharp/Jimp) ONCE at startup
+  if (DEBUG_MODE) console.log('[RaceTagger] Initializing image processor...');
+  await initializeImageProcessor();
+
   // Check app version before creating window
   await checkAppVersion();
 
@@ -2707,8 +2711,9 @@ app.whenReady().then(async () => { // Added async here
     await rawConverter.cleanupAllTempFiles();
 
     // Cleanup files from the centralized temp directory (older than 7 days)
-    const { CleanupManager } = require('./utils/cleanup-manager');
-    const cleanupManager = new CleanupManager();
+    // PERFORMANCE: Use singleton to avoid memory leak (MaxListenersExceededWarning)
+    const { getCleanupManager } = require('./utils/cleanup-manager');
+    const cleanupManager = getCleanupManager();
     await cleanupManager.startupCleanup();
 
     // Start periodic cleanup (every 24h, files older than 7 days)

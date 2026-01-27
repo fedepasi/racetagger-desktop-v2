@@ -236,7 +236,10 @@ export class OnnxDetector {
 
   /**
    * Preprocess image for inference
-   * RF-DETR/Roboflow uses ImageNet normalization
+   * Matches Roboflow training pipeline:
+   * 1. Auto-orient based on EXIF (Roboflow "Auto-Orient: Applied")
+   * 2. Resize to 640x640 STRETCH (Roboflow "Stretch to 640x640")
+   * 3. Simple /255 normalization (Roboflow default, NOT ImageNet!)
    */
   private async preprocessImage(imageBuffer: Buffer): Promise<Float32Array> {
     if (!this.modelConfig) {
@@ -254,6 +257,7 @@ export class OnnxDetector {
 
     // Resize and convert to RGB
     const { data, info } = await sharp(imageBuffer)
+      .rotate()  // Auto-rotate based on EXIF orientation data (matches Roboflow "Auto-Orient: Applied")
       .resize(targetWidth, targetHeight, {
         fit: 'fill',
         kernel: 'lanczos3',
@@ -262,12 +266,15 @@ export class OnnxDetector {
       .raw()
       .toBuffer({ resolveWithObject: true });
 
-    // ImageNet normalization values (used by RF-DETR/Roboflow)
-    const mean = [0.485, 0.456, 0.406];  // RGB
-    const std = [0.229, 0.224, 0.225];   // RGB
+    // NORMALIZATION SELECTION based on model type
+    // Roboflow YOLO training uses SIMPLE /255 normalization (NOT ImageNet!)
+    // Verified via notebook testing - ImageNet normalization causes 0.0 confidence
+    const useImageNetNorm = false; // YOLOv11 trained with SIMPLE /255 normalization (Roboflow default)
 
-    // Convert to Float32 with ImageNet normalization
-    // RF-DETR expects CHW format (channels, height, width)
+    const mean = [0.485, 0.456, 0.406];  // RGB (ImageNet)
+    const std = [0.229, 0.224, 0.225];   // RGB (ImageNet)
+
+    // Convert to Float32 (CHW format: channels, height, width)
     const floatData = new Float32Array(3 * targetHeight * targetWidth);
 
     for (let c = 0; c < 3; c++) {
@@ -275,11 +282,18 @@ export class OnnxDetector {
         for (let w = 0; w < targetWidth; w++) {
           const srcIdx = (h * targetWidth + w) * 3 + c;
           const dstIdx = c * targetHeight * targetWidth + h * targetWidth + w;
-          // ImageNet normalization: (pixel / 255.0 - mean) / std
-          floatData[dstIdx] = (data[srcIdx] / 255.0 - mean[c]) / std[c];
+
+          if (useImageNetNorm) {
+            // ImageNet normalization: (pixel / 255.0 - mean) / std
+            floatData[dstIdx] = (data[srcIdx] / 255.0 - mean[c]) / std[c];
+          } else {
+            // Simple normalization: pixel / 255.0 (YOLOv11 standard)
+            floatData[dstIdx] = data[srcIdx] / 255.0;
+          }
         }
       }
     }
+    console.log(`[ONNX-Preprocess] Using ${useImageNetNorm ? 'ImageNet' : 'Simple'} normalization`);
 
     return floatData;
   }
@@ -311,6 +325,18 @@ export class OnnxDetector {
       feeds[this.session.inputNames[0]] = inputTensor;
 
       const results = await this.session.run(feeds);
+
+      // DEBUG: Log output tensor info for YOLOv11 compatibility check
+      console.log('[ONNX-Output] Output tensor names:', Object.keys(results));
+      for (const name of Object.keys(results)) {
+        const tensor = results[name];
+        console.log(`[ONNX-Output] ${name}: dims=${tensor.dims}, type=${tensor.type}, size=${tensor.size}`);
+
+        // Sample first few raw values to understand data format
+        const data = tensor.data as Float32Array;
+        const samples = Array.from(data.slice(0, 20)).map(v => v.toFixed(4));
+        console.log(`[ONNX-Output] First 20 values:`, samples.join(', '));
+      }
 
       // Parse detections based on output format
       const detections = this.parseDetections(results);
@@ -360,6 +386,7 @@ export class OnnxDetector {
 
     // Format 1: Separate boxes and scores (common for DETR)
     if (results['boxes'] && results['scores']) {
+      console.log('[ONNX-Parse] Using RF-DETR format (boxes + scores)');
       const boxes = results['boxes'].data as Float32Array;
       const scores = results['scores'].data as Float32Array;
 
@@ -487,58 +514,169 @@ export class OnnxDetector {
       }
     }
 
-    // Format 2: Combined output tensor
-    else if (results['output'] || results['detections']) {
-      const output = (results['output'] || results['detections']).data as Float32Array;
-      const dims = (results['output'] || results['detections']).dims;
+    // Format 2: Combined output tensor (YOLOv11/YOLOv8 format)
+    else if (results['output'] || results['detections'] || results['output0']) {
+      console.log('[ONNX-Parse] Using YOLO combined format');
+      const outputTensor = results['output'] || results['detections'] || results['output0'];
+      const output = outputTensor.data as Float32Array;
+      const dims = outputTensor.dims;
 
       // Try to parse based on dimensions
       if (dims.length === 3) {
-        // [batch, num_detections, values]
-        const numDetections = Number(dims[1]);
-        const valuesPerDetection = Number(dims[2]);
+        const batchSize = Number(dims[0]);
+        const dim1 = Number(dims[1]);
+        const dim2 = Number(dims[2]);
 
-        for (let i = 0; i < numDetections; i++) {
-          const offset = i * valuesPerDetection;
+        console.log(`[ONNX-Parse] 3D tensor format: [${batchSize}, ${dim1}, ${dim2}]`);
+        console.log(`[ONNX-Parse] Model has ${this.modelConfig.classes.length} classes`);
+        console.log(`[ONNX-Parse] Expected transposed dim1: ${4 + this.modelConfig.classes.length}`);
 
-          // Common format: [x, y, w, h, confidence, class_scores...]
-          const x = output[offset];
-          const y = output[offset + 1];
-          const width = output[offset + 2];
-          const height = output[offset + 3];
-          const objectness = this.sigmoid(output[offset + 4]);
+        // YOLOv11 transposed format: [1, 4+num_classes, num_anchors]
+        // Example: [1, 84, 8400] for 80 classes (4 bbox + 80 classes = 84)
+        // SPECIAL CASE: [1, 64, 8400] = 60 classes (manifest might have wrong count)
+        const exactMatch = dim1 === (4 + this.modelConfig.classes.length);
+        const knownTransposedFormat = (dim1 === 64 && dim2 === 8400); // IMSA 60-class model
+        const isTransposedFormat = exactMatch || knownTransposedFormat;
 
-          // Find best class (apply sigmoid to class scores)
-          let maxClassScore = 0;
-          let bestClassIndex = 0;
+        if (knownTransposedFormat && !exactMatch) {
+          console.log(`[ONNX-Parse] ✅ Known transposed format detected: [1, 64, 8400] = 60 classes`);
+          console.log(`[ONNX-Parse] Overriding manifest class count (${this.modelConfig.classes.length}) → using 60 classes from tensor`);
+        } else if (!exactMatch && dim2 > dim1 * 10) {
+          console.log(`[ONNX-Parse] ⚠️ Dimension mismatch: dim1=${dim1} != expected ${4 + this.modelConfig.classes.length}`);
+          console.log(`[ONNX-Parse] Trying STANDARD format [batch, detections, features] instead`);
+        }
 
-          for (let c = 0; c < this.modelConfig.classes.length; c++) {
-            const classScore = this.sigmoid(output[offset + 5 + c] || 0);
-            if (classScore > maxClassScore) {
-              maxClassScore = classScore;
-              bestClassIndex = c;
+        if (isTransposedFormat) {
+          console.log('[ONNX-Parse] Detected YOLOv11 transposed format [1, features, anchors]');
+          const numAnchors = dim2;
+          // Use actual class count from tensor dimensions, not manifest
+          const numClasses = dim1 - 4; // dim1 = 4 bbox + num_classes
+          console.log(`[ONNX-Parse] Using ${numClasses} classes from tensor (manifest says ${this.modelConfig.classes.length})`);
+
+          // DEBUG: Sample first few anchors to see raw values
+          let sampledAnchors = 0;
+
+          for (let i = 0; i < numAnchors; i++) {
+            // In transposed format, data is organized as:
+            // output[0*numAnchors + i] = x
+            // output[1*numAnchors + i] = y
+            // output[2*numAnchors + i] = w
+            // output[3*numAnchors + i] = h
+            // output[(4+c)*numAnchors + i] = class_score[c]
+
+            const x = output[0 * numAnchors + i];
+            const y = output[1 * numAnchors + i];
+            const width = output[2 * numAnchors + i];
+            const height = output[3 * numAnchors + i];
+
+            // Find best class
+            let maxClassScore = 0;
+            let bestClassIndex = 0;
+
+            // DEBUG: Sample class scores for first anchor
+            if (i === 0 && sampledAnchors === 0) {
+              console.log(`[ONNX-Parse] First anchor class scores (first 10):`);
+              for (let c = 0; c < Math.min(10, numClasses); c++) {
+                const idx = (4 + c) * numAnchors + i;
+                const score = output[idx];
+                console.log(`  class ${c}: idx=${idx}, value=${score.toFixed(6)}`);
+              }
             }
+
+            for (let c = 0; c < numClasses; c++) {
+              const classScore = output[(4 + c) * numAnchors + i];
+              if (classScore > maxClassScore) {
+                maxClassScore = classScore;
+                bestClassIndex = c;
+              }
+            }
+
+            const confidence = maxClassScore; // YOLOv11 already combines objectness*class_prob
+
+            // DEBUG: Sample first 10 anchors unconditionally to see raw values
+            if (sampledAnchors < 10) {
+              console.log(`[ONNX-Parse] Anchor ${i}: x=${x.toFixed(2)}, y=${y.toFixed(2)}, w=${width.toFixed(2)}, h=${height.toFixed(2)}, maxScore=${maxClassScore.toFixed(6)}, class=${bestClassIndex}/${numClasses}`);
+              sampledAnchors++;
+            }
+
+            if (confidence < 0.1) continue;
+
+            const className = this.modelConfig.classes[bestClassIndex] || `class_${bestClassIndex}`;
+
+            // YOLOv11 outputs center-based coords, normalized 0-1
+            const [inputW, inputH] = this.modelConfig.inputSize;
+            const centerX = x / inputW;
+            const centerY = y / inputH;
+            const boxWidth = width / inputW;
+            const boxHeight = height / inputH;
+
+            // Convert to corner-based (top-left)
+            const cornerX = centerX - boxWidth / 2;
+            const cornerY = centerY - boxHeight / 2;
+
+            detections.push({
+              x: cornerX,
+              y: cornerY,
+              width: boxWidth,
+              height: boxHeight,
+              confidence,
+              classIndex: bestClassIndex,
+              className,
+              raceNumber: this.extractRaceNumber(className),
+            });
           }
+        } else {
+          // Standard format: [batch, num_detections, values]
+          console.log('[ONNX-Parse] Detected standard format [batch, detections, features]');
+          const numDetections = dim1;
+          const valuesPerDetection = dim2;
 
-          const confidence = objectness * maxClassScore;
-          if (confidence < 0.1) continue;
+          for (let i = 0; i < numDetections; i++) {
+            const offset = i * valuesPerDetection;
 
-          const className = this.modelConfig.classes[bestClassIndex] || `class_${bestClassIndex}`;
+            // Common format: [x, y, w, h, confidence, class_scores...]
+            const x = output[offset];
+            const y = output[offset + 1];
+            const width = output[offset + 2];
+            const height = output[offset + 3];
+            const objectness = this.sigmoid(output[offset + 4]);
 
-          detections.push({
-            x,
-            y,
-            width,
-            height,
-            confidence,
-            classIndex: bestClassIndex,
-            className,
-            raceNumber: this.extractRaceNumber(className),
-          });
+            // Find best class (apply sigmoid to class scores)
+            let maxClassScore = 0;
+            let bestClassIndex = 0;
+
+            for (let c = 0; c < this.modelConfig.classes.length; c++) {
+              const classScore = this.sigmoid(output[offset + 5 + c] || 0);
+              if (classScore > maxClassScore) {
+                maxClassScore = classScore;
+                bestClassIndex = c;
+              }
+            }
+
+            const confidence = objectness * maxClassScore;
+            if (confidence < 0.1) continue;
+
+            const className = this.modelConfig.classes[bestClassIndex] || `class_${bestClassIndex}`;
+
+            detections.push({
+              x,
+              y,
+              width,
+              height,
+              confidence,
+              classIndex: bestClassIndex,
+              className,
+              raceNumber: this.extractRaceNumber(className),
+            });
+          }
         }
       }
+    } else {
+      console.warn('[ONNX-Parse] ⚠️ Unrecognized output format. Available tensors:', outputNames);
+      console.warn('[ONNX-Parse] Expected: "boxes"+"scores" (RF-DETR) OR "output"/"output0"/"detections" (YOLO)');
     }
 
+    console.log(`[ONNX-Parse] Parsed ${detections.length} detections before NMS`);
     return detections;
   }
 

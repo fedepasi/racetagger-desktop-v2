@@ -23,8 +23,11 @@ export interface CleanupStats {
 
 /**
  * Gestisce la pulizia automatica dei file temporanei della pipeline
+ * SINGLETON: Una sola istanza condivisa per evitare memory leak (MaxListenersExceededWarning)
  */
 export class CleanupManager extends EventEmitter {
+  private static instance: CleanupManager | null = null;
+
   private tempFiles: Map<string, TempFile> = new Map();
   private stats: CleanupStats = {
     filesTracked: 0,
@@ -36,17 +39,34 @@ export class CleanupManager extends EventEmitter {
   private tempDirectory: string;
   private isShuttingDown: boolean = false;
 
-  constructor() {
+  /**
+   * Constructor privato per implementare Singleton pattern
+   * PERFORMANCE: Previene multiple istanze che causano MaxListenersExceededWarning
+   */
+  private constructor() {
     super();
 
     // Usa la directory unificata ~/.racetagger-temp/ per tutti i file temporanei
     this.tempDirectory = path.join(os.homedir(), '.racetagger-temp');
     this.ensureTempDirectory();
 
-    // Cleanup automatico su exit del processo
+    // Cleanup automatico su exit del processo (registrato UNA sola volta)
     process.on('exit', () => this.emergencyCleanup());
     process.on('SIGINT', () => this.emergencyCleanup());
     process.on('SIGTERM', () => this.emergencyCleanup());
+
+    console.log(`[CleanupManager] Singleton instance created. Process listeners: exit=${process.listenerCount('exit')}, SIGINT=${process.listenerCount('SIGINT')}, SIGTERM=${process.listenerCount('SIGTERM')}`);
+  }
+
+  /**
+   * Ottieni l'istanza singleton di CleanupManager
+   * PERFORMANCE: Garantisce una sola istanza nell'intero processo
+   */
+  public static getInstance(): CleanupManager {
+    if (!CleanupManager.instance) {
+      CleanupManager.instance = new CleanupManager();
+    }
+    return CleanupManager.instance;
   }
 
   /**
@@ -436,4 +456,16 @@ export class CleanupManager extends EventEmitter {
       this.periodicCleanupTimer = null;
     }
   }
+}
+
+/**
+ * Factory function per ottenere l'istanza singleton di CleanupManager
+ * PERFORMANCE: Usa questa invece di `new CleanupManager()` per evitare memory leak
+ *
+ * @example
+ * import { getCleanupManager } from './cleanup-manager';
+ * const cleanupManager = getCleanupManager();
+ */
+export function getCleanupManager(): CleanupManager {
+  return CleanupManager.getInstance();
 }
