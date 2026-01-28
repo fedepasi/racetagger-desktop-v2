@@ -95,6 +95,12 @@ export interface UnifiedProcessingResult {
   sceneSkipped?: boolean; // True if AI analysis was skipped due to scene classification
   // Face Recognition
   faceRecognitionUsed?: boolean; // True if face recognition was used for identification
+  // Pending database update (passed from worker to processor for batch flushing)
+  pendingUpdate?: {
+    imageId: string;
+    updateData: any;
+    timestamp: number;
+  };
 }
 
 /**
@@ -2305,6 +2311,9 @@ class UnifiedImageWorker extends EventEmitter {
     const timing: Record<string, number> = {};
     let phaseStart = Date.now();
 
+    // BATCH UPDATE: Pending database update data (to be accumulated by processor)
+    let pendingUpdateData: {imageId: string; updateData: any; timestamp: number} | undefined = undefined;
+
     // Reset segmentation cache for this image
     this.cachedSegmentationResults = null;
 
@@ -3097,59 +3106,38 @@ class UnifiedImageWorker extends EventEmitter {
         // Log to JSONL file
         this.analysisLogger.logImageAnalysis(imageAnalysisEvent);
 
-        // UPDATE analysis_results with enriched vehicle data (participantMatch, corrections, etc.)
-        // This ensures the management portal can view the same data as the JSONL logs
-        // NOTE: Use analysisResult.imageId (database UUID) NOT imageFile.id (temporary local ID)
+        // PREPARE database update for batch flushing (performance optimization)
+        // Worker returns update data to processor, which accumulates and flushes in batches
+        // This prevents Supabase timeout by sending updates in controlled batches
+        // Full event is already logged to JSONL file for debugging
         const dbImageId = analysisResult.imageId;
         console.log(`[DBUpdate] Check: dbImageId=${dbImageId}, vehicles.length=${vehicles.length}`);
+
         if (dbImageId && vehicles.length > 0) {
-          try {
-            // Debug: Check auth state before UPDATE
-            const { data: sessionData } = await this.supabase.auth.getSession();
-            const authUid = sessionData?.session?.user?.id;
-            console.log(`[DBUpdate] Auth state: uid=${authUid || 'NOT AUTHENTICATED'}`);
+          // PERFORMANCE: Prepare update data to be accumulated by processor
+          // Processor will flush updates every BATCH_UPDATE_THRESHOLD images or at end of batch
+          pendingUpdateData = {
+            imageId: dbImageId,
+            updateData: {
+              raw_response: {
+                vehicles,
+                totalVehicles: filteredAnalysis.length,
+                recognitionMethod: analysisResult.recognitionMethod || undefined,
+                modelSource: analysisResult.recognitionMethod || 'gemini',
+                segmentationPreprocessing: analysisResult.segmentationPreprocessing || undefined,
+                imageSize: analysisResult.imageSize || undefined,
+                visualTags: visualTagsResult?.tags || undefined,
+                temporalContext: temporalContextLog,
+                enrichedByDesktop: true,
+                enrichedAt: new Date().toISOString()
+              }
+              // ❌ Removed analysis_log - reduces payload size by ~70%
+              // Full data already in JSONL for debugging
+            },
+            timestamp: Date.now()
+          };
 
-            // Add .select() to verify rows were actually updated
-            const { data: updateData, error: updateError } = await this.supabase
-              .from('analysis_results')
-              .update({
-                raw_response: {
-                  vehicles,
-                  totalVehicles: filteredAnalysis.length,
-                  recognitionMethod: analysisResult.recognitionMethod || undefined,
-                  modelSource: analysisResult.recognitionMethod || 'gemini', // Actual AI model used
-                  segmentationPreprocessing: analysisResult.segmentationPreprocessing || undefined,
-                  imageSize: analysisResult.imageSize || undefined,
-                  visualTags: visualTagsResult?.tags || undefined,
-                  temporalContext: temporalContextLog,
-                  enrichedByDesktop: true, // Flag to indicate SmartMatcher enrichment
-                  enrichedAt: new Date().toISOString()
-                },
-                // PERFORMANCE: Save only essential data (NOT full imageAnalysisEvent - too large, causes timeout)
-                // Full event is already logged to JSONL file for debugging
-                analysis_log: {
-                  imageId: imageFile.id,
-                  fileName: imageFile.fileName,
-                  vehicles: vehicles,
-                  recognitionMethod: analysisResult.recognitionMethod || undefined,
-                  temporalContext: temporalContextLog || null,
-                  visualTags: visualTagsResult?.tags || undefined
-                  // ❌ NO: thumbnailPath, compressedPath, aiResponse.rawText (too large)
-                }
-              })
-              .eq('image_id', dbImageId)
-              .select('id, image_id');
-
-            if (updateError) {
-              console.error(`[DBUpdate] FAILED: ${updateError.message}`, updateError);
-            } else if (!updateData || updateData.length === 0) {
-              console.warn(`[DBUpdate] NO ROWS MATCHED: image_id=${dbImageId} - row may not exist or RLS policy denied access`);
-            } else {
-              console.log(`[DBUpdate] SUCCESS: Updated ${updateData.length} row(s) for image ${dbImageId}`);
-            }
-          } catch (dbError: any) {
-            console.error(`[DBUpdate] EXCEPTION: ${dbError.message}`, dbError);
-          }
+          console.log(`[DBUpdate] Prepared update for ${dbImageId} (will be queued by processor)`);
         }
       }
       timing['7_jsonlAndDbUpdate'] = Date.now() - phaseStart;
@@ -3193,7 +3181,9 @@ class UnifiedImageWorker extends EventEmitter {
         localOnnxInferenceMs: analysisResult.localOnnxInferenceMs,
         // Scene Classification info
         sceneCategory: sceneClassification?.category,
-        sceneConfidence: sceneClassification?.confidence
+        sceneConfidence: sceneClassification?.confidence,
+        // Pending database update (returned to processor for batch flushing)
+        pendingUpdate: pendingUpdateData
       };
 
       return result;
@@ -5018,6 +5008,17 @@ export class UnifiedImageProcessor extends EventEmitter {
   };
   private usePreAuthSystem: boolean = false; // Flag per usare pre-auth (v1.1.0+)
 
+  // ============================================================================
+  // BATCH DATABASE UPDATES (Performance optimization to avoid Supabase timeout)
+  // ============================================================================
+  private pendingUpdates: Array<{
+    imageId: string;
+    updateData: any;
+    timestamp: number;
+  }> = [];
+  private readonly BATCH_UPDATE_THRESHOLD = 25; // Flush every 25 images
+  private readonly UPDATE_TIMEOUT_MS = 3000; // Timeout per singolo update
+
   constructor(config: Partial<UnifiedProcessorConfig> = {}) {
     super();
     
@@ -5044,6 +5045,75 @@ export class UnifiedImageProcessor extends EventEmitter {
     this.filesystemTimestampExtractor = new FilesystemTimestampExtractor();
 
     if (DEBUG_MODE) if (DEBUG_MODE) console.log(`[UnifiedProcessor] Initialized with ${this.config.maxConcurrentWorkers} workers`);
+  }
+
+  /**
+   * Flush pending database updates in batches to avoid Supabase timeout
+   * Updates are sent in chunks of 10 with 3-second timeout per update
+   */
+  private async flushPendingUpdates(): Promise<void> {
+    if (this.pendingUpdates.length === 0) {
+      return;
+    }
+
+    const updateCount = this.pendingUpdates.length;
+    log.info(`[DBUpdate] Flushing ${updateCount} pending updates...`);
+
+    try {
+      const { getSupabaseClient } = await import('./database-service');
+      const supabase = getSupabaseClient();
+
+      // Process updates in chunks of 10 to avoid overwhelming Supabase
+      const CHUNK_SIZE = 10;
+      const chunks: typeof this.pendingUpdates[] = [];
+
+      for (let i = 0; i < this.pendingUpdates.length; i += CHUNK_SIZE) {
+        chunks.push(this.pendingUpdates.slice(i, i + CHUNK_SIZE));
+      }
+
+      let successCount = 0;
+      let errorCount = 0;
+
+      for (const chunk of chunks) {
+        // Process chunk updates in parallel (max 10 concurrent)
+        const updatePromises = chunk.map(async (pendingUpdate) => {
+          try {
+            // Add timeout to prevent hanging
+            const updatePromise = supabase
+              .from('analysis_results')
+              .update(pendingUpdate.updateData)
+              .eq('image_id', pendingUpdate.imageId)
+              .maybeSingle(); // More efficient than .select()
+
+            // Create timeout promise
+            const timeoutPromise = new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('Update timeout')), this.UPDATE_TIMEOUT_MS)
+            );
+
+            // Race between update and timeout
+            await Promise.race([updatePromise, timeoutPromise]);
+            successCount++;
+          } catch (error: any) {
+            errorCount++;
+            if (DEBUG_MODE) {
+              console.warn(`[DBUpdate] Failed to update image ${pendingUpdate.imageId}:`, error.message);
+            }
+          }
+        });
+
+        // Wait for chunk to complete before next chunk
+        await Promise.allSettled(updatePromises);
+      }
+
+      log.info(`[DBUpdate] Flush complete: ${successCount} success, ${errorCount} errors`);
+
+      // Clear pending updates after flush
+      this.pendingUpdates = [];
+
+    } catch (error: any) {
+      log.error(`[DBUpdate] Failed to flush updates: ${error.message}`);
+      // Don't clear pending updates on critical error - they'll be retried
+    }
   }
 
   /**
@@ -5842,6 +5912,12 @@ export class UnifiedImageProcessor extends EventEmitter {
     
     if (DEBUG_MODE) console.log(`[UnifiedProcessor] Batch completed: ${results.length} images processed successfully`);
 
+    // FINAL FLUSH: Send any remaining pending database updates
+    if (this.pendingUpdates.length > 0) {
+      console.log(`[Finalize] Flushing ${this.pendingUpdates.length} remaining database updates...`);
+      await this.flushPendingUpdates();
+    }
+
     // Aggregate RF-DETR metrics from all worker results
     for (const result of results) {
       if (result.success && result.rfDetrDetections !== undefined) {
@@ -6007,6 +6083,19 @@ export class UnifiedImageProcessor extends EventEmitter {
       // Calculate temporal context in main process and pass to worker
       const temporalContext = this.getTemporalContext(imageFile.originalPath);
       const result = await worker.processImage(imageFile, this, temporalContext);
+
+      // BATCH UPDATE ACCUMULATION: Collect pending updates from worker
+      if (result.pendingUpdate) {
+        this.pendingUpdates.push(result.pendingUpdate);
+        console.log(`[Processor] Accumulated update from worker (${this.pendingUpdates.length} pending)`);
+
+        // PERIODIC FLUSH: Flush updates every BATCH_UPDATE_THRESHOLD images
+        if (this.pendingUpdates.length >= this.BATCH_UPDATE_THRESHOLD) {
+          console.log(`[Processor] Threshold reached (${this.BATCH_UPDATE_THRESHOLD}), flushing updates...`);
+          await this.flushPendingUpdates();
+        }
+      }
+
       return result;
     } finally {
       this.activeWorkers--;

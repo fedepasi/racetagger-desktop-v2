@@ -360,6 +360,25 @@ export class OnnxDetector {
         }))
         .filter(r => r.raceNumber !== 'unknown');
 
+      // DEBUG: Detection summary with class distribution
+      const classDistribution = new Map<string, number>();
+      filteredDetections.forEach(d => {
+        const count = classDistribution.get(d.className) || 0;
+        classDistribution.set(d.className, count + 1);
+      });
+
+      console.log(`[ONNX-Parse] Detection summary:`);
+      console.log(`  Total detections after NMS: ${filteredDetections.length}`);
+      console.log(`  Detections above threshold (${this.modelConfig.confidenceThreshold}): ${analysisResults.length}`);
+      if (classDistribution.size > 0) {
+        console.log(`  Class distribution:`);
+        Array.from(classDistribution.entries())
+          .sort((a, b) => b[1] - a[1])  // Sort by count descending
+          .forEach(([className, count]) => {
+            console.log(`    ${className}: ${count} detection(s)`);
+          });
+      }
+
       return {
         results: analysisResults,
         imageSize: this.lastImageDimensions!
@@ -573,13 +592,34 @@ export class OnnxDetector {
             let maxClassScore = 0;
             let bestClassIndex = 0;
 
-            // DEBUG: Sample class scores for first anchor
+            // DEBUG: Sample class scores for first anchor - show top scoring classes
             if (i === 0 && sampledAnchors === 0) {
-              console.log(`[ONNX-Parse] First anchor class scores (first 10):`);
-              for (let c = 0; c < Math.min(10, numClasses); c++) {
+              console.log(`[ONNX-Parse] First anchor class scores analysis:`);
+
+              // Collect all class scores for this anchor
+              const classScores: Array<{classIdx: number, score: number}> = [];
+              for (let c = 0; c < numClasses; c++) {
                 const idx = (4 + c) * numAnchors + i;
                 const score = output[idx];
-                console.log(`  class ${c}: idx=${idx}, value=${score.toFixed(6)}`);
+                if (score > 0.01) {  // Only include non-trivial scores
+                  classScores.push({ classIdx: c, score });
+                }
+              }
+
+              // Sort by score descending
+              classScores.sort((a, b) => b.score - a.score);
+
+              // Log top 5 classes (or all if fewer)
+              const topN = Math.min(5, classScores.length);
+              console.log(`  Found ${classScores.length} classes with score > 0.01, showing top ${topN}:`);
+              for (let i = 0; i < topN; i++) {
+                const { classIdx, score } = classScores[i];
+                const className = this.modelConfig.classes[classIdx] || `class_${classIdx}`;
+                console.log(`  class ${classIdx} (${className}): score=${score.toFixed(6)}`);
+              }
+
+              if (classScores.length === 0) {
+                console.log(`  ⚠️ No classes with score > 0.01 found (all near zero)`);
               }
             }
 
@@ -595,7 +635,8 @@ export class OnnxDetector {
 
             // DEBUG: Sample first 10 anchors unconditionally to see raw values
             if (sampledAnchors < 10) {
-              console.log(`[ONNX-Parse] Anchor ${i}: x=${x.toFixed(2)}, y=${y.toFixed(2)}, w=${width.toFixed(2)}, h=${height.toFixed(2)}, maxScore=${maxClassScore.toFixed(6)}, class=${bestClassIndex}/${numClasses}`);
+              const className = this.modelConfig.classes[bestClassIndex] || `class_${bestClassIndex}`;
+              console.log(`[ONNX-Parse] Anchor ${i}: x=${x.toFixed(2)}, y=${y.toFixed(2)}, w=${width.toFixed(2)}, h=${height.toFixed(2)}, maxScore=${maxClassScore.toFixed(6)}, class=${bestClassIndex}/${numClasses} (${className})`);
               sampledAnchors++;
             }
 
