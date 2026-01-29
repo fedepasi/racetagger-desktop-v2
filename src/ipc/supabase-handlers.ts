@@ -112,8 +112,8 @@ export function registerSupabaseHandlers(): void {
 
   ipcMain.handle('supabase-save-preset-participants', async (_, { presetId, participants }: { presetId: string, participants: Omit<PresetParticipantSupabase, 'id' | 'created_at'>[] }) => {
     try {
-      await savePresetParticipantsSupabase(presetId, participants);
-      return { success: true };
+      const savedParticipants = await savePresetParticipantsSupabase(presetId, participants);
+      return { success: true, participants: savedParticipants };
     } catch (e: any) {
       return { success: false, error: e.message };
     }

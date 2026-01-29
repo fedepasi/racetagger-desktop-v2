@@ -18,6 +18,7 @@ class DriverFaceManagerMulti {
     this.currentUserId = null;
     this.isOfficial = false;
     this.drivers = []; // Array of { id, name, metatag, order, faceManager }
+    this.isSyncing = false; // Track sync state for awaiting completion
 
     // DOM references
     this.containerElement = null;
@@ -97,6 +98,10 @@ class DriverFaceManagerMulti {
       return;
     }
 
+    // Set syncing flag to prevent race conditions
+    this.isSyncing = true;
+    console.log('[DriverFaceManagerMulti] 🔄 Sync started');
+
     try {
       const result = await window.api.invoke('preset-driver-sync', {
         participantId: this.currentParticipantId,
@@ -120,6 +125,7 @@ class DriverFaceManagerMulti {
             if (existing.faceManager && driver.id) {
               existing.faceManager.currentDriverId = driver.id;
               existing.faceManager.currentParticipantId = this.currentParticipantId;
+              console.log(`[DriverFaceManagerMulti]   ✓ Updated driver ID for ${driver.driver_name}: ${driver.id?.substring(0, 8)}...`);
             }
 
             return existing;
@@ -135,12 +141,38 @@ class DriverFaceManagerMulti {
           };
         });
 
-        console.log(`[DriverFaceManagerMulti] Synced ${this.drivers.length} drivers (created: ${result.created}, updated: ${result.updated}, deleted: ${result.deleted})`);
+        console.log(`[DriverFaceManagerMulti] ✅ Synced ${this.drivers.length} drivers (created: ${result.created}, updated: ${result.updated}, deleted: ${result.deleted})`);
       } else {
         console.error('[DriverFaceManagerMulti] Sync failed:', result.error);
       }
     } catch (error) {
       console.error('[DriverFaceManagerMulti] Sync error:', error);
+    } finally {
+      // Always clear syncing flag
+      this.isSyncing = false;
+      console.log('[DriverFaceManagerMulti] 🏁 Sync complete');
+    }
+  }
+
+  /**
+   * Wait for sync to complete
+   * Used by photo upload to ensure driver IDs are ready
+   */
+  async waitForSync() {
+    console.log('[DriverFaceManagerMulti] ⏳ Waiting for sync to complete...');
+    let waited = 0;
+    const maxWait = 5000; // 5 seconds max
+    const checkInterval = 100;
+
+    while (this.isSyncing && waited < maxWait) {
+      await new Promise(resolve => setTimeout(resolve, checkInterval));
+      waited += checkInterval;
+    }
+
+    if (this.isSyncing) {
+      console.warn('[DriverFaceManagerMulti] ⚠️  Sync still in progress after', maxWait, 'ms');
+    } else {
+      console.log('[DriverFaceManagerMulti] ✅ Sync wait complete (waited', waited, 'ms)');
     }
   }
 
@@ -213,6 +245,13 @@ class DriverFaceManagerMulti {
         // Re-attach existing face manager to new DOM elements
         driver.faceManager.gridElement = document.getElementById(`driver-photos-grid-${driver.id || index}`);
         driver.faceManager.countLabel = document.getElementById(`driver-photo-count-${driver.id || index}`);
+
+        // CRITICAL: Update driver ID if it was null before (newly created driver)
+        if (driver.id && driver.faceManager.currentDriverId !== driver.id) {
+          driver.faceManager.currentDriverId = driver.id;
+          driver.faceManager.currentParticipantId = this.currentParticipantId;
+          console.log(`[DriverFaceManagerMulti] ✓ Updated face manager driver ID: ${driver.id}`);
+        }
 
         // Re-attach button event listener
         const addButton = document.querySelector(`[data-driver-index="${index}"]`);

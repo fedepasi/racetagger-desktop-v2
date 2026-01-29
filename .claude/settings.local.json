@@ -169,7 +169,8 @@
       "Bash(clang++ -std=c++14 -stdlib=libc++ -x c++ -E:*)",
       "Bash(SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk npm run build:native:*)",
       "Bash(psql \"postgresql://postgres.taompbzifylmdzgbbrpv:MxfC6o1PWKiXBtDT@aws-0-eu-central-1.pooler.supabase.com:6543/postgres\" -c \"SELECT version, checksum_sha256, onnx_storage_path FROM onnx_models WHERE category_id = \\(SELECT id FROM sport_categories WHERE code = ''IMSA_WeatherTech''\\) AND is_active = true;\")",
-      "Bash(tail:*)"
+      "Bash(tail:*)",
+      "Bash(npm test:*)"
     ],
     "deny": [],
     "ask": []

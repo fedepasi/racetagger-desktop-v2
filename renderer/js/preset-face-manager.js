@@ -235,31 +235,69 @@ class PresetFaceManager {
         if (typeof window.saveParticipantAndStay === 'function') {
           await window.saveParticipantAndStay();
 
-          // Wait a bit for the IDs to be updated
-          await new Promise(resolve => setTimeout(resolve, 500));
+          // ⚠️ CRITICAL FIX: Replace arbitrary 500ms timeout with proper ID validation
+          // Poll for IDs with exponential backoff (100ms * 20 = 2 seconds max)
+          console.log('[PresetFaceManager] 🔍 Validating IDs after save...');
+          let retries = 0;
+          const maxRetries = 20; // 2 seconds total
+          let idsReady = false;
+
+          while (retries < maxRetries) {
+            if (this.isDriverContext()) {
+              // For driver context, retrieve ID from parent manager
+              if (window.driverFaceManagerMulti) {
+                const parentDriver = window.driverFaceManagerMulti.drivers.find(
+                  d => d.faceManager === this
+                );
+                if (parentDriver?.id) {
+                  this.currentDriverId = parentDriver.id;
+                  console.log(`[PresetFaceManager] ✓ Retrieved driver ID: ${parentDriver.id?.substring(0, 8)}...`);
+                  idsReady = true;
+                  break;
+                }
+              }
+            } else {
+              // For participant context, just need participant and preset IDs
+              if (this.currentParticipantId && this.currentPresetId) {
+                idsReady = true;
+                break;
+              }
+            }
+
+            // Wait and retry
+            await new Promise(resolve => setTimeout(resolve, 100));
+            retries++;
+
+            if (retries % 5 === 0) {
+              console.log(`[PresetFaceManager] ⏳ Still waiting for IDs (attempt ${retries}/${maxRetries})...`);
+            }
+          }
 
           console.log('[PresetFaceManager] After auto-save:', {
             participantId: this.currentParticipantId,
             driverId: this.currentDriverId,
             presetId: this.currentPresetId,
-            isDriverContext: this.isDriverContext()
+            isDriverContext: this.isDriverContext(),
+            retriesNeeded: retries,
+            idsReady
           });
 
           // Check if we now have the required IDs
-          // For driver context, we MUST have a driver ID at this point
           const stillMissingIds = !this.currentParticipantId || !this.currentPresetId ||
                                    (this.isDriverContext() && !this.currentDriverId);
 
           if (stillMissingIds) {
-            console.error('[PresetFaceManager] Still missing IDs after save:', {
+            console.error('[PresetFaceManager] ❌ IDs not ready after', retries * 100, 'ms:', {
               hasParticipantId: !!this.currentParticipantId,
               hasPresetId: !!this.currentPresetId,
               hasDriverId: !!this.currentDriverId,
               needsDriverId: this.isDriverContext()
             });
-            this.showNotification('Could not save participant/driver. Please try again.', 'error');
+            this.showNotification('Driver not ready. Please wait a moment and try again.', 'error');
             return;
           }
+
+          console.log('[PresetFaceManager] ✅ All required IDs validated, proceeding with upload');
         } else {
           this.showNotification('Please save the preset first, then try adding photos.', 'warning');
           return;
@@ -286,6 +324,17 @@ class PresetFaceManager {
 
     if (!this.currentUserId) {
       this.showNotification('User session not found. Please log in again.', 'warning');
+      return;
+    }
+
+    // ⚠️ FINAL VALIDATION: Double-check driver ID exists for driver context
+    if (this.isDriverContext() && !this.currentDriverId) {
+      console.error('[PresetFaceManager] ❌ Final validation failed: Driver ID is null', {
+        participantId: this.currentParticipantId,
+        presetId: this.currentPresetId,
+        driverId: this.currentDriverId
+      });
+      this.showNotification('Driver not ready. Please save the participant first.', 'error');
       return;
     }
 

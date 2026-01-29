@@ -659,6 +659,140 @@ function confirmAddFolder() {
 }
 
 /**
+ * Auto-migrate multi-driver participants without driver records
+ * Creates driver records from comma-separated nome field
+ * @param {Object} participant - Participant data
+ * @returns {Promise<boolean>} - True if migration performed
+ */
+async function autoMigrateDriverRecords(participant) {
+  // 🔍 DEBUG: Log participant structure to diagnose preset_participant_drivers issue
+  console.log(`[DEBUG autoMigrate] Participant #${participant.numero}:`, {
+    id: participant.id,
+    nome: participant.nome,
+    hasDriversProperty: 'preset_participant_drivers' in participant,
+    driversValue: participant.preset_participant_drivers,
+    driversType: typeof participant.preset_participant_drivers,
+    driversIsArray: Array.isArray(participant.preset_participant_drivers),
+    driversLength: participant.preset_participant_drivers?.length
+  });
+
+  // Only migrate if:
+  // 1. Participant is saved (has ID)
+  // 2. Has multi-driver name (contains comma)
+  // 3. No driver records exist yet
+  if (!participant.id) {
+    return false;
+  }
+
+  const nome = participant.nome || participant.nome_pilota || '';
+  const hasMultipleDrivers = nome.includes(',');
+
+  if (!hasMultipleDrivers) {
+    return false;
+  }
+
+  // Check if driver records already exist (with robust type checking)
+  const hasExistingRecords = participant.preset_participant_drivers &&
+                              Array.isArray(participant.preset_participant_drivers) &&
+                              participant.preset_participant_drivers.length > 0;
+
+  if (hasExistingRecords) {
+    console.log(`[Participants] Skipping migration - ${participant.preset_participant_drivers.length} drivers already exist for #${participant.numero}`);
+    return false;
+  }
+
+  // Parse driver names
+  const driverNames = nome.split(',').map(s => s.trim()).filter(Boolean);
+
+  if (driverNames.length < 2) {
+    return false;
+  }
+
+  // Double-check database to prevent race conditions
+  const dbCheckResult = await window.api.invoke('preset-driver-get-all', participant.id);
+  if (dbCheckResult.success && dbCheckResult.drivers && dbCheckResult.drivers.length > 0) {
+    console.log(`[Participants] Drivers already exist in DB (${dbCheckResult.drivers.length}), skipping migration`);
+    // Update local object with database data
+    participant.preset_participant_drivers = dbCheckResult.drivers;
+
+    // ⚠️ CRITICAL: Sync participantsData cache to prevent future re-migrations
+    const participantIndex = participantsData.findIndex(p => p.id === participant.id);
+    if (participantIndex !== -1) {
+      participantsData[participantIndex].preset_participant_drivers = dbCheckResult.drivers;
+      console.log(`[Participants] Synced cache for participant #${participant.numero} with ${dbCheckResult.drivers.length} drivers`);
+    } else {
+      console.warn(`[Participants] Could not find participant ${participant.id} in participantsData for cache sync`);
+    }
+
+    return false;
+  }
+
+  // Create driver records via sync
+  console.log(`[Participants] Auto-migrating ${driverNames.length} drivers for #${participant.numero}`);
+
+  try {
+    const syncResult = await window.api.invoke('preset-driver-sync', {
+      participantId: participant.id,
+      driverNames: driverNames
+    });
+
+    if (syncResult.success) {
+      console.log(`[Participants] ✓ Auto-migration complete: ${syncResult.created} drivers created`);
+
+      // Update participant object with new driver records
+      if (syncResult.drivers && syncResult.drivers.length > 0) {
+        participant.preset_participant_drivers = syncResult.drivers;
+      }
+
+      // Show discrete notification
+      const notification = document.createElement('div');
+      notification.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: #28a745;
+        color: white;
+        padding: 12px 20px;
+        border-radius: 6px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        z-index: 10000;
+        opacity: 0;
+        transform: translateY(-10px);
+        transition: all 0.3s ease-out;
+      `;
+      notification.innerHTML = `
+        <strong>✓ Driver records created</strong><br>
+        <small style="opacity: 0.9;">${syncResult.created} driver${syncResult.created > 1 ? 's' : ''} migrated automatically</small>
+      `;
+      document.body.appendChild(notification);
+
+      // Trigger fade-in
+      setTimeout(() => {
+        notification.style.opacity = '1';
+        notification.style.transform = 'translateY(0)';
+      }, 10);
+
+      // Auto-remove after 4 seconds
+      setTimeout(() => {
+        notification.style.opacity = '0';
+        notification.style.transform = 'translateY(-10px)';
+        setTimeout(() => {
+          if (notification.parentNode) {
+            notification.parentNode.removeChild(notification);
+          }
+        }, 300);
+      }, 4000);
+
+      return true;
+    }
+  } catch (error) {
+    console.error('[Participants] Auto-migration error:', error);
+  }
+
+  return false;
+}
+
+/**
  * Open participant edit modal
  * @param {number} rowIndex - Index in participantsData array (-1 for new participant)
  */
@@ -685,6 +819,9 @@ async function openParticipantEditModal(rowIndex = -1) {
   if (rowIndex >= 0 && participantsData[rowIndex]) {
     // Edit mode: populate form with existing data
     const participant = participantsData[rowIndex];
+
+    // AUTO-MIGRATION: Create driver records if they don't exist
+    await autoMigrateDriverRecords(participant);
     document.getElementById('edit-numero').value = participant.numero || '';
     document.getElementById('edit-categoria').value = participant.categoria || '';
     document.getElementById('edit-squadra').value = participant.squadra || '';
@@ -953,7 +1090,19 @@ async function saveParticipantAndStay() {
         // Update driver face managers with new participant and driver IDs
         if (typeof driverFaceManagerMulti !== 'undefined') {
           const driverNames = getDriversTagsArray();
+          console.log('[Participants] Loading driver face managers and waiting for sync...');
+
+          // Load the driver face managers (this triggers syncDrivers internally)
           await driverFaceManagerMulti.load(savedParticipant.id, currentPreset.id, currentUserId, isOfficial, driverNames);
+
+          // ⚠️ CRITICAL FIX: Wait for driver sync to complete before allowing photo upload
+          // This ensures driver IDs are properly set before photos are uploaded
+          if (driverFaceManagerMulti.isSyncing) {
+            console.log('[Participants] ⏳ Driver sync in progress, waiting...');
+            await driverFaceManagerMulti.waitForSync();
+            console.log('[Participants] ✅ Driver sync complete, IDs ready for photo upload');
+          }
+
           showNotification('Participant saved! You can now add face photos.', 'success');
         } else if (typeof presetFaceManager !== 'undefined') {
           // Fallback to old face manager if driver manager not available
@@ -1348,6 +1497,23 @@ async function exportPresetJSON(presetId) {
 
     const preset = response.data;
 
+    // Fetch driver data for all participants
+    const allDrivers = [];
+    for (const p of preset.participants || []) {
+      const driversResult = await window.api.invoke('preset-get-drivers-for-participant', p.id);
+      if (driversResult.success && driversResult.drivers.length > 0) {
+        driversResult.drivers.forEach(d => {
+          allDrivers.push({
+            id: d.id,
+            participant_numero: p.numero,
+            driver_name: d.driver_name,
+            driver_metatag: d.driver_metatag,
+            driver_order: d.driver_order
+          });
+        });
+      }
+    }
+
     // Prepare export data with English field names
     const exportData = {
       name: preset.name,
@@ -1364,9 +1530,10 @@ async function exportPresetJSON(presetId) {
         folder_2: p.folder_2,
         folder_3: p.folder_3
       })),
+      drivers: allDrivers,  // NEW: Complete driver data with IDs
       custom_folders: preset.custom_folders || [],
       exported_at: new Date().toISOString(),
-      version: '1.0'
+      version: '2.0'  // Bump version to indicate driver support
     };
 
     // Convert to JSON
@@ -1428,21 +1595,29 @@ async function exportPresetCSV(presetId) {
       return;
     }
 
-    // CSV Header (English column names)
-    const csvHeader = 'Number,Driver,Team,Category,Plate_Number,Sponsors,Metatag,Folder_1,Folder_2,Folder_3';
+    // Helper to escape CSV values
+    const escapeCSV = (value) => {
+      if (!value) return '';
+      const str = String(value);
+      // If value contains comma, quote, or newline, wrap in quotes and escape quotes
+      if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
 
-    // Convert participants to CSV rows
-    const csvRows = participants.map(p => {
-      // Helper to escape CSV values
-      const escapeCSV = (value) => {
-        if (!value) return '';
-        const str = String(value);
-        // If value contains comma, quote, or newline, wrap in quotes and escape quotes
-        if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-          return `"${str.replace(/"/g, '""')}"`;
-        }
-        return str;
-      };
+    // CSV Header (English column names + hidden driver preservation columns)
+    const csvHeader = 'Number,Driver,Team,Category,Plate_Number,Sponsors,Metatag,Folder_1,Folder_2,Folder_3,_Driver_IDs,_Driver_Metatags';
+
+    // Convert participants to CSV rows (fetch drivers for each participant)
+    const csvRows = await Promise.all(participants.map(async (p) => {
+      // Fetch driver data for this participant
+      const driversResult = await window.api.invoke('preset-get-drivers-for-participant', p.id);
+      const drivers = driversResult.success ? driversResult.drivers : [];
+
+      // Build pipe-separated driver metadata
+      const driverIds = drivers.map(d => d.id).join('|');
+      const driverMetatags = drivers.map(d => d.driver_metatag || '').join('|');
 
       return [
         escapeCSV(p.numero || ''),
@@ -1454,9 +1629,11 @@ async function exportPresetCSV(presetId) {
         escapeCSV(p.metatag || ''),
         escapeCSV(p.folder_1 || ''),
         escapeCSV(p.folder_2 || ''),
-        escapeCSV(p.folder_3 || '')
+        escapeCSV(p.folder_3 || ''),
+        escapeCSV(driverIds),
+        escapeCSV(driverMetatags)
       ].join(',');
-    });
+    }));
 
     // Combine header and rows
     const csvContent = [csvHeader, ...csvRows].join('\n');
@@ -1756,7 +1933,9 @@ async function savePreset() {
     }
 
     // Use participants data from memory (already updated via modal)
+    // ⚠️ CRITICAL FIX: Include ID to enable UPSERT (UPDATE existing instead of INSERT new)
     const participants = participantsData.map(p => ({
+      id: p.id || undefined, // ✅ Include ID for UPSERT logic
       numero: p.numero || '',
       nome: p.nome || p.nome_pilota || '',
       categoria: p.categoria || '',
@@ -2021,6 +2200,49 @@ function createCsvPreviewTable(data) {
 }
 
 /**
+ * Check if CSV import might cause data loss (orphaned photos)
+ */
+async function checkForDangerousImport(csvData, presetName) {
+  try {
+    // Check if preset with same name exists
+    const presetsResponse = await window.api.invoke('supabase-get-participant-presets');
+    if (!presetsResponse.success) {
+      return { proceed: true, autoRecover: false };
+    }
+
+    const existingPreset = presetsResponse.data?.find(p => p.name === presetName);
+
+    if (existingPreset && existingPreset.face_photo_count > 0) {
+      // Check if CSV has driver IDs
+      const hasDriverIds = csvData.some(row =>
+        row._Driver_IDs || row._driver_ids || row._Driver_Metatags || row._driver_metatags
+      );
+
+      if (!hasDriverIds) {
+        // DANGER: CSV without IDs + existing preset with photos
+        const confirmed = await showConfirmDialog(
+          '⚠️ Warning: Face Photos at Risk',
+          `A preset named "${presetName}" exists with ${existingPreset.face_photo_count} face photos.\n\n` +
+          `This CSV does not contain driver IDs. Importing may orphan existing photos.\n\n` +
+          `Recommendations:\n` +
+          `• Export the current preset to get an updated CSV with IDs\n` +
+          `• Use a different preset name\n` +
+          `• Continue only if you're sure this is correct`,
+          ['Cancel Import', 'Continue Anyway']
+        );
+
+        return { proceed: confirmed === 1, autoRecover: false };
+      }
+    }
+
+    return { proceed: true, autoRecover: false };
+  } catch (error) {
+    console.error('[Participants] Error checking for dangerous import:', error);
+    return { proceed: true, autoRecover: false };
+  }
+}
+
+/**
  * Import CSV preset
  */
 async function importCsvPreset() {
@@ -2035,6 +2257,12 @@ async function importCsvPreset() {
 
     if (!window.csvImportData || window.csvImportData.length === 0) {
       showNotification('No CSV data to import', 'error');
+      return;
+    }
+
+    // Check for dangerous import (might orphan photos)
+    const safety = await checkForDangerousImport(window.csvImportData, presetName);
+    if (!safety.proceed) {
       return;
     }
 
@@ -2064,6 +2292,77 @@ async function importCsvPreset() {
     importBtn.disabled = false;
     importBtn.innerHTML = '<span class="btn-icon">📥</span>Import';
   }
+}
+
+/**
+ * Show confirmation dialog with custom buttons
+ */
+async function showConfirmDialog(title, message, buttons) {
+  return new Promise((resolve) => {
+    // Create modal overlay
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10000;
+    `;
+
+    // Create modal
+    const modal = document.createElement('div');
+    modal.style.cssText = `
+      background: white;
+      padding: 24px;
+      border-radius: 8px;
+      max-width: 500px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    `;
+
+    // Title
+    const titleEl = document.createElement('h3');
+    titleEl.textContent = title;
+    titleEl.style.cssText = 'margin: 0 0 12px 0; color: #333;';
+    modal.appendChild(titleEl);
+
+    // Message
+    const messageEl = document.createElement('p');
+    messageEl.textContent = message;
+    messageEl.style.cssText = 'margin: 0 0 20px 0; white-space: pre-line; color: #666; line-height: 1.5;';
+    modal.appendChild(messageEl);
+
+    // Buttons container
+    const btnContainer = document.createElement('div');
+    btnContainer.style.cssText = 'display: flex; gap: 8px; justify-content: flex-end;';
+
+    // Create buttons
+    buttons.forEach((btnText, index) => {
+      const btn = document.createElement('button');
+      btn.textContent = btnText;
+      btn.style.cssText = `
+        padding: 8px 16px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        cursor: pointer;
+        background: ${index === buttons.length - 1 ? '#007bff' : 'white'};
+        color: ${index === buttons.length - 1 ? 'white' : '#333'};
+      `;
+      btn.onclick = () => {
+        document.body.removeChild(overlay);
+        resolve(index);
+      };
+      btnContainer.appendChild(btn);
+    });
+
+    modal.appendChild(btnContainer);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+  });
 }
 
 /**
@@ -2179,6 +2478,7 @@ async function importJsonPreset() {
     const presetId = createResponse.data.id;
 
     // Save participants
+    let savedParticipants = [];
     if (participants.length > 0) {
       const saveResponse = await window.api.invoke('supabase-save-preset-participants', {
         presetId: presetId,
@@ -2188,9 +2488,53 @@ async function importJsonPreset() {
       if (!saveResponse.success) {
         throw new Error(saveResponse.error || 'Failed to save participants');
       }
+
+      savedParticipants = saveResponse.participants || [];
     }
 
-    showNotification(`Successfully imported preset "${presetData.name}" with ${participants.length} participants!`, 'success');
+    // NEW: Create driver records if present in JSON v2.0+
+    if (presetData.drivers && Array.isArray(presetData.drivers) && presetData.drivers.length > 0) {
+      console.log(`[Participants] JSON Import: Found ${presetData.drivers.length} drivers to import`);
+
+      // Group drivers by participant numero
+      const driversByParticipant = {};
+      presetData.drivers.forEach(d => {
+        if (!driversByParticipant[d.participant_numero]) {
+          driversByParticipant[d.participant_numero] = [];
+        }
+        driversByParticipant[d.participant_numero].push(d);
+      });
+
+      // Create driver records for each participant
+      for (const savedP of savedParticipants) {
+        const driversForP = driversByParticipant[savedP.numero] || [];
+        if (driversForP.length > 0) {
+          const batchResult = await window.api.invoke('preset-create-drivers-batch', {
+            participantId: savedP.id,
+            drivers: driversForP.map(d => ({
+              id: d.id,  // Preserve original ID
+              driver_name: d.driver_name,
+              driver_metatag: d.driver_metatag,
+              driver_order: d.driver_order
+            }))
+          });
+
+          if (!batchResult.success) {
+            console.error(`[Participants] Failed to create drivers for #${savedP.numero}:`, batchResult.error);
+          } else {
+            console.log(`[Participants] Created ${batchResult.count} drivers for #${savedP.numero}`);
+          }
+        }
+      }
+
+      showNotification(
+        `Successfully imported preset "${presetData.name}" with ${participants.length} participants and ${presetData.drivers.length} drivers!`,
+        'success'
+      );
+    } else {
+      showNotification(`Successfully imported preset "${presetData.name}" with ${participants.length} participants!`, 'success');
+    }
+
     closeJsonImportModal();
     await loadParticipantPresets(); // Refresh list
 
@@ -3135,7 +3479,39 @@ async function importPdfPreset() {
       throw new Error(saveResponse.error || 'Failed to save participants');
     }
 
-    showNotification(`Successfully imported ${participants.length} participants from PDF!`, 'success');
+    const savedParticipants = saveResponse.participants || [];
+
+    // NEW: Auto-create driver records for multi-driver vehicles
+    let driversCreated = 0;
+    for (const savedP of savedParticipants) {
+      if (savedP.nome && savedP.nome.includes(',')) {
+        // Multi-driver detected
+        const driverNames = savedP.nome.split(',').map(s => s.trim()).filter(Boolean);
+
+        if (driverNames.length > 1) {
+          console.log(`[PDF Import] Creating ${driverNames.length} drivers for #${savedP.numero}`);
+
+          const syncResult = await window.api.invoke('preset-driver-sync', {
+            participantId: savedP.id,
+            driverNames: driverNames
+          });
+
+          if (syncResult.success) {
+            driversCreated += syncResult.created || 0;
+          }
+        }
+      }
+    }
+
+    if (driversCreated > 0) {
+      showNotification(
+        `Successfully imported ${participants.length} participants from PDF with ${driversCreated} driver records created!`,
+        'success'
+      );
+    } else {
+      showNotification(`Successfully imported ${participants.length} participants from PDF!`, 'success');
+    }
+
     closePdfImportModal();
     await loadParticipantPresets(); // Refresh list
 

@@ -2735,7 +2735,16 @@ export async function getUserParticipantPresetsSupabase(includeAllForAdmin: bool
       .select(`
         *,
         sport_categories(code, name, ai_prompt),
-        preset_participants(*)
+        preset_participants(
+          *,
+          preset_participant_drivers(
+            id,
+            driver_name,
+            driver_metatag,
+            driver_order,
+            created_at
+          )
+        )
       `);
 
     // If not admin mode, filter by user_id, public presets, or official presets
@@ -2814,11 +2823,12 @@ export async function getParticipantPresetByIdSupabase(presetId: string): Promis
     }
 
     // Check cache first - look for either participants or preset_participants
+    console.log('[DB Reload] 🔵 getParticipantPresetByIdSupabase called for preset', presetId);
     const cached = presetsCache.find(p => p.id === presetId);
     if (cached) {
       const cachedParticipants = cached.participants || (cached as any).preset_participants;
       if (cachedParticipants && cachedParticipants.length > 0) {
-        console.log(`[DB] Returning cached preset ${presetId} with ${cachedParticipants.length} participants`);
+        console.log(`[DB Reload] 📦 CACHE HIT - Returning cached preset with ${cachedParticipants.length} participants`);
         // Ensure participants property is set for UI compatibility
         if (!cached.participants) {
           cached.participants = cachedParticipants;
@@ -2826,6 +2836,8 @@ export async function getParticipantPresetByIdSupabase(presetId: string): Promis
         return cached;
       }
     }
+
+    console.log('[DB Reload] 🌐 CACHE MISS - Fetching fresh data from Supabase with drivers included');
 
     // Use authenticated client from authService for RLS policy compliance
     const authenticatedClient = authService.getSupabaseClient();
@@ -2858,7 +2870,14 @@ export async function getParticipantPresetByIdSupabase(presetId: string): Promis
     // Map preset_participants to participants for UI compatibility
     if (data) {
       data.participants = data.preset_participants || [];
-      console.log(`[DB] Loaded preset ${presetId} with ${data.participants.length} participants from Supabase`);
+      const participantsWithDrivers = data.participants.filter((p: any) => p.preset_participant_drivers?.length > 0);
+      console.log(`[DB Reload] ✅ Loaded preset with ${data.participants.length} participants from Supabase`);
+      console.log(`[DB Reload] 🚗 ${participantsWithDrivers.length} participants have driver records`);
+      if (participantsWithDrivers.length > 0) {
+        console.log('[DB Reload] Driver details:', participantsWithDrivers.map((p: any) =>
+          `#${p.numero}: ${p.preset_participant_drivers?.length} drivers`
+        ).join(', '));
+      }
     }
 
     return data;
@@ -2872,8 +2891,14 @@ export async function getParticipantPresetByIdSupabase(presetId: string): Promis
 /**
  * Save preset participants to Supabase
  */
-export async function savePresetParticipantsSupabase(presetId: string, participants: Omit<PresetParticipantSupabase, 'id' | 'created_at'>[]): Promise<void> {
+export async function savePresetParticipantsSupabase(presetId: string, participants: Omit<PresetParticipantSupabase, 'id' | 'created_at'>[]): Promise<PresetParticipantSupabase[]> {
   try {
+    console.log('[DB Save] 🔵 START savePresetParticipantsSupabase:', {
+      presetId,
+      participantCount: participants.length,
+      participantNumbers: participants.map(p => p.numero).join(', ')
+    });
+
     const userId = getCurrentUserId();
     if (!userId) throw new Error('User not authenticated');
 
@@ -2898,25 +2923,100 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
       throw new Error('Access denied: preset belongs to another user');
     }
 
-    // Delete existing participants
-    const { error: deleteError } = await supabase
+    // ⚠️ CRITICAL FIX: Replace "nuclear delete" with intelligent UPSERT
+    // This preserves existing participant IDs and their associated drivers/photos
+    console.log('[DB Save] 🔄 UPSERT mode: preserving existing participant IDs');
+
+    // Get current participants from database
+    const { data: currentInDb, error: fetchError } = await supabase
       .from('preset_participants')
-      .delete()
+      .select('id, numero')
       .eq('preset_id', presetId);
 
-    if (deleteError) {
-      console.error('[DB] Error deleting existing participants:', deleteError);
+    if (fetchError) {
+      console.error('[DB Save] ❌ Error fetching current participants:', fetchError);
+      throw fetchError;
     }
 
-    // Insert new participants
-    if (participants.length > 0) {
-      const { error: insertError } = await supabase
+    const currentIds = new Set((currentInDb || []).map(p => p.id));
+    console.log('[DB Save] 📋 Current participants in DB:', currentInDb?.length || 0, 'records');
+
+    // Separate participants into existing (have IDs) vs new (no IDs)
+    const existingParticipants = participants.filter(p => (p as any).id);
+    const newParticipants = participants.filter(p => !(p as any).id);
+    const keepIds = new Set(existingParticipants.map(p => (p as any).id));
+
+    // Find participants to delete (in DB but not in current list)
+    const toDelete = [...currentIds].filter(id => !keepIds.has(id));
+
+    console.log('[DB Save] 📊 Operation breakdown:', {
+      update: existingParticipants.length,
+      insert: newParticipants.length,
+      delete: toDelete.length
+    });
+
+    let savedParticipants: PresetParticipantSupabase[] = [];
+
+    // 1. UPDATE existing participants (preserves IDs and associated data)
+    if (existingParticipants.length > 0) {
+      console.log('[DB Save] 🔄 Updating', existingParticipants.length, 'existing participants');
+      for (const participant of existingParticipants) {
+        const { id, ...participantData } = participant as any;
+        console.log(`[DB Save]   ↻ Updating participant #${participantData.numero} (ID: ${id?.substring(0, 8)}...)`);
+
+        const { data: updated, error: updateError } = await supabase
+          .from('preset_participants')
+          .update({ ...participantData, preset_id: presetId })
+          .eq('id', id)
+          .select()
+          .single();
+
+        if (updateError) {
+          console.error(`[DB Save] ❌ Error updating participant ${id}:`, updateError);
+          throw updateError;
+        }
+
+        if (updated) {
+          savedParticipants.push(updated);
+        }
+      }
+      console.log('[DB Save] ✅ Updated', existingParticipants.length, 'participants');
+    }
+
+    // 2. INSERT new participants
+    if (newParticipants.length > 0) {
+      console.log('[DB Save] 💾 Inserting', newParticipants.length, 'new participants');
+      const { data: insertedData, error: insertError } = await supabase
         .from('preset_participants')
-        .insert(participants.map(p => ({ ...p, preset_id: presetId })));
+        .insert(newParticipants.map(p => ({ ...p, preset_id: presetId })))
+        .select();
 
       if (insertError) {
-        console.error('[DB] Error inserting participants:', insertError);
+        console.error('[DB Save] ❌ Error inserting participants:', insertError);
         throw insertError;
+      }
+
+      if (insertedData) {
+        savedParticipants.push(...insertedData);
+        console.log('[DB Save] ✅ Inserted', insertedData.length, 'participants with new IDs:',
+          insertedData.map(p => `#${p.numero} (${p.id?.substring(0, 8) || 'no-id'}...)`).join(', ')
+        );
+      }
+    }
+
+    // 3. DELETE removed participants (surgical delete, not nuclear)
+    if (toDelete.length > 0) {
+      console.log('[DB Save] 🗑️  Deleting', toDelete.length, 'removed participants');
+      const { error: deleteError } = await supabase
+        .from('preset_participants')
+        .delete()
+        .in('id', toDelete);
+
+      if (deleteError) {
+        console.error('[DB Save] ❌ Error deleting participants:', deleteError);
+        // Don't throw - deletes are less critical than updates/inserts
+      } else {
+        console.log('[DB Save] ✅ Deleted', toDelete.length, 'participants');
       }
     }
 
@@ -2930,18 +3030,46 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
       console.error('[DB] Error updating preset timestamp:', updateError);
     }
 
-    // Update cache with new participants instead of clearing
+    // ⚠️ CRITICAL FIX: Invalidate cache to force reload with complete driver data
+    console.log('[DB Save] 🧹 Invalidating cache for preset', presetId);
     const cacheIndex = presetsCache.findIndex(p => p.id === presetId);
     if (cacheIndex !== -1) {
-      presetsCache[cacheIndex] = {
-        ...presetsCache[cacheIndex],
-        participants: participants as PresetParticipantSupabase[],
-        updated_at: new Date().toISOString()
-      };
-      console.log('[DB] Cache updated with', participants.length, 'participants for preset', presetId);
+      presetsCache.splice(cacheIndex, 1);
+      console.log('[DB Save] ✅ Removed preset from cache');
     }
-    // Force refresh on next detailed load to get IDs
     cacheLastUpdated = 0;
+
+    // ⚠️ NEW: Reload preset with complete driver data
+    // savedParticipants from UPSERT doesn't include preset_participant_drivers
+    // Do fresh query with drivers included to return complete data
+    console.log('[DB Save] 🔄 Reloading preset with complete driver data');
+    const { data: reloadedPreset, error: reloadError } = await supabase
+      .from('participant_presets')
+      .select(`
+        *,
+        participants:preset_participants(
+          *,
+          drivers:preset_participant_drivers(*)
+        )
+      `)
+      .eq('id', presetId)
+      .single();
+
+    if (reloadError) {
+      console.error('[DB Save] ⚠️  Error reloading preset (returning basic data):', reloadError);
+      // Fall back to returning what we have
+      console.log('[DB Save] 🟢 COMPLETE savePresetParticipantsSupabase - returning', savedParticipants.length, 'participants (basic data)');
+      return savedParticipants;
+    }
+
+    if (reloadedPreset?.participants) {
+      console.log('[DB Save] ✅ Reloaded', reloadedPreset.participants.length, 'participants with complete driver data');
+      console.log('[DB Save] 🟢 COMPLETE savePresetParticipantsSupabase - returning complete data with drivers');
+      return reloadedPreset.participants;
+    }
+
+    console.log('[DB Save] 🟢 COMPLETE savePresetParticipantsSupabase - returning', savedParticipants.length, 'participants');
+    return savedParticipants;
 
   } catch (error) {
     console.error('[DB] Error saving preset participants to Supabase:', error);
@@ -3121,9 +3249,11 @@ export async function duplicateOfficialPresetSupabase(sourcePresetId: string): P
 }
 
 /**
- * Import participants from CSV to Supabase
+ * Import participants from CSV to Supabase (with driver ID preservation)
  */
 export async function importParticipantsFromCSVSupabase(csvData: any[], presetName: string, categoryId?: string): Promise<ParticipantPresetSupabase> {
+  const supabase = authService.getSupabaseClient();
+
   const preset = await createParticipantPresetSupabase({
     user_id: getCurrentUserId() || '',
     name: presetName,
@@ -3148,7 +3278,7 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
       custom_fields: {
         // Store any additional CSV fields
         ...Object.keys(row).reduce((acc, key) => {
-          const knownFields = ['numero', 'Number', 'nome', 'Driver', 'categoria', 'Category', 'squadra', 'team', 'Team', 'sponsor', 'Sponsors', 'metatag', 'Metatag', 'plate_number', 'Plate_Number', 'folder_1', 'Folder_1', 'folder_2', 'Folder_2', 'folder_3', 'Folder_3'];
+          const knownFields = ['numero', 'Number', 'nome', 'Driver', 'categoria', 'Category', 'squadra', 'team', 'Team', 'sponsor', 'Sponsors', 'metatag', 'Metatag', 'plate_number', 'Plate_Number', 'folder_1', 'Folder_1', 'folder_2', 'Folder_2', 'folder_3', 'Folder_3', '_Driver_IDs', '_driver_ids', '_Driver_Metatags', '_driver_metatags'];
           if (!knownFields.includes(key)) {
             acc[key] = row[key];
           }
@@ -3160,7 +3290,58 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
     return participant;
   });
 
-  await savePresetParticipantsSupabase(preset.id!, participants);
+  const savedParticipants = await savePresetParticipantsSupabase(preset.id!, participants);
+
+  // NEW: Process driver metadata from CSV hidden columns
+  for (let i = 0; i < csvData.length; i++) {
+    const row = csvData[i];
+    const savedParticipant = savedParticipants[i];
+
+    // Check for driver ID preservation columns (case-insensitive)
+    const driverIdsRaw = row._Driver_IDs || row._driver_ids || '';
+    const driverMetatagsRaw = row._Driver_Metatags || row._driver_metatags || '';
+    const driverNamesRaw = row.nome || row.Driver || '';
+
+    // Parse driver names (comma-separated)
+    const driverNames = driverNamesRaw ? driverNamesRaw.split(',').map((s: string) => s.trim()).filter(Boolean) : [];
+
+    if (driverIdsRaw && driverNames.length > 0) {
+      // PRESERVE MODE: CSV has driver IDs - reuse them
+      const ids = driverIdsRaw.split('|').map((s: string) => s.trim()).filter(Boolean);
+      const metatags = driverMetatagsRaw ? driverMetatagsRaw.split('|').map((s: string) => s.trim()) : [];
+
+      const driversToCreate = driverNames.map((name: string, idx: number) => ({
+        id: ids[idx] || crypto.randomUUID(), // Reuse ID or generate new
+        participant_id: savedParticipant.id,
+        driver_name: name,
+        driver_metatag: metatags[idx] || null,
+        driver_order: idx,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      }));
+
+      // Upsert drivers (preserves IDs)
+      await supabase.from('preset_participant_drivers').upsert(driversToCreate);
+
+      console.log(`[DB] CSV Import: Preserved ${driversToCreate.length} driver IDs for participant ${savedParticipant.numero}`);
+
+    } else if (driverNames.length > 1) {
+      // LEGACY MODE: No IDs in CSV - create new drivers
+      const driversToCreate = driverNames.map((name: string, idx: number) => ({
+        id: crypto.randomUUID(),
+        participant_id: savedParticipant.id,
+        driver_name: name,
+        driver_metatag: null,
+        driver_order: idx,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      }));
+
+      await supabase.from('preset_participant_drivers').insert(driversToCreate);
+
+      console.log(`[DB] CSV Import: Created ${driversToCreate.length} new drivers for participant ${savedParticipant.numero}`);
+    }
+  }
 
   return preset;
 }
