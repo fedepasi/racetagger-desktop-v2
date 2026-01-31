@@ -2939,6 +2939,18 @@ class UnifiedImageWorker extends EventEmitter {
         delete (analysisResult as any)._parallelVisualTags;  // Clean up temporary property
         timing['5_visualTagging_parallel'] = true as any;  // Mark as parallel execution
         log.info(`[VisualTagging] Using parallel result (0ms additional latency)`);
+
+        // FIX: In parallel mode, the edge function couldn't save tags because imageId wasn't
+        // available yet. Now that analysis is complete, persist the tags to the database.
+        if (analysisResult?.imageId && visualTagsResult?.tags) {
+          this.persistParallelVisualTags(
+            analysisResult.imageId,
+            this.config.executionId || '',
+            visualTagsResult.tags,
+            visualTagsResult.usage,
+            analysisResult
+          ).catch(err => log.warn(`[VisualTagging] Persist failed: ${err.message}`));
+        }
       } else if (this.config.visualTagging?.enabled && storagePath && !this.shouldUseCropContext() && !this.shouldUseLocalOnnx()) {
         // Fallback: Only run sequentially if not already parallelized (shouldn't happen normally)
         try {
@@ -3734,12 +3746,26 @@ class UnifiedImageWorker extends EventEmitter {
 
       log.debug(`[VisualTagging] Invoking for image: ${storagePath}${analysisResult ? '' : ' (parallel mode, no recognition data)'}`);
 
-      // Build recognitionResult only if analysisResult is available
-      const recognitionResult = analysisResult ? {
-        raceNumber: analysisResult.analysis?.[0]?.raceNumber,
-        driverName: analysisResult.analysis?.[0]?.drivers?.[0],
-        teamName: analysisResult.analysis?.[0]?.teamName
-      } : undefined;
+      // Build recognitionResult with ALL detected vehicles (not just first)
+      let recognitionResult: { raceNumber?: string; driverName?: string; teamName?: string } | undefined;
+      if (analysisResult) {
+        const vehicles = analysisResult.analysis || [];
+        const allDrivers: string[] = [];
+        const allTeams: string[] = [];
+        const allNumbers: string[] = [];
+        for (const v of vehicles) {
+          if (v.raceNumber && !allNumbers.includes(v.raceNumber)) allNumbers.push(v.raceNumber);
+          if (v.teamName && !allTeams.includes(v.teamName)) allTeams.push(v.teamName);
+          for (const d of (v.drivers || [])) {
+            if (d && !allDrivers.includes(d)) allDrivers.push(d);
+          }
+        }
+        recognitionResult = {
+          raceNumber: allNumbers.join('; ') || undefined,
+          driverName: allDrivers.join('; ') || undefined,
+          teamName: allTeams.join('; ') || undefined
+        };
+      }
 
       const response = await Promise.race([
         this.supabase.functions.invoke('visualTagging', {
@@ -3786,6 +3812,72 @@ class UnifiedImageWorker extends EventEmitter {
     } catch (error: any) {
       log.warn(`[VisualTagging] Failed (non-blocking): ${error.message}`);
       return null;
+    }
+  }
+
+  /**
+   * Persist visual tags to database after parallel extraction.
+   * In parallel mode, imageId is not available when the edge function runs,
+   * so tags are extracted but not saved. This method saves them once imageId is known.
+   */
+  private async persistParallelVisualTags(
+    imageId: string,
+    executionId: string,
+    tags: any,
+    usage: any,
+    analysisResult: any
+  ): Promise<void> {
+    if (!imageId) return;
+
+    try {
+      const userId = await authService.getCurrentUserId();
+
+      // Collect ALL drivers, teams, and numbers from all detected vehicles
+      const vehicles = analysisResult?.analysis || [];
+      const allDrivers: string[] = [];
+      const allTeams: string[] = [];
+      const allNumbers: string[] = [];
+      for (const v of vehicles) {
+        if (v.raceNumber && !allNumbers.includes(v.raceNumber)) allNumbers.push(v.raceNumber);
+        if (v.teamName && !allTeams.includes(v.teamName)) allTeams.push(v.teamName);
+        for (const d of (v.drivers || [])) {
+          if (d && !allDrivers.includes(d)) allDrivers.push(d);
+        }
+      }
+      const participantName = allDrivers.length > 0 ? allDrivers.join('; ') : null;
+      const participantTeam = allTeams.length > 0 ? allTeams.join('; ') : null;
+      const participantNumber = allNumbers.length > 0 ? allNumbers.join('; ') : null;
+
+      const { error } = await this.supabase
+        .from('visual_tags')
+        .upsert({
+          image_id: imageId,
+          execution_id: executionId || null,
+          user_id: userId,
+          location_tags: tags.location || [],
+          weather_tags: tags.weather || [],
+          scene_type_tags: tags.sceneType || [],
+          subject_tags: tags.subjects || [],
+          visual_style_tags: tags.visualStyle || [],
+          emotion_tags: tags.emotion || [],
+          participant_name: participantName,
+          participant_team: participantTeam,
+          participant_number: participantNumber,
+          model_used: 'gemini-2.5-flash-lite',
+          input_tokens: usage?.inputTokens || 0,
+          output_tokens: usage?.outputTokens || 0,
+          estimated_cost_usd: usage?.estimatedCostUSD || 0
+        }, {
+          onConflict: 'image_id'
+        });
+
+      if (error) {
+        log.warn(`[VisualTagging] Failed to persist parallel tags: ${error.message}`);
+      } else {
+        log.debug(`[VisualTagging] Persisted parallel tags for image: ${imageId}`);
+      }
+    } catch (err: any) {
+      log.warn(`[VisualTagging] Error persisting parallel tags: ${err.message}`);
     }
   }
 
@@ -4994,6 +5086,14 @@ export class UnifiedImageProcessor extends EventEmitter {
   private onnxCircuitBreakerLogged: boolean = false;
 
   // ============================================================================
+  // WORKER POOL (v1.1.0+) - Reusable workers to avoid redundant ONNX initialization
+  // ============================================================================
+  private USE_WORKER_POOL = false; // Set to false to disable worker pool (emergency fallback) - TEMPORARILY DISABLED FOR DEBUG
+  private workerPool: UnifiedImageWorker[] = [];
+  private availableWorkers: UnifiedImageWorker[] = [];
+  private busyWorkers: Set<UnifiedImageWorker> = new Set();
+
+  // ============================================================================
   // BATCH TOKEN PRE-AUTHORIZATION (v1.1.0+)
   // ============================================================================
   private currentReservationId: string | null = null;
@@ -5322,6 +5422,18 @@ export class UnifiedImageProcessor extends EventEmitter {
     }
     // ========================================================================
 
+    // ========================================================================
+    // WORKER POOL INITIALIZATION: Pre-create workers with ONNX loaded once
+    // ========================================================================
+    // This avoids redundant ONNX initialization for each image
+    // Expected impact: Eliminates N×(ONNX init time) overhead per batch
+    if (this.USE_WORKER_POOL) {
+      await this.initializeWorkerPool();
+    } else {
+      console.log('[WorkerPool] ⚠️  Worker pool DISABLED - using legacy one-worker-per-image mode');
+    }
+    // ========================================================================
+
     let results: UnifiedProcessingResult[];
 
     try {
@@ -5349,6 +5461,11 @@ export class UnifiedImageProcessor extends EventEmitter {
         await this.finalizeBatchTokens();
       }
       throw error;
+    } finally {
+      // Cleanup worker pool (allows garbage collection)
+      if (this.USE_WORKER_POOL) {
+        this.disposeWorkerPool();
+      }
     }
   }
 
@@ -6069,15 +6186,111 @@ export class UnifiedImageProcessor extends EventEmitter {
   }
 
   /**
+   * Initialize worker pool for batch processing
+   * Pre-creates and initializes workers to avoid redundant ONNX loading
+   */
+  private async initializeWorkerPool(): Promise<void> {
+    if (this.workerPool.length > 0) {
+      if (DEBUG_MODE) console.log('[WorkerPool] Pool already initialized, skipping');
+      return;
+    }
+
+    const poolSize = this.config.maxConcurrentWorkers;
+    console.log(`[WorkerPool] Initializing pool with ${poolSize} workers...`);
+
+    const workerConfig = { ...this.config, sportCategories: this.batchSportCategories };
+    const workerPromises: Promise<UnifiedImageWorker>[] = [];
+
+    for (let i = 0; i < poolSize; i++) {
+      workerPromises.push(UnifiedImageWorker.create(workerConfig, this.analysisLogger, this.networkMonitor));
+    }
+
+    this.workerPool = await Promise.all(workerPromises);
+    this.availableWorkers = [...this.workerPool];
+    this.busyWorkers.clear();
+
+    console.log(`[WorkerPool] ✅ Pool initialized with ${this.workerPool.length} workers (ONNX loaded once per worker)`);
+    console.log(`[WorkerPool] Available workers: ${this.availableWorkers.length}, Busy workers: ${this.busyWorkers.size}`);
+  }
+
+  /**
+   * Get an available worker from the pool
+   * Waits if all workers are busy
+   */
+  private async getWorkerFromPool(): Promise<UnifiedImageWorker> {
+    // Safety check: ensure pool was initialized
+    if (this.workerPool.length === 0) {
+      throw new Error('[WorkerPool] Worker pool not initialized! Call initializeWorkerPool() first.');
+    }
+
+    // Wait until a worker becomes available (with timeout protection)
+    const maxWaitTime = 300000; // 5 minutes max wait
+    const startTime = Date.now();
+
+    while (this.availableWorkers.length === 0) {
+      // Check timeout to prevent infinite loop
+      if (Date.now() - startTime > maxWaitTime) {
+        throw new Error(`[WorkerPool] Timeout waiting for available worker after ${maxWaitTime}ms. Pool might be deadlocked.`);
+      }
+
+      if (DEBUG_MODE) console.log(`[WorkerPool] All workers busy (${this.busyWorkers.size}/${this.workerPool.length}), waiting...`);
+      await new Promise(resolve => setTimeout(resolve, 100)); // Wait 100ms before checking again
+    }
+
+    const worker = this.availableWorkers.shift()!;
+    this.busyWorkers.add(worker);
+
+    if (DEBUG_MODE) console.log(`[WorkerPool] Worker acquired (${this.busyWorkers.size} busy, ${this.availableWorkers.length} available)`);
+
+    return worker;
+  }
+
+  /**
+   * Return a worker to the pool after processing
+   */
+  private releaseWorkerToPool(worker: UnifiedImageWorker): void {
+    this.busyWorkers.delete(worker);
+    this.availableWorkers.push(worker);
+
+    if (DEBUG_MODE) console.log(`[WorkerPool] Worker released (${this.busyWorkers.size} busy, ${this.availableWorkers.length} available)`);
+  }
+
+  /**
+   * Dispose all workers in the pool
+   */
+  private disposeWorkerPool(): void {
+    if (this.workerPool.length === 0) return;
+
+    console.log(`[WorkerPool] Disposing ${this.workerPool.length} workers...`);
+
+    // Note: UnifiedImageWorker doesn't have a dispose method yet,
+    // but we clear the pool references to allow garbage collection
+    this.workerPool = [];
+    this.availableWorkers = [];
+    this.busyWorkers.clear();
+
+    console.log('[WorkerPool] ✅ Worker pool disposed');
+  }
+
+  /**
    * Processa una singola immagine con un worker
    */
   private async processWithWorker(imageFile: UnifiedImageFile): Promise<UnifiedProcessingResult> {
-    this.activeWorkers++;
+    let worker: UnifiedImageWorker;
+    let usePool = false;
 
-    // Pass cached sport categories to worker (avoid redundant Supabase fetch)
-    const workerConfig = { ...this.config, sportCategories: this.batchSportCategories };
-    if (DEBUG_MODE) console.log(`[UnifiedProcessor] Passing ${workerConfig.sportCategories?.length || 0} cached categories to worker`);
-    const worker = await UnifiedImageWorker.create(workerConfig, this.analysisLogger, this.networkMonitor);
+    if (this.USE_WORKER_POOL && this.workerPool.length > 0) {
+      // NEW: Get worker from pool (reuses initialized workers with pre-loaded ONNX)
+      // Do this BEFORE incrementing activeWorkers to avoid counter mismatch on error
+      worker = await this.getWorkerFromPool();
+      usePool = true;
+    } else {
+      // LEGACY: Create new worker per image (old behavior before worker pool)
+      const workerConfig = { ...this.config, sportCategories: this.batchSportCategories };
+      worker = await UnifiedImageWorker.create(workerConfig, this.analysisLogger, this.networkMonitor);
+    }
+
+    this.activeWorkers++;
 
     try {
       // Calculate temporal context in main process and pass to worker
@@ -6097,8 +6310,16 @@ export class UnifiedImageProcessor extends EventEmitter {
       }
 
       return result;
+    } catch (error) {
+      // Log error and re-throw
+      console.error(`[WorkerPool] Error processing ${imageFile.fileName}:`, error);
+      throw error;
     } finally {
       this.activeWorkers--;
+      if (usePool) {
+        this.releaseWorkerToPool(worker); // Return worker to pool for reuse
+      }
+      // If not using pool, worker is discarded (garbage collected)
     }
   }
 

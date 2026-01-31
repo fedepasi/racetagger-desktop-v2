@@ -15,10 +15,22 @@ const FACE_DETECTOR_CONFIG = {
   // Model paths (relative to app)
   modelsPath: './src/assets/models/face-api',
 
-  // Detection options
-  minConfidence: 0.5,
-  inputSize: 416,  // 128, 160, 224, 320, 416, 512, 608
-  scoreThreshold: 0.5,
+  // Detector selection
+  // 'ssd' = SsdMobilenetv1 (more accurate, min confidence ~50%)
+  // 'tiny' = TinyFaceDetector (faster, can go below 30%)
+  detectorType: 'tiny',  // Default to 'tiny' for better low-confidence detection
+
+  // SSD-specific options
+  ssd: {
+    minConfidence: 0.3,  // Note: SSD has internal limit ~50%
+    inputSize: 416       // 128, 160, 224, 320, 416, 512, 608
+  },
+
+  // Tiny-specific options
+  tiny: {
+    scoreThreshold: 0.3, // Can go much lower than SSD (down to 0.1)
+    inputSize: 416       // 128, 160, 224, 320, 416, 512, 608
+  },
 
   // Descriptor generation
   descriptorSize: 128
@@ -75,9 +87,10 @@ class FaceDetector {
         // IPC not ready, using relative models path
       }
 
-      // Load all required models
+      // Load all required models (both SSD and Tiny for flexibility)
       await Promise.all([
         this.faceapi.nets.ssdMobilenetv1.loadFromUri(modelsPath),
+        this.faceapi.nets.tinyFaceDetector.loadFromUri(modelsPath),
         this.faceapi.nets.faceLandmark68Net.loadFromUri(modelsPath),
         this.faceapi.nets.faceRecognitionNet.loadFromUri(modelsPath)
       ]);
@@ -85,6 +98,7 @@ class FaceDetector {
       this.modelsLoaded = true;
       this.isInitialized = true;
 
+      console.log('[FaceDetector] Models loaded successfully (SSD + Tiny)');
       return { success: true };
 
     } catch (error) {
@@ -95,9 +109,54 @@ class FaceDetector {
   }
 
   /**
+   * Get detector options based on config and runtime options
+   * @private
+   */
+  _getDetectorOptions(options = {}) {
+    const detectorType = options.detectorType || FACE_DETECTOR_CONFIG.detectorType;
+
+    if (detectorType === 'tiny') {
+      const scoreThreshold = options.scoreThreshold !== undefined
+        ? options.scoreThreshold
+        : FACE_DETECTOR_CONFIG.tiny.scoreThreshold;
+      const inputSize = options.inputSize !== undefined
+        ? options.inputSize
+        : FACE_DETECTOR_CONFIG.tiny.inputSize;
+
+      return {
+        type: 'tiny',
+        options: new this.faceapi.TinyFaceDetectorOptions({
+          inputSize,
+          scoreThreshold
+        })
+      };
+    } else {
+      // SSD Mobilenet v1
+      const minConfidence = options.minConfidence !== undefined
+        ? options.minConfidence
+        : FACE_DETECTOR_CONFIG.ssd.minConfidence;
+      const inputSize = options.inputSize !== undefined
+        ? options.inputSize
+        : FACE_DETECTOR_CONFIG.ssd.inputSize;
+
+      return {
+        type: 'ssd',
+        options: new this.faceapi.SsdMobilenetv1Options({
+          minConfidence,
+          inputSize
+        })
+      };
+    }
+  }
+
+  /**
    * Detect faces in an image and generate descriptors
    * @param {string} imagePath - Path to the image file
    * @param {Object} options - Detection options
+   * @param {string} options.detectorType - 'ssd' or 'tiny' (default: config value)
+   * @param {number} options.minConfidence - For SSD (default: 0.3)
+   * @param {number} options.scoreThreshold - For Tiny (default: 0.3)
+   * @param {number} options.inputSize - Resolution (default: 416)
    * @returns {Object} Detection results with faces and descriptors
    */
   async detectFaces(imagePath, options = {}) {
@@ -114,11 +173,12 @@ class FaceDetector {
       // Load image into canvas
       const img = await this._loadImage(imagePath);
 
+      // Get detector options (SSD or Tiny)
+      const { type, options: detectorOptions } = this._getDetectorOptions(options);
+
       // Detect faces with landmarks and descriptors
       const detections = await this.faceapi
-        .detectAllFaces(img, new this.faceapi.SsdMobilenetv1Options({
-          minConfidence: options.minConfidence || FACE_DETECTOR_CONFIG.minConfidence
-        }))
+        .detectAllFaces(img, detectorOptions)
         .withFaceLandmarks()
         .withFaceDescriptors();
 
@@ -132,7 +192,8 @@ class FaceDetector {
         },
         landmarks: detection.landmarks.positions.map(pt => [pt.x, pt.y]),
         descriptor: Array.from(detection.descriptor), // Convert Float32Array to regular array
-        confidence: detection.detection.score
+        confidence: detection.detection.score,
+        detectorType: type  // Track which detector was used
       }));
 
       const inferenceTimeMs = Date.now() - startTime;
@@ -140,7 +201,8 @@ class FaceDetector {
       return {
         success: true,
         faces,
-        inferenceTimeMs
+        inferenceTimeMs,
+        detectorType: type
       };
 
     } catch (error) {
@@ -156,6 +218,8 @@ class FaceDetector {
   /**
    * Detect single face (best for portraits)
    * Returns only the most prominent face
+   * @param {string} imagePath - Path to the image file
+   * @param {Object} options - Detection options (same as detectFaces)
    */
   async detectSingleFace(imagePath, options = {}) {
     if (!this.isInitialized) {
@@ -170,11 +234,12 @@ class FaceDetector {
     try {
       const img = await this._loadImage(imagePath);
 
+      // Get detector options (SSD or Tiny)
+      const { type, options: detectorOptions } = this._getDetectorOptions(options);
+
       // Detect single best face
       const detection = await this.faceapi
-        .detectSingleFace(img, new this.faceapi.SsdMobilenetv1Options({
-          minConfidence: options.minConfidence || FACE_DETECTOR_CONFIG.minConfidence
-        }))
+        .detectSingleFace(img, detectorOptions)
         .withFaceLandmarks()
         .withFaceDescriptor();
 
@@ -182,7 +247,8 @@ class FaceDetector {
         return {
           success: true,
           face: null,
-          inferenceTimeMs: Date.now() - startTime
+          inferenceTimeMs: Date.now() - startTime,
+          detectorType: type
         };
       }
 
@@ -195,7 +261,8 @@ class FaceDetector {
         },
         landmarks: detection.landmarks.positions.map(pt => [pt.x, pt.y]),
         descriptor: Array.from(detection.descriptor),
-        confidence: detection.detection.score
+        confidence: detection.detection.score,
+        detectorType: type
       };
 
       const inferenceTimeMs = Date.now() - startTime;
@@ -203,7 +270,8 @@ class FaceDetector {
       return {
         success: true,
         face,
-        inferenceTimeMs
+        inferenceTimeMs,
+        detectorType: type
       };
 
     } catch (error) {
@@ -274,11 +342,17 @@ class FaceDetector {
     return {
       initialized: this.isInitialized,
       modelsLoaded: this.modelsLoaded,
+      currentDetector: FACE_DETECTOR_CONFIG.detectorType,
       models: this.modelsLoaded ? {
         ssdMobilenetv1: true,
+        tinyFaceDetector: true,
         faceLandmark68Net: true,
         faceRecognitionNet: true
-      } : null
+      } : null,
+      config: {
+        ssd: FACE_DETECTOR_CONFIG.ssd,
+        tiny: FACE_DETECTOR_CONFIG.tiny
+      }
     };
   }
 }

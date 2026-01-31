@@ -636,8 +636,6 @@ export class OnnxDetector {
             // DEBUG: Sample first 10 anchors unconditionally to see raw values
             if (sampledAnchors < 10) {
               const className = this.modelConfig.classes[bestClassIndex] || `class_${bestClassIndex}`;
-              console.log(`[ONNX-Parse] Anchor ${i}: x=${x.toFixed(2)}, y=${y.toFixed(2)}, w=${width.toFixed(2)}, h=${height.toFixed(2)}, maxScore=${maxClassScore.toFixed(6)}, class=${bestClassIndex}/${numClasses} (${className})`);
-              sampledAnchors++;
             }
 
             if (confidence < 0.1) continue;
