@@ -190,6 +190,16 @@
           </div>
         </div>
 
+        <div class="form-group" style="margin-top: 1rem;">
+          <label for="folder-path-input">Destination Path <span style="opacity: 0.6;">(optional)</span></label>
+          <div class="folder-path-picker">
+            <input type="text" id="folder-path-input" class="form-input" placeholder="No path set — will use default output folder" readonly>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="browseFolderPath()">Browse</button>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="clearFolderPath()">Clear</button>
+          </div>
+          <small class="form-hint">When set, photos are saved directly to this absolute path instead of a subfolder in the output directory.</small>
+        </div>
+
         <div class="folder-modal-tip">
           <span class="tip-icon">💡</span>
           <div class="tip-content">
@@ -478,7 +488,7 @@
 
   <!-- Edit Folder Name Modal -->
   <div id="edit-folder-modal" class="modal">
-    <div class="modal-content" style="max-width: 500px;">
+    <div class="modal-content" style="max-width: 640px;">
       <div class="modal-header">
         <h2>Edit Folder Name</h2>
         <button class="modal-close" onclick="closeEditFolderModal()">&times;</button>
@@ -493,6 +503,15 @@
             placeholder="Enter folder name"
             onkeypress="if(event.key === 'Enter') saveEditedFolderName()"
           >
+        </div>
+        <div class="form-group" style="margin-top: 1rem;">
+          <label for="edit-folder-path-input">Destination Path <span style="opacity: 0.6;">(optional)</span></label>
+          <div class="folder-path-picker">
+            <input type="text" id="edit-folder-path-input" class="form-input" placeholder="No path set — will use default output folder" readonly>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="browseEditFolderPath()">Browse</button>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="clearEditFolderPath()">Clear</button>
+          </div>
+          <small class="form-hint">When set, photos are saved directly to this absolute path instead of a subfolder in the output directory.</small>
         </div>
       </div>
       <div class="modal-footer">

@@ -6,7 +6,7 @@
 var currentPreset = null;
 var participantsData = [];
 var isEditingPreset = false;
-var customFolders = []; // Array di nomi folder personalizzate
+var customFolders = []; // Array of {name, path?} objects for custom folders
 var editingRowIndex = -1; // -1 = new participant, >=0 = editing existing
 var currentSortColumn = 0; // Colonna corrente di ordinamento (0 = numero)
 var currentSortDirection = 'asc'; // Direzione: 'asc' o 'desc'
@@ -603,6 +603,8 @@ function createNewPreset() {
 function addCustomFolder() {
   // Clear previous input
   document.getElementById('folder-name-input').value = '';
+  const pathInput = document.getElementById('folder-path-input');
+  if (pathInput) pathInput.value = '';
 
   // Show modal
   const modal = document.getElementById('folder-name-modal');
@@ -624,6 +626,8 @@ function closeFolderNameModal() {
   const modal = document.getElementById('folder-name-modal');
   modal.classList.remove('show');
   document.getElementById('folder-name-input').value = '';
+  const pathInput = document.getElementById('folder-path-input');
+  if (pathInput) pathInput.value = '';
 
   // Hide dropdown when closing modal
   hideKeywordDropdown();
@@ -643,14 +647,20 @@ function confirmAddFolder() {
   }
 
   // Check for duplicates
-  if (customFolders.includes(folderName)) {
+  if (customFolders.some(f => (typeof f === 'string' ? f : f.name) === folderName)) {
     alert('A folder with this name already exists');
     folderNameInput.focus();
     return;
   }
 
-  // Add folder
-  customFolders.push(folderName);
+  // Read optional path
+  const pathInput = document.getElementById('folder-path-input');
+  const folderPath = pathInput ? pathInput.value.trim() : '';
+
+  // Add folder as object
+  const folderObj = { name: folderName };
+  if (folderPath) folderObj.path = folderPath;
+  customFolders.push(folderObj);
   renderCustomFolders();
   updateFolderSelects();
 
@@ -939,10 +949,12 @@ function populateFolderSelects() {
     if (!select) return;
 
     select.innerHTML = `<option value="">Folder ${index + 1}: None</option>`;
-    customFolders.forEach(folderName => {
+    customFolders.forEach(folder => {
+      const folderName = typeof folder === 'string' ? folder : folder.name;
+      const folderPath = typeof folder === 'string' ? '' : (folder.path || '');
       const option = document.createElement('option');
       option.value = folderName;
-      option.textContent = folderName;
+      option.textContent = folderPath ? `${folderName} [${shortenPath(folderPath)}]` : folderName;
       select.appendChild(option);
     });
   });
@@ -1063,6 +1075,9 @@ async function saveParticipantAndStay() {
       folder_1: p.folder_1 || '',
       folder_2: p.folder_2 || '',
       folder_3: p.folder_3 || '',
+      folder_1_path: p.folder_1_path || getFolderPath(p.folder_1),
+      folder_2_path: p.folder_2_path || getFolderPath(p.folder_2),
+      folder_3_path: p.folder_3_path || getFolderPath(p.folder_3),
       sort_order: index
     }));
 
@@ -1220,7 +1235,7 @@ function scrollToParticipant(numero) {
  * Remove a custom folder
  */
 function removeCustomFolder(folderName) {
-  const index = customFolders.indexOf(folderName);
+  const index = customFolders.findIndex(f => (typeof f === 'string' ? f : f.name) === folderName);
   if (index > -1) {
     customFolders.splice(index, 1);
     renderCustomFolders();
@@ -1239,10 +1254,14 @@ function editCustomFolder(index) {
   }
 
   editingFolderIndex = index;
-  const oldFolderName = customFolders[index];
+  const folder = customFolders[index];
+  const oldFolderName = typeof folder === 'string' ? folder : folder.name;
+  const oldFolderPath = typeof folder === 'string' ? '' : (folder.path || '');
 
-  // Open modal and populate with current name
+  // Open modal and populate with current name and path
   document.getElementById('edit-folder-name-input').value = oldFolderName;
+  const pathInput = document.getElementById('edit-folder-path-input');
+  if (pathInput) pathInput.value = oldFolderPath;
   document.getElementById('edit-folder-modal').classList.add('show');
 
   // Focus on input
@@ -1258,6 +1277,73 @@ function closeEditFolderModal() {
   editingFolderIndex = -1;
 }
 
+/**
+ * Shorten a filesystem path for display
+ */
+function shortenPath(fullPath) {
+  if (!fullPath) return '';
+  const maxLen = 40;
+  if (fullPath.length <= maxLen) return fullPath;
+  // Show first part + ... + last part
+  const parts = fullPath.split('/').filter(Boolean);
+  if (parts.length <= 2) return fullPath;
+  return parts[0] + '/.../' + parts[parts.length - 1];
+}
+
+/**
+ * Browse for a folder path (Add Folder modal)
+ */
+async function browseFolderPath() {
+  const result = await window.api.invoke('dialog-show-open', {
+    properties: ['openDirectory', 'createDirectory'],
+    title: 'Select Destination Folder'
+  });
+  if (result && result.filePaths && result.filePaths.length > 0) {
+    const pathInput = document.getElementById('folder-path-input');
+    if (pathInput) pathInput.value = result.filePaths[0];
+  }
+}
+
+/**
+ * Clear folder path (Add Folder modal)
+ */
+function clearFolderPath() {
+  const pathInput = document.getElementById('folder-path-input');
+  if (pathInput) pathInput.value = '';
+}
+
+/**
+ * Browse for a folder path (Edit Folder modal)
+ */
+async function browseEditFolderPath() {
+  const result = await window.api.invoke('dialog-show-open', {
+    properties: ['openDirectory', 'createDirectory'],
+    title: 'Select Destination Folder'
+  });
+  if (result && result.filePaths && result.filePaths.length > 0) {
+    const pathInput = document.getElementById('edit-folder-path-input');
+    if (pathInput) pathInput.value = result.filePaths[0];
+  }
+}
+
+/**
+ * Clear folder path (Edit Folder modal)
+ */
+function clearEditFolderPath() {
+  const pathInput = document.getElementById('edit-folder-path-input');
+  if (pathInput) pathInput.value = '';
+}
+
+/**
+ * Get the absolute path for a folder by name, from the customFolders array
+ */
+function getFolderPath(folderName) {
+  if (!folderName) return '';
+  const folder = customFolders.find(f => (typeof f === 'string' ? f : f.name) === folderName);
+  if (!folder || typeof folder === 'string') return '';
+  return folder.path || '';
+}
+
 function saveEditedFolderName() {
   if (editingFolderIndex < 0 || editingFolderIndex >= customFolders.length) {
     return;
@@ -1271,17 +1357,24 @@ function saveEditedFolderName() {
     return;
   }
 
-  const oldFolderName = customFolders[editingFolderIndex];
+  const oldFolder = customFolders[editingFolderIndex];
+  const oldFolderName = typeof oldFolder === 'string' ? oldFolder : oldFolder.name;
 
   // Check if the new name already exists (and it's not the same folder)
-  if (customFolders.includes(newFolderName) && newFolderName !== oldFolderName) {
+  if (customFolders.some(f => (typeof f === 'string' ? f : f.name) === newFolderName) && newFolderName !== oldFolderName) {
     alert('A folder with this name already exists!');
     document.getElementById('edit-folder-name-input').focus();
     return;
   }
 
-  // Update folder name
-  customFolders[editingFolderIndex] = newFolderName;
+  // Read optional path
+  const pathInput = document.getElementById('edit-folder-path-input');
+  const newFolderPath = pathInput ? pathInput.value.trim() : '';
+
+  // Update folder as object
+  const updatedFolder = { name: newFolderName };
+  if (newFolderPath) updatedFolder.path = newFolderPath;
+  customFolders[editingFolderIndex] = updatedFolder;
 
   // Update all participants that have this folder assigned
   participantsData.forEach(participant => {
@@ -1331,11 +1424,19 @@ function renderCustomFolders() {
   existingChips.forEach(chip => chip.remove());
 
   // Add folder chips
-  customFolders.forEach((folderName, index) => {
+  customFolders.forEach((folder, index) => {
+    const folderName = typeof folder === 'string' ? folder : folder.name;
+    const folderPath = typeof folder === 'string' ? '' : (folder.path || '');
     const chip = document.createElement('div');
     chip.className = 'folder-chip';
+    const pathHtml = folderPath
+      ? `<span class="folder-chip-path" title="${escapeHtml(folderPath)}">${escapeHtml(shortenPath(folderPath))}</span>`
+      : '';
     chip.innerHTML = `
-      <span class="folder-chip-name">📁 ${escapeHtml(folderName)}</span>
+      <div class="folder-chip-info">
+        <span class="folder-chip-name">📁 ${escapeHtml(folderName)}</span>
+        ${pathHtml}
+      </div>
       <button type="button" class="folder-chip-edit" onclick="editCustomFolder(${index})" title="Edit folder">
         ✏️
       </button>
@@ -1371,10 +1472,12 @@ function updateFolderSelects() {
 
       // Rebuild options
       select.innerHTML = '<option value="">-- None --</option>';
-      customFolders.forEach(folderName => {
+      customFolders.forEach(folder => {
+        const folderName = typeof folder === 'string' ? folder : folder.name;
+        const folderPath = typeof folder === 'string' ? '' : (folder.path || '');
         const option = document.createElement('option');
         option.value = folderName;
-        option.textContent = folderName;
+        option.textContent = folderPath ? `${folderName} [${shortenPath(folderPath)}]` : folderName;
         if (currentValue === folderName) {
           option.selected = true;
         }
@@ -1399,8 +1502,10 @@ async function editPreset(presetId) {
     isEditingPreset = true;
     participantsData = currentPreset.participants || [];
 
-    // Load custom folders from preset
-    customFolders = currentPreset.custom_folders || [];
+    // Load custom folders from preset (normalize old string entries to objects)
+    customFolders = (currentPreset.custom_folders || []).map(f =>
+      typeof f === 'string' ? { name: f } : f
+    );
     renderCustomFolders();
 
     // Fill form with preset data
@@ -1528,12 +1633,15 @@ async function exportPresetJSON(presetId) {
         metatag: p.metatag,
         folder_1: p.folder_1,
         folder_2: p.folder_2,
-        folder_3: p.folder_3
+        folder_3: p.folder_3,
+        folder_1_path: p.folder_1_path,
+        folder_2_path: p.folder_2_path,
+        folder_3_path: p.folder_3_path
       })),
       drivers: allDrivers,  // NEW: Complete driver data with IDs
       custom_folders: preset.custom_folders || [],
       exported_at: new Date().toISOString(),
-      version: '2.0'  // Bump version to indicate driver support
+      version: '2.1'  // Bump version to indicate folder path support
     };
 
     // Convert to JSON
@@ -1607,7 +1715,7 @@ async function exportPresetCSV(presetId) {
     };
 
     // CSV Header (English column names + hidden driver preservation columns)
-    const csvHeader = 'Number,Driver,Team,Category,Plate_Number,Sponsors,Metatag,Folder_1,Folder_2,Folder_3,_Driver_IDs,_Driver_Metatags';
+    const csvHeader = 'Number,Driver,Team,Category,Plate_Number,Sponsors,Metatag,Folder_1,Folder_2,Folder_3,Folder_1_Path,Folder_2_Path,Folder_3_Path,_Driver_IDs,_Driver_Metatags';
 
     // Convert participants to CSV rows (fetch drivers for each participant)
     const csvRows = await Promise.all(participants.map(async (p) => {
@@ -1630,6 +1738,9 @@ async function exportPresetCSV(presetId) {
         escapeCSV(p.folder_1 || ''),
         escapeCSV(p.folder_2 || ''),
         escapeCSV(p.folder_3 || ''),
+        escapeCSV(p.folder_1_path || ''),
+        escapeCSV(p.folder_2_path || ''),
+        escapeCSV(p.folder_3_path || ''),
         escapeCSV(driverIds),
         escapeCSV(driverMetatags)
       ].join(',');
@@ -1945,7 +2056,10 @@ async function savePreset() {
       metatag: p.metatag || '',
       folder_1: p.folder_1 || '',
       folder_2: p.folder_2 || '',
-      folder_3: p.folder_3 || ''
+      folder_3: p.folder_3 || '',
+      folder_1_path: p.folder_1_path || getFolderPath(p.folder_1),
+      folder_2_path: p.folder_2_path || getFolderPath(p.folder_2),
+      folder_3_path: p.folder_3_path || getFolderPath(p.folder_3)
     }));
 
     // Disable save button during operation
@@ -2648,7 +2762,10 @@ function parseCSV(csvText) {
     'Metatag': 'metatag',
     'Folder_1': 'folder_1',
     'Folder_2': 'folder_2',
-    'Folder_3': 'folder_3'
+    'Folder_3': 'folder_3',
+    'Folder_1_Path': 'folder_1_path',
+    'Folder_2_Path': 'folder_2_path',
+    'Folder_3_Path': 'folder_3_path'
   };
 
   for (let i = 1; i < lines.length; i++) {

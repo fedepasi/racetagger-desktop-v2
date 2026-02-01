@@ -56,6 +56,15 @@ export interface CsvParticipantData {
   folder_1?: string; // Custom folder 1
   folder_2?: string; // Custom folder 2
   folder_3?: string; // Custom folder 3
+  folder_1_path?: string; // Absolute filesystem path for folder 1
+  folder_2_path?: string; // Absolute filesystem path for folder 2
+  folder_3_path?: string; // Absolute filesystem path for folder 3
+}
+
+// Resolved folder target with optional absolute path
+interface FolderTarget {
+  name: string;
+  absolutePath?: string;
 }
 
 /**
@@ -169,36 +178,41 @@ export class FolderOrganizer {
       const numbers = Array.isArray(raceNumbers) ? raceNumbers : [raceNumbers];
 
       // NEW LOGIC: Collect custom folders from ALL csvData entries
-      const customFolders: string[] = [];
+      const customFolderTargets: FolderTarget[] = [];
 
       if (csvDataArray.length > 0) {
         // Iterate through ALL participant matches
         csvDataArray.forEach(csvData => {
           if (csvData?.folder_1?.trim()) {
-            // Parse folder name with placeholders (e.g., "{number}-{name}" -> "51-Calado")
             const parsedFolder1 = this.parseFolderName(csvData.folder_1.trim(), csvData);
-            customFolders.push(parsedFolder1);
+            customFolderTargets.push({ name: parsedFolder1, absolutePath: csvData.folder_1_path?.trim() || undefined });
           }
           if (csvData?.folder_2?.trim()) {
             const parsedFolder2 = this.parseFolderName(csvData.folder_2.trim(), csvData);
-            customFolders.push(parsedFolder2);
+            customFolderTargets.push({ name: parsedFolder2, absolutePath: csvData.folder_2_path?.trim() || undefined });
           }
           if (csvData?.folder_3?.trim()) {
             const parsedFolder3 = this.parseFolderName(csvData.folder_3.trim(), csvData);
-            customFolders.push(parsedFolder3);
+            customFolderTargets.push({ name: parsedFolder3, absolutePath: csvData.folder_3_path?.trim() || undefined });
           }
         });
       }
 
-      // Remove duplicates (e.g., if 2 vehicles share the same folder)
-      const uniqueCustomFolders = [...new Set(customFolders)];
+      // Remove duplicates by name+path combination
+      const seenKeys = new Set<string>();
+      const uniqueFolderTargets = customFolderTargets.filter(ft => {
+        const key = ft.absolutePath ? `path:${ft.absolutePath}` : `name:${ft.name}`;
+        if (seenKeys.has(key)) return false;
+        seenKeys.add(key);
+        return true;
+      });
 
       // DECISION TREE:
       // - If NO custom folders -> use race numbers (default behavior for ALL numbers)
       // - If AT LEAST ONE custom folder -> use ONLY custom folders (copy to all)
-      const foldersToCreate = uniqueCustomFolders.length > 0
-        ? uniqueCustomFolders
-        : numbers.map(num => this.generateFolderName(num));
+      const foldersToCreate: FolderTarget[] = uniqueFolderTargets.length > 0
+        ? uniqueFolderTargets
+        : numbers.map(num => ({ name: this.generateFolderName(num) }));
 
       const baseDir = this.config.destinationPath || sourceDir || path.dirname(imagePath);
 
@@ -213,8 +227,11 @@ export class FolderOrganizer {
 
       // COPY FILE TO ALL FOLDERS
       for (let i = 0; i < foldersToCreate.length; i++) {
-        const folderName = foldersToCreate[i];
-        const targetFolder = path.join(baseDir, folderName);
+        const folderTarget = foldersToCreate[i];
+        // Use absolute path if set, otherwise fall back to baseDir/name
+        const targetFolder = folderTarget.absolutePath
+          ? folderTarget.absolutePath
+          : path.join(baseDir, folderTarget.name);
 
         await this.ensureFolderExists(targetFolder);
 
@@ -270,7 +287,7 @@ export class FolderOrganizer {
         success: true,
         originalPath: imagePath,
         organizedPath: copiedPaths[0],
-        folderName: foldersToCreate.join(', '),
+        folderName: foldersToCreate.map(ft => ft.absolutePath || ft.name).join(', '),
         operation: firstOperation,
         timeMs: Date.now() - startTime
       };
@@ -559,8 +576,20 @@ export class FolderOrganizer {
    */
   private async ensureFolderExists(folderPath: string): Promise<void> {
     if (!fs.existsSync(folderPath)) {
-      await fsPromises.mkdir(folderPath, { recursive: true });
-      this.createdFolders.add(folderPath);
+      try {
+        await fsPromises.mkdir(folderPath, { recursive: true });
+        this.createdFolders.add(folderPath);
+      } catch (error: any) {
+        // Provide clear error messages for common issues with absolute paths
+        if (error.code === 'EACCES' || error.code === 'EPERM') {
+          throw new Error(`Permission denied creating folder "${folderPath}". Check that you have write access to this location.`);
+        }
+        if (error.code === 'ENOENT') {
+          // Parent path component doesn't exist - likely unmounted volume
+          throw new Error(`Cannot create folder "${folderPath}". The volume or parent directory may not be mounted or accessible.`);
+        }
+        throw error;
+      }
     }
   }
 

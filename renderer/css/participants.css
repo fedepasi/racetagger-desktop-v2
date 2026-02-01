@@ -359,7 +359,7 @@
 
 /* Folder Name Input Modal */
 .folder-name-modal {
-  max-width: 500px;
+  max-width: 640px;
   width: 90vw;
 }
 
@@ -999,6 +999,44 @@
 .folder-chip:hover .folder-chip-edit,
 .folder-chip:hover .folder-chip-remove {
   background: rgba(255, 255, 255, 0.2);
+}
+
+/* Folder chip info layout (name + optional path) */
+.folder-chip-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.folder-chip-path {
+  font-size: 0.7rem;
+  font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
+/* Folder path picker row (input + Browse + Clear) */
+.folder-path-picker {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.folder-path-picker .form-input {
+  flex: 1;
+  min-width: 0;
+  font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+  font-size: 0.85rem;
+}
+
+.folder-path-picker .btn-sm {
+  flex-shrink: 0;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.8rem;
 }
 
 .folder-info-box {

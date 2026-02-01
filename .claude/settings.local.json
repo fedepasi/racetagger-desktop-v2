@@ -185,7 +185,9 @@
       "Bash(supabase functions deploy:*)",
       "Bash(supabase secrets list:*)",
       "Bash(npx electron:*)",
-      "Bash(supabase secrets set:*)"
+      "Bash(supabase secrets set:*)",
+      "Bash(for branch in origin/claude/issue-1-20260114-1404 origin/claude/issue-12-20260122-1432 origin/claude/issue-15-20260122-1441 origin/claude/issue-16-20260122-1430 origin/claude/issue-9-20260122-1435 origin/add-claude-github-actions-1768397256111 origin/claude/issue-1-20260114-1408 origin/claude/issue-4-20260114-1427)",
+      "Bash(do echo \"=== $branch ===\")"
     ],
     "deny": [],
     "ask": []

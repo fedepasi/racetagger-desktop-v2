@@ -545,6 +545,9 @@ function initializeLocalCacheSchema(): void {
         folder_1 TEXT,
         folder_2 TEXT,
         folder_3 TEXT,
+        folder_1_path TEXT,
+        folder_2_path TEXT,
+        folder_3_path TEXT,
         created_at TEXT NOT NULL,
         FOREIGN KEY (preset_id) REFERENCES ParticipantPresets(id) ON DELETE CASCADE,
         UNIQUE(preset_id, numero)
@@ -607,6 +610,15 @@ function initializeLocalCacheSchema(): void {
     } catch (e) { /* Column already exists */ }
     try {
       localDB.exec('ALTER TABLE PresetParticipants ADD COLUMN folder_3 TEXT');
+    } catch (e) { /* Column already exists */ }
+    try {
+      localDB.exec('ALTER TABLE PresetParticipants ADD COLUMN folder_1_path TEXT');
+    } catch (e) { /* Column already exists */ }
+    try {
+      localDB.exec('ALTER TABLE PresetParticipants ADD COLUMN folder_2_path TEXT');
+    } catch (e) { /* Column already exists */ }
+    try {
+      localDB.exec('ALTER TABLE PresetParticipants ADD COLUMN folder_3_path TEXT');
     } catch (e) { /* Column already exists */ }
 
     // Configure primary connection for optimal performance
@@ -696,6 +708,9 @@ export interface PresetParticipant {
   folder_1?: string;         // Custom folder 1
   folder_2?: string;         // Custom folder 2
   folder_3?: string;         // Custom folder 3
+  folder_1_path?: string;    // Absolute filesystem path for folder 1
+  folder_2_path?: string;    // Absolute filesystem path for folder 2
+  folder_3_path?: string;    // Absolute filesystem path for folder 3
   created_at?: string;
 }
 
@@ -2233,8 +2248,8 @@ export async function savePresetParticipants(presetId: string, participants: Omi
     // Inserisci i nuovi partecipanti
     const insertStmt = localDB.prepare(`
       INSERT INTO PresetParticipants
-      (id, preset_id, numero, nome_pilota, nome_navigatore, nome_terzo, nome_quarto, squadra, sponsors, metatag, categoria, plate_number, folder_1, folder_2, folder_3, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, preset_id, numero, nome_pilota, nome_navigatore, nome_terzo, nome_quarto, squadra, sponsors, metatag, categoria, plate_number, folder_1, folder_2, folder_3, folder_1_path, folder_2_path, folder_3_path, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const now = new Date().toISOString();
@@ -2249,6 +2264,7 @@ export async function savePresetParticipants(presetId: string, participants: Omi
         participant.squadra, sponsorsJson, participant.metatag,
         participant.categoria || null, participant.plate_number || null,
         participant.folder_1 || null, participant.folder_2 || null, participant.folder_3 || null,
+        participant.folder_1_path || null, participant.folder_2_path || null, participant.folder_3_path || null,
         now
       );
     }
@@ -2334,7 +2350,10 @@ export async function importParticipantsFromCSV(csvData: any[], presetName: stri
     plate_number: row.plate_number || row.Plate_Number || '',
     folder_1: row.folder_1 || row.Folder_1 || '',
     folder_2: row.folder_2 || row.Folder_2 || '',
-    folder_3: row.folder_3 || row.Folder_3 || ''
+    folder_3: row.folder_3 || row.Folder_3 || '',
+    folder_1_path: row.folder_1_path || row.Folder_1_Path || '',
+    folder_2_path: row.folder_2_path || row.Folder_2_Path || '',
+    folder_3_path: row.folder_3_path || row.Folder_3_Path || ''
   }));
 
   await savePresetParticipants(preset.id!, participants);
@@ -2384,6 +2403,12 @@ export interface SportCategory {
   save_segmentation_masks?: boolean;      // Save full RLE mask data in JSONL logs for debugging/training
 }
 
+// A custom folder can be a simple name string or an object with name + optional absolute path
+export interface CustomFolder {
+  name: string;
+  path?: string; // Optional absolute filesystem path
+}
+
 export interface ParticipantPresetSupabase {
   id?: string;
   user_id: string;
@@ -2392,7 +2417,7 @@ export interface ParticipantPresetSupabase {
   description?: string;
   is_template?: boolean;
   is_public?: boolean;
-  custom_folders?: string[]; // Array di nomi folder personalizzate create dall'utente
+  custom_folders?: (string | CustomFolder)[]; // Array of folder names or {name, path?} objects
   created_at?: string;
   updated_at?: string;
   last_used_at?: string;
@@ -2415,6 +2440,9 @@ export interface PresetParticipantSupabase {
   folder_1?: string;
   folder_2?: string;
   folder_3?: string;
+  folder_1_path?: string;    // Absolute filesystem path for folder 1
+  folder_2_path?: string;    // Absolute filesystem path for folder 2
+  folder_3_path?: string;    // Absolute filesystem path for folder 3
   custom_fields?: any;
   sort_order?: number;
   created_at?: string;
@@ -3212,6 +3240,9 @@ export async function duplicateOfficialPresetSupabase(sourcePresetId: string): P
         folder_1: p.folder_1 || '',
         folder_2: p.folder_2 || '',
         folder_3: p.folder_3 || '',
+        folder_1_path: p.folder_1_path || '',
+        folder_2_path: p.folder_2_path || '',
+        folder_3_path: p.folder_3_path || '',
         sort_order: p.sort_order || index,
         custom_fields: p.custom_fields || {}
       }));
@@ -3274,11 +3305,14 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
       folder_1: row.folder_1 || row.Folder_1 || '',
       folder_2: row.folder_2 || row.Folder_2 || '',
       folder_3: row.folder_3 || row.Folder_3 || '',
+      folder_1_path: row.folder_1_path || row.Folder_1_Path || '',
+      folder_2_path: row.folder_2_path || row.Folder_2_Path || '',
+      folder_3_path: row.folder_3_path || row.Folder_3_Path || '',
       sort_order: index,
       custom_fields: {
         // Store any additional CSV fields
         ...Object.keys(row).reduce((acc, key) => {
-          const knownFields = ['numero', 'Number', 'nome', 'Driver', 'categoria', 'Category', 'squadra', 'team', 'Team', 'sponsor', 'Sponsors', 'metatag', 'Metatag', 'plate_number', 'Plate_Number', 'folder_1', 'Folder_1', 'folder_2', 'Folder_2', 'folder_3', 'Folder_3', '_Driver_IDs', '_driver_ids', '_Driver_Metatags', '_driver_metatags'];
+          const knownFields = ['numero', 'Number', 'nome', 'Driver', 'categoria', 'Category', 'squadra', 'team', 'Team', 'sponsor', 'Sponsors', 'metatag', 'Metatag', 'plate_number', 'Plate_Number', 'folder_1', 'Folder_1', 'folder_2', 'Folder_2', 'folder_3', 'Folder_3', 'folder_1_path', 'Folder_1_Path', 'folder_2_path', 'Folder_2_Path', 'folder_3_path', 'Folder_3_Path', '_Driver_IDs', '_driver_ids', '_Driver_Metatags', '_driver_metatags'];
           if (!knownFields.includes(key)) {
             acc[key] = row[key];
           }

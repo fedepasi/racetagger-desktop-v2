@@ -2922,7 +2922,10 @@ app.whenReady().then(async () => { // Added async here
                     metatag: match.metatag,
                     folder_1: match.folder_1,
                     folder_2: match.folder_2,
-                    folder_3: match.folder_3
+                    folder_3: match.folder_3,
+                    folder_1_path: match.folder_1_path,
+                    folder_2_path: match.folder_2_path,
+                    folder_3_path: match.folder_3_path
                   });
                 }
               });
