@@ -187,7 +187,14 @@
       "Bash(npx electron:*)",
       "Bash(supabase secrets set:*)",
       "Bash(for branch in origin/claude/issue-1-20260114-1404 origin/claude/issue-12-20260122-1432 origin/claude/issue-15-20260122-1441 origin/claude/issue-16-20260122-1430 origin/claude/issue-9-20260122-1435 origin/add-claude-github-actions-1768397256111 origin/claude/issue-1-20260114-1408 origin/claude/issue-4-20260114-1427)",
-      "Bash(do echo \"=== $branch ===\")"
+      "Bash(do echo \"=== $branch ===\")",
+      "Bash(git merge origin/claude/issue-12-20260122-1432 --no-ff -m \"$\\(cat <<''EOF''\nMerge branch ''claude/issue-12'' - Add autocomplete for result editing\n\nAdds HTML5 datalist autocomplete for Race Number, Team, and Drivers\nfields when editing results, based on participant preset data.\nPrevents typos and ensures consistency with preset data.\n\nCloses #12\nEOF\n\\)\")",
+      "Bash(git push)",
+      "Bash(git show:*)",
+      "Bash(git apply:*)",
+      "Bash(node -c:*)",
+      "Bash(# Let''s check the NEF file to understand what previews are available /opt/homebrew/bin/exiftool -a -G -s \"\"/Users/federicopasinetti/Desktop/AI_Tech_Projects/racetagger_sample/ACI-Weekend/E4/Z8P_5241.NEF\"\")",
+      "Bash(# Check the raw-preview-extractor module to understand how it chooses previews ls -la node_modules/raw-preview-extractor/)"
     ],
     "deny": [],
     "ask": []

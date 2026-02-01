@@ -105,6 +105,38 @@ class ResultsPageManager {
 
       subtitle.textContent = `${projectName} • ${totalImages} ${photosText} analyzed`;
     }
+
+    // Add sport category tag immediately (data is available on execution)
+    const category = execution.category ||
+                     execution.execution_settings?.sport_category;
+    if (category) {
+      const tagsContainer = document.getElementById('results-info-tags');
+      if (tagsContainer) {
+        const categoryLabel = category.charAt(0).toUpperCase() + category.slice(1);
+        tagsContainer.innerHTML = `
+          <span class="results-info-tag results-info-tag--category">
+            <span class="results-info-tag__label">Category</span>
+            <span class="results-info-tag__value">${categoryLabel}</span>
+          </span>
+        `;
+      }
+    }
+  }
+
+  /**
+   * Update header with preset name after log visualizer loads it
+   */
+  updateHeaderPresetTag(presetName) {
+    const tagsContainer = document.getElementById('results-info-tags');
+    if (!tagsContainer || !presetName) return;
+
+    const presetTag = document.createElement('span');
+    presetTag.className = 'results-info-tag results-info-tag--preset';
+    presetTag.innerHTML = `
+      <span class="results-info-tag__label">Preset</span>
+      <span class="results-info-tag__value">${presetName}</span>
+    `;
+    tagsContainer.appendChild(presetTag);
   }
 
   /**
@@ -206,6 +238,8 @@ class ResultsPageManager {
           compressedPath: (localPaths.compressedPath && localPaths.compressedPath !== 'null') ? localPaths.compressedPath : entry.supabaseUrl,
           thumbnailPath: (localPaths.thumbnailPath && localPaths.thumbnailPath !== 'null') ? localPaths.thumbnailPath : entry.supabaseUrl,
           microThumbPath: (localPaths.microThumbPath && localPaths.microThumbPath !== 'null') ? localPaths.microThumbPath : entry.supabaseUrl,
+          metadataWritten: entry.metadataWritten !== undefined ? entry.metadataWritten : true,
+          metadataSkipReason: entry.metadataSkipReason || null,
           timestamp: entry.timestamp
         });
       }
@@ -311,6 +345,11 @@ class ResultsPageManager {
 
     // Inizializza con i risultati (pass execution object for folder organization check)
     await this.logVisualizer.init(this.executionId, this.results, this.execution);
+
+    // Update header with preset name (loaded during init)
+    if (this.logVisualizer.participantPresetData?.name) {
+      this.updateHeaderPresetTag(this.logVisualizer.participantPresetData.name);
+    }
 
     // Render the dashboard
     this.logVisualizer.render('#log-visualizer-container');

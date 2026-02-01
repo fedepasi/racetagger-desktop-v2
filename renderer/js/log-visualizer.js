@@ -12,6 +12,7 @@ class LogVisualizer {
     this.filteredResults = [];
     this.currentImageIndex = 0;
     this.isGalleryOpen = false;
+    this.zoomController = null;
     this.manualCorrections = new Map(); // Track manual corrections
 
     // Auto-save properties
@@ -254,33 +255,6 @@ class LogVisualizer {
   createDashboardHTML() {
     return `
       <div id="log-visualizer-container" class="log-visualizer">
-        <!-- Header with statistics and filters -->
-        <div class="lv-header">
-          <div class="lv-header-title">
-            <h3>📊 Analysis Results</h3>
-            <p class="lv-subtitle">Review and edit recognition results</p>
-          </div>
-
-          <div class="lv-stats">
-            <div class="lv-stat-item">
-              <span class="lv-stat-label">Total Images</span>
-              <span class="lv-stat-value" id="lv-total">0</span>
-            </div>
-            <div class="lv-stat-item">
-              <span class="lv-stat-label">Matched</span>
-              <span class="lv-stat-value" id="lv-matched">0</span>
-            </div>
-            <div class="lv-stat-item">
-              <span class="lv-stat-label">No Match</span>
-              <span class="lv-stat-value" id="lv-no-match">0</span>
-            </div>
-            <div class="lv-stat-item">
-              <span class="lv-stat-label">Manual Corrections</span>
-              <span class="lv-stat-value" id="lv-corrections">0</span>
-            </div>
-          </div>
-        </div>
-
         <!-- Filters and search -->
         <div class="lv-filters">
           <div class="lv-search-container">
@@ -296,6 +270,7 @@ class LogVisualizer {
               <option value="corrected">Manually Corrected</option>
               <option value="high-confidence">High Confidence (>90%)</option>
               <option value="low-confidence">Low Confidence (<70%)</option>
+              <option value="no-metadata">No Metadata Written</option>
             </select>
 
             <button id="lv-clear-filters" class="lv-clear-btn">Clear Filters</button>
@@ -494,12 +469,23 @@ class LogVisualizer {
     if (prevBtn) prevBtn.addEventListener('click', () => this.navigateGallery(-1));
     if (nextBtn) nextBtn.addEventListener('click', () => this.navigateGallery(1));
 
+    // Zoom controller
+    this.zoomController = new GalleryZoomController();
+    const zoomImg = document.getElementById('lv-gallery-img');
+    const zoomContainer = document.querySelector('.lv-gallery-image-container');
+    if (zoomImg && zoomContainer) this.zoomController.attach(zoomImg, zoomContainer);
+
     // Keyboard navigation
     document.addEventListener('keydown', (e) => {
       if (!this.isGalleryOpen) return;
 
       const isInputFocused = document.activeElement &&
         ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
+
+      if (!isInputFocused && this.zoomController && this.zoomController.handleKeyDown(e)) {
+        e.preventDefault();
+        return;
+      }
 
       switch (e.key) {
         case 'Escape':
@@ -1214,6 +1200,7 @@ class LogVisualizer {
                class="lv-lazy-image"
                style="${cachedImageUrl ? 'opacity: 1;' : ''}" />
           ${isModified ? '<div class="lv-modified-badge">✏️ Modified</div>' : ''}
+          ${result.metadataWritten === false ? '<div class="lv-no-metadata-badge">No metadata</div>' : ''}
           ${vehicles.length > 1 ? `<div class="lv-multi-badge">${vehicles.length} vehicles</div>` : ''}
         </div>
 
@@ -1488,6 +1475,7 @@ class LogVisualizer {
    */
   async closeGallery() {
     this.isGalleryOpen = false;
+    if (this.zoomController) this.zoomController.reset(false);
 
     // Handle unsaved changes before closing
     if (this.hasUnsavedChanges) {
@@ -1540,6 +1528,7 @@ class LogVisualizer {
    * Navigate gallery by offset
    */
   async navigateGallery(offset) {
+    if (this.zoomController) this.zoomController.reset(false);
     const newIndex = this.currentImageIndex + offset;
 
     if (newIndex >= 0 && newIndex < this.filteredResults.length) {
@@ -1825,6 +1814,33 @@ class LogVisualizer {
           break;
       }
     });
+
+    // Autocomplete: auto-fill other fields when Race Number or Driver is selected from preset
+    if (this.presetParticipants && this.presetParticipants.length > 0) {
+      newContainer.addEventListener('input', (event) => {
+        const input = event.target;
+        if (!input.classList.contains('lv-autocomplete-input')) return;
+
+        const field = input.dataset.field;
+        const value = input.value.trim();
+        if (!value) return;
+
+        const vehicleEditor = input.closest('.lv-vehicle-editor');
+        if (!vehicleEditor) return;
+
+        if (field === 'raceNumber') {
+          const participant = this.findParticipantByNumber(value);
+          if (participant) {
+            this.autoFillFromParticipant(vehicleEditor, participant, 'raceNumber');
+          }
+        } else if (field === 'drivers') {
+          const participant = this.findParticipantByName(value);
+          if (participant) {
+            this.autoFillFromParticipant(vehicleEditor, participant, 'drivers');
+          }
+        }
+      });
+    }
   }
 
   /**
@@ -1833,57 +1849,39 @@ class LogVisualizer {
   createVehicleEditorHTML(vehicle, vehicleIndex, fileName, imageIndex) {
     const isModified = this.manualCorrections.has(`${fileName}_${vehicleIndex}`);
 
-    // Generate unique IDs for datalists
-    const raceNumberListId = `racenumber-list-${fileName}-${vehicleIndex}`;
-    const teamListId = `team-list-${fileName}-${vehicleIndex}`;
-    const driverListId = `driver-list-${fileName}-${vehicleIndex}`;
-
-    // Build datalist options if preset data is available
     const hasPresetData = this.presetParticipants && this.presetParticipants.length > 0;
 
+    // Build datalist options for Race Number and Drivers if preset data is available
+    const raceNumberListId = `racenumber-list-${fileName}-${vehicleIndex}`;
+    const driverListId = `driver-list-${fileName}-${vehicleIndex}`;
+
     let raceNumberOptions = '';
-    let teamOptions = '';
     let driverOptions = '';
 
     if (hasPresetData) {
-      // Create unique sets for each field to avoid duplicates
-      const raceNumbers = new Set();
-      const teams = new Set();
-      const drivers = new Set();
+      // Race Number datalist: value=numero, hint text shows nome + squadra
+      raceNumberOptions = this.presetParticipants
+        .filter(p => p.numero)
+        .map(p => {
+          const hint = [p.nome, p.squadra].filter(Boolean).join(' - ');
+          return `<option value="${this.escapeHtml(p.numero)}">${this.escapeHtml(hint)}</option>`;
+        }).join('');
 
-      this.presetParticipants.forEach(participant => {
-        // Race numbers
-        if (participant.numero) {
-          raceNumbers.add(participant.numero);
-        }
-
-        // Teams
-        if (participant.squadra) {
-          teams.add(participant.squadra);
-        }
-
-        // Drivers/Names
-        if (participant.nome) {
-          drivers.add(participant.nome);
-        }
-        // Support for navigatore field (rally)
-        if (participant.navigatore) {
-          drivers.add(participant.navigatore);
-        }
+      // Drivers datalist: value=driver_name, hint text shows #numero + squadra
+      // Drivers are stored in preset_participant_drivers array, fallback to nome field
+      const driverEntries = [];
+      const seenNames = new Set();
+      this.presetParticipants.forEach(p => {
+        const driverNames = this.getDriverNamesFromParticipant(p);
+        driverNames.forEach(name => {
+          if (!seenNames.has(name)) {
+            seenNames.add(name);
+            const hint = [`#${p.numero || '?'}`, p.squadra].filter(Boolean).join(' - ');
+            driverEntries.push(`<option value="${this.escapeHtml(name)}">${this.escapeHtml(hint)}</option>`);
+          }
+        });
       });
-
-      // Build options HTML
-      raceNumberOptions = Array.from(raceNumbers).map(num =>
-        `<option value="${this.escapeHtml(num)}">`
-      ).join('');
-
-      teamOptions = Array.from(teams).map(team =>
-        `<option value="${this.escapeHtml(team)}">`
-      ).join('');
-
-      driverOptions = Array.from(drivers).map(driver =>
-        `<option value="${this.escapeHtml(driver)}">`
-      ).join('');
+      driverOptions = driverEntries.join('');
     }
 
     return `
@@ -1899,7 +1897,7 @@ class LogVisualizer {
           <div class="lv-field-group">
             <label>Race Number:</label>
             <input type="text"
-                   class="lv-edit-input lv-autocomplete-input"
+                   class="lv-edit-input${hasPresetData ? ' lv-autocomplete-input' : ''}"
                    data-field="raceNumber"
                    value="${vehicle.raceNumber || ''}"
                    placeholder="Enter number..."
@@ -1911,19 +1909,17 @@ class LogVisualizer {
           <div class="lv-field-group">
             <label>Team:</label>
             <input type="text"
-                   class="lv-edit-input lv-autocomplete-input"
+                   class="lv-edit-input"
                    data-field="team"
                    value="${vehicle.team || ''}"
                    placeholder="Enter team name..."
-                   ${hasPresetData ? `list="${teamListId}"` : ''}
                    autocomplete="off" />
-            ${hasPresetData ? `<datalist id="${teamListId}">${teamOptions}</datalist>` : ''}
           </div>
 
           <div class="lv-field-group">
             <label>Drivers:</label>
             <input type="text"
-                   class="lv-edit-input lv-autocomplete-input"
+                   class="lv-edit-input${hasPresetData ? ' lv-autocomplete-input' : ''}"
                    data-field="drivers"
                    value="${(vehicle.drivers || []).join(', ')}"
                    placeholder="Enter driver names..."
@@ -2406,6 +2402,78 @@ class LogVisualizer {
       "'": '&#039;'
     };
     return text.toString().replace(/[&<>"']/g, m => map[m]);
+  }
+
+  /**
+   * Extract driver names from a participant object.
+   * Uses preset_participant_drivers array (sorted by driver_order) if available,
+   * falls back to parsing the nome field (comma-separated).
+   */
+  getDriverNamesFromParticipant(participant) {
+    if (participant.preset_participant_drivers && Array.isArray(participant.preset_participant_drivers) && participant.preset_participant_drivers.length > 0) {
+      return [...participant.preset_participant_drivers]
+        .sort((a, b) => (a.driver_order || 0) - (b.driver_order || 0))
+        .map(d => d.driver_name)
+        .filter(Boolean);
+    }
+    // Fallback: parse nome field
+    const nome = participant.nome || participant.nome_pilota || '';
+    if (!nome) return [];
+    return nome.split(',').map(s => s.trim()).filter(Boolean);
+  }
+
+  /**
+   * Find a participant from preset by race number (exact match)
+   */
+  findParticipantByNumber(numero) {
+    if (!this.presetParticipants || !numero) return null;
+    return this.presetParticipants.find(p =>
+      p.numero && p.numero.toString().trim() === numero.toString().trim()
+    ) || null;
+  }
+
+  /**
+   * Find a participant from preset by driver name (exact match)
+   */
+  findParticipantByName(name) {
+    if (!this.presetParticipants || !name) return null;
+    const nameLower = name.toLowerCase().trim();
+    return this.presetParticipants.find(p => {
+      const driverNames = this.getDriverNamesFromParticipant(p);
+      return driverNames.some(d => d.toLowerCase().trim() === nameLower);
+    }) || null;
+  }
+
+  /**
+   * Auto-fill Team and Drivers (or Race Number) from a matched participant.
+   * sourceField indicates which field triggered the match so we skip overwriting it.
+   */
+  autoFillFromParticipant(vehicleEditor, participant, sourceField) {
+    if (sourceField !== 'raceNumber') {
+      const raceInput = vehicleEditor.querySelector('[data-field="raceNumber"]');
+      if (raceInput && participant.numero) {
+        raceInput.value = participant.numero;
+      }
+    }
+
+    if (sourceField !== 'team') {
+      const teamInput = vehicleEditor.querySelector('[data-field="team"]');
+      if (teamInput && participant.squadra) {
+        teamInput.value = participant.squadra;
+      }
+    }
+
+    if (sourceField !== 'drivers') {
+      const driversInput = vehicleEditor.querySelector('[data-field="drivers"]');
+      if (driversInput) {
+        const names = this.getDriverNamesFromParticipant(participant).join(', ');
+        if (names) {
+          driversInput.value = names;
+        }
+      }
+    }
+
+    console.log(`[LogVisualizer] Auto-filled from preset: #${participant.numero} → ${this.getDriverNamesFromParticipant(participant).join(', ')} / ${participant.squadra || ''}`);
   }
 
   /**

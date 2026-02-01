@@ -97,6 +97,9 @@ export interface UnifiedProcessingResult {
   sceneSkipped?: boolean; // True if AI analysis was skipped due to scene classification
   // Face Recognition
   faceRecognitionUsed?: boolean; // True if face recognition was used for identification
+  // Metadata writing status
+  metadataWritten?: boolean;
+  metadataSkipReason?: 'no_keywords' | 'no_preset_match';
   // Pending database update (passed from worker to processor for batch flushing)
   pendingUpdate?: {
     imageId: string;
@@ -3152,11 +3155,20 @@ class UnifiedImageWorker extends EventEmitter {
 
       // Fase 5: Scrittura dei metadata (XMP per RAW, IPTC per JPEG) con dual-mode system
       phaseStart = Date.now();
+      const hasKeywords = processedAnalysis.keywords && processedAnalysis.keywords.length > 0;
       await this.writeMetadata(imageFile, processedAnalysis.keywords, uploadReadyPath, processedAnalysis.analysis, processedAnalysis.csvMatch);
       timing['8_writeMetadata'] = Date.now() - phaseStart;
 
       // Folder organization removed from pipeline - now a post-analysis action
       const organizedPath: string | undefined = undefined;
+
+      // Enrich JSONL event with metadata writing status
+      if (imageAnalysisEvent) {
+        imageAnalysisEvent.metadataWritten = !!hasKeywords;
+        if (!hasKeywords) {
+          imageAnalysisEvent.metadataSkipReason = this.participantsData.length > 0 ? 'no_preset_match' : 'no_keywords';
+        }
+      }
 
       // Log to JSONL file
       if (imageAnalysisEvent && this.analysisLogger) {
@@ -3195,6 +3207,11 @@ class UnifiedImageWorker extends EventEmitter {
         // Scene Classification info
         sceneCategory: sceneClassification?.category,
         sceneConfidence: sceneClassification?.confidence,
+        // Metadata writing status
+        metadataWritten: !!hasKeywords,
+        metadataSkipReason: !hasKeywords
+          ? (this.participantsData.length > 0 ? 'no_preset_match' : 'no_keywords')
+          : undefined,
         // Pending database update (returned to processor for batch flushing)
         pendingUpdate: pendingUpdateData
       };
@@ -3253,6 +3270,29 @@ class UnifiedImageWorker extends EventEmitter {
 
         if (!previewResult.success || !previewResult.data) {
           throw new Error(previewResult.error || 'Preview extraction failed');
+        }
+
+        // DIAGNOSTIC: Log RAW preview extraction quality
+        {
+          const previewSizeKB = Math.round(previewResult.data.length / 1024);
+          const previewW = previewResult.width || 0;
+          const previewH = previewResult.height || 0;
+          const method = previewResult.method || 'unknown';
+          console.log(`[QUALITY-DIAG] 📸 RAW Preview Extracted: ${imageFile.fileName}`);
+          console.log(`[QUALITY-DIAG]   Method: ${method}`);
+          console.log(`[QUALITY-DIAG]   Preview size: ${previewSizeKB}KB`);
+          console.log(`[QUALITY-DIAG]   Preview dimensions: ${previewW}x${previewH}`);
+          console.log(`[QUALITY-DIAG]   Extraction time: ${previewResult.extractionTimeMs}ms`);
+
+          // Also get actual dimensions from the buffer using sharp
+          try {
+            const diagProcessor = await createImageProcessor(previewResult.data);
+            const diagMeta = await diagProcessor.metadata();
+            console.log(`[QUALITY-DIAG]   Sharp-detected dimensions: ${diagMeta.width}x${diagMeta.height}`);
+            console.log(`[QUALITY-DIAG]   Format: ${diagMeta.format}`);
+          } catch (diagErr) {
+            console.log(`[QUALITY-DIAG]   Could not read preview metadata: ${diagErr}`);
+          }
         }
 
         // Salva la preview estratta come file temporaneo JPEG
@@ -3356,6 +3396,15 @@ class UnifiedImageWorker extends EventEmitter {
     const estimatedQuality = Math.round((maxSizeBytes / (megapixels * 10000)) * 100);
     const initialQuality = Math.max(30, Math.min(95, estimatedQuality));
 
+    // DIAGNOSTIC: Log compression parameters
+    console.log(`[QUALITY-DIAG] 🗜️ Compression starting: ${fileName}`);
+    console.log(`[QUALITY-DIAG]   Original dimensions: ${originalWidth}x${originalHeight}`);
+    console.log(`[QUALITY-DIAG]   Target dimensions: ${targetWidth}x${targetHeight} (maxDim=${maxDim})`);
+    console.log(`[QUALITY-DIAG]   Input file size: ${Math.round(imageBuffer.length / 1024)}KB`);
+    console.log(`[QUALITY-DIAG]   Target max size: ${Math.round(maxSizeBytes / 1024)}KB`);
+    console.log(`[QUALITY-DIAG]   Megapixels: ${megapixels.toFixed(2)}MP`);
+    console.log(`[QUALITY-DIAG]   Predicted quality: ${initialQuality}% (raw estimate: ${estimatedQuality}%)`);
+
     let compressedBuffer: Buffer;
     let compressionAttempts = 0;
 
@@ -3376,8 +3425,12 @@ class UnifiedImageWorker extends EventEmitter {
 
       compressionAttempts++;
 
+      // DIAGNOSTIC: Log first compression result
+      console.log(`[QUALITY-DIAG]   First pass result: ${Math.round(compressedBuffer.length / 1024)}KB at quality ${initialQuality}%`);
+
       // If predictive compression overshot, fallback to binary search
       if (compressedBuffer.length > maxSizeBytes) {
+        console.log(`[QUALITY-DIAG]   ⚠️ OVERSHOT! ${Math.round(compressedBuffer.length / 1024)}KB > ${Math.round(maxSizeBytes / 1024)}KB - entering binary search`);
         compressedBuffer = await this.compressWithBinarySearch(
           imageBuffer,
           maxSizeBytes,
@@ -3404,6 +3457,18 @@ class UnifiedImageWorker extends EventEmitter {
     } catch (error) {
       console.error(`[UnifiedWorker] Failed to write compressed file for ${fileName}:`, error);
       throw new Error(`Failed to save compressed image: ${error}`);
+    }
+
+    // DIAGNOSTIC: Log final compression result
+    {
+      try {
+        const finalProcessor = await createImageProcessor(compressedBuffer);
+        const finalMeta = await finalProcessor.metadata();
+        console.log(`[QUALITY-DIAG]   ✅ Final compressed: ${Math.round(compressedBuffer.length / 1024)}KB, ${finalMeta.width}x${finalMeta.height}`);
+        console.log(`[QUALITY-DIAG]   This is what Gemini receives (as base64)`);
+      } catch (e) {
+        console.log(`[QUALITY-DIAG]   ✅ Final compressed: ${Math.round(compressedBuffer.length / 1024)}KB`);
+      }
     }
 
     return {
@@ -3993,6 +4058,7 @@ class UnifiedImageWorker extends EventEmitter {
    */
   private async writeMetadata(imageFile: UnifiedImageFile, keywords: string[] | null, processedImagePath: string, analysis?: any[], csvMatch?: any): Promise<void> {
     if (!keywords || keywords.length === 0) {
+      console.warn(`[MetadataWriter] No keywords for ${imageFile.fileName} - metadata not written`);
       return;
     }
 
@@ -4467,7 +4533,8 @@ class UnifiedImageWorker extends EventEmitter {
     const hasNoValidMatches = validMatches.length === 0;
 
     if (isUsingParticipantPreset && hasNoValidMatches) {
-      return null; // Don't write any metadata when using preset but no matches found
+      console.warn(`[buildMetatag] Participant preset active but no matches found - metadata not written`);
+      return null;
     }
 
     // Enhanced metadata building for preset participants (multi-vehicle support)
@@ -5758,6 +5825,7 @@ export class UnifiedImageProcessor extends EventEmitter {
               maxImageSizeKB: this.config.maxImageSizeKB,
               category: this.config.category,
               hasParticipantPreset: !!(this.config.participantPresetData && this.config.participantPresetData.length > 0),
+              participantPresetId: this.config.presetId || null,
               participantCount: this.config.participantPresetData?.length || 0,
               folderOrganizationEnabled: !!this.config.folderOrganization?.enabled,
               enableAdvancedAnnotations: this.config.enableAdvancedAnnotations,

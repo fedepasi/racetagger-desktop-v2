@@ -88,7 +88,7 @@
 
 .consent-details-list li {
   margin-bottom: var(--spacing-xs);
-  color: var(--text-secondary);
+  color: #374151;
   font-size: 13px;
   line-height: 1.5;
 }
@@ -159,10 +159,11 @@
 .settings-page .info-box .info-text {
   font-size: 13px;
   line-height: 1.6;
+  color: #1f2937;
 }
 
 .settings-page .info-box .info-text strong {
-  color: var(--text-primary);
+  color: #111827;
 }
 
 /* ================================

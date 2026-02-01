@@ -12,24 +12,46 @@
   <div class="results-page">
     <!-- Header -->
     <div class="results-header">
-      <div class="results-title">
-        <div class="results-breadcrumb">
-          <span>🏠 Main</span>
-          <span>→</span>
-          <span>📊 Results</span>
-          <span id="execution-badge"></span>
+      <div class="results-header-top">
+        <div class="results-title">
+          <div class="results-breadcrumb">
+            <span>🏠 Main</span>
+            <span>→</span>
+            <span>📊 Results</span>
+            <span id="execution-badge"></span>
+          </div>
+          <h1 id="results-title">Analysis Complete!</h1>
+          <p class="results-subtitle" id="results-subtitle">Loading execution data...</p>
+          <div class="results-info-tags" id="results-info-tags"></div>
         </div>
-        <h1 id="results-title">Analysis Complete!</h1>
-        <p class="results-subtitle" id="results-subtitle">Loading execution data...</p>
+
+        <div class="results-actions">
+          <button id="btn-done" class="btn-done">
+            ✅ DONE!
+          </button>
+          <button id="btn-new-analysis" class="btn-new-analysis">
+            ✨ Start New Analysis
+          </button>
+        </div>
       </div>
 
-      <div class="results-actions">
-        <button id="btn-done" class="btn-done">
-          ✅ DONE!
-        </button>
-        <button id="btn-new-analysis" class="btn-new-analysis">
-          ✨ Start New Analysis
-        </button>
+      <div class="results-stats" id="results-stats">
+        <div class="results-stat-item">
+          <span class="results-stat-value" id="lv-total">0</span>
+          <span class="results-stat-label">Total Images</span>
+        </div>
+        <div class="results-stat-item results-stat-item--success">
+          <span class="results-stat-value" id="lv-matched">0</span>
+          <span class="results-stat-label">Matched</span>
+        </div>
+        <div class="results-stat-item results-stat-item--warning">
+          <span class="results-stat-value" id="lv-no-match">0</span>
+          <span class="results-stat-label">No Match</span>
+        </div>
+        <div class="results-stat-item results-stat-item--info">
+          <span class="results-stat-value" id="lv-corrections">0</span>
+          <span class="results-stat-label">Corrections</span>
+        </div>
       </div>
     </div>
 
@@ -65,6 +87,7 @@
     </div>
   </div>
 
+  <script src="js/gallery-zoom.js"></script>
   <script src="js/log-visualizer.js"></script>
   <script src="js/results-page.js"></script>
 

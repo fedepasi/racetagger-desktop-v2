@@ -60,6 +60,7 @@ function loadLastAnalysisSettings() {
     // Apply basic settings
     applyModelSetting(settings.model);
     applyCategorySetting(settings.category);
+    applyPresetSetting(settings.presetId);
 
     // Apply folder organization settings
     if (settings.folderOrganization) {
@@ -217,6 +218,37 @@ function applyCategorySetting(category) {
     const event = new Event('change', { bubbles: true });
     categorySelect.dispatchEvent(event);
   }
+}
+
+function applyPresetSetting(presetId) {
+  if (!presetId) return;
+
+  const presetSelect = document.getElementById('preset-select');
+  if (!presetSelect) return;
+
+  // The preset options are populated asynchronously after category loads.
+  // Poll until the option is available (max ~3s).
+  let attempts = 0;
+  const maxAttempts = 30;
+
+  const tryApply = () => {
+    const option = presetSelect.querySelector(`option[value="${presetId}"]`);
+    if (option) {
+      presetSelect.value = presetId;
+      const event = new Event('change', { bubbles: true });
+      presetSelect.dispatchEvent(event);
+      console.log('[LastAnalysisSettings] Preset restored:', presetId);
+      return;
+    }
+    attempts++;
+    if (attempts < maxAttempts) {
+      setTimeout(tryApply, 100);
+    } else {
+      console.warn('[LastAnalysisSettings] Preset option not found after polling:', presetId);
+    }
+  };
+
+  tryApply();
 }
 
 function applyFolderOrganizationSettings(settings) {

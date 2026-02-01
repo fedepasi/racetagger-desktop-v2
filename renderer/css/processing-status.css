@@ -1085,6 +1085,21 @@
   font-weight: 600;
 }
 
+.lv-no-metadata-badge {
+  position: absolute;
+  top: var(--spacing-xs);
+  left: var(--spacing-xs);
+  background: var(--accent-danger, #ef4444);
+  color: white;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-radius: var(--border-radius-sm);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  opacity: 0.9;
+}
+
 .lv-multi-badge {
   position: absolute;
   bottom: var(--spacing-xs);
@@ -1342,7 +1357,8 @@
   border-radius: var(--border-radius-sm);
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
   transition: opacity 0.2s ease-in-out;
-  will-change: opacity;
+  will-change: opacity, transform;
+  transform-origin: 0 0;
 }
 
 .lv-gallery-loading {
@@ -1695,6 +1711,104 @@
   }
 }
 
+/* ── Gallery Zoom Controls ──────────────────────────────────── */
+
+.lv-zoom-controls {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.lv-gallery-image-container:hover .lv-zoom-controls,
+.lv-gallery-image-container.lv-zoomed .lv-zoom-controls {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.lv-zoom-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.85);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  padding: 0;
+}
+
+.lv-zoom-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
+.lv-zoom-btn:active {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.lv-zoom-indicator {
+  min-width: 48px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace;
+  color: rgba(255, 255, 255, 0.85);
+  user-select: none;
+}
+
+/* Cursor states for zoom/pan */
+.lv-gallery-image-container .lv-gallery-image {
+  cursor: zoom-in;
+}
+
+.lv-gallery-image-container.lv-zoomed .lv-gallery-image {
+  cursor: grab;
+}
+
+.lv-gallery-image-container.lv-grabbing .lv-gallery-image {
+  cursor: grabbing;
+}
+
+/* Disable nav button pointer-events while panning */
+.lv-gallery-image-container.lv-grabbing .lv-gallery-nav {
+  pointer-events: none;
+}
+
+@media (max-width: 768px) {
+  .lv-zoom-controls {
+    bottom: 8px;
+    padding: 2px 6px;
+    gap: 2px;
+  }
+
+  .lv-zoom-btn {
+    width: 28px;
+    height: 28px;
+  }
+
+  .lv-zoom-indicator {
+    min-width: 40px;
+    font-size: 11px;
+  }
+}
+
 /* Dark mode enhancements */
 @media (prefers-color-scheme: dark) {
   .lv-gallery-modal {
@@ -1707,5 +1821,10 @@
 
   .lv-gallery-image img {
     opacity: 0.98;
+  }
+
+  .lv-zoom-controls {
+    background: rgba(0, 0, 0, 0.75);
+    border-color: rgba(255, 255, 255, 0.15);
   }
 }
