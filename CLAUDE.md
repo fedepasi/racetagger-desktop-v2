@@ -244,6 +244,53 @@ Professional Electron desktop application for AI-powered race number detection i
 - Tracked in `execution_settings` table
 - Separate from Gemini token usage
 
+## Face Recognition (DISABLED - Coming Soon)
+
+**Status:** UI shows styled "Coming Soon" state with blurred preview. All JS logic disabled. Models not loaded.
+
+**What was done to disable it (3 layers):**
+
+1. **HTML** (`renderer/pages/participants.html`)
+   - Class `driver-face-section--disabled` on `#driver-face-section`
+   - Header uses `.column-header.face-column` + `.column-badge.badge-face` (same pattern as the 3 columns above)
+   - Added `.coming-soon-wrapper` with absolute overlay (lock icon SVG + message)
+   - Added `.coming-soon-preview` with fake blurred driver panels underneath
+   - Real `#driver-panels-container` and `#driver-panels-empty-state` hidden (`display: none`)
+   - Removed the `driver-face-info` help box
+
+2. **CSS** (`renderer/css/participants.css`)
+   - `.column-header.face-column` - grey gradient header, matching other column headers
+   - `.badge-face` - grey badge (matching `.badge-written`, `.badge-matching`, `.badge-folder` pattern)
+   - `.coming-soon-overlay-abs` - absolute positioned, `backdrop-filter: blur(3px)`, blocks all clicks
+   - `.coming-soon-preview` - fake panels at `opacity: 0.5` + `grayscale(60%)`
+   - Preview panels mimic real driver panel structure (header + 5 photo slots)
+   - Dark mode variants for all new styles
+
+3. **JavaScript** (2 files with `FACE_RECOGNITION_ENABLED = false` flag)
+   - `renderer/js/face-detector.js` - Skips face-api.js model loading (~50-100MB RAM saved)
+   - `renderer/js/driver-face-manager.js` - `load()`, `syncDrivers()`, `render()` are all no-ops
+   - Classes/functions still exported on `window` to prevent errors in other modules
+
+**How to re-enable (checklist):**
+
+1. `renderer/js/face-detector.js` - Set `FACE_RECOGNITION_ENABLED = true`
+2. `renderer/js/driver-face-manager.js` - Set `FACE_RECOGNITION_ENABLED = true`
+3. `renderer/pages/participants.html`:
+   - Remove class `driver-face-section--disabled` from `#driver-face-section`
+   - Replace `.column-header.face-column` block with original `.section-title` + `.section-description`
+   - Change `.badge-face` / `COMING SOON` back to `.badge-beta` / `BETA`
+   - Remove the entire `.coming-soon-wrapper` div (overlay + preview)
+   - Restore `#driver-panels-empty-state` to `style="display: block;"`
+   - Restore `#driver-panels-container` to `style="display: none;"`
+   - Restore the `driver-face-info` help box (was removed)
+4. CSS can be left in place (no effect without disabled class/wrapper)
+
+**Related files (full feature, untouched):**
+- `renderer/js/face-recognition-ui.js` - Match badges and recognition service
+- `renderer/js/preset-face-manager.js` - Photo upload/management (up to 5 per driver)
+- `src/ipc/face-recognition-handlers.ts` - IPC handlers (6 handlers)
+- `src/preload.ts` - Exposed APIs (face-recognition-*, preset-face-*, preset-driver-*)
+
 ## Analysis Logging System
 
 **Purpose:** Track corrections and decisions during analysis

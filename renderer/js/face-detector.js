@@ -429,6 +429,15 @@ function setupFaceDetectionIPC() {
 // ============================================
 
 function initFaceDetector() {
+  // Face recognition is disabled (coming soon) - skip model loading to save memory
+  const FACE_RECOGNITION_ENABLED = false;
+
+  if (!FACE_RECOGNITION_ENABLED) {
+    console.log('[FaceDetector] Face recognition disabled (coming soon) - skipping model initialization');
+    // Still export the class/functions so nothing breaks, but don't load models
+    return null;
+  }
+
   const detector = getFaceDetector();
   setupFaceDetectionIPC();
 

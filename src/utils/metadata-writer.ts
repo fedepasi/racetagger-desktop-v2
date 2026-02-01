@@ -1,5 +1,21 @@
 import * as path from 'path';
 import { nativeToolManager } from './native-tool-manager';
+import { createXmpSidecar } from './xmp-manager';
+
+/**
+ * Known RAW file extensions. For these formats, metadata must be written
+ * to an XMP sidecar file instead of directly to the image to avoid
+ * overwriting pre-existing metadata (color labels, copyright, etc.).
+ */
+const RAW_EXTENSIONS = new Set(['nef', 'arw', 'cr2', 'cr3', 'orf', 'raw', 'rw2', 'dng']);
+
+/**
+ * Checks whether a file is a RAW image based on its extension.
+ */
+function isRawFile(filePath: string): boolean {
+  const ext = path.extname(filePath).toLowerCase().replace('.', '');
+  return RAW_EXTENSIONS.has(ext);
+}
 
 /**
  * Reads existing IPTC keywords from an image file using ExifTool.
@@ -153,6 +169,12 @@ export async function writeKeywordsToImage(imagePath: string, keywords: string[]
       filteredNewKeywords = simplifyKeywords(filteredNewKeywords);
     }
 
+    // RAW files: write to XMP sidecar instead of directly to the file
+    if (isRawFile(imagePath)) {
+      await createXmpSidecar(imagePath, filteredNewKeywords);
+      return;
+    }
+
     // Build ExifTool arguments based on mode
     // CRITICAL: Preserve all existing metadata while writing keywords
     // -overwrite_original: Modifies the file in place, without creating a backup
@@ -210,6 +232,13 @@ export async function writeKeywordsToImage(imagePath: string, keywords: string[]
 export async function writeSpecialInstructions(imagePath: string, raceData: string): Promise<void> {
   try {
     if (!raceData || raceData.trim().length === 0) {
+      return;
+    }
+
+    // RAW files: write to XMP sidecar instead of directly to the file
+    if (isRawFile(imagePath)) {
+      const formattedData = `RaceTagger: ${raceData.trim()}`;
+      await createXmpSidecar(imagePath, ['racetagger'], formattedData);
       return;
     }
 
@@ -273,6 +302,12 @@ export async function writeExtendedDescription(imagePath: string, raceData: stri
       return;
     }
 
+    // RAW files: write to XMP sidecar instead of directly to the file
+    if (isRawFile(imagePath)) {
+      await createXmpSidecar(imagePath, ['racetagger'], raceData.trim());
+      return;
+    }
+
     let finalDescription: string;
 
     if (mode === 'overwrite') {
@@ -333,6 +368,12 @@ export async function writePersonInImage(
     // Filter empty names
     const filteredNames = names.filter(n => n && n.trim().length > 0);
     if (filteredNames.length === 0) {
+      return;
+    }
+
+    // RAW files: write to XMP sidecar instead of directly to the file
+    if (isRawFile(imagePath)) {
+      await createXmpSidecar(imagePath, filteredNames);
       return;
     }
 
@@ -474,6 +515,27 @@ export async function writeFullMetadata(
   metadata: ExportDestinationMetadata
 ): Promise<void> {
   try {
+    // RAW files: write to XMP sidecar instead of directly to the file
+    if (isRawFile(imagePath)) {
+      // Collect keywords and description for XMP sidecar
+      const sidecarKeywords: string[] = [];
+      if (metadata.keywords && metadata.keywords.length > 0) {
+        sidecarKeywords.push(...metadata.keywords.filter(k => k && k.trim()));
+      }
+      if (metadata.personShown) {
+        const persons = Array.isArray(metadata.personShown) ? metadata.personShown : [metadata.personShown];
+        sidecarKeywords.push(...persons.filter(p => p && p.trim()));
+      }
+      // Add credit/creator info as keywords for searchability
+      if (metadata.credit) sidecarKeywords.push(metadata.credit);
+      if (metadata.creator) sidecarKeywords.push(metadata.creator);
+      sidecarKeywords.push('racetagger');
+
+      const description = metadata.description || metadata.headline || undefined;
+      await createXmpSidecar(imagePath, sidecarKeywords.length > 0 ? sidecarKeywords : ['racetagger'], description);
+      return;
+    }
+
     const args: string[] = [
       '-overwrite_original',
       '-P', // Preserve file timestamp

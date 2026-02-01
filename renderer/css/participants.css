@@ -1304,6 +1304,11 @@
   border-bottom-color: rgba(59, 130, 246, 0.3);
 }
 
+.column-header.face-column {
+  background: linear-gradient(135deg, rgba(100, 116, 139, 0.15) 0%, rgba(100, 116, 139, 0.05) 100%);
+  border-bottom-color: rgba(100, 116, 139, 0.3);
+}
+
 /* Column Badges */
 .column-badge {
   display: inline-flex;
@@ -1334,6 +1339,12 @@
   background: rgba(59, 130, 246, 0.2);
   color: #3b82f6;
   border: 1px solid rgba(59, 130, 246, 0.4);
+}
+
+.badge-face {
+  background: rgba(100, 116, 139, 0.2);
+  color: #64748b;
+  border: 1px solid rgba(100, 116, 139, 0.4);
 }
 
 .badge-icon {
@@ -1705,6 +1716,15 @@
     color: #60a5fa;
   }
 
+  .badge-face {
+    background: rgba(148, 163, 184, 0.15);
+    color: #94a3b8;
+  }
+
+  .column-header.face-column {
+    background: linear-gradient(135deg, rgba(100, 116, 139, 0.12) 0%, rgba(100, 116, 139, 0.04) 100%);
+  }
+
   .matching-info-box {
     background: rgba(251, 191, 36, 0.06);
     border-color: rgba(251, 191, 36, 0.15);
@@ -1963,6 +1983,138 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
   vertical-align: middle;
+}
+
+/* Badge Coming Soon */
+.badge-coming-soon {
+  display: inline-block;
+  background: linear-gradient(135deg, #64748b 0%, #94a3b8 100%);
+  color: white;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  vertical-align: middle;
+}
+
+/* ============================================
+   Face Recognition - Coming Soon State
+   ============================================ */
+
+/* Wrapper: relative container for the overlay */
+.coming-soon-wrapper {
+  position: relative;
+  border-radius: var(--radius-md, 8px);
+  overflow: hidden;
+  min-height: 200px;
+}
+
+/* Absolute overlay: blocks all interaction */
+.coming-soon-overlay-abs {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  border-radius: var(--radius-md, 8px);
+}
+
+.coming-soon-card {
+  text-align: center;
+  padding: 1.5rem 2rem;
+}
+
+.coming-soon-icon-ring {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--background-gray, #f8fafc);
+  border: 1.5px solid var(--border-color, #e2e8f0);
+  color: var(--text-secondary, #64748b);
+  margin-bottom: 0.75rem;
+}
+
+.coming-soon-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text-primary, #1e293b);
+  margin: 0 0 0.375rem 0;
+}
+
+.coming-soon-text {
+  font-size: 0.8125rem;
+  color: var(--text-secondary, #64748b);
+  margin: 0;
+  max-width: 300px;
+  line-height: 1.5;
+}
+
+/* Blurred preview panels underneath the overlay */
+.coming-soon-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 0.5rem;
+  opacity: 0.5;
+  filter: grayscale(60%);
+}
+
+.preview-driver-panel {
+  background: var(--bg-card, #ffffff);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: var(--radius-md, 8px);
+  padding: 1rem;
+}
+
+.preview-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+}
+
+.preview-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: var(--background-gray, #f8fafc);
+  border: 1px solid var(--border-color, #e2e8f0);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  color: var(--text-secondary, #64748b);
+}
+
+.preview-name {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-secondary, #64748b);
+}
+
+.preview-photos-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 0.5rem;
+}
+
+.preview-photo-slot {
+  aspect-ratio: 1;
+  border-radius: 6px;
+  border: 1.5px dashed var(--border-color, #e2e8f0);
+  background: var(--background-gray, #f8fafc);
 }
 
 /* Face Photos Grid */
@@ -2226,6 +2378,29 @@
 
   .badge-beta {
     background: linear-gradient(135deg, #a78bfa 0%, #818cf8 100%);
+  }
+
+  .badge-coming-soon {
+    background: linear-gradient(135deg, #9ca3af 0%, #d1d5db 100%);
+    color: #1f2937;
+  }
+
+  .coming-soon-overlay-abs {
+    background: rgba(15, 23, 42, 0.75);
+  }
+
+  .coming-soon-icon-ring {
+    background: rgba(51, 65, 85, 0.6);
+    border-color: rgba(148, 163, 184, 0.3);
+    color: #94a3b8;
+  }
+
+  .coming-soon-title {
+    color: #e2e8f0;
+  }
+
+  .coming-soon-text {
+    color: #94a3b8;
   }
 }
 

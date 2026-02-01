@@ -230,22 +230,23 @@ class EnhancedFileBrowser {
     });
     
     // Highlight drop area
-    ['dragenter', 'dragover'].forEach(eventName => {
-      browser.addEventListener(eventName, (e) => {
-        dragCounter++;
-        browser.classList.add('drag-over');
-      }, false);
-    });
-    
-    ['dragleave'].forEach(eventName => {
-      browser.addEventListener(eventName, (e) => {
-        dragCounter--;
-        if (dragCounter <= 0) {
-          browser.classList.remove('drag-over');
-          dragCounter = 0;
-        }
-      }, false);
-    });
+    browser.addEventListener('dragenter', (e) => {
+      dragCounter++;
+      browser.classList.add('drag-over');
+    }, false);
+
+    browser.addEventListener('dragover', (e) => {
+      // Keep visual feedback on dragover but don't increment counter
+      browser.classList.add('drag-over');
+    }, false);
+
+    browser.addEventListener('dragleave', (e) => {
+      dragCounter--;
+      if (dragCounter <= 0) {
+        browser.classList.remove('drag-over');
+        dragCounter = 0;
+      }
+    }, false);
     
     // Handle dropped files
     browser.addEventListener('drop', (e) => {
@@ -995,7 +996,10 @@ class EnhancedFileBrowser {
         selectedFiles: this.selectedFiles, // Include file metadata
         selectedModel: 'gemini-2.5-flash-preview-04-17',
         selectedCategory: window.selectedCategory || 'motorsport',
-        resize: { enabled: true, preset: 'balanced' },
+        resize: {
+          enabled: document.getElementById('resize-enabled')?.checked || false,
+          preset: document.querySelector('[name="resize-preset"]:checked')?.value || 'balanced'
+        },
         // Include participant preset data
         participantPreset: this.selectedPreset ? {
           id: this.selectedPreset.presetId || this.selectedPreset.id,

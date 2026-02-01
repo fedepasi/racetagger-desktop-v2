@@ -11,6 +11,9 @@
  * - Each driver gets their own PresetFaceManager instance
  */
 
+// Feature flag: set to true to re-enable face recognition
+const FACE_RECOGNITION_ENABLED = false;
+
 class DriverFaceManagerMulti {
   constructor() {
     this.currentParticipantId = null;
@@ -45,6 +48,11 @@ class DriverFaceManagerMulti {
    * @param {Array|null} existingDrivers - Existing driver records from DB (optional)
    */
   async load(participantId, presetId, userId, isOfficial, driverNames = [], existingDrivers = null) {
+    if (!FACE_RECOGNITION_ENABLED) {
+      console.log('[DriverFaceManagerMulti] Face recognition disabled (coming soon) - skipping load');
+      return;
+    }
+
     this.currentParticipantId = participantId;
     this.currentPresetId = presetId;
     this.currentUserId = userId;
@@ -93,6 +101,8 @@ class DriverFaceManagerMulti {
    * Creates/updates/deletes drivers to match the provided names array
    */
   async syncDrivers(driverNames) {
+    if (!FACE_RECOGNITION_ENABLED) return;
+
     if (!this.currentParticipantId) {
       console.warn('[DriverFaceManagerMulti] Cannot sync without participantId');
       return;
@@ -226,6 +236,7 @@ class DriverFaceManagerMulti {
    * Render all driver panels
    */
   async render() {
+    if (!FACE_RECOGNITION_ENABLED) return;
     if (!this.containerElement) return;
 
     this.containerElement.innerHTML = '';

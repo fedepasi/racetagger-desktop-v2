@@ -312,8 +312,8 @@
                   Sponsors
                   <span class="field-destination field-destination-matching">→ AI only</span>
                 </label>
-                <input type="text" id="edit-sponsor" class="form-input form-input-matching" placeholder="Shell, Santander, Ray-Ban">
-                <small class="form-hint">Comma-separated list. Helps AI confirm participant identity when sponsor logos are visible</small>
+                <input type="text" id="edit-sponsor" class="form-input form-input-matching" placeholder="e.g. Prorive, JotaSport (UNIQUE to this car)">
+                <small class="form-hint">Comma-separated. Use UNIQUE sponsors/identifiers visible only on THIS specific car - NOT generic sponsors (like tire brands) shared across multiple cars</small>
               </div>
 
               <!-- Plate Number -->
@@ -396,40 +396,66 @@
 
         </div>
 
-        <!-- FACE RECOGNITION & DRIVER METADATA SECTION -->
-        <div class="form-section driver-face-section" id="driver-face-section">
-          <h3 class="section-title">
-            Face Recognition & Driver Metadata
-            <span class="badge badge-beta" title="Experimental feature">BETA</span>
-          </h3>
-          <p class="section-description">
-            For each driver, set a specific metatag and upload reference photos for face recognition.
-          </p>
-
-          <!-- Empty state (shown when no drivers) -->
-          <div class="driver-panels-empty-state" id="driver-panels-empty-state" style="display: block;">
-            <div class="empty-state-icon">👥</div>
-            <h4>No Drivers Yet</h4>
-            <p>Add drivers in the "Drivers" field above to enable face recognition and driver-specific metadata.</p>
+        <!-- FACE RECOGNITION & DRIVER METADATA SECTION (Coming Soon) -->
+        <div class="form-section driver-face-section driver-face-section--disabled" id="driver-face-section">
+          <div class="column-header face-column">
+            <div class="column-badge badge-face">
+              <span class="badge-icon">👤</span>
+              <span class="badge-text">COMING SOON</span>
+            </div>
+            <h3 class="column-title">Face Recognition & Driver Metadata</h3>
+            <p class="column-description">Per-driver face recognition and metadata for multi-driver vehicles</p>
           </div>
 
-          <!-- Driver panels container (shown when drivers exist) -->
-          <div class="driver-panels-container" id="driver-panels-container" style="display: none;">
-            <!-- Driver panels will be rendered here dynamically by driver-face-manager.js -->
-          </div>
+          <!-- Coming Soon overlay (absolute, blocks all interaction) -->
+          <div class="coming-soon-wrapper">
+            <div class="coming-soon-overlay-abs">
+              <div class="coming-soon-card">
+                <div class="coming-soon-icon-ring">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                  </svg>
+                </div>
+                <h4 class="coming-soon-title">Coming Soon</h4>
+                <p class="coming-soon-text">Per-driver face recognition and metadata will be available in a future update.</p>
+              </div>
+            </div>
 
-          <div class="driver-face-info">
-            <span class="info-icon">💡</span>
-            <div class="info-text">
-              <strong>How it works:</strong>
-              <ul>
-                <li>Each driver gets their own metatag written to IPTC only when their face is recognized</li>
-                <li>Upload up to 5 photos per driver for best recognition accuracy</li>
-                <li>Use clear, front-facing photos for optimal results</li>
-                <li>Perfect for multi-driver vehicles (e.g., WEC endurance racing)</li>
-              </ul>
+            <!-- Blurred preview content underneath -->
+            <div class="coming-soon-preview">
+              <div class="preview-driver-panel">
+                <div class="preview-header">
+                  <span class="preview-badge">D1</span>
+                  <span class="preview-name">Driver Name</span>
+                </div>
+                <div class="preview-photos-grid">
+                  <div class="preview-photo-slot"></div>
+                  <div class="preview-photo-slot"></div>
+                  <div class="preview-photo-slot"></div>
+                  <div class="preview-photo-slot"></div>
+                  <div class="preview-photo-slot"></div>
+                </div>
+              </div>
+              <div class="preview-driver-panel">
+                <div class="preview-header">
+                  <span class="preview-badge">D2</span>
+                  <span class="preview-name">Driver Name</span>
+                </div>
+                <div class="preview-photos-grid">
+                  <div class="preview-photo-slot"></div>
+                  <div class="preview-photo-slot"></div>
+                  <div class="preview-photo-slot"></div>
+                  <div class="preview-photo-slot"></div>
+                  <div class="preview-photo-slot"></div>
+                </div>
+              </div>
             </div>
           </div>
+
+          <!-- Hidden: real panels (kept for future re-enable) -->
+          <div class="driver-panels-empty-state" id="driver-panels-empty-state" style="display: none;"></div>
+          <div class="driver-panels-container" id="driver-panels-container" style="display: none;"></div>
         </div>
       </div>
 
