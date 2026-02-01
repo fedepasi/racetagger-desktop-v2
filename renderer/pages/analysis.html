@@ -81,131 +81,13 @@
       </div>
     </div>
 
-    <!-- FOLDER ORGANIZATION: Now available as a main feature -->
+    <!-- FOLDER ORGANIZATION: Available as post-analysis action -->
     <div id="folder-organization-section" class="folder-organization-section mb-md">
-      <div class="section-header mb-sm">
-        <h4>📁 Folder Organization</h4>
-        <p class="form-text">Automatically organize photos into folders based on race numbers:</p>
-      </div>
-
-      <div class="toggle-option">
-        <label class="toggle-container" for="folder-organization-enabled">
-          <input type="checkbox" id="folder-organization-enabled" class="toggle-input">
-          <div class="toggle-slider"></div>
-          <div class="toggle-content">
-            <div class="toggle-title">Enable folder organization</div>
-            <div class="form-text">Create folders named after race numbers and organize photos accordingly</div>
-          </div>
-        </label>
-      </div>
-
-      <div id="folder-organization-options" class="folder-org-options mt-md" style="display: none;">
-        <div class="destination-selection-section mb-md">
-          <h5>Destination Folder:</h5>
-          <div class="toggle-option">
-            <label class="toggle-container" for="custom-destination-enabled">
-              <input type="checkbox" id="custom-destination-enabled" class="toggle-input">
-              <div class="toggle-slider"></div>
-              <div class="toggle-content">
-                <div class="toggle-title">Choose custom destination folder</div>
-                <div class="form-text">By default, creates "Organized_Photos" in source folder</div>
-              </div>
-            </label>
-          </div>
-
-          <div id="custom-destination-controls" class="custom-input-container mt-sm" style="display: none;">
-            <div style="display: flex; align-items: center; gap: 1rem;">
-              <input type="text" id="custom-destination-path" class="form-control" placeholder="No folder selected" readonly style="flex: 1; background: var(--surface-color-light); cursor: pointer;">
-              <button type="button" id="select-destination-btn" class="btn btn-secondary">
-                📁 Browse
-              </button>
-            </div>
-            <div class="form-text">Click Browse to select where to organize your photos</div>
-          </div>
-        </div>
-
-        <div class="org-mode-section mb-md">
-          <h5>Operation Mode:</h5>
-          <div class="radio-group space-y-2">
-            <label class="radio-option" for="org-mode-copy">
-              <input type="radio" id="org-mode-copy" name="org-mode" value="copy" checked>
-              <div class="radio-content">
-                <div class="radio-title">📄 Copy files</div>
-                <div class="form-text">Safe option - creates copies in organized folders (preserves originals)</div>
-              </div>
-            </label>
-
-            <label class="radio-option warning-option" for="org-mode-move">
-              <input type="radio" id="org-mode-move" name="org-mode" value="move">
-              <div class="radio-content">
-                <div class="radio-title">🔄 Move files</div>
-                <div class="form-text warning-text">Moves originals to organized folders (use with caution)</div>
-              </div>
-            </label>
-          </div>
-        </div>
-
-        <div class="conflict-handling-section mb-md">
-          <h5>File Conflicts:</h5>
-          <p class="form-text" style="margin-bottom: 0.75rem;">These options apply only if the destination folder already contains files with the same name.</p>
-          <div class="radio-group space-y-2">
-            <label class="radio-option" for="conflict-rename">
-              <input type="radio" id="conflict-rename" name="conflict-strategy" value="rename" checked>
-              <div class="radio-content">
-                <div class="radio-title">🔄 Rename automatically</div>
-                <div class="form-text">If file exists, rename to IMG_0001_2.jpg, IMG_0001_3.jpg, etc.</div>
-              </div>
-            </label>
-
-            <label class="radio-option" for="conflict-skip">
-              <input type="radio" id="conflict-skip" name="conflict-strategy" value="skip">
-              <div class="radio-content">
-                <div class="radio-title">Skip duplicates</div>
-                <div class="form-text">Don't copy/move files that already exist in destination</div>
-              </div>
-            </label>
-
-            <label class="radio-option warning-option" for="conflict-overwrite">
-              <input type="radio" id="conflict-overwrite" name="conflict-strategy" value="overwrite">
-              <div class="radio-content">
-                <div class="radio-title">Overwrite existing</div>
-                <div class="form-text warning-text">Replace existing files (use with caution)</div>
-              </div>
-            </label>
-          </div>
-        </div>
-
-        <div class="special-options-section">
-          <h5>Special Cases:</h5>
-          <div class="toggle-option">
-            <label class="toggle-container" for="create-unknown-folder">
-              <input type="checkbox" id="create-unknown-folder" class="toggle-input" checked>
-              <div class="toggle-slider"></div>
-              <div class="toggle-content">
-                <div class="toggle-title">Create "Unknown" folder</div>
-                <div class="form-text">For photos where no race number was detected</div>
-              </div>
-            </label>
-          </div>
-
-          <div class="toggle-option">
-            <label class="toggle-container" for="include-xmp-files">
-              <input type="checkbox" id="include-xmp-files" class="toggle-input" checked>
-              <div class="toggle-slider"></div>
-              <div class="toggle-content">
-                <div class="toggle-title">Include XMP sidecar files</div>
-                <div class="form-text">Copy XMP files alongside RAW images (recommended for Lightroom users)</div>
-              </div>
-            </label>
-          </div>
-        </div>
-
-        <div class="organization-warning info-box mt-md">
-          <span class="info-icon">💡</span>
-          <div class="info-text">
-            <strong>Note:</strong> Folder organization works alongside metadata writing.
-            Both features can be enabled simultaneously for maximum workflow flexibility.
-          </div>
+      <div class="info-box" style="display: flex; align-items: center; gap: 0.75rem; padding: 1rem;">
+        <span class="info-icon">📁</span>
+        <div class="info-text">
+          <strong>Folder Organization</strong> is available after analysis.
+          Review your results, make any corrections, then organize photos into folders from the results page.
         </div>
       </div>
     </div>

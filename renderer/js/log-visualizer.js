@@ -240,19 +240,12 @@ class LogVisualizer {
           </div>
         </div>
 
-        <!-- Results grid without virtual scrolling -->
-        <div class="lv-results-container">
-          <div class="lv-results-grid" id="lv-results">
-            <!-- All items will be rendered here -->
-          </div>
-        </div>
-
-        <!-- Post-Analysis Folder Organization (conditional) -->
+        <!-- Post-Analysis Folder Organization -->
         ${this.shouldShowFolderOrganizationUI() ? `
         <div class="lv-folder-organization-section" id="lv-folder-org-section">
           <div class="lv-folder-org-header">
             <h4>📁 Organize Photos into Folders</h4>
-            <p>You can still organize your photos based on the analysis results</p>
+            <p>Review your results, make any corrections, then organize photos into folders</p>
           </div>
           <div class="lv-folder-org-content" id="lv-folder-org-content" style="display: none;">
             <!-- Folder organization configuration will be injected here -->
@@ -267,6 +260,13 @@ class LogVisualizer {
           </div>
         </div>
         ` : ''}
+
+        <!-- Results grid without virtual scrolling -->
+        <div class="lv-results-container">
+          <div class="lv-results-grid" id="lv-results">
+            <!-- All items will be rendered here -->
+          </div>
+        </div>
 
         <!-- Quick actions -->
         <div class="lv-footer">
@@ -507,7 +507,6 @@ class LogVisualizer {
     const contentDiv = document.getElementById('lv-folder-org-content');
     if (!contentDiv) return;
 
-    // Clone the folder organization configuration from index.html
     const folderOrgHTML = `
       <div class="folder-org-config">
         <div class="config-section">
@@ -552,19 +551,27 @@ class LogVisualizer {
 
         <div class="config-section">
           <h5>Destination:</h5>
-          <div class="toggle-option">
-            <label class="toggle-container">
-              <input type="checkbox" id="post-custom-destination" class="toggle-input">
-              <div class="toggle-slider"></div>
-              <div class="toggle-content">
-                <div class="toggle-title">Choose custom destination</div>
-                <div class="form-text">Default: Creates "Organized_Photos" in source folder</div>
+          <div class="radio-group">
+            <label class="radio-option">
+              <input type="radio" name="post-destination" value="default" checked>
+              <div class="radio-content">
+                <div class="radio-title">📂 Source folder</div>
+                <div class="form-text">Creates "Organized_Photos" in the same folder as your images</div>
+              </div>
+            </label>
+            <label class="radio-option">
+              <input type="radio" name="post-destination" value="custom">
+              <div class="radio-content">
+                <div class="radio-title">📁 Custom destination</div>
+                <div class="form-text">Choose a specific folder for organized photos</div>
               </div>
             </label>
           </div>
-          <div id="post-custom-dest-controls" style="display: none; margin-top: 10px;">
-            <input type="text" id="post-dest-path" class="form-control" placeholder="No folder selected" readonly>
-            <button type="button" id="post-select-dest-btn" class="btn btn-secondary" style="margin-top: 8px;">📁 Browse</button>
+          <div id="post-custom-dest-controls" class="lv-dest-controls" style="display: none;">
+            <div class="lv-dest-input-row">
+              <input type="text" id="post-dest-path" class="lv-dest-input" placeholder="No folder selected" readonly>
+              <button type="button" id="post-select-dest-btn" class="lv-action-btn lv-btn-secondary">📁 Browse</button>
+            </div>
           </div>
         </div>
 
@@ -598,15 +605,17 @@ class LogVisualizer {
    * Setup event listeners for post-organization UI
    */
   setupPostOrganizationListeners() {
-    // Custom destination toggle
-    const customDestToggle = document.getElementById('post-custom-destination');
+    // Destination radio buttons - show/hide custom controls
+    const destRadios = document.querySelectorAll('input[name="post-destination"]');
     const customDestControls = document.getElementById('post-custom-dest-controls');
 
-    if (customDestToggle && customDestControls) {
-      customDestToggle.addEventListener('change', (e) => {
-        customDestControls.style.display = e.target.checked ? 'block' : 'none';
+    destRadios.forEach(radio => {
+      radio.addEventListener('change', (e) => {
+        if (customDestControls) {
+          customDestControls.style.display = e.target.value === 'custom' ? 'flex' : 'none';
+        }
       });
-    }
+    });
 
     // Browse destination button
     const selectDestBtn = document.getElementById('post-select-dest-btn');
@@ -639,7 +648,7 @@ class LogVisualizer {
       createUnknownFolder: true,
       unknownFolderName: 'Unknown_Numbers',
       includeXmpFiles: true,
-      destinationPath: document.getElementById('post-custom-destination')?.checked ?
+      destinationPath: document.querySelector('input[name="post-destination"]:checked')?.value === 'custom' ?
         document.getElementById('post-dest-path')?.value : undefined,
       conflictStrategy: document.querySelector('input[name="post-conflict-strategy"]:checked')?.value || 'rename'
     };
@@ -2839,8 +2848,8 @@ ${summary.skippedFiles} skipped, ${summary.unknownFiles} unknown`;
    * Check if folder organization UI should be shown
    */
   shouldShowFolderOrganizationUI() {
-    // Show only if folder organization was NOT used during analysis
-    return !this.wasAlreadyOrganized;
+    // Always show - folder organization is now exclusively a post-analysis action
+    return true;
   }
 
   /**

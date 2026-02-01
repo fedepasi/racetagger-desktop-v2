@@ -240,6 +240,9 @@ export class FolderOrganizer {
 
         // Perform operation if not skipped
         if (operation !== 'skip') {
+          // Save original path before potential mutation (needed for XMP lookup)
+          const sourcePathForXmp = imagePath;
+
           if (operation === 'copy') {
             await fsPromises.copyFile(imagePath, finalTargetPath);
           } else {
@@ -248,9 +251,9 @@ export class FolderOrganizer {
             imagePath = finalTargetPath; // Update source path for subsequent copies
           }
 
-          // Handle XMP sidecar file
+          // Handle XMP sidecar file (use pre-move source path so XMP is found at original location)
           await this.handleXmpSidecar(
-            i === 0 ? imagePath : copiedPaths[0], // Use original or first copy as source
+            i === 0 ? sourcePathForXmp : copiedPaths[0],
             finalTargetPath,
             operation
           );

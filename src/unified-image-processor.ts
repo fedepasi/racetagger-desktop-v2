@@ -2444,13 +2444,14 @@ class UnifiedImageWorker extends EventEmitter {
             },
             thumbnailPath,
             microThumbPath,
-            compressedPath
+            compressedPath,
+            sceneCategory: sceneClassification.category,
+            sceneSkipped: true
           });
         }
 
-        // FOLDER ORGANIZATION: Organize skipped scene images to "Others" folder
-        // This ensures generic images (crowd, portraits, etc.) don't remain in source folder
-        await this.organizeSkippedScene(imageFile, sceneClassification.category);
+        // Folder organization removed from pipeline - now a post-analysis action
+        // Scene-skipped images will be organized to "Others" folder via log-visualizer post-analysis
 
         return {
           fileId: imageFile.id,
@@ -2611,12 +2612,7 @@ class UnifiedImageWorker extends EventEmitter {
             };
           });
 
-          // ADMIN FEATURE: Organize face recognition results into folders
-          const faceProcessedAnalysis = {
-            analysis: matchedDrivers.map(d => ({ raceNumber: d.raceNumber })),
-            csvMatch: faceRecognitionCsvMatches
-          };
-          await this.organizeToFolders(imageFile, faceProcessedAnalysis, uploadReadyPath);
+          // Folder organization removed from pipeline - now a post-analysis action
 
           // ============================================
           // Upload to Supabase Storage and save to database (like normal flow)
@@ -3159,16 +3155,11 @@ class UnifiedImageWorker extends EventEmitter {
       await this.writeMetadata(imageFile, processedAnalysis.keywords, uploadReadyPath, processedAnalysis.analysis, processedAnalysis.csvMatch);
       timing['8_writeMetadata'] = Date.now() - phaseStart;
 
-      // ADMIN FEATURE: Fase 6 - Organizzazione in cartelle (condizionale)
-      phaseStart = Date.now();
-      const organizedPath = await this.organizeToFolders(imageFile, processedAnalysis, uploadReadyPath);
-      timing['9_folderOrganization'] = Date.now() - phaseStart;
+      // Folder organization removed from pipeline - now a post-analysis action
+      const organizedPath: string | undefined = undefined;
 
-      // Log to JSONL file AFTER folder organization so organizedPath is captured
+      // Log to JSONL file
       if (imageAnalysisEvent && this.analysisLogger) {
-        if (organizedPath) {
-          imageAnalysisEvent.organizedPath = organizedPath;
-        }
         this.analysisLogger.logImageAnalysis(imageAnalysisEvent);
       }
 

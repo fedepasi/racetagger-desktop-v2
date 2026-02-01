@@ -1483,13 +1483,8 @@ async function proceedWithFolderAnalysis() {
       config.resize = { enabled: true, preset: 'balanced' };
     }
 
-    // Aggiungi configurazione folder organization se disponibile
-    if (window.getFolderOrganizationConfig) {
-      const folderOrgConfig = window.getFolderOrganizationConfig();
-      if (folderOrgConfig && folderOrgConfig.enabled) {
-        config.folderOrganization = folderOrgConfig;
-      }
-    }
+    // Folder organization removed from pre-analysis config.
+    // Now triggered post-analysis from the results page (log-visualizer.js).
 
     // Aggiungi configurazione visual tagging se disponibile
     if (window.getVisualTaggingConfig) {

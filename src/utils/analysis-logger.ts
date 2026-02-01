@@ -142,6 +142,9 @@ export interface ImageAnalysisEvent extends LogEvent {
   visualTags?: VisualTagsData;
   // Backward compatibility fields (uses first vehicle data)
   primaryVehicle?: VehicleAnalysisData;
+  // Scene classification for post-analysis folder organization
+  sceneCategory?: string;
+  sceneSkipped?: boolean;
 }
 
 export interface CorrectionData {

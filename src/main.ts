@@ -2865,50 +2865,74 @@ app.whenReady().then(async () => { // Added async here
               continue;
             }
 
+            // Handle scene-skipped images -> route to "Others" folder
+            const isSceneSkipped = event.sceneSkipped ||
+              (event.aiResponse?.totalVehicles === 0 &&
+               event.aiResponse?.rawText?.startsWith('SKIPPED:'));
+
+            if (isSceneSkipped) {
+              // Extract scene category from structured field or parse from rawText
+              let sceneCategory = event.sceneCategory;
+              if (!sceneCategory && event.aiResponse?.rawText) {
+                const match = event.aiResponse.rawText.match(/SKIPPED:\s*(\w+)\s+scene/);
+                if (match) sceneCategory = match[1];
+              }
+
+              const sceneResult = await organizer.organizeGenericScene(
+                originalPath,
+                sceneCategory || 'unknown_scene',
+                path.dirname(originalPath)
+              );
+              results.push(sceneResult);
+              continue;
+            }
+
             // Get final race numbers (apply corrections if any)
             let raceNumbers: string[] = [];
             if (event.aiResponse?.vehicles) {
-              // Apply manual corrections if they exist
               event.aiResponse.vehicles.forEach((vehicle: any, index: number) => {
                 const key = `${fileName}_${index}`;
                 const correction = correctionMap.get(key);
 
                 if (correction && correction.number) {
-                  // Use manually corrected number
                   raceNumbers.push(correction.number);
                 } else if (vehicle.finalResult?.raceNumber) {
-                  // Use finalResult.raceNumber (after automatic corrections)
                   raceNumbers.push(vehicle.finalResult.raceNumber);
                 } else if (vehicle.raceNumber) {
-                  // Fallback: use initial raceNumber
                   raceNumbers.push(vehicle.raceNumber);
                 }
               });
             }
 
-            // If no race numbers found, use "unknown"
             if (raceNumbers.length === 0) {
               raceNumbers = ['unknown'];
             }
 
-            // Get CSV match data if available
-            let csvData = undefined;
-            if (event.aiResponse?.vehicles && event.aiResponse.vehicles[0]?.participantMatch) {
-              const match = event.aiResponse.vehicles[0].participantMatch;
-              csvData = {
-                numero: match.numero,
-                nome: match.nome_pilota || match.nome,
-                categoria: match.categoria,
-                squadra: match.squadra,
-                metatag: match.metatag
-              };
+            // Collect CSV data for ALL vehicles (not just the first)
+            const csvDataList: any[] = [];
+            if (event.aiResponse?.vehicles) {
+              event.aiResponse.vehicles.forEach((vehicle: any) => {
+                if (vehicle.participantMatch) {
+                  const match = vehicle.participantMatch;
+                  csvDataList.push({
+                    numero: match.numero,
+                    nome: match.nome_pilota || match.nome,
+                    categoria: match.categoria,
+                    squadra: match.squadra,
+                    metatag: match.metatag,
+                    folder_1: match.folder_1,
+                    folder_2: match.folder_2,
+                    folder_3: match.folder_3
+                  });
+                }
+              });
             }
 
             // Organize the image
             const result = await organizer.organizeImage(
               originalPath,
               raceNumbers,
-              csvData
+              csvDataList.length > 0 ? csvDataList : undefined
             );
 
             results.push(result);
