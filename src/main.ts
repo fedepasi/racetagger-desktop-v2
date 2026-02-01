@@ -1270,7 +1270,10 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
     console.error('handleUnifiedImageProcessing: mainWindow is null');
     return;
   }
-  
+
+  // Reset cancellation flag from any previous run
+  setBatchProcessingCancelled(false);
+
   // Statistiche per il tracciamento
   let executionStats = {
     totalImages: 0,
@@ -1521,6 +1524,9 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
         const { SmartMatcher: SmartMatcherEnd2 } = await import('./matching/smart-matcher');
         SmartMatcherEnd2.endSession();
 
+        // Check if processing was cancelled
+        const wasCancelled = isBatchProcessingCancelled();
+
         // Calcola le statistiche finali per il tracciamento
         executionStats.executionDurationMs = Date.now() - executionStartTime;
         executionStats.averageImageProcessingTimeMs = results.length > 0
@@ -1531,8 +1537,10 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
         if (currentExecutionId) {
           try {
             await updateExecutionOnline(currentExecutionId, {
-              status: 'completed',
-              results_reference: `${results.length} images processed`,
+              status: wasCancelled ? 'cancelled' : 'completed',
+              results_reference: wasCancelled
+                ? `Cancelled after ${results.length}/${executionStats.totalImages} images`
+                : `${results.length} images processed`,
               completed_at: new Date().toISOString(),
               total_images: executionStats.totalImages,
               processed_images: results.length
@@ -1629,11 +1637,22 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
           }
         }
 
-        // Send the actual results array to the renderer with execution ID for log visualizer
+        // Notify renderer: send batch-cancelled if cancelled, batch-complete otherwise
+        if (wasCancelled) {
+          safeSend('batch-cancelled', {
+            results,
+            executionId: currentExecutionId,
+            processedImages: results.length,
+            totalImages: executionStats.totalImages
+          });
+        }
+
+        // Always send batch-complete so any listener gets the partial/full results
         safeSend('batch-complete', {
           results,
           executionId: currentExecutionId,
-          isProcessingComplete: true,
+          isProcessingComplete: !wasCancelled,
+          wasCancelled,
           exportResult
         });
       })
@@ -3154,7 +3173,11 @@ app.whenReady().then(async () => { // Added async here
 
         // Update image metadata using exiftool
         try {
-          await updateImageMetadataWithCorrection(correction);
+          await updateImageMetadataWithCorrection(
+            correction,
+            imageAnalysisEvent?.originalPath,
+            imageAnalysisEvent?.organizedPath
+          );
         } catch (metadataError) {
           if (DEBUG_MODE) console.warn('[Main Process] Failed to update image metadata:', metadataError);
           // Continue with log update even if metadata update fails
@@ -3316,32 +3339,50 @@ app.whenReady().then(async () => { // Added async here
   // ============================================
 
   // Update image metadata with manual correction
-  async function updateImageMetadataWithCorrection(correction: {
-    fileName: string;
-    vehicleIndex: number;
-    changes: any;
-  }) {
+  async function updateImageMetadataWithCorrection(
+    correction: {
+      fileName: string;
+      vehicleIndex: number;
+      changes: any;
+    },
+    originalPath?: string,
+    organizedPath?: string
+  ) {
     try {
-      // Find the image file - this is a simplified version
-      // In reality, you'd need to track the full image paths from the processing results
-      if (DEBUG_MODE) console.log(`[Main Process] Would update metadata for ${correction.fileName} with:`, correction.changes);
+      // Use organized path (after move/copy) if available, otherwise original
+      const effectivePath = organizedPath || originalPath;
 
-      // TODO: Implement actual metadata update using exiftool
-      // This would require:
-      // 1. Finding the actual image file path
-      // 2. Reading current IPTC keywords/description
-      // 3. Updating with new recognition data
-      // 4. Writing back to file
-      //
-      // Example implementation:
-      // const imagePath = await findImagePath(correction.fileName);
-      // if (imagePath) {
-      //   await updateImageMetadata(imagePath, {
-      //     raceNumber: correction.changes.raceNumber,
-      //     team: correction.changes.team,
-      //     drivers: correction.changes.drivers
-      //   });
-      // }
+      if (!effectivePath) {
+        if (DEBUG_MODE) console.warn(`[Main Process] No path available for ${correction.fileName}, skipping metadata update`);
+        return { success: false, reason: 'no_path' };
+      }
+
+      if (!fs.existsSync(effectivePath)) {
+        if (DEBUG_MODE) console.warn(`[Main Process] File not found at ${effectivePath}, skipping metadata update`);
+        return { success: false, reason: 'file_not_found' };
+      }
+
+      // Build keywords from correction changes
+      const keywords: string[] = [];
+      if (correction.changes.raceNumber) {
+        keywords.push(`RaceNumber:${correction.changes.raceNumber}`);
+      }
+      if (correction.changes.team) {
+        keywords.push(`Team:${correction.changes.team}`);
+      }
+      if (correction.changes.drivers) {
+        const drivers = Array.isArray(correction.changes.drivers)
+          ? correction.changes.drivers
+          : [correction.changes.drivers];
+        drivers.forEach((driver: string) => {
+          if (driver) keywords.push(`Driver:${driver}`);
+        });
+      }
+
+      if (keywords.length > 0) {
+        if (DEBUG_MODE) console.log(`[Main Process] Writing corrected metadata to ${effectivePath}:`, keywords);
+        await writeKeywordsToImage(effectivePath, keywords, true, 'overwrite');
+      }
 
       return { success: true };
 

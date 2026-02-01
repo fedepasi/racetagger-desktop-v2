@@ -393,7 +393,7 @@ class LogVisualizer {
 
     // Setup beforeunload handler for unsaved changes
     window.addEventListener('beforeunload', (e) => {
-      if (this.manualCorrections && this.manualCorrections.size > 0) {
+      if (this.hasUnsavedChanges && this.manualCorrections && this.manualCorrections.size > 0) {
         const message = 'You have unsaved changes. Are you sure you want to leave?';
         e.preventDefault();
         e.returnValue = message;
@@ -413,7 +413,7 @@ class LogVisualizer {
     const overlay = document.getElementById('lv-gallery-overlay');
 
     if (closeBtn) closeBtn.addEventListener('click', async () => await this.closeGallery());
-    if (overlay) overlay.addEventListener('click', async () => await this.closeGallery());
+    if (overlay) overlay.addEventListener('click', async (e) => { if (e.target === overlay) await this.closeGallery(); });
 
     // Navigation
     const prevBtn = document.getElementById('lv-gallery-prev');
@@ -426,15 +426,22 @@ class LogVisualizer {
     document.addEventListener('keydown', (e) => {
       if (!this.isGalleryOpen) return;
 
+      const isInputFocused = document.activeElement &&
+        ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
+
       switch (e.key) {
         case 'Escape':
-          this.closeGallery();
+          if (isInputFocused) {
+            document.activeElement.blur();
+          } else {
+            this.closeGallery();
+          }
           break;
         case 'ArrowLeft':
-          this.navigateGallery(-1);
+          if (!isInputFocused) this.navigateGallery(-1);
           break;
         case 'ArrowRight':
-          this.navigateGallery(1);
+          if (!isInputFocused) this.navigateGallery(1);
           break;
       }
     });

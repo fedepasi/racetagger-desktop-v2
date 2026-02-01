@@ -147,7 +147,7 @@ export function registerAnalysisHandlers(): void {
   });
 
   // Cancel batch processing
-  ipcMain.on('cancel-batch-processing', async () => {
+  const handleCancelBatchProcessing = async () => {
     console.log('[Analysis] Batch processing cancellation requested');
     setBatchProcessingCancelled(true);
 
@@ -157,7 +157,12 @@ export function registerAnalysisHandlers(): void {
     } catch (error) {
       console.error('[Analysis] Error handling batch cancellation for tokens:', error);
     }
-  });
+  };
+
+  ipcMain.on('cancel-batch-processing', handleCancelBatchProcessing);
+
+  // stop-processing is sent by the enhanced-progress.js UI (alias for cancel)
+  ipcMain.on('stop-processing', handleCancelBatchProcessing);
 
   // Get recent executions from local JSONL files
   ipcMain.handle('get-local-executions', async () => {

@@ -301,6 +301,7 @@ class ResultsPageManager {
   async initializeLogVisualizer() {
     // Crea LogVisualizer modificato per usare il cache manager
     this.logVisualizer = new LogVisualizer();
+    window.logVisualizer = this.logVisualizer;
 
     // Override del metodo getThumbnailUrl per usare il cache manager
     const originalGetThumbnailUrl = this.logVisualizer.getThumbnailUrl.bind(this.logVisualizer);

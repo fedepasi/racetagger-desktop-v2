@@ -83,6 +83,8 @@ export interface UnifiedProcessingResult {
   compressedPath?: string;
   thumbnailPath?: string | null;
   microThumbPath?: string | null;
+  // Path after folder organization (move/copy)
+  organizedPath?: string;
   // RF-DETR Metrics (from worker)
   rfDetrDetections?: number;
   rfDetrCost?: number;
@@ -2975,6 +2977,7 @@ class UnifiedImageWorker extends EventEmitter {
 
       // Log detailed analysis with corrections if logger is available (now supports multi-vehicle)
       phaseStart = Date.now();
+      let imageAnalysisEvent: any = null;
       if (this.analysisLogger && this.smartMatcher) {
         const corrections = this.smartMatcher.getCorrections();
         // For local ONNX, use local path; for cloud API, use Supabase URL
@@ -3086,7 +3089,7 @@ class UnifiedImageWorker extends EventEmitter {
         }
 
         // Build the complete analysis event (same structure for JSONL and database)
-        const imageAnalysisEvent = {
+        imageAnalysisEvent = {
           imageId: imageFile.id,
           fileName: imageFile.fileName,
           originalFileName: path.basename(imageFile.originalPath),
@@ -3114,9 +3117,6 @@ class UnifiedImageWorker extends EventEmitter {
           // Backward compatibility - use first vehicle as primary
           primaryVehicle: vehicles.length > 0 ? vehicles[0] : undefined
         };
-
-        // Log to JSONL file
-        this.analysisLogger.logImageAnalysis(imageAnalysisEvent);
 
         // PREPARE database update for batch flushing (performance optimization)
         // Worker returns update data to processor, which accumulates and flushes in batches
@@ -3161,8 +3161,16 @@ class UnifiedImageWorker extends EventEmitter {
 
       // ADMIN FEATURE: Fase 6 - Organizzazione in cartelle (condizionale)
       phaseStart = Date.now();
-      await this.organizeToFolders(imageFile, processedAnalysis, uploadReadyPath);
+      const organizedPath = await this.organizeToFolders(imageFile, processedAnalysis, uploadReadyPath);
       timing['9_folderOrganization'] = Date.now() - phaseStart;
+
+      // Log to JSONL file AFTER folder organization so organizedPath is captured
+      if (imageAnalysisEvent && this.analysisLogger) {
+        if (organizedPath) {
+          imageAnalysisEvent.organizedPath = organizedPath;
+        }
+        this.analysisLogger.logImageAnalysis(imageAnalysisEvent);
+      }
 
       // Calculate total processing time
       timing['total'] = Date.now() - startTime;
@@ -3185,6 +3193,8 @@ class UnifiedImageWorker extends EventEmitter {
         compressedPath,
         thumbnailPath,
         microThumbPath,
+        // Path after folder organization (move/copy)
+        organizedPath,
         // RF-DETR Metrics from worker
         rfDetrDetections: this.totalRfDetrDetections,
         rfDetrCost: this.totalRfDetrCost,
@@ -4749,11 +4759,11 @@ class UnifiedImageWorker extends EventEmitter {
     imageFile: UnifiedImageFile,
     processedAnalysis: any,
     processedImagePath: string
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     // Verifica se la funzionalità è abilitata
     const { APP_CONFIG } = await import('./config');
     if (!APP_CONFIG.features.ENABLE_FOLDER_ORGANIZATION || !this.config.folderOrganization?.enabled) {
-      return;
+      return undefined;
     }
 
     try {
@@ -4784,8 +4794,10 @@ class UnifiedImageWorker extends EventEmitter {
       // Extract numbers that have valid matches in the preset
       const numbersWithMatches = this.extractNumbersWithMatches(processedAnalysis.csvMatch);
 
+      let organizeResult: import('./utils/folder-organizer').FolderOrganizationResult | undefined;
+
       if (!allDetectedNumbers || allDetectedNumbers.length === 0) {
-        await organizer.organizeUnknownImage(
+        organizeResult = await organizer.organizeUnknownImage(
           imageFile.originalPath,
           path.dirname(imageFile.originalPath)
         );
@@ -4804,7 +4816,7 @@ class UnifiedImageWorker extends EventEmitter {
           });
         }
 
-        await organizer.organizeToUnknownNumbers(
+        organizeResult = await organizer.organizeToUnknownNumbers(
           imageFile.originalPath,
           path.dirname(imageFile.originalPath)
         );
@@ -4826,21 +4838,24 @@ class UnifiedImageWorker extends EventEmitter {
         }
 
         // Organizza l'immagine solo con i numeri che hanno match
-        const result = await organizer.organizeImage(
+        organizeResult = await organizer.organizeImage(
           imageFile.originalPath,
           numbersToOrganize,
           csvDataList,
           path.dirname(imageFile.originalPath)
         );
 
-        if (!result.success) {
-          console.error(`[UnifiedWorker] Failed to organize ${imageFile.fileName}:`, result.error);
+        if (!organizeResult.success) {
+          console.error(`[UnifiedWorker] Failed to organize ${imageFile.fileName}:`, organizeResult.error);
         }
       }
+
+      return organizeResult?.organizedPath;
 
     } catch (error: any) {
       console.error(`[UnifiedWorker] Error during folder organization for ${imageFile.fileName}:`, error);
       // Non bloccare il processamento per errori di organizzazione
+      return undefined;
     }
   }
 
@@ -5917,7 +5932,20 @@ export class UnifiedImageProcessor extends EventEmitter {
     while (activeWorkers.size > 0) {
       // Check for cancellation before processing next batch
       if (this.config.isCancelled && this.config.isCancelled()) {
-        if (DEBUG_MODE) console.log(`[UnifiedProcessor] Processing cancelled, stopping workers`);
+        console.log(`[UnifiedProcessor] Processing cancelled, awaiting ${activeWorkers.size} in-flight workers before stopping...`);
+        // Await all in-flight workers to complete gracefully (don't orphan them)
+        try {
+          const inFlightPromises = Array.from(activeWorkers.values()).map(tracker =>
+            tracker.promise
+              .then(result => { results.push(result); this.processedImages++; })
+              .catch(error => console.warn(`[UnifiedProcessor] In-flight worker for ${tracker.fileName} failed during cancel:`, error))
+          );
+          await Promise.allSettled(inFlightPromises);
+        } catch (error) {
+          console.warn('[UnifiedProcessor] Error awaiting in-flight workers during cancellation:', error);
+        }
+        activeWorkers.clear();
+        console.log(`[UnifiedProcessor] All in-flight workers settled, cancellation complete`);
         break;
       }
 

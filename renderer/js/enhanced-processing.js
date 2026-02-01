@@ -41,7 +41,36 @@ class EnhancedProcessor {
       openPricingPageBtn.addEventListener('click', () => this.openPricingPage());
     }
 
-    // Progress elements
+    // Progress elements (may be null if analysis page not loaded yet)
+    this.progressElements = {};
+    this.bindProgressElements();
+
+    // ESC key handler for modal
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        const modal = document.getElementById('token-info-modal');
+        if (modal && modal.style.display === 'flex') {
+          this.closeTokenInfoModal();
+        }
+      }
+    });
+
+    // Handle batch cancellation event from main process
+    if (window.api && window.api.receive) {
+      window.api.receive('batch-cancelled', (data) => {
+        this.handleBatchCancelled();
+      });
+    }
+
+    // Re-bind progress elements when analysis page is loaded by router
+    window.addEventListener('page-loaded', (e) => {
+      if (e.detail && e.detail.page === 'analysis') {
+        this.bindProgressElements();
+      }
+    });
+  }
+
+  bindProgressElements() {
     this.progressElements = {
       container: document.getElementById('progress-container'),
       currentImageNumber: document.getElementById('current-image-number'),
@@ -60,24 +89,10 @@ class EnhancedProcessor {
 
     // Cancel processing handler
     if (this.progressElements.cancelBtn) {
+      // Remove existing listener to prevent duplicates
+      this.progressElements.cancelBtn.replaceWith(this.progressElements.cancelBtn.cloneNode(true));
+      this.progressElements.cancelBtn = document.getElementById('cancel-processing-btn');
       this.progressElements.cancelBtn.addEventListener('click', () => this.cancelProcessing());
-    }
-
-    // ESC key handler for modal
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        const modal = document.getElementById('token-info-modal');
-        if (modal && modal.style.display === 'flex') {
-          this.closeTokenInfoModal();
-        }
-      }
-    });
-
-    // Handle batch cancellation event from main process
-    if (window.api && window.api.receive) {
-      window.api.receive('batch-cancelled', (data) => {
-        this.handleBatchCancelled();
-      });
     }
   }
 

@@ -250,15 +250,19 @@ class EnhancedProgressTracker {
       window.api.receive('processing-completed', (data) => {
         this.completeProcessing(data);
       });
-      
+
+      window.api.receive('batch-cancelled', (data) => {
+        this.handleCancelled(data);
+      });
+
       window.api.receive('processing-error', (data) => {
         this.showError(data.error);
       });
-      
+
       window.api.receive('processing-paused', () => {
         this.setPaused(true);
       });
-      
+
       window.api.receive('processing-resumed', () => {
         this.setPaused(false);
       });
@@ -660,15 +664,54 @@ class EnhancedProgressTracker {
       if (window.api) {
         window.api.send('stop-processing');
       }
-      
-      this.showStatusMessage('Processing stopped by user', 'warning');
-      
-      setTimeout(() => {
-        this.hide();
-      }, 2000);
+
+      this.showStatusMessage('Stopping... waiting for in-flight images to complete', 'warning');
+
+      // Disable stop button to prevent multiple clicks
+      const stopBtn = document.getElementById('btn-stop');
+      if (stopBtn) {
+        stopBtn.disabled = true;
+        stopBtn.innerHTML = '<span>🛑</span><span>Stopping...</span>';
+      }
+
+      // UI will be hidden when batch-cancelled or batch-complete event is received
     }
   }
   
+  handleCancelled(data) {
+    const processed = data?.processedImages || this.processedFiles;
+    const total = data?.totalImages || this.totalFiles;
+
+    // Update UI to show cancellation
+    document.getElementById('progress-main-icon').textContent = '🛑';
+    document.getElementById('progress-main-title').textContent = 'Processing Cancelled';
+    document.getElementById('progress-subtitle').textContent = `Processed ${processed} of ${total} images before cancellation`;
+
+    this.showStatusMessage(`Processing cancelled. ${processed} images were completed.`, 'warning');
+
+    // Change controls to show Done button
+    const controlsDiv = document.querySelector('.progress-controls');
+    if (controlsDiv) {
+      controlsDiv.innerHTML = `
+        <button class="progress-control-btn btn-resume" onclick="window.enhancedProgress.viewResults()">
+          <span>👁️</span>
+          <span>View Results</span>
+        </button>
+        <button class="progress-control-btn btn-minimize" onclick="window.enhancedProgress.hide()">
+          <span>✅</span>
+          <span>Done</span>
+        </button>
+      `;
+    }
+
+    // Auto-hide after 3 seconds if minimized
+    if (this.isMinimized) {
+      setTimeout(() => {
+        this.hide();
+      }, 3000);
+    }
+  }
+
   completeProcessing(data) {
     // Mark all phases as completed
     Object.keys(this.phases).forEach(phase => {

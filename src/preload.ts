@@ -36,7 +36,7 @@ const validSendReceiveChannels: string[] = [
   'temporal-analysis-started', 'temporal-batch-progress', 'temporal-analysis-complete',
   'recognition-phase-started',
   // Cancellation channels
-  'cancel-batch-processing', 'batch-cancelled',
+  'cancel-batch-processing', 'batch-cancelled', 'stop-processing',
   // Window control events are typically send-only from renderer or receive-only
   // but for simplicity, we can list them here if they are used in `receive`
   // Category and auth refresh channels

@@ -15,7 +15,8 @@
   animation: slideInUp 0.4s ease-out;
 }
 
-.enhanced-progress-container.active {
+.enhanced-progress-container.active,
+.enhanced-progress-container.visible {
   display: block;
 }
 

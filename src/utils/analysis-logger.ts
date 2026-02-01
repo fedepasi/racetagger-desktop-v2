@@ -115,6 +115,8 @@ export interface ImageAnalysisEvent extends LogEvent {
   thumbnailPath?: string | null;
   microThumbPath?: string | null;
   compressedPath?: string | null;
+  // Path after folder organization (move/copy)
+  organizedPath?: string;
   // Recognition method tracking
   recognitionMethod?: 'gemini' | 'rf-detr' | 'local-onnx' | 'gemini-v6-seg' | 'face_recognition';
   // Original image dimensions for bbox mapping (especially useful for local-onnx)
