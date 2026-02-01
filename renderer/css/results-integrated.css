@@ -596,6 +596,24 @@
   font-weight: 600 !important;
 }
 
+.lv-autocomplete-indicator {
+  background: var(--success-color, #10b981) !important;
+  color: white !important;
+  padding: var(--spacing-xs) var(--spacing-sm) !important;
+  border-radius: var(--radius-sm) !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  margin-left: var(--spacing-xs) !important;
+  cursor: help !important;
+}
+
+/* Autocomplete input styling */
+.lv-autocomplete-input:focus {
+  outline: none !important;
+  border-color: var(--success-color, #10b981) !important;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.1) !important;
+}
+
 /* Form Elements */
 .lv-edit-input,
 .lv-form-group input,
