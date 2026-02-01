@@ -292,6 +292,14 @@
           console.log('[Router] EnhancedFileBrowser already exists, reloading presets');
           window.enhancedFileBrowser.loadAvailablePresets();
         }
+
+        // Load last analysis settings to restore previous configuration
+        // This runs after a short delay to ensure all UI elements are ready
+        if (typeof window.loadLastAnalysisSettings === 'function') {
+          setTimeout(() => {
+            window.loadLastAnalysisSettings();
+          }, 100);
+        }
         break;
     }
   }

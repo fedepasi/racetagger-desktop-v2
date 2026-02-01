@@ -1508,6 +1508,11 @@ async function proceedWithFolderAnalysis() {
       }
     }
 
+    // Save current analysis settings for next time
+    if (typeof window.saveLastAnalysisSettings === 'function') {
+      window.saveLastAnalysisSettings();
+    }
+
     // Let main process determine optimal processing mode based on USE_UNIFIED_PROCESSOR flag
     // Send to main process
     if (window.api) {
