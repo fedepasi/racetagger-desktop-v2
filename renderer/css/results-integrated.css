@@ -388,7 +388,7 @@
   background: var(--bg-card);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md);
-  margin: var(--spacing-lg) 0;
+  /*margin: var(--spacing-lg) 0;*/
   overflow: hidden;
 }
 

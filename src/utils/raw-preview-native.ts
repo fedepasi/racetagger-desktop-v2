@@ -449,6 +449,186 @@ export class RawPreviewExtractor {
       speedup
     };
   }
+  /**
+   * Extract full/high quality preview from a RAW file.
+   * Targets the largest embedded JPEG (JpgFromRaw), typically 2-8MB, full resolution.
+   */
+  async extractFullPreview(filePath: string, options?: { timeout?: number }): Promise<NativePreviewResult> {
+    const startTime = Date.now();
+
+    if (!this.nativeLibraryAvailable) {
+      // Fallback to ExifTool with -JpgFromRaw tag
+      return this.extractJpgFromRawWithExifTool(filePath, options?.timeout || 30000);
+    }
+
+    try {
+      const nativeLib = await import('raw-preview-extractor');
+      const result = await nativeLib.extractFullPreview(filePath, {
+        timeout: options?.timeout || 15000
+      });
+
+      if (result.success && result.preview) {
+        return {
+          success: true,
+          data: result.preview.data,
+          width: result.preview.width,
+          height: result.preview.height,
+          format: 'JPEG',
+          extractionTimeMs: Date.now() - startTime,
+          method: 'native',
+          metadata: result.preview.metadata ? {
+            orientation: result.preview.metadata.orientation,
+            camera: result.preview.metadata.camera,
+            iso: result.preview.metadata.iso,
+            aperture: result.preview.metadata.fNumber,
+            shutterSpeed: result.preview.metadata.exposureTime
+          } : undefined
+        };
+      }
+
+      // Native failed - try ExifTool -JpgFromRaw
+      return this.extractJpgFromRawWithExifTool(filePath, options?.timeout || 30000);
+    } catch (error: any) {
+      return this.extractJpgFromRawWithExifTool(filePath, options?.timeout || 30000);
+    }
+  }
+
+  /**
+   * Extract all available JPEG previews from a RAW file.
+   * Returns all embedded previews sorted by size, useful for calibration.
+   */
+  async extractAllPreviews(filePath: string): Promise<{
+    success: boolean;
+    previews: Array<{
+      quality: 'thumbnail' | 'preview' | 'full';
+      width: number;
+      height: number;
+      data: Buffer;
+      size: number;
+    }>;
+    error?: string;
+  }> {
+    if (!this.nativeLibraryAvailable) {
+      return { success: false, previews: [], error: 'Native library not available' };
+    }
+
+    try {
+      const nativeLib = await import('raw-preview-extractor');
+      const result = await nativeLib.extractAllPreviews(filePath);
+
+      if (result.success && result.previews) {
+        return {
+          success: true,
+          previews: result.previews.map((p: any) => ({
+            quality: p.quality || 'preview',
+            width: p.width,
+            height: p.height,
+            data: p.data,
+            size: p.data.length
+          }))
+        };
+      }
+
+      return { success: false, previews: [], error: result.error || 'No previews found' };
+    } catch (error: any) {
+      return { success: false, previews: [], error: error.message };
+    }
+  }
+
+  /**
+   * Extract JpgFromRaw using ExifTool (fallback for extractFullPreview)
+   */
+  private async extractJpgFromRawWithExifTool(filePath: string, timeout: number): Promise<NativePreviewResult> {
+    const startTime = Date.now();
+
+    try {
+      if (!fs.existsSync(filePath)) {
+        return { success: false, error: `File not found: ${filePath}` };
+      }
+
+      const platform = process.platform;
+      let isDev = true;
+      try {
+        const { app } = require('electron');
+        isDev = !app || !app.isPackaged;
+      } catch {
+        isDev = true;
+      }
+
+      let vendorDir: string;
+      if (isDev) {
+        vendorDir = path.join(__dirname, '../../../vendor', platform);
+      } else {
+        vendorDir = path.join(process.resourcesPath, 'app.asar.unpacked', 'vendor', platform);
+      }
+
+      let exiftoolPath: string;
+      if (platform === 'win32') {
+        const perlExe = path.join(vendorDir, 'perl.exe');
+        const exiftoolPl = path.join(vendorDir, 'exiftool.pl');
+        exiftoolPath = `"${perlExe}" "${exiftoolPl}"`;
+      } else {
+        exiftoolPath = path.join(vendorDir, 'exiftool');
+      }
+
+      const { exec } = await import('child_process');
+      const { promisify } = await import('util');
+      const execAsync = promisify(exec);
+
+      const tempDir = os.tmpdir();
+      const randomId = Math.random().toString(36).substring(2, 15);
+      const tempOutputPath = path.join(tempDir, `exiftool_jpgfromraw_${randomId}.jpg`);
+
+      // Try JpgFromRaw first (full resolution), then PreviewImage as fallback
+      const command = `${exiftoolPath} -b -JpgFromRaw "${filePath}" > "${tempOutputPath}"`;
+
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('ExifTool timeout')), timeout);
+      });
+
+      await Promise.race([
+        execAsync(command, { maxBuffer: 50 * 1024 * 1024 }),
+        timeoutPromise
+      ]);
+
+      if (!fs.existsSync(tempOutputPath)) {
+        return { success: false, error: 'ExifTool JpgFromRaw extraction failed - no output' };
+      }
+
+      const stats = await fsPromises.stat(tempOutputPath);
+      if (stats.size === 0) {
+        await fsPromises.unlink(tempOutputPath);
+        // Fallback to PreviewImage
+        return this.extractWithDcrawFallback(filePath, {
+          targetMinSize: 200 * 1024,
+          targetMaxSize: 10 * 1024 * 1024,
+          timeout: timeout,
+          preferQuality: 'full',
+          includeMetadata: false,
+          useNativeLibrary: false
+        });
+      }
+
+      const data = await fsPromises.readFile(tempOutputPath);
+      try { await fsPromises.unlink(tempOutputPath); } catch { /* non-critical */ }
+
+      return {
+        success: true,
+        data,
+        width: 0,  // Will be detected by sharp in caller
+        height: 0,
+        format: 'JPEG',
+        extractionTimeMs: Date.now() - startTime,
+        method: 'dcraw-fallback'
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: `JpgFromRaw extraction failed: ${error.message}`,
+        extractionTimeMs: Date.now() - startTime
+      };
+    }
+  }
 }
 
 // Istanza singleton per uso globale

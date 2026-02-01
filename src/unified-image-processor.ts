@@ -109,6 +109,18 @@ export interface UnifiedProcessingResult {
 }
 
 /**
+ * RAW preview extraction strategy determined by calibration sampling
+ */
+interface RawPreviewStrategy {
+  method: 'full' | 'preview' | 'fallback';
+  bestWidth: number;
+  bestHeight: number;
+  bestSizeKB: number;
+  targetMaxSize: number;  // bytes
+  sampleFile: string;
+}
+
+/**
  * Configurazione del processore unificato
  */
 export interface UnifiedProcessorConfig {
@@ -197,6 +209,8 @@ class UnifiedImageWorker extends EventEmitter {
   // Face Recognition (browser-based detection via IPC bridge)
   private faceRecognitionEnabled: boolean = false;
   private faceDescriptorsLoaded: boolean = false;
+  // RAW preview calibration strategy (set by processor from calibration results)
+  private rawPreviewStrategies: Map<string, RawPreviewStrategy> = new Map();
   private faceDescriptorCount: number = 0;
   // Training consent tracking (default true for opt-out model)
   private userTrainingConsent: boolean = true;
@@ -2339,6 +2353,14 @@ class UnifiedImageWorker extends EventEmitter {
       this.smartMatcher.startImageAnalysis(imageFile.id);
     }
 
+    // Copy RAW preview strategies from processor (if available)
+    if (processor) {
+      const strategies = processor.getRawPreviewStrategies();
+      if (strategies.size > 0) {
+        this.rawPreviewStrategies = strategies;
+      }
+    }
+
     try {
       // Fase 1: Preparazione dell'immagine per upload (RAW→JPEG o compressione JPEG)
       phaseStart = Date.now();
@@ -3246,6 +3268,7 @@ class UnifiedImageWorker extends EventEmitter {
 
   /**
    * Fase 1: Prepara l'immagine per l'upload - estrazione preview per RAW, copia per JPEG
+   * Uses calibrated strategy per RAW extension when available (from batch calibration).
    */
   private async prepareImageForUpload(imageFile: UnifiedImageFile): Promise<string> {
     if (imageFile.isRaw) {
@@ -3258,49 +3281,113 @@ class UnifiedImageWorker extends EventEmitter {
       );
 
       try {
-        // Estrazione preview veloce con raw-preview-extractor
-        const previewResult = await rawPreviewExtractor.extractPreview(imageFile.originalPath, {
-          targetMinSize: 200 * 1024,     // 200KB min
-          targetMaxSize: 2 * 1024 * 1024, // 2MB max
-          timeout: 10000,                  // 10s timeout
-          preferQuality: 'preview',        // Usa preview embedded
-          includeMetadata: true,           // Include metadata EXIF
-          useNativeLibrary: true          // Priorità a libreria nativa
-        });
+        // Determine extraction strategy from calibration data
+        const ext = path.extname(imageFile.fileName).toLowerCase();
+        const strategy = this.rawPreviewStrategies.get(ext);
 
-        if (!previewResult.success || !previewResult.data) {
-          throw new Error(previewResult.error || 'Preview extraction failed');
-        }
+        let previewData: Buffer | null = null;
+        let previewWidth = 0;
+        let previewHeight = 0;
+        let extractionMethod = 'unknown';
+        let previewOrientation: number | undefined;
 
-        // DIAGNOSTIC: Log RAW preview extraction quality
-        {
-          const previewSizeKB = Math.round(previewResult.data.length / 1024);
-          const previewW = previewResult.width || 0;
-          const previewH = previewResult.height || 0;
-          const method = previewResult.method || 'unknown';
-          console.log(`[QUALITY-DIAG] 📸 RAW Preview Extracted: ${imageFile.fileName}`);
-          console.log(`[QUALITY-DIAG]   Method: ${method}`);
-          console.log(`[QUALITY-DIAG]   Preview size: ${previewSizeKB}KB`);
-          console.log(`[QUALITY-DIAG]   Preview dimensions: ${previewW}x${previewH}`);
-          console.log(`[QUALITY-DIAG]   Extraction time: ${previewResult.extractionTimeMs}ms`);
-
-          // Also get actual dimensions from the buffer using sharp
+        if (strategy && strategy.method === 'full') {
+          // CALIBRATED: Use extractFullPreview for maximum quality
           try {
-            const diagProcessor = await createImageProcessor(previewResult.data);
-            const diagMeta = await diagProcessor.metadata();
-            console.log(`[QUALITY-DIAG]   Sharp-detected dimensions: ${diagMeta.width}x${diagMeta.height}`);
-            console.log(`[QUALITY-DIAG]   Format: ${diagMeta.format}`);
-          } catch (diagErr) {
-            console.log(`[QUALITY-DIAG]   Could not read preview metadata: ${diagErr}`);
+            const fullResult = await rawPreviewExtractor.extractFullPreview(imageFile.originalPath, { timeout: 15000 });
+            if (fullResult.success && fullResult.data) {
+              previewData = fullResult.data;
+              previewWidth = fullResult.width || 0;
+              previewHeight = fullResult.height || 0;
+              extractionMethod = 'calibrated-full';
+              previewOrientation = fullResult.metadata?.orientation;
+            }
+          } catch (fullErr: any) {
+            console.warn(`[RAW-Extract] extractFullPreview failed for ${imageFile.fileName}, falling back: ${fullErr.message}`);
+          }
+        } else if (strategy && strategy.method === 'preview') {
+          // CALIBRATED: Use extractPreview with optimal targetMaxSize
+          try {
+            const previewResult = await rawPreviewExtractor.extractPreview(imageFile.originalPath, {
+              targetMinSize: 200 * 1024,
+              targetMaxSize: strategy.targetMaxSize,
+              timeout: 10000,
+              preferQuality: 'preview',
+              includeMetadata: true,
+              useNativeLibrary: true
+            });
+            if (previewResult.success && previewResult.data) {
+              previewData = previewResult.data;
+              previewWidth = previewResult.width || 0;
+              previewHeight = previewResult.height || 0;
+              extractionMethod = 'calibrated-preview';
+              previewOrientation = previewResult.metadata?.orientation;
+            }
+          } catch (prevErr: any) {
+            console.warn(`[RAW-Extract] calibrated preview failed for ${imageFile.fileName}, falling back: ${prevErr.message}`);
           }
         }
 
+        // Fallback: try extractFullPreview first, then standard extractPreview
+        if (!previewData) {
+          // Try full preview first (best quality)
+          try {
+            const fullResult = await rawPreviewExtractor.extractFullPreview(imageFile.originalPath, { timeout: 15000 });
+            if (fullResult.success && fullResult.data) {
+              previewData = fullResult.data;
+              previewWidth = fullResult.width || 0;
+              previewHeight = fullResult.height || 0;
+              extractionMethod = 'fallback-full';
+              previewOrientation = fullResult.metadata?.orientation;
+            }
+          } catch {
+            // Continue to next fallback
+          }
+        }
+
+        if (!previewData) {
+          // Last resort: standard extraction (original behavior)
+          const previewResult = await rawPreviewExtractor.extractPreview(imageFile.originalPath, {
+            targetMinSize: 200 * 1024,
+            targetMaxSize: 3 * 1024 * 1024,
+            timeout: 10000,
+            preferQuality: 'full',
+            includeMetadata: true,
+            useNativeLibrary: true
+          });
+          if (previewResult.success && previewResult.data) {
+            previewData = previewResult.data;
+            previewWidth = previewResult.width || 0;
+            previewHeight = previewResult.height || 0;
+            extractionMethod = 'fallback-standard';
+            previewOrientation = previewResult.metadata?.orientation;
+          }
+        }
+
+        if (!previewData) {
+          throw new Error('All preview extraction methods failed');
+        }
+
+        // Detect actual dimensions if not reported by extractor
+        if (previewWidth === 0 || previewHeight === 0) {
+          try {
+            const diagProcessor = await createImageProcessor(previewData);
+            const diagMeta = await diagProcessor.metadata();
+            previewWidth = diagMeta.width || 0;
+            previewHeight = diagMeta.height || 0;
+          } catch {
+            // Non-critical
+          }
+        }
+
+        workerLog.info(`[RAW-Extract] ${imageFile.fileName}: ${extractionMethod} ${previewWidth}x${previewHeight} (${Math.round(previewData.length / 1024)}KB)`);
+
         // Salva la preview estratta come file temporaneo JPEG
-        await fsPromises.writeFile(tempJpegPath, previewResult.data);
+        await fsPromises.writeFile(tempJpegPath, previewData);
 
         // MEMORY FIX: Rilascia esplicitamente il Buffer della preview per evitare accumulo memoria
-        const previewBufferSize = previewResult.data.length;
-        previewResult.data = null as any; // Nullifica reference per permettere GC
+        const previewBufferSize = previewData.length;
+        previewData = null as any; // Nullifica reference per permettere GC
 
         // Forza garbage collection per Buffer grandi (>1MB)
         if (previewBufferSize > 1024 * 1024 && global.gc) {
@@ -3308,7 +3395,7 @@ class UnifiedImageWorker extends EventEmitter {
         }
 
         // Applica rotazione automatica basata sui metadata EXIF se disponibili
-        if (previewResult.metadata?.orientation && previewResult.metadata.orientation !== 1) {
+        if (previewOrientation && previewOrientation !== 1) {
           try {
             const processor = await createImageProcessor(tempJpegPath);
             let rotatedBuffer = await processor
@@ -3396,14 +3483,9 @@ class UnifiedImageWorker extends EventEmitter {
     const estimatedQuality = Math.round((maxSizeBytes / (megapixels * 10000)) * 100);
     const initialQuality = Math.max(30, Math.min(95, estimatedQuality));
 
-    // DIAGNOSTIC: Log compression parameters
-    console.log(`[QUALITY-DIAG] 🗜️ Compression starting: ${fileName}`);
-    console.log(`[QUALITY-DIAG]   Original dimensions: ${originalWidth}x${originalHeight}`);
-    console.log(`[QUALITY-DIAG]   Target dimensions: ${targetWidth}x${targetHeight} (maxDim=${maxDim})`);
-    console.log(`[QUALITY-DIAG]   Input file size: ${Math.round(imageBuffer.length / 1024)}KB`);
-    console.log(`[QUALITY-DIAG]   Target max size: ${Math.round(maxSizeBytes / 1024)}KB`);
-    console.log(`[QUALITY-DIAG]   Megapixels: ${megapixels.toFixed(2)}MP`);
-    console.log(`[QUALITY-DIAG]   Predicted quality: ${initialQuality}% (raw estimate: ${estimatedQuality}%)`);
+    if (DEBUG_MODE) {
+      console.log(`[Compress] ${fileName}: ${originalWidth}x${originalHeight} -> ${targetWidth}x${targetHeight}, quality=${initialQuality}%, input=${Math.round(imageBuffer.length / 1024)}KB`);
+    }
 
     let compressedBuffer: Buffer;
     let compressionAttempts = 0;
@@ -3425,12 +3507,8 @@ class UnifiedImageWorker extends EventEmitter {
 
       compressionAttempts++;
 
-      // DIAGNOSTIC: Log first compression result
-      console.log(`[QUALITY-DIAG]   First pass result: ${Math.round(compressedBuffer.length / 1024)}KB at quality ${initialQuality}%`);
-
       // If predictive compression overshot, fallback to binary search
       if (compressedBuffer.length > maxSizeBytes) {
-        console.log(`[QUALITY-DIAG]   ⚠️ OVERSHOT! ${Math.round(compressedBuffer.length / 1024)}KB > ${Math.round(maxSizeBytes / 1024)}KB - entering binary search`);
         compressedBuffer = await this.compressWithBinarySearch(
           imageBuffer,
           maxSizeBytes,
@@ -3457,18 +3535,6 @@ class UnifiedImageWorker extends EventEmitter {
     } catch (error) {
       console.error(`[UnifiedWorker] Failed to write compressed file for ${fileName}:`, error);
       throw new Error(`Failed to save compressed image: ${error}`);
-    }
-
-    // DIAGNOSTIC: Log final compression result
-    {
-      try {
-        const finalProcessor = await createImageProcessor(compressedBuffer);
-        const finalMeta = await finalProcessor.metadata();
-        console.log(`[QUALITY-DIAG]   ✅ Final compressed: ${Math.round(compressedBuffer.length / 1024)}KB, ${finalMeta.width}x${finalMeta.height}`);
-        console.log(`[QUALITY-DIAG]   This is what Gemini receives (as base64)`);
-      } catch (e) {
-        console.log(`[QUALITY-DIAG]   ✅ Final compressed: ${Math.round(compressedBuffer.length / 1024)}KB`);
-      }
     }
 
     return {
@@ -5192,6 +5258,11 @@ export class UnifiedImageProcessor extends EventEmitter {
   private readonly BATCH_UPDATE_THRESHOLD = 25; // Flush every 25 images
   private readonly UPDATE_TIMEOUT_MS = 3000; // Timeout per singolo update
 
+  // ============================================================================
+  // RAW PREVIEW CALIBRATION (dynamic extraction strategy per extension)
+  // ============================================================================
+  private rawPreviewStrategies: Map<string, RawPreviewStrategy> = new Map();
+
   constructor(config: Partial<UnifiedProcessorConfig> = {}) {
     super();
     
@@ -5507,6 +5578,13 @@ export class UnifiedImageProcessor extends EventEmitter {
     }
     // ========================================================================
 
+    // ========================================================================
+    // RAW PREVIEW CALIBRATION: Sample one file per RAW extension to determine
+    // optimal extraction strategy (full vs preview vs fallback)
+    // ========================================================================
+    await this.calibrateRawPreviews(filteredFiles);
+    // ========================================================================
+
     let results: UnifiedProcessingResult[];
 
     try {
@@ -5540,6 +5618,236 @@ export class UnifiedImageProcessor extends EventEmitter {
         this.disposeWorkerPool();
       }
     }
+  }
+
+  /**
+   * Calibrate RAW preview extraction by sampling one file per RAW extension.
+   * Determines the best extraction method (full/preview/fallback) for each format.
+   * When crop-context is active, prefers larger previews for better crop quality.
+   */
+  private async calibrateRawPreviews(imageFiles: UnifiedImageFile[]): Promise<void> {
+    // Group RAW files by extension
+    const rawExtensions = new Map<string, UnifiedImageFile>();
+    for (const file of imageFiles) {
+      if (file.isRaw) {
+        const ext = path.extname(file.fileName).toLowerCase();
+        if (!rawExtensions.has(ext)) {
+          rawExtensions.set(ext, file);
+        }
+      }
+    }
+
+    if (rawExtensions.size === 0) {
+      return; // No RAW files in batch
+    }
+
+    const cropContextActive = this.shouldUseCropContextForCalibration();
+    console.log(`[RAW-Calibration] Calibrating ${rawExtensions.size} RAW format(s), crop-context: ${cropContextActive}`);
+
+    for (const [ext, sampleFile] of rawExtensions) {
+      try {
+        console.log(`[RAW-Calibration] Sampling ${ext} with ${sampleFile.fileName}...`);
+
+        // Use extractAllPreviews to discover what's available
+        const allResult = await rawPreviewExtractor.extractAllPreviews(sampleFile.originalPath);
+
+        if (!allResult.success || !allResult.previews || allResult.previews.length === 0) {
+          // extractAllPreviews failed - try extractFullPreview as calibration probe
+          console.log(`[RAW-Calibration]   extractAllPreviews returned empty, probing with extractFullPreview...`);
+          try {
+            const probeResult = await rawPreviewExtractor.extractFullPreview(sampleFile.originalPath, { timeout: 15000 });
+            if (probeResult.success && probeResult.data) {
+              // Detect dimensions
+              let probeWidth = probeResult.width || 0;
+              let probeHeight = probeResult.height || 0;
+              if (probeWidth === 0 || probeHeight === 0) {
+                try {
+                  const probeProcessor = await createImageProcessor(probeResult.data);
+                  const probeMeta = await probeProcessor.metadata();
+                  probeWidth = probeMeta.width || 0;
+                  probeHeight = probeMeta.height || 0;
+                } catch { /* non-critical */ }
+              }
+
+              const probeSizeKB = Math.round(probeResult.data.length / 1024);
+              const probeMethod: 'full' | 'preview' = probeWidth >= 1920 ? 'full' : 'preview';
+              const targetMax = probeMethod === 'full' ? 8 * 1024 * 1024 : 3 * 1024 * 1024;
+
+              // Release probe buffer immediately
+              probeResult.data = null as any;
+
+              this.rawPreviewStrategies.set(ext, {
+                method: probeMethod,
+                bestWidth: probeWidth,
+                bestHeight: probeHeight,
+                bestSizeKB: probeSizeKB,
+                targetMaxSize: targetMax,
+                sampleFile: sampleFile.fileName
+              });
+              console.log(`[RAW-Calibration]   Probe success: ${ext} -> '${probeMethod}' ${probeWidth}x${probeHeight} (${probeSizeKB}KB)`);
+              continue;
+            }
+          } catch (probeErr: any) {
+            console.warn(`[RAW-Calibration]   Probe also failed: ${probeErr.message}`);
+          }
+
+          // Complete fallback
+          console.log(`[RAW-Calibration]   Using fallback strategy for ${ext}`);
+          this.rawPreviewStrategies.set(ext, {
+            method: 'fallback',
+            bestWidth: 0,
+            bestHeight: 0,
+            bestSizeKB: 0,
+            targetMaxSize: 3 * 1024 * 1024,
+            sampleFile: sampleFile.fileName
+          });
+          continue;
+        }
+
+        // Sort previews by pixel count (largest first)
+        const sorted = [...allResult.previews].sort((a, b) =>
+          (b.width * b.height) - (a.width * a.height)
+        );
+
+        // Log all available previews
+        for (const p of sorted) {
+          console.log(`[RAW-Calibration]   Found: ${p.quality} ${p.width}x${p.height} (${Math.round(p.data.length / 1024)}KB)`);
+        }
+
+        // Choose strategy based on crop-context and available previews
+        const fullPreview = sorted.find(p => p.quality === 'full');
+        const mediumPreview = sorted.find(p => p.quality === 'preview');
+        const bestPreview = sorted[0]; // Largest available
+
+        let chosen: typeof sorted[0];
+        let method: 'full' | 'preview' | 'fallback';
+
+        if (cropContextActive) {
+          // Crop-context needs maximum detail for accurate bbox crops
+          // Prefer full preview (JpgFromRaw) if available
+          if (fullPreview && fullPreview.width >= 1920) {
+            chosen = fullPreview;
+            method = 'full';
+          } else if (bestPreview.width >= 1920) {
+            chosen = bestPreview;
+            method = bestPreview.quality === 'full' ? 'full' : 'preview';
+          } else {
+            // Even the best preview is small - still use it, but log warning
+            chosen = bestPreview;
+            method = 'preview';
+            console.warn(`[RAW-Calibration]   ⚠️ ${ext}: Best preview only ${chosen.width}x${chosen.height} - may affect crop quality`);
+          }
+        } else {
+          // No crop-context: we only need enough resolution for the maxDimension resize (1920px default)
+          // Prefer medium-sized preview to avoid wasting time resizing huge JpgFromRaw
+          const minAcceptableWidth = this.config.maxDimension || 1920;
+
+          if (mediumPreview && mediumPreview.width >= minAcceptableWidth) {
+            // Medium preview is big enough - use it (faster than full)
+            chosen = mediumPreview;
+            method = 'preview';
+          } else if (fullPreview && fullPreview.width >= minAcceptableWidth) {
+            // Need full preview to reach target dimension
+            chosen = fullPreview;
+            method = 'full';
+          } else if (bestPreview.width >= minAcceptableWidth) {
+            chosen = bestPreview;
+            method = bestPreview.quality === 'full' ? 'full' : 'preview';
+          } else {
+            // All previews are smaller than target - use the largest available
+            chosen = bestPreview;
+            method = bestPreview.quality === 'full' ? 'full' : 'preview';
+            console.warn(`[RAW-Calibration]   ⚠️ ${ext}: Best preview ${chosen.width}x${chosen.height} is below target ${minAcceptableWidth}px`);
+          }
+        }
+
+        // Set targetMaxSize based on strategy
+        // For full: allow up to 8MB (JpgFromRaw can be large)
+        // For preview: allow up to 3MB
+        const targetMaxSize = method === 'full'
+          ? 8 * 1024 * 1024
+          : 3 * 1024 * 1024;
+
+        const strategy: RawPreviewStrategy = {
+          method,
+          bestWidth: chosen.width,
+          bestHeight: chosen.height,
+          bestSizeKB: Math.round(chosen.data.length / 1024),
+          targetMaxSize,
+          sampleFile: sampleFile.fileName
+        };
+
+        this.rawPreviewStrategies.set(ext, strategy);
+        console.log(`[RAW-Calibration]   ✅ ${ext}: Using '${method}' strategy → ${chosen.width}x${chosen.height} (${strategy.bestSizeKB}KB, maxTarget=${Math.round(targetMaxSize / 1024 / 1024)}MB)`);
+
+      } catch (error: any) {
+        console.error(`[RAW-Calibration]   ❌ Failed to calibrate ${ext}: ${error.message}`);
+        // Fallback: use current default behavior
+        this.rawPreviewStrategies.set(ext, {
+          method: 'fallback',
+          bestWidth: 0,
+          bestHeight: 0,
+          bestSizeKB: 0,
+          targetMaxSize: 3 * 1024 * 1024,
+          sampleFile: sampleFile.fileName
+        });
+      }
+    }
+
+    console.log(`[RAW-Calibration] Calibration complete: ${this.rawPreviewStrategies.size} strategies configured`);
+  }
+
+  /**
+   * Check if crop-context is likely to be used for this batch.
+   * Used during calibration to determine preview size requirements.
+   */
+  private shouldUseCropContextForCalibration(): boolean {
+    // Check current sport category crop_config
+    if (this.currentSportCategory?.crop_config) {
+      let cropConfig = this.currentSportCategory.crop_config;
+      if (typeof cropConfig === 'string') {
+        try {
+          cropConfig = JSON.parse(cropConfig);
+        } catch {
+          return false;
+        }
+      }
+      return cropConfig?.enabled === true;
+    }
+
+    // Also check batch sport categories if available
+    if (this.batchSportCategories) {
+      for (const cat of this.batchSportCategories) {
+        if (cat.code === this.config.category && cat.crop_config) {
+          let cropConfig = cat.crop_config;
+          if (typeof cropConfig === 'string') {
+            try {
+              cropConfig = JSON.parse(cropConfig);
+            } catch {
+              continue;
+            }
+          }
+          return cropConfig?.enabled === true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Get the calibrated RAW preview strategy for a given file extension.
+   * Returns null if no calibration data exists (use default behavior).
+   */
+  getRawPreviewStrategy(ext: string): RawPreviewStrategy | null {
+    return this.rawPreviewStrategies.get(ext.toLowerCase()) || null;
+  }
+
+  /**
+   * Get all calibrated RAW preview strategies (for passing to workers).
+   */
+  getRawPreviewStrategies(): Map<string, RawPreviewStrategy> {
+    return this.rawPreviewStrategies;
   }
 
   /**
