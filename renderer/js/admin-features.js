@@ -209,11 +209,11 @@ class FolderOrganizationManager {
    */
   showMoveWarning() {
     const confirmed = confirm(
-      '⚠️ ATTENZIONE: Modalità "Sposta file"\n\n' +
-      'Questa modalità sposterà i file originali nelle cartelle organizzate.\n' +
-      'Non ci saranno copie di backup nella posizione originale.\n\n' +
-      'Sei sicuro di voler procedere con questa modalità?\n\n' +
-      '(Consigliamo la modalità "Copia file" per maggiore sicurezza)'
+      '⚠️ WARNING: "Move Files" Mode\n\n' +
+      'This mode will move the original files into the organized folders.\n' +
+      'There will be no backup copies in the original location.\n\n' +
+      'Are you sure you want to proceed with this mode?\n\n' +
+      '(We recommend "Copy Files" mode for greater safety)'
     );
 
     if (!confirmed) {

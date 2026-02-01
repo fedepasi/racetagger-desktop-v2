@@ -133,7 +133,7 @@ export class FolderOrganizer {
     const targetXmpPath = path.join(targetDir, `${targetNameWithoutExt}${originalExt}`);
 
     try {
-      if (this.config.mode === 'copy') {
+      if (operation === 'copy') {
         await fsPromises.copyFile(originalXmpPath, targetXmpPath);
       } else {
         await fsPromises.rename(originalXmpPath, targetXmpPath);

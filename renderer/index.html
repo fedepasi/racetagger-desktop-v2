@@ -28,6 +28,9 @@
   <!-- Settings Page -->
   <link rel="stylesheet" href="css/settings.css">
 
+  <!-- Feedback Modal -->
+  <link rel="stylesheet" href="css/feedback-modal.css">
+
   <!-- Router Page Container Styles -->
   <style>
     .page-container {
@@ -337,6 +340,9 @@
   <!-- Home Page Logic -->
   <script src="js/home.js"></script>
 
+  <!-- Support Feedback Modal -->
+  <script src="js/feedback-modal.js"></script>
+
   <!-- Face Recognition -->
   <script src="js/vendor/face-api.min.js"></script>
   <script src="js/face-detector.js"></script>
@@ -564,6 +570,13 @@
       </div>
     </div>
   </div>
+
+  <!-- Feedback FAB (Floating Action Button) -->
+  <button class="feedback-fab" id="feedback-fab" onclick="openFeedbackModal()" title="Send Feedback">
+    <svg class="feedback-fab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+    </svg>
+  </button>
 
 </body>
 </html>

@@ -99,6 +99,12 @@ const validInvokeChannels: string[] = [
   'get-supabase-image-url',
   // Feedback
   'submit-feedback',
+  // Support Feedback System
+  'submit-support-feedback',
+  'get-system-diagnostics',
+  'get-dependency-status',
+  'get-recent-errors',
+  'open-github-issues',
   // Access Code
   'check-access-code',
   'verify-access-code',

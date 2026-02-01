@@ -104,3 +104,51 @@ export type HandlerResult<T> = HandlerSuccess<T> | HandlerError;
 export const RAW_EXTENSIONS = ['.nef', '.arw', '.cr2', '.cr3', '.orf', '.raw', '.rw2', '.dng'];
 export const STANDARD_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp'];
 export const ALL_SUPPORTED_EXTENSIONS = [...STANDARD_EXTENSIONS, ...RAW_EXTENSIONS];
+
+// ==================== Support Feedback System ====================
+
+export interface SystemDiagnostics {
+  appVersion: string;
+  electronVersion: string;
+  nodeVersion: string;
+  os: string;
+  osVersion: string;
+  arch: string;
+  cpu: string;
+  cpuCores: number;
+  cpuThreads: number;
+  ramTotal: number;
+  ramAvailable: number;
+  gpu?: string;
+  diskType: string;
+  diskAvailable: number;
+  diskTotal: number;
+}
+
+export interface DependencyStatus {
+  name: string;
+  path?: string;
+  exists: boolean;
+  working: boolean;
+  native?: boolean;
+  error?: string;
+}
+
+export interface FeedbackSubmission {
+  type: 'bug' | 'feature' | 'general';
+  title: string;
+  description: string;
+  includeDiagnostics: boolean;
+  diagnostics?: {
+    system: SystemDiagnostics;
+    dependencies: DependencyStatus[];
+    recentErrors: Array<{ message: string; category: string; severity: string; timestamp: string }>;
+  };
+}
+
+export interface FeedbackResult {
+  success: boolean;
+  issueNumber?: number;
+  issueUrl?: string;
+  error?: string;
+}

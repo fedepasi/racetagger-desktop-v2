@@ -19,8 +19,6 @@ module.exports = {
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
     '^electron$': '<rootDir>/tests/__mocks__/electron.ts',
-    '^fs$': '<rootDir>/tests/__mocks__/fs.ts',
-    '^fs/promises$': '<rootDir>/tests/__mocks__/fs.ts',
   },
   setupFilesAfterEnv: ['<rootDir>/tests/setup.ts'],
   testTimeout: 30000

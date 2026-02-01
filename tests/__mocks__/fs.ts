@@ -1,5 +1,4 @@
 // Mock fs module for testing
-import { jest } from '@jest/globals';
 
 const mockStats = {
   isFile: jest.fn().mockReturnValue(true),

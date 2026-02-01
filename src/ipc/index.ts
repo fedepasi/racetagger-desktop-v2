@@ -18,8 +18,9 @@
  * - face-recognition-handlers.ts: Face detection and matching (6 handlers)
  * - preset-face-handlers.ts: Preset participant face photos (6 handlers)
  * - version-handlers.ts: App version checking (4 handlers)
+ * - feedback-handlers.ts: Support feedback & diagnostics (5 handlers)
  *
- * Total: 123 handlers extracted into modular files
+ * Total: 128 handlers extracted into modular files
  * Note: Some complex handlers (analyze-folder) remain in main.ts due to dependencies
  */
 
@@ -38,6 +39,7 @@ import { registerAnalysisHandlers } from './analysis-handlers';
 import { registerFaceRecognitionHandlers } from './face-recognition-handlers';
 import { registerPresetFaceHandlers } from './preset-face-handlers';
 import { registerVersionHandlers } from './version-handlers';
+import { registerFeedbackHandlers } from './feedback-handlers';
 
 /**
  * Initialize IPC context with mainWindow reference
@@ -95,8 +97,11 @@ export function registerAllHandlers(): void {
   // Version handlers (4)
   registerVersionHandlers();
 
+  // Feedback handlers (5)
+  registerFeedbackHandlers();
+
   console.log('[IPC] ========================================');
-  console.log('[IPC] All handlers registered (123 modular handlers)');
+  console.log('[IPC] All handlers registered (128 modular handlers)');
   console.log('[IPC] ========================================');
 }
 
