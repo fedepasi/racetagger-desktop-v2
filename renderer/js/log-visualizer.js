@@ -45,6 +45,7 @@ class LogVisualizer {
 
     // Folder organization status
     this.wasAlreadyOrganized = false; // Will be set during init
+    this.moveOrganizationCompleted = false; // Tracks if move was already done
 
     // Participant preset data for autocomplete
     this.participantPresetData = null;
@@ -68,6 +69,17 @@ class LogVisualizer {
     if (execution) {
       this.wasAlreadyOrganized = execution.folder_organization_enabled === true;
       console.log(`[LogVisualizer] Folder organization was ${this.wasAlreadyOrganized ? 'ENABLED' : 'NOT enabled'} during analysis`);
+    }
+
+    // Check if a move organization was already completed for this execution
+    try {
+      const moveStatus = await window.api.invoke('check-organization-move-completed', executionId);
+      this.moveOrganizationCompleted = moveStatus?.completed === true;
+      if (this.moveOrganizationCompleted) {
+        console.log(`[LogVisualizer] Move organization already completed at ${moveStatus.timestamp}`);
+      }
+    } catch (error) {
+      console.warn('[LogVisualizer] Could not check move organization status:', error);
     }
 
     // Load participant preset data for autocomplete if available
@@ -293,6 +305,15 @@ class LogVisualizer {
         <!-- Post-Analysis Folder Organization -->
         ${this.shouldShowFolderOrganizationUI() ? `
         <div class="lv-folder-organization-section" id="lv-folder-org-section">
+          ${this.moveOrganizationCompleted ? `
+          <div class="lv-folder-org-completed">
+            <div class="lv-folder-org-completed-icon">✅</div>
+            <div class="lv-folder-org-completed-text">
+              <h4>Folder Organization Completed</h4>
+              <p>Photos have been moved to their organized folders. Since the files were moved (not copied), they are no longer at their original location and this operation cannot be repeated.</p>
+            </div>
+          </div>
+          ` : `
           <div class="lv-folder-org-header">
             <h4>📁 Organize Photos into Folders</h4>
             <p>Review your results, make any corrections, then organize photos into folders</p>
@@ -308,6 +329,7 @@ class LogVisualizer {
               🚀 Start Organization
             </button>
           </div>
+          `}
         </div>
         ` : ''}
 
@@ -2941,6 +2963,19 @@ class LogVisualizer {
         return;
       }
 
+      // Warn user before move — this is a one-time operation
+      if (folderOrgConfig.mode === 'move') {
+        const confirmed = confirm(
+          'You selected "Move" mode. This will relocate the original files to organized folders.\n\n' +
+          'Once moved, the files will no longer be at their original paths and you will not be able to reorganize them again for this execution.\n\n' +
+          'Do you want to continue?'
+        );
+        if (!confirmed) {
+          console.log('[LogVisualizer] User cancelled move organization');
+          return;
+        }
+      }
+
       // Show progress indicator
       this.showNotification('🔄 Organizing photos into folders...', 'info');
 
@@ -2957,6 +2992,23 @@ ${summary.organizedFiles} photos organized into ${summary.foldersCreated} folder
 ${summary.skippedFiles} skipped, ${summary.unknownFiles} unknown`;
 
         this.showNotification(successMsg, 'success');
+
+        // If this was a move operation, disable the entire organization section
+        if (folderOrgConfig.mode === 'move' && summary.organizedFiles > 0) {
+          this.moveOrganizationCompleted = true;
+          const section = document.getElementById('lv-folder-org-section');
+          if (section) {
+            section.innerHTML = `
+              <div class="lv-folder-org-completed">
+                <div class="lv-folder-org-completed-icon">✅</div>
+                <div class="lv-folder-org-completed-text">
+                  <h4>Folder Organization Completed</h4>
+                  <p>Photos have been moved to their organized folders. Since the files were moved (not copied), they are no longer at their original location and this operation cannot be repeated.</p>
+                </div>
+              </div>
+            `;
+          }
+        }
 
         if (response.errors && response.errors.length > 0) {
           console.warn('[LogVisualizer] Organization completed with errors:', response.errors);

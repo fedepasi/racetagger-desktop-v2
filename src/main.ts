@@ -2817,6 +2817,17 @@ app.whenReady().then(async () => { // Added async here
           }
         }).filter(Boolean);
 
+        // Block repeated "move" operations - files are no longer at original paths
+        if (folderOrganizationConfig.mode === 'move') {
+          const alreadyMoved = logEvents.some((event: any) => event.type === 'ORGANIZATION_MOVE_COMPLETED');
+          if (alreadyMoved) {
+            return {
+              success: false,
+              error: 'Files have already been moved for this execution. The original files are no longer at their original paths. Use "Copy" mode instead if you need to reorganize.'
+            };
+          }
+        }
+
         // Extract image analysis events
         const imageAnalysisEvents = logEvents.filter(event => event.type === 'IMAGE_ANALYSIS');
 
@@ -2950,6 +2961,23 @@ app.whenReady().then(async () => { // Added async here
         // Get summary
         const summary = organizer.getSummary();
 
+        // Record move completion in the JSONL log to prevent repeated moves
+        if (folderOrganizationConfig.mode === 'move' && summary.organizedFiles > 0) {
+          try {
+            const moveCompletedEvent = JSON.stringify({
+              type: 'ORGANIZATION_MOVE_COMPLETED',
+              timestamp: new Date().toISOString(),
+              executionId,
+              organizedFiles: summary.organizedFiles,
+              foldersCreated: summary.foldersCreated
+            }) + '\n';
+            fs.appendFileSync(logFilePath, moveCompletedEvent);
+            console.log(`[Main Process] Recorded ORGANIZATION_MOVE_COMPLETED for execution ${executionId}`);
+          } catch (logError) {
+            console.error('[Main Process] Failed to record move completion:', logError);
+          }
+        }
+
         return {
           success: true,
           summary,
@@ -2962,6 +2990,37 @@ app.whenReady().then(async () => { // Added async here
           success: false,
           error: (error as Error).message
         };
+      }
+    });
+
+    // Check if a move organization was already completed for an execution
+    ipcMain.handle('check-organization-move-completed', async (_, executionId: string) => {
+      try {
+        const logsDir = path.join(app.getPath('userData'), '.analysis-logs');
+        const logFilePath = path.join(logsDir, `exec_${executionId}.jsonl`);
+
+        if (!fs.existsSync(logFilePath)) {
+          return { completed: false };
+        }
+
+        const logContent = fs.readFileSync(logFilePath, 'utf-8');
+        const logLines = logContent.trim().split('\n').filter(line => line.trim());
+
+        for (const line of logLines) {
+          try {
+            const event = JSON.parse(line);
+            if (event.type === 'ORGANIZATION_MOVE_COMPLETED') {
+              return { completed: true, timestamp: event.timestamp };
+            }
+          } catch {
+            // Skip malformed lines
+          }
+        }
+
+        return { completed: false };
+      } catch (error) {
+        console.error('[Main Process] Error checking move completion:', error);
+        return { completed: false };
       }
     });
   }

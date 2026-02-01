@@ -139,6 +139,7 @@ const validInvokeChannels: string[] = [
   'get-folder-organization-config',
   'select-organization-destination',
   'organize-results-post-analysis',
+  'check-organization-move-completed',
 
   // Supabase Operations
   'supabase-get-sport-categories',
