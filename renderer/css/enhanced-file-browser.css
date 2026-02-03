@@ -666,6 +666,14 @@
   box-shadow: 0 4px 20px rgba(59, 130, 246, 0.15);
 }
 
+.folder-selector-enhanced.drag-over {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.18), rgba(37, 99, 235, 0.14));
+  border-color: rgba(59, 130, 246, 0.6);
+  border-style: dashed;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 24px rgba(59, 130, 246, 0.25);
+}
+
 .folder-label {
   display: flex;
   align-items: center;
@@ -705,6 +713,12 @@
   font-size: 0.75rem;
   margin-top: 0.25rem;
   line-height: 1.4;
+}
+
+.folder-drop-hint {
+  text-align: center;
+  font-style: italic;
+  opacity: 0.7;
 }
 
 /* Category Section (Step 2) */

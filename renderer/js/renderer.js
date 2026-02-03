@@ -635,6 +635,65 @@ function handleFolderSelection() {
   }
 }
 
+// Setup drag & drop on the folder selector area
+function setupFolderDragAndDrop() {
+  const folderSelector = document.querySelector('.folder-selector-enhanced');
+  if (!folderSelector) return;
+  // Avoid re-binding
+  if (folderSelector._dragDropInitialized) return;
+  folderSelector._dragDropInitialized = true;
+
+  let dragCounter = 0;
+
+  const preventDefaults = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(evt => {
+    folderSelector.addEventListener(evt, preventDefaults, false);
+  });
+
+  folderSelector.addEventListener('dragenter', () => {
+    dragCounter++;
+    folderSelector.classList.add('drag-over');
+  }, false);
+
+  folderSelector.addEventListener('dragover', () => {
+    folderSelector.classList.add('drag-over');
+  }, false);
+
+  folderSelector.addEventListener('dragleave', () => {
+    dragCounter--;
+    if (dragCounter <= 0) {
+      folderSelector.classList.remove('drag-over');
+      dragCounter = 0;
+    }
+  }, false);
+
+  folderSelector.addEventListener('drop', (e) => {
+    dragCounter = 0;
+    folderSelector.classList.remove('drag-over');
+
+    const items = e.dataTransfer.items;
+    if (!items || items.length === 0) return;
+
+    // Try to get the folder path from dropped items
+    const files = e.dataTransfer.files;
+    if (files.length > 0) {
+      const firstFile = files[0];
+      // In Electron, dropped files/folders have a .path property
+      const droppedPath = firstFile.path;
+      if (droppedPath && window.api) {
+        console.log('[Renderer] Folder dropped:', droppedPath);
+        window.api.send('select-folder-by-path', droppedPath);
+      }
+    }
+  }, false);
+
+  console.log('[Renderer] Folder drag & drop initialized');
+}
+
 // Handle folder selected response
 async function handleFolderSelected(data) {
   console.log('[Renderer] handleFolderSelected called with:', data);
@@ -2136,6 +2195,7 @@ window.refreshCategories = refreshCategories;
 // Expose functions for router/dynamic page initialization
 window.handleFolderSelection = handleFolderSelection;
 window.handleFolderSelected = handleFolderSelected;
+window.setupFolderDragAndDrop = setupFolderDragAndDrop;
 window.toggleAdvancedOptions = toggleAdvancedOptions;
 window.loadDynamicCategories = loadDynamicCategories;
 

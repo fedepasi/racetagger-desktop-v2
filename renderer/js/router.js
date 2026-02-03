@@ -263,6 +263,11 @@
           window.api.receive('folder-selected', window.handleFolderSelected);
         }
 
+        // Initialize drag & drop on folder selector
+        if (typeof window.setupFolderDragAndDrop === 'function') {
+          window.setupFolderDragAndDrop();
+        }
+
         // Load dynamic sport categories from database
         if (typeof window.loadDynamicCategories === 'function') {
           window.loadDynamicCategories(false); // use cache if valid

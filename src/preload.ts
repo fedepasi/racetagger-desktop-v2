@@ -84,6 +84,7 @@ const validInvokeChannels: string[] = [
   // Image/File Operations
   'analyze-image',
   'select-folder',
+  'select-folder-by-path',
   'load-csv',
   'download-csv-template',
   'analyze-folder',

@@ -2766,6 +2766,46 @@ app.whenReady().then(async () => { // Added async here
   // console.log('[Main Process] testConversion finished or failed. Check console above.');
 
   ipcMain.on('select-folder', handleFolderSelection);
+
+  // Handle folder selection by path (drag & drop)
+  ipcMain.on('select-folder-by-path', async (event, folderPath: string) => {
+    try {
+      console.log('[FolderSelection] select-folder-by-path called with:', folderPath);
+
+      if (!folderPath || !fs.existsSync(folderPath)) {
+        event.sender.send('folder-selected', { success: false, message: 'La cartella selezionata non esiste' });
+        return;
+      }
+
+      const stat = fs.statSync(folderPath);
+      if (!stat.isDirectory()) {
+        event.sender.send('folder-selected', { success: false, message: 'Il percorso selezionato non è una cartella' });
+        return;
+      }
+
+      const imageFiles = await getImagesFromFolder(folderPath);
+      const imageCount = imageFiles.length;
+      const rawCount = imageFiles.filter(img => img.isRaw).length;
+
+      const payload = {
+        success: true,
+        path: folderPath,
+        imageCount,
+        rawCount
+      };
+      console.log('[FolderSelection] Sending folder-selected event with payload:', payload);
+      event.sender.send('folder-selected', payload);
+
+      if (batchConfig) {
+        batchConfig.folderPath = folderPath;
+      } else {
+        batchConfig = { folderPath, updateExif: false };
+      }
+    } catch (error) {
+      console.error('Error during folder selection by path:', error);
+      event.sender.send('folder-selected', { success: false, message: 'Errore durante la selezione della cartella' });
+    }
+  });
   
   // NOTE: Version checking IPC handlers moved to version-handlers.ts
   // (check-app-version, get-version-check-result, is-force-update-required, quit-app-for-update)
