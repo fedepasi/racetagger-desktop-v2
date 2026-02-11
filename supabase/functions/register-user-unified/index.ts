@@ -78,11 +78,14 @@ serve(async (req) => {
       }
     }
 
-    // Check duplicate email
+    // Normalize email (lowercase + trim) to prevent duplicate registrations with different casing
+    const normalizedEmail = email.toLowerCase().trim();
+
+    // Check duplicate email (case-insensitive)
     const { data: existingSubscriber } = await supabaseAdmin
       .from('subscribers')
       .select('email')
-      .eq('email', email)
+      .eq('email', normalizedEmail)
       .maybeSingle();
 
     if (existingSubscriber) {
@@ -102,9 +105,9 @@ serve(async (req) => {
 
     const position = (count || 0) + 1;
 
-    // Create auth user
+    // Create auth user (use normalized email)
     const { data: authUser, error: authError } = await supabaseAdmin.auth.admin.createUser({
-      email,
+      email: normalizedEmail,
       password,
       email_confirm: true,
       user_metadata: { name, source: source || 'unknown' }
@@ -116,11 +119,11 @@ serve(async (req) => {
 
     const authUserId = authUser.user.id;
 
-    // Create subscriber
+    // Create subscriber (use normalized email)
     const { data: newSubscriber, error: subscriberError } = await supabaseAdmin
       .from('subscribers')
       .insert([{
-        email,
+        email: normalizedEmail,
         name,
         position,
         company,

@@ -531,8 +531,11 @@ export class AuthService {
         };
       }
 
+      // Normalize email to ensure consistent authentication (lowercase + trim)
+      const normalizedEmail = email.toLowerCase().trim();
+
       const { data, error } = await this.supabase.auth.signInWithPassword({
-        email,
+        email: normalizedEmail,
         password
       });
 
@@ -593,12 +596,15 @@ export class AuthService {
         return { success: false, error: 'Password must contain at least one number' };
       }
 
+      // Normalize email to ensure consistent registration (lowercase + trim)
+      const normalizedEmail = email.toLowerCase().trim();
+
       // Use unified registration edge function
       const { data, error } = await this.supabase.functions.invoke('register-user-unified', {
         body: {
-          email,
+          email: normalizedEmail,
           password,
-          name: name || email.split('@')[0], // Extract name from email if not provided
+          name: name || normalizedEmail.split('@')[0], // Extract name from email if not provided
           source: 'desktop'
         }
       });

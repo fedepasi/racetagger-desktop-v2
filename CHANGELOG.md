@@ -1,20 +1,87 @@
 # Changelog - RaceTagger Desktop
 
-## [1.1.0] - 2025-12-23
+## [1.1.0] - 2026-02-11
 
-### 🎯 New Features
-- **Sport Category Filtering**: I preset dei partecipanti sono ora filtrati per sport category
-  - Selezione obbligatoria della sport category durante creazione/modifica preset
-  - Il dropdown dei preset nella pagina analisi mostra solo preset della categoria selezionata
-  - Mapping automatico tra codice categoria e ID per il filtering
+### 🎯 Major Features
 
-### 🎨 UI Improvements
-- **Renamed "Event Type" to "Sport Category"**: Label più chiara nell'interfaccia
-- **Folder Organization Box**: Aggiornato il tema colore (da verde/teal a blu)
+#### **Drag & Drop Folder Selection**
+- Drag and drop di cartelle per selezione rapida
+- UI hints per guidare l'utente
+- Esperienza utente migliorata per batch processing
+
+#### **RAW Preview Calibration & Extraction**
+- Nuove strategie di estrazione preview RAW ottimizzate
+- Calibrazione automatica per diversi formati RAW (NEF, CR2, CR3, ARW, etc.)
+- Performance migliorate per processing di file RAW di grandi dimensioni
+
+#### **Enhanced Results Page**
+- Stats bar con metriche chiave (analyzed, matched, unmatched)
+- Category tags per filtering e visualizzazione
+- UI moderna e informativa per risultati analisi
+
+#### **Batch Token Reservation System** 🔐
+- Pre-authorization token per batch processing
+- Dynamic TTL basato su dimensione batch (30min-12h)
+- Automatic cleanup expired reservations
+- Refund automatico di token non utilizzati
+- Previene consumo token in caso di errori
+
+#### **Post-Analysis Folder Organization**
+- Organizzazione automatica cartelle dopo analisi
+- Support per custom folder paths nei preset partecipanti
+- Block repeated move organization per completed executions
+
+#### **User Feedback System**
+- Modal feedback integrato nell'app
+- Supporto diagnostici automatici
+- Token rewards per feedback validati
 
 ### 🔧 Technical Improvements
-- Cached presets con filtering dinamico per migliori performance
-- Category code-to-ID mapping per supportare il filtering dei preset
+
+#### **Performance & Optimization**
+- Batch database update mechanism (ottimizza performance, previene timeout)
+- Singleton pattern per CleanupManager (previene memory leaks)
+- Cached presets con filtering dinamico per performance
+
+#### **Data Integrity**
+- Driver ID Preservation across CSV, JSON, PDF import/export
+- Autocomplete for result editing basato su participant preset
+- Persist last analysis settings between sessions
+
+#### **Processing Enhancements**
+- Enhanced batch processing cancellation handling
+- Improved model management e processing flow
+- Export Tags fix per esportazione training labels
+
+### 🎨 UI/UX Improvements
+- **Sport Category Filtering**: Preset filtrati per sport category con mapping automatico
+- **Renamed "Event Type" to "Sport Category"**: Label più chiara
+- **Folder Organization Box**: Tema colore aggiornato (blu)
+- **Fully Dynamic Flexbox Scrolling**: Participants modal ottimizzato
+- **Metadata vs AI Matching Distinction**: Redesign participant edit modal
+- **PDF Drag-and-Drop**: Upload participant presets da PDF
+
+### 🔒 Security & Reliability
+
+#### **Email Normalization Fix** 🆕
+- **Fixed**: Duplicate registration bug con email case-sensitive
+- Server-side email normalization (backward compatible)
+- Client-side normalization (defense in depth)
+- Database cleanup: 187 user emails normalized
+- Duplicate accounts detection e merge
+- **Impact**: Previene completamente duplicati email
+
+### 🐛 Bug Fixes
+- Fix organize skipped scene images to 'Others' folder
+- Fix Person Shown field removal da participant preset
+- Fix confidence indicator removal da PDF import
+- Fix UUID generation (crypto.randomUUID() nativo)
+- Face Detection temporarily disabled (Coming Soon feature)
+
+### 📱 Platform Updates
+- Windows x64 build ottimizzata
+- macOS Apple Silicon (ARM64) ottimizzata
+- Enhanced error handling e logging
 
 ---
 

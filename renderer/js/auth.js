@@ -102,8 +102,9 @@ function initializeAuth() {
 // Handle login form submission
 function handleLogin(event) {
   event.preventDefault();
-  
-  const email = document.getElementById('login-email').value;
+
+  // Normalize email (lowercase + trim) to ensure consistent authentication
+  const email = document.getElementById('login-email').value.toLowerCase().trim();
   const password = document.getElementById('login-password').value;
   
   if (!email || !password) {
@@ -246,7 +247,8 @@ function updatePasswordRequirements(password) {
 function handleRegister(event) {
   event.preventDefault();
 
-  const email = document.getElementById('register-email').value;
+  // Normalize email (lowercase + trim) to prevent duplicate registrations with different casing
+  const email = document.getElementById('register-email').value.toLowerCase().trim();
   const password = document.getElementById('register-password').value;
   const confirmPassword = document.getElementById('register-confirm-password').value;
 
