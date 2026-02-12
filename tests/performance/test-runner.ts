@@ -141,5 +141,7 @@ Examples:
     }
   }
   
-  PerformanceTestRunner.run(options);
+  PerformanceTestRunner.run(options).then(() => {
+    process.exit(0);
+  });
 }
