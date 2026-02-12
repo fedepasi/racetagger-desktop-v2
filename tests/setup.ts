@@ -21,10 +21,8 @@ console.warn = jest.fn();
 // Global test timeout
 jest.setTimeout(30000);
 
-// Mock Electron environment
-Object.defineProperty(process, 'platform', {
-  value: 'darwin'
-});
+// Store original platform for tests that need it
+(global as any).originalPlatform = process.platform;
 
 // Mock process.versions for Electron environment
 Object.defineProperty(process, 'versions', {
