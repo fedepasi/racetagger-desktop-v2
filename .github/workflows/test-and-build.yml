@@ -1,0 +1,288 @@
+name: Test and Build
+
+on:
+  push:
+    branches: [main, release/*, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+        node: [18.x]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: 'npm'
+
+      - name: Install system dependencies (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libimage-exiftool-perl dcraw
+
+      - name: Install system dependencies (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install exiftool dcraw
+
+      - name: Install system dependencies (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          choco install exiftool dcraw -y
+        shell: pwsh
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Rebuild native modules
+        run: npm run rebuild
+
+      - name: Generate test fixtures
+        run: npm run generate-fixtures
+
+      - name: Compile TypeScript
+        run: npm run compile
+
+      - name: Run unit tests (Sharp)
+        id: test-sharp
+        run: npm test -- --testPathPattern="sharp/"
+
+      - name: Run unit tests (Metadata)
+        id: test-metadata
+        run: npm test -- --testPathPattern="metadata/"
+        continue-on-error: true
+
+      - name: Run unit tests (RAW Processing)
+        id: test-raw
+        run: npm test -- --testPathPattern="raw/"
+        continue-on-error: true
+
+      - name: Run unit tests (ONNX)
+        id: test-onnx
+        run: npm test -- --testPathPattern="onnx/"
+        continue-on-error: true
+
+      - name: Download large test files
+        run: npm run download-test-files
+        continue-on-error: true
+
+      - name: Run E2E tests
+        id: test-e2e
+        run: npm test -- --testPathPattern="e2e/"
+        continue-on-error: true
+
+      - name: Test summary
+        if: always()
+        shell: bash
+        run: |
+          echo "## Test Results (${{ matrix.os }})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Suite | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Sharp | ${{ steps.test-sharp.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Metadata | ${{ steps.test-metadata.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| RAW | ${{ steps.test-raw.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ONNX | ${{ steps.test-onnx.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| E2E | ${{ steps.test-e2e.outcome }} |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: |
+            tests/**/*.log
+            tests/temp/
+          retention-days: 7
+
+  build:
+    needs: test
+    strategy:
+      matrix:
+        include:
+          - os: macos-13
+            platform: mac
+            arch: x64
+          - os: macos-14
+            platform: mac
+            arch: arm64
+          - os: windows-latest
+            platform: win
+            arch: x64
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'npm'
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Compile TypeScript
+        run: npm run compile
+
+      - name: Build Electron app (macOS)
+        if: matrix.platform == 'mac'
+        run: npm run build:mac:${{ matrix.arch }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Electron app (Windows)
+        if: matrix.platform == 'win'
+        run: npm run build:win:${{ matrix.arch }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Electron app (Linux)
+        if: matrix.platform == 'linux'
+        run: npm run build:linux:${{ matrix.arch }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify build artifacts (macOS)
+        if: matrix.platform == 'mac'
+        shell: bash
+        run: |
+          ls -lh release/*.dmg || echo "No DMG found"
+          ls -lh release/*.zip || echo "No ZIP found"
+
+      - name: Verify build artifacts (Windows)
+        if: matrix.platform == 'win'
+        shell: bash
+        run: |
+          ls -lh release/*.exe || echo "No EXE found"
+          ls -lh release/*.zip || echo "No ZIP found"
+
+      - name: Verify build artifacts (Linux)
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          ls -lh release/*.AppImage || echo "No AppImage found"
+          ls -lh release/*.deb || echo "No DEB found"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: racetagger-${{ matrix.platform }}-${{ matrix.arch }}
+          path: release/*
+          retention-days: 7
+
+  verify:
+    needs: build
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download macOS ARM64 build
+        uses: actions/download-artifact@v4
+        with:
+          name: racetagger-mac-arm64
+          path: ./verify
+
+      - name: List downloaded artifacts
+        run: ls -la ./verify
+
+      - name: Mount DMG and verify app structure
+        run: |
+          # Find the DMG file
+          DMG_FILE=$(find ./verify -name "*.dmg" | head -n 1)
+
+          if [ -z "$DMG_FILE" ]; then
+            echo "No DMG file found"
+            exit 1
+          fi
+
+          echo "Mounting DMG: $DMG_FILE"
+          hdiutil attach "$DMG_FILE"
+
+          # List mounted volumes
+          ls -la /Volumes/
+
+          # Find RaceTagger volume
+          VOLUME_PATH=$(find /Volumes -maxdepth 1 -name "*RaceTagger*" | head -n 1)
+
+          if [ -z "$VOLUME_PATH" ]; then
+            echo "RaceTagger volume not found"
+            exit 1
+          fi
+
+          echo "RaceTagger volume: $VOLUME_PATH"
+
+          # Verify app structure
+          ls -la "$VOLUME_PATH/RaceTagger.app/Contents/Resources/"
+
+          # Verify ASAR unpack for native modules
+          ls -la "$VOLUME_PATH/RaceTagger.app/Contents/Resources/app.asar.unpacked/" || echo "No app.asar.unpacked found"
+
+          # Unmount
+          hdiutil detach "$VOLUME_PATH"
+
+      - name: Check code signing (macOS)
+        run: |
+          DMG_FILE=$(find ./verify -name "*.dmg" | head -n 1)
+
+          if [ -z "$DMG_FILE" ]; then
+            echo "No DMG file found"
+            exit 1
+          fi
+
+          hdiutil attach "$DMG_FILE"
+          VOLUME_PATH=$(find /Volumes -maxdepth 1 -name "*RaceTagger*" | head -n 1)
+
+          # Check code signing
+          codesign --verify --deep --strict "$VOLUME_PATH/RaceTagger.app" || echo "Code signing verification failed"
+
+          hdiutil detach "$VOLUME_PATH"
+
+  performance:
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Rebuild native modules
+        run: npm run rebuild
+
+      - name: Run performance benchmarks
+        run: npm run test:performance:quick
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: tests/performance/results/
+          retention-days: 30
