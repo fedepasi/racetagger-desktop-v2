@@ -43,10 +43,12 @@ jobs:
         shell: pwsh
 
       - name: Install npm dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
+        env:
+          npm_config_ignore_scripts: true
 
-      - name: Rebuild native modules
-        run: npm run rebuild
+      - name: Rebuild native modules for Node.js (not Electron)
+        run: npm rebuild
         continue-on-error: true
 
       - name: Generate test fixtures
