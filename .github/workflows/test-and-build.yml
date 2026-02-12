@@ -43,14 +43,10 @@ jobs:
         shell: pwsh
 
       - name: Install npm dependencies
-        run: npm install --ignore-scripts
+        run: npm install || true
 
-      - name: Install Sharp for current platform
-        run: npm install --no-save sharp
-
-      - name: Rebuild native modules for Node.js
-        run: npm rebuild
-        continue-on-error: true
+      - name: Verify Sharp works
+        run: node -e "require('sharp')" 2>/dev/null || npm install --no-save sharp
 
       - name: Generate test fixtures
         run: npm run generate-fixtures
