@@ -45,6 +45,9 @@ jobs:
       - name: Install npm dependencies
         run: npm install --ignore-scripts
 
+      - name: Install Sharp for current platform
+        run: npm install --no-save sharp
+
       - name: Rebuild native modules for Node.js
         run: npm rebuild
         continue-on-error: true
