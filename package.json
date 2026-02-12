@@ -190,7 +190,6 @@
     "onnxruntime-node": "^1.23.2",
     "p-limit": "^3.1.0",
     "piexifjs": "^1.0.6",
-    "raw-preview-extractor": "file:./vendor/raw-preview-extractor",
     "sharp": "^0.34.3"
   },
   "devDependencies": {
@@ -212,7 +211,8 @@
   },
   "optionalDependencies": {
     "@img/sharp-win32-arm64": "^0.34.3",
-    "@img/sharp-win32-x64": "^0.34.3"
+    "@img/sharp-win32-x64": "^0.34.3",
+    "raw-preview-extractor": "file:./vendor/raw-preview-extractor"
   },
   "cpu": [
     "x64",
