@@ -164,7 +164,8 @@
       "Bash(gh run view:*)",
       "Bash(npm ls:*)",
       "Bash(npm pack:*)",
-      "Bash(xcrun stapler validate:*)"
+      "Bash(xcrun stapler validate:*)",
+      "Bash(\".\\\\exiftool.exe\" -ver)"
     ],
     "deny": [],
     "ask": []
