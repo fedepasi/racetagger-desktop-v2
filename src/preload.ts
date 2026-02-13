@@ -54,6 +54,8 @@ const validSendReceiveChannels: string[] = [
   'model-download-progress',
   'model-download-complete',
   'model-download-error',
+  // Startup health report (main → renderer DevTools console)
+  'startup-health-report',
 ];
 
 const validInvokeChannels: string[] = [

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, IpcMainEvent, IpcMainInvokeEvent, dialog, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, IpcMainEvent, IpcMainInvokeEvent, dialog, shell, net } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { promises as fsPromises } from 'fs';
@@ -2669,7 +2669,178 @@ async function trackAppLaunch(): Promise<void> {
   }
 }
 
+/**
+ * Log a consolidated startup health report to the console.
+ * Each check is individually wrapped in try/catch with a 3s timeout
+ * so one failure never blocks others or delays startup.
+ */
+async function logStartupHealthReport(startupMs: number): Promise<void> {
+  try {
+    const results: Array<{ name: string; status: 'OK' | 'WARN' | 'FAIL'; detail: string }> = [];
+
+    const withTimeout = <T>(promise: Promise<T>, fallback: T, ms = 3000): Promise<T> =>
+      Promise.race([promise, new Promise<T>(resolve => setTimeout(() => resolve(fallback), ms))]);
+
+    // 1. Sharp
+    try {
+      require('sharp');
+      // If sharp can be required it's loaded; fast-mode was already confirmed at initializeImageProcessor
+      results.push({ name: 'Sharp', status: 'OK', detail: 'working (fast mode)' });
+    } catch {
+      results.push({ name: 'Sharp', status: 'WARN', detail: 'fallback to Jimp (slow mode)' });
+    }
+
+    // 2. better-sqlite3
+    try {
+      const { db } = require('./database-service');
+      if (db) {
+        const walMode = db.pragma('journal_mode', { simple: true });
+        results.push({ name: 'better-sqlite3', status: 'OK', detail: `working (${walMode} mode)` });
+      } else {
+        results.push({ name: 'better-sqlite3', status: 'FAIL', detail: 'not initialized' });
+      }
+    } catch (e: any) {
+      results.push({ name: 'better-sqlite3', status: 'FAIL', detail: e.message || 'load error' });
+    }
+
+    // 3. Supabase cache
+    try {
+      const categories = getCachedSportCategories();
+      const presets = getCachedParticipantPresets();
+      const catCount = categories?.length ?? 0;
+      const presetCount = presets?.length ?? 0;
+      if (catCount > 0) {
+        results.push({ name: 'Supabase', status: 'OK', detail: `connected (categories: ${catCount}, presets: ${presetCount})` });
+      } else {
+        results.push({ name: 'Supabase', status: 'WARN', detail: 'cache empty (offline or not authenticated)' });
+      }
+    } catch {
+      results.push({ name: 'Supabase', status: 'WARN', detail: 'cache unavailable' });
+    }
+
+    // 4. Auth session
+    try {
+      const authState = authService.getAuthState();
+      if (authState.isAuthenticated && authState.user) {
+        const email = authState.user.email || 'unknown';
+        results.push({ name: 'Auth Session', status: 'OK', detail: `authenticated (${email})` });
+      } else {
+        results.push({ name: 'Auth Session', status: 'WARN', detail: 'not authenticated' });
+      }
+    } catch {
+      results.push({ name: 'Auth Session', status: 'WARN', detail: 'check failed' });
+    }
+
+    // 5. Native tools (dcraw, ExifTool, ImageMagick)
+    try {
+      const { nativeToolManager } = require('./utils/native-tool-manager');
+      const diag: any = await withTimeout(nativeToolManager.getSystemDiagnostics(), null as any);
+      if (diag && diag.tools) {
+        for (const [toolName, info] of Object.entries(diag.tools) as [string, any][]) {
+          const displayName = toolName === 'exiftool' ? 'ExifTool' : toolName === 'dcraw' ? 'dcraw' : 'ImageMagick';
+          if (info.working) {
+            const loc = info.path ? ` (${info.path})` : '';
+            results.push({ name: displayName, status: 'OK', detail: `working${loc}` });
+          } else if (info.exists) {
+            results.push({ name: displayName, status: 'WARN', detail: 'found but not working' });
+          } else {
+            const isOptional = toolName === 'imagemagick';
+            results.push({ name: displayName, status: isOptional ? 'WARN' : 'FAIL', detail: `not found${isOptional ? ' (optional)' : ''}` });
+          }
+        }
+      }
+    } catch {
+      results.push({ name: 'Native Tools', status: 'WARN', detail: 'diagnostic check failed' });
+    }
+
+    // 6. ONNX Runtime
+    try {
+      require('onnxruntime-node');
+      results.push({ name: 'ONNX Runtime', status: 'OK', detail: 'loaded' });
+    } catch {
+      results.push({ name: 'ONNX Runtime', status: 'WARN', detail: 'not available' });
+    }
+
+    // 7. raw-preview-extractor
+    try {
+      require('raw-preview-extractor');
+      results.push({ name: 'raw-preview-ext', status: 'OK', detail: 'loaded' });
+    } catch {
+      results.push({ name: 'raw-preview-ext', status: 'WARN', detail: 'not available' });
+    }
+
+    // 8. Network
+    try {
+      const online = net.isOnline();
+      if (online) {
+        // Attempt a quick latency check via networkMonitor
+        let latencyStr = '';
+        try {
+          const { networkMonitor } = require('./utils/network-monitor');
+          const metrics: any = await withTimeout(networkMonitor.getInitialMetrics(2000), null as any, 3000);
+          if (metrics?.supabase_latency_ms) {
+            latencyStr = ` (latency: ${Math.round(metrics.supabase_latency_ms)}ms)`;
+          }
+        } catch { /* latency check optional */ }
+        results.push({ name: 'Network', status: 'OK', detail: `online${latencyStr}` });
+      } else {
+        results.push({ name: 'Network', status: 'WARN', detail: 'offline' });
+      }
+    } catch {
+      results.push({ name: 'Network', status: 'WARN', detail: 'status unknown' });
+    }
+
+    // 9. Disk Space + Hardware
+    let cpuStr = '';
+    let ramStr = '';
+    try {
+      const { hardwareDetector } = require('./utils/hardware-detector');
+      const hw: any = await withTimeout(hardwareDetector.getHardwareInfo(), null as any);
+      if (hw) {
+        results.push({ name: 'Disk Space', status: hw.disk_available_gb > 5 ? 'OK' : 'WARN', detail: `${hw.disk_available_gb.toFixed(1)} GB free` });
+        cpuStr = `${hw.cpu_model} (${hw.cpu_cores} cores)`;
+        ramStr = `${hw.ram_total_gb.toFixed(1)} GB`;
+      }
+    } catch {
+      results.push({ name: 'Disk Space', status: 'WARN', detail: 'check failed' });
+    }
+
+    // Format and log
+    const sep = '\u2550'.repeat(50);
+    const thin = '\u2500'.repeat(50);
+    const lines: string[] = [];
+
+    const logLine = (line: string) => {
+      console.log(line);
+      lines.push(line);
+    };
+
+    logLine(`[RaceTagger] ${sep}`);
+    logLine(`[RaceTagger] Startup Health Report - v${app.getVersion()}`);
+    logLine(`[RaceTagger] ${sep}`);
+    for (const r of results) {
+      const icon = r.status === 'OK' ? '\u2705' : r.status === 'WARN' ? '\u26A0\uFE0F' : '\u274C';
+      const name = r.name.padEnd(18);
+      logLine(`[RaceTagger]  ${icon} ${name}\u2502 ${r.detail}`);
+    }
+    logLine(`[RaceTagger] ${thin}`);
+    logLine(`[RaceTagger]  Platform: ${process.platform} ${process.arch} \u2502 Electron ${process.versions.electron}`);
+    if (ramStr || cpuStr) {
+      logLine(`[RaceTagger]  RAM: ${ramStr || 'N/A'} \u2502 CPU: ${cpuStr || 'N/A'}`);
+    }
+    logLine(`[RaceTagger]  Startup: ${startupMs.toLocaleString()}ms`);
+    logLine(`[RaceTagger] ${sep}`);
+
+    // Also send to renderer DevTools console
+    safeSend('startup-health-report', lines);
+  } catch (error) {
+    console.error('[RaceTagger] Failed to generate health report:', error);
+  }
+}
+
 app.whenReady().then(async () => { // Added async here
+  const startupStart = Date.now();
+
   // Set app name for proper dock/taskbar display
   app.setName('RaceTagger');
 
@@ -2759,11 +2930,8 @@ app.whenReady().then(async () => { // Added async here
     // Don't fail startup if model download fails
   }
 
-  // NOTE: The test code has been removed from startup to prevent conflicts with UI events.
-  // If you need to run a test, uncomment the following lines:
-  // console.log('[Main Process] Attempting to run testConversion...');
-  // await testConversion();
-  // console.log('[Main Process] testConversion finished or failed. Check console above.');
+  // Log startup health report (non-blocking, all checks have individual timeouts)
+  await logStartupHealthReport(Date.now() - startupStart);
 
   ipcMain.on('select-folder', handleFolderSelection);
 

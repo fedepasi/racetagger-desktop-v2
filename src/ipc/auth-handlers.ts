@@ -215,15 +215,8 @@ export function registerAuthHandlers(): void {
   });
 
   // ==================== Token Management ====================
-
-  ipcMain.on('get-token-balance', async (event: IpcMainEvent) => {
-    try {
-      const balance = await authService.getTokenBalance();
-      event.sender.send('token-balance', balance);
-    } catch (error: any) {
-      event.sender.send('auth-error', { message: 'Failed to fetch token balance' });
-    }
-  });
+  // NOTE: 'get-token-balance' is registered as ipcMain.handle() in main.ts (for invoke pattern)
+  // Do NOT add ipcMain.on() here as it would create a redundant dual registration
 
   ipcMain.on('force-token-refresh', async (event: IpcMainEvent) => {
     try {

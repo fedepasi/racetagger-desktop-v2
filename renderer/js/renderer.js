@@ -152,6 +152,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Listen for messages from main process
   if (window.api) {
+    // Startup health report (from main process → DevTools console)
+    window.api.receive('startup-health-report', (lines) => {
+      if (Array.isArray(lines)) {
+        lines.forEach(line => console.log(line));
+      }
+    });
+
     // Analysis results
     window.api.receive('analysis-result', (results) => {
       handleAnalysisResults(results);
@@ -1351,7 +1358,13 @@ async function handleUploadAndAnalyze() {
     return;
   }
 
-  handleFolderAnalysis();
+  handleFolderAnalysis().catch(error => {
+    console.error('[Analysis] handleFolderAnalysis failed:', error);
+    setUploading(false);
+    if (window.streamingView) {
+      window.streamingView.deactivate();
+    }
+  });
 }
 
 // ==================== No Preset Warning Modal ====================
@@ -1439,6 +1452,7 @@ async function handleFolderAnalysis() {
 
 // Actual folder analysis logic (extracted from handleFolderAnalysis)
 async function proceedWithFolderAnalysis() {
+  console.log('[Analysis] proceedWithFolderAnalysis started - images:', selectedFolderImages, 'folder:', selectedFolderPath);
 
   // OLD CODE: Show results container - REMOVED FOR STREAMING VIEW
   // resultsContainer.style.display = 'block';
@@ -1453,11 +1467,24 @@ async function proceedWithFolderAnalysis() {
   }
 
   // Pre-validation: Check token balance
+  const TOKEN_BALANCE_TIMEOUT = 10000; // 10 seconds
   try {
-    const tokenBalance = await window.api.invoke('get-token-balance');
+    console.log('[Analysis] Requesting token balance...');
+    const tokenBalance = await Promise.race([
+      window.api.invoke('get-token-balance'),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Token balance check timed out after 10s')), TOKEN_BALANCE_TIMEOUT)
+      )
+    ]);
+    console.log('[Analysis] Token balance received:', tokenBalance);
 
     if (tokenBalance < selectedFolderImages) {
       const shortfall = selectedFolderImages - tokenBalance;
+
+      // Deactivate streaming view before showing error
+      if (window.streamingView) {
+        window.streamingView.deactivate();
+      }
 
       // Reset any processing state that might have been set
       setUploading(false);
@@ -1488,8 +1515,12 @@ async function proceedWithFolderAnalysis() {
       return;
     }
   } catch (error) {
-    console.error('Error checking token balance:', error);
-    showError('Unable to verify token balance. Please try again or contact support.');
+    console.error('[Analysis] Error checking token balance:', error);
+    // Deactivate streaming view if it was activated
+    if (window.streamingView) {
+      window.streamingView.deactivate();
+    }
+    showError('Unable to verify token balance. Please check your connection and try again.');
     return;
   }
 
@@ -1574,6 +1605,7 @@ async function proceedWithFolderAnalysis() {
 
     // Let main process determine optimal processing mode based on USE_UNIFIED_PROCESSOR flag
     // Send to main process
+    console.log('[Analysis] Sending analyze-folder to main process, model:', config.model, 'category:', config.category);
     if (window.api) {
       window.api.send('analyze-folder', config);
     } else {

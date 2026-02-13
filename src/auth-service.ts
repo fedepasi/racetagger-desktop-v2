@@ -851,56 +851,64 @@ export class AuthService {
       return defaultBalance;
     }
 
+    const QUERY_TIMEOUT = 8000; // 8 seconds
+
     try {
-      const { data: userTokensData, error: userTokensError } = await this.supabase
-        .from('user_tokens')
-        .select('tokens_purchased, tokens_used')
-        .eq('user_id', this.authState.user.id)
-        .single();
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Token balance query timed out after 8s')), QUERY_TIMEOUT)
+      );
 
-      // Query subscribers table for bonus tokens
-      const { data: subscriberData, error: subscriberError } = await this.supabase
-        .from('subscribers')
-        .select('base_tokens, bonus_tokens, earned_tokens, admin_bonus_tokens')
-        .eq('email', this.authState.user.email?.toLowerCase())
-        .single();
+      const queryPromise = (async (): Promise<TokenBalance> => {
+        const { data: userTokensData, error: userTokensError } = await this.supabase
+          .from('user_tokens')
+          .select('tokens_purchased, tokens_used')
+          .eq('user_id', this.authState.user.id)
+          .single();
 
-      // Query token_requests for approved tokens
-      const { data: tokenRequestsData, error: tokenRequestsError } = await this.supabase
-        .from('token_requests')
-        .select('tokens_requested, status')
-        .eq('user_id', this.authState.user.id)
-        .in('status', ['approved', 'completed']);
+        // Query subscribers table for bonus tokens
+        const { data: subscriberData, error: subscriberError } = await this.supabase
+          .from('subscribers')
+          .select('base_tokens, bonus_tokens, earned_tokens, admin_bonus_tokens')
+          .eq('email', this.authState.user.email?.toLowerCase())
+          .single();
 
-      // Calculate total tokens from all sources
-      // SINGLE SOURCE OF TRUTH: user_tokens.tokens_purchased contains ALL purchased/granted tokens
-      // (includes base, bonus, Stripe purchases, access code grants)
-      const userTokensPurchased = userTokensData?.tokens_purchased || 0;
-      const userTokensUsed = userTokensData?.tokens_used || 0;
+        // Query token_requests for approved tokens
+        const { data: tokenRequestsData, error: tokenRequestsError } = await this.supabase
+          .from('token_requests')
+          .select('tokens_requested, status')
+          .eq('user_id', this.authState.user.id)
+          .in('status', ['approved', 'completed']);
 
-      // NOTE: subscribers.base_tokens and subscribers.bonus_tokens are DEPRECATED
-      // All purchased/granted tokens are now in user_tokens.tokens_purchased
+        // Calculate total tokens from all sources
+        // SINGLE SOURCE OF TRUTH: user_tokens.tokens_purchased contains ALL purchased/granted tokens
+        // (includes base, bonus, Stripe purchases, access code grants)
+        const userTokensPurchased = userTokensData?.tokens_purchased || 0;
+        const userTokensUsed = userTokensData?.tokens_used || 0;
 
-      // Additional separate sources:
-      const earnedTokens = subscriberData?.earned_tokens || 0;        // Referral rewards
-      const adminBonusTokens = subscriberData?.admin_bonus_tokens || 0; // Extra admin grants
+        // NOTE: subscribers.base_tokens and subscribers.bonus_tokens are DEPRECATED
+        // All purchased/granted tokens are now in user_tokens.tokens_purchased
 
-      // Sum up approved tokens from token_requests
-      const approvedTokensFromRequests = tokenRequestsData?.reduce((sum, request) =>
-        sum + (request.tokens_requested || 0), 0) || 0;
+        // Additional separate sources:
+        const earnedTokens = subscriberData?.earned_tokens || 0;        // Referral rewards
+        const adminBonusTokens = subscriberData?.admin_bonus_tokens || 0; // Extra admin grants
 
-      // FIXED: Use userTokensPurchased as base, not baseTokens + bonusTokens
-      const totalTokens = userTokensPurchased + earnedTokens + adminBonusTokens + approvedTokensFromRequests;
+        // Sum up approved tokens from token_requests
+        const approvedTokensFromRequests = tokenRequestsData?.reduce((sum: number, request: any) =>
+          sum + (request.tokens_requested || 0), 0) || 0;
 
-      const tokenBalance = {
-        total: totalTokens,
-        used: userTokensUsed,
-        remaining: totalTokens - userTokensUsed
-      };
+        // FIXED: Use userTokensPurchased as base, not baseTokens + bonusTokens
+        const totalTokens = userTokensPurchased + earnedTokens + adminBonusTokens + approvedTokensFromRequests;
 
-      return tokenBalance;
+        return {
+          total: totalTokens,
+          used: userTokensUsed,
+          remaining: totalTokens - userTokensUsed
+        };
+      })();
+
+      return await Promise.race([queryPromise, timeoutPromise]);
     } catch (error) {
-      console.error('Exception fetching token balance:', error);
+      console.error('[AuthService] getTokenBalance error:', error);
       return defaultBalance;
     }
   }
