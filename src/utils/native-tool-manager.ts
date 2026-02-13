@@ -95,7 +95,8 @@ export class NativeToolManager {
     }
 
     if (isDev) {
-      return path.join(__dirname, '../../vendor');
+      // In dev mode, __dirname is dist/src/utils/, so we need ../../../vendor to reach project root
+      return path.join(__dirname, '../../../vendor');
     }
 
     // In production, vendor files are unpacked from asar
@@ -153,7 +154,13 @@ export class NativeToolManager {
       return this.getImageMagickWindowsPath(arch);
     }
 
-    // Try architecture-specific path first
+    // Try non-architecture-specific path first (vendor/win32/exiftool.exe)
+    const flatPath = path.join(this.basePath, 'win32', executable);
+    if (fs.existsSync(flatPath)) {
+      return { path: flatPath, native: true };
+    }
+
+    // Try architecture-specific path (vendor/win32/x64/exiftool.exe)
     const archPath = path.join(this.basePath, 'win32', arch, executable);
     if (fs.existsSync(archPath)) {
       return { path: archPath, native: true };
@@ -241,9 +248,22 @@ export class NativeToolManager {
   async executeTool(toolName: string, args: string[], options: any = {}): Promise<{ stdout: string; stderr: string }> {
     return new Promise((resolve, reject) => {
       const toolInfo = this.getToolPath(toolName);
-      const toolPath = toolInfo.path;
+      let toolPath = toolInfo.path;
+      let finalArgs = args;
 
-      const child = execFile(toolPath, args, {
+      // Special handling for Windows ExifTool bundled as Perl + exiftool.pl
+      // The vendor/win32/exiftool.exe is actually perl.exe, so we need to call:
+      // exiftool.exe exiftool.pl [args]
+      if (process.platform === 'win32' && toolName === 'exiftool') {
+        const exiftoolDir = path.dirname(toolPath);
+        const exiftoolPlPath = path.join(exiftoolDir, 'exiftool.pl');
+        if (fs.existsSync(exiftoolPlPath)) {
+          // exiftool.exe is actually Perl, prepend exiftool.pl to args
+          finalArgs = [exiftoolPlPath, ...args];
+        }
+      }
+
+      const child = execFile(toolPath, finalArgs, {
         cwd: options.cwd,
         env: { ...process.env, ...options.env, ...this.getToolEnvironment() },
         maxBuffer: options.maxBuffer || 100 * 1024 * 1024, // 100MB default

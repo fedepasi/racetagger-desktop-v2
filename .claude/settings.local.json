@@ -165,6 +165,7 @@
       "Bash(npm ls:*)",
       "Bash(npm pack:*)",
       "Bash(xcrun stapler validate:*)",
+      "Bash(\".\\\\exiftool.exe\" -ver)",
       "Bash(otool -L:*)",
       "Bash(lipo -info:*)"
     ],
