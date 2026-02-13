@@ -6,14 +6,25 @@ let nativeModule: any;
 
 try {
   // Try different possible locations for the native module
+  const platform = process.platform;
+  const arch = process.arch;
   const possiblePaths = [
+    // Build locale (sviluppo con node-gyp)
     path.join(__dirname, '../../build/Release/raw_extractor.node'),
     path.join(__dirname, '../build/Release/raw_extractor.node'),
     path.join(process.cwd(), 'build/Release/raw_extractor.node'),
-    '../../build/Release/raw_extractor.node',
-    '../../build/Debug/raw_extractor.node',
-    path.join(__dirname, '../prebuilds/darwin-x64+arm64/raw-preview-extractor.node'),
-    path.join(process.cwd(), 'prebuilds/darwin-x64+arm64/raw-preview-extractor.node')
+    // Prebuild per piattaforma+architettura esatta (es. darwin-arm64)
+    path.join(__dirname, `../prebuilds/${platform}-${arch}/raw-preview-extractor.node`),
+    // Prebuild universale (es. darwin-universal)
+    path.join(__dirname, `../prebuilds/${platform}-universal/raw-preview-extractor.node`),
+    // Prebuild cross-arch legacy (es. darwin-x64+arm64)
+    path.join(__dirname, `../prebuilds/${platform}-x64+arm64/raw-preview-extractor.node`),
+    // Stessi path relativi a cwd
+    path.join(process.cwd(), `prebuilds/${platform}-${arch}/raw-preview-extractor.node`),
+    path.join(process.cwd(), `prebuilds/${platform}-universal/raw-preview-extractor.node`),
+    path.join(process.cwd(), `prebuilds/${platform}-x64+arm64/raw-preview-extractor.node`),
+    // Debug build
+    path.join(__dirname, '../../build/Debug/raw_extractor.node'),
   ];
   
   let moduleLoaded = false;

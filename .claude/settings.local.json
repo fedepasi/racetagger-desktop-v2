@@ -164,7 +164,9 @@
       "Bash(gh run view:*)",
       "Bash(npm ls:*)",
       "Bash(npm pack:*)",
-      "Bash(xcrun stapler validate:*)"
+      "Bash(xcrun stapler validate:*)",
+      "Bash(otool -L:*)",
+      "Bash(lipo -info:*)"
     ],
     "deny": [],
     "ask": []
