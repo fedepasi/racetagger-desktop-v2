@@ -245,10 +245,22 @@ export class RawPreviewExtractor {
       }
 
       if (platform === 'win32') {
-        // Windows: usa perl.exe + exiftool.pl
+        // Windows: Try multiple ExifTool configurations
+        // 1. Standalone exiftool.exe (Phil Harvey's distribution or Oliver Betz's launcher)
+        const exiftoolExe = path.join(vendorDir, 'exiftool.exe');
+        // 2. Perl distribution: perl.exe + exiftool.pl
         const perlExe = path.join(vendorDir, 'perl.exe');
         const exiftoolPl = path.join(vendorDir, 'exiftool.pl');
-        exiftoolPath = `"${perlExe}" "${exiftoolPl}"`;
+
+        if (fs.existsSync(exiftoolExe)) {
+          exiftoolPath = `"${exiftoolExe}"`;
+        } else if (fs.existsSync(perlExe) && fs.existsSync(exiftoolPl)) {
+          exiftoolPath = `"${perlExe}" "${exiftoolPl}"`;
+        } else {
+          // Neither found — log warning and use exiftool.exe as default (may fail)
+          console.warn(`[RawPreviewExtractor] Windows ExifTool not found. Checked: ${exiftoolExe}, ${perlExe}`);
+          exiftoolPath = `"${exiftoolExe}"`; // Will fail gracefully
+        }
       } else if (platform === 'darwin') {
         // macOS
         exiftoolPath = path.join(vendorDir, 'exiftool');
@@ -564,9 +576,18 @@ export class RawPreviewExtractor {
 
       let exiftoolPath: string;
       if (platform === 'win32') {
+        // Windows: Try multiple ExifTool configurations
+        const exiftoolExe = path.join(vendorDir, 'exiftool.exe');
         const perlExe = path.join(vendorDir, 'perl.exe');
         const exiftoolPl = path.join(vendorDir, 'exiftool.pl');
-        exiftoolPath = `"${perlExe}" "${exiftoolPl}"`;
+
+        if (fs.existsSync(exiftoolExe)) {
+          exiftoolPath = `"${exiftoolExe}"`;
+        } else if (fs.existsSync(perlExe) && fs.existsSync(exiftoolPl)) {
+          exiftoolPath = `"${perlExe}" "${exiftoolPl}"`;
+        } else {
+          exiftoolPath = `"${exiftoolExe}"`;
+        }
       } else {
         exiftoolPath = path.join(vendorDir, 'exiftool');
       }

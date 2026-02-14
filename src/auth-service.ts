@@ -78,6 +78,7 @@ export class AuthService {
   private readonly MAX_DEMO_USAGE: number = 3;
   private tokenRefreshInterval?: NodeJS.Timeout;
   private isWritingSession = false;
+  private isRefreshing = false; // Prevent concurrent refresh attempts
   private window?: BrowserWindow; // Add window property
 
   private SESSION_FILE_PATH: string; // Removed readonly
@@ -108,6 +109,11 @@ export class AuthService {
     const initializePathAndSession = () => {
       try {
         this.SESSION_FILE_PATH = path.join(app.getPath('userData'), 'session.json');
+
+        // Setup auth state listener BEFORE restoring session
+        // This ensures that any token refresh by the SDK is captured
+        this.setupAuthStateListener();
+
         this.restoreSession().catch(err => {
           console.error("Error during deferred restoreSession call:", err);
         });
@@ -159,6 +165,9 @@ export class AuthService {
       const savedSession = this.loadSessionFromFile();
 
       if (savedSession) {
+        // Set refreshing flag to prevent timer-based refresh during restoration
+        this.isRefreshing = true;
+
         try {
           // Prima prova a rinnovare la sessione con il refresh token
           const { data: refreshData, error: refreshError } = await this.supabase.auth.refreshSession({
@@ -166,6 +175,32 @@ export class AuthService {
           });
 
           if (refreshError) {
+            console.warn('[Auth Restore] Refresh failed:', refreshError.message);
+
+            // For refresh_token_already_used, try setSession as fallback
+            // (the token file might have stale tokens but Supabase SDK might have valid state)
+            const isTokenStale = refreshError.message?.includes('refresh_token_already_used') ||
+                                 refreshError.code === 'refresh_token_already_used';
+
+            if (isTokenStale) {
+              console.warn('[Auth Restore] Refresh token already used, trying getSession from SDK...');
+              // Try to get session from Supabase SDK internal state
+              const { data: sdkSession } = await this.supabase.auth.getSession();
+              if (sdkSession?.session) {
+                this.authState = {
+                  isAuthenticated: true,
+                  user: sdkSession.session.user,
+                  session: sdkSession.session,
+                  userRole: null
+                };
+                this.updateUserRole();
+                await this.saveSessionToFile(sdkSession.session);
+                console.log('[Auth Restore] Recovered from SDK internal session');
+                this.isRefreshing = false;
+                return;
+              }
+            }
+
             // Se non è possibile rinnovare la sessione, prova a impostarla direttamente
             const { data, error } = await this.supabase.auth.setSession({
               access_token: savedSession.access_token,
@@ -177,42 +212,22 @@ export class AuthService {
               if (error.message && (
                   error.message.includes('network') ||
                   error.message.includes('connection') ||
-                  error.message.includes('offline')
+                  error.message.includes('offline') ||
+                  error.message.includes('fetch')
                 )) {
                 // In caso di problemi di rete, tenta di utilizzare la sessione salvata
                 // anche se non possiamo verificarla con Supabase
-                try {
-                  // Estrai le informazioni utente dal token JWT
-                  const tokenParts = savedSession.access_token.split('.');
-                  if (tokenParts.length === 3) {
-                    const payload = JSON.parse(Buffer.from(tokenParts[1], 'base64').toString('utf-8'));
-
-                    if (payload && payload.sub) {
-                      this.authState = {
-                        isAuthenticated: true,
-                        user: {
-                          id: payload.sub,
-                          email: payload.email || 'Utente offline',
-                          // Aggiungi altri campi utente dal payload se disponibili
-                          ...payload.user_metadata
-                        },
-                        session: {
-                          access_token: savedSession.access_token,
-                          refresh_token: savedSession.refresh_token,
-                          expires_at: payload.exp ? payload.exp * 1000 : undefined
-                        },
-                        userRole: null
-                      };
-                      return;
-                    }
-                  }
-                } catch (jwtError) {
-                  console.error('Error parsing JWT token:', jwtError);
+                const offlineSession = this.createOfflineSessionFromJwt(savedSession);
+                if (offlineSession) {
+                  this.authState = offlineSession;
+                  this.isRefreshing = false;
+                  return;
                 }
               }
 
               // Se non è possibile utilizzare la sessione salvata, rimuovila
               this.clearSavedSession();
+              this.isRefreshing = false;
               return;
             }
 
@@ -227,11 +242,13 @@ export class AuthService {
               // Determina e aggiorna il ruolo utente
               this.updateUserRole();
 
-              // Salva la sessione aggiornata
+              // Salva la sessione aggiornata (con nuovo refresh token!)
               await this.saveSessionToFile(data.session);
+              this.isRefreshing = false;
               return;
             } else {
               this.clearSavedSession();
+              this.isRefreshing = false;
               return;
             }
           }
@@ -245,53 +262,36 @@ export class AuthService {
               userRole: null
             };
 
-            // Salva la sessione aggiornata
+            // Salva la sessione aggiornata (con nuovo refresh token!)
             await this.saveSessionToFile(refreshData.session);
 
             // Emit event to signal auth completed (for data reloading)
-            if (this.window) {
+            if (this.window && !this.window.isDestroyed()) {
               this.window.webContents.send('auth-refresh-completed');
             }
 
             // Determine and update user role after refresh
             this.updateUserRole();
+            this.isRefreshing = false;
             return;
           } else {
             this.clearSavedSession();
+            this.isRefreshing = false;
             return;
           }
         } catch (sessionError) {
           console.error('Exception during session restoration:', sessionError);
 
           // Tenta di utilizzare la sessione salvata in modalità offline
-          try {
-            const tokenParts = savedSession.access_token.split('.');
-            if (tokenParts.length === 3) {
-              const payload = JSON.parse(Buffer.from(tokenParts[1], 'base64').toString('utf-8'));
-
-              if (payload && payload.sub) {
-                this.authState = {
-                  isAuthenticated: true,
-                  user: {
-                    id: payload.sub,
-                    email: payload.email || 'Utente offline',
-                    ...payload.user_metadata
-                  },
-                  session: {
-                    access_token: savedSession.access_token,
-                    refresh_token: savedSession.refresh_token,
-                    expires_at: payload.exp ? payload.exp * 1000 : undefined
-                  },
-                  userRole: null
-                };
-                return;
-              }
-            }
-          } catch (jwtError) {
-            console.error('Error parsing JWT token in error handler:', jwtError);
+          const offlineSession = this.createOfflineSessionFromJwt(savedSession);
+          if (offlineSession) {
+            this.authState = offlineSession;
+            this.isRefreshing = false;
+            return;
           }
 
           this.clearSavedSession();
+          this.isRefreshing = false;
         }
       }
 
@@ -327,8 +327,19 @@ export class AuthService {
 
   // Verifica se il token è vicino alla scadenza e lo rinnova se necessario
   private async checkAndRefreshToken(session: Session): Promise<void> {
+    // Prevent concurrent refresh attempts (race condition protection)
+    if (this.isRefreshing) {
+      console.log('[Auth] Refresh already in progress, skipping');
+      return;
+    }
+
+    this.isRefreshing = true;
+
     try {
-      if (!session.expires_at) return;
+      if (!session.expires_at) {
+        this.isRefreshing = false;
+        return;
+      }
 
       // Convert expires_at to milliseconds if it's in seconds (typical for JWT tokens)
       const expiresAtMs = typeof session.expires_at === 'number' && session.expires_at < 20000000000
@@ -343,23 +354,222 @@ export class AuthService {
 
       // Se mancano meno di 60 minuti alla scadenza, rinnova il token
       if (minutesRemaining < 60) {
-        const { data, error } = await this.supabase.auth.refreshSession();
+        console.log(`[Auth] Token expires in ${minutesRemaining} min, refreshing...`);
+
+        // Use the refresh_token from our saved state to ensure consistency
+        const currentRefreshToken = this.authState.session?.refresh_token;
+        if (!currentRefreshToken) {
+          console.error('[Auth] No refresh token available in auth state');
+          this.isRefreshing = false;
+          return;
+        }
+
+        const { data, error } = await this.supabase.auth.refreshSession({
+          refresh_token: currentRefreshToken
+        });
 
         if (error) {
-          console.error('Error refreshing token:', error);
+          console.error('[Auth] Error refreshing token:', JSON.stringify(error));
+
+          // Handle specific error: refresh_token_already_used
+          // This means the token was rotated by another code path or Supabase SDK internal listener
+          if (error.message?.includes('refresh_token_already_used') ||
+              error.code === 'refresh_token_already_used') {
+            console.warn('[Auth] Refresh token already used - attempting recovery from file...');
+            await this.recoverFromStaleToken();
+            this.isRefreshing = false;
+            return;
+          }
+
+          // Handle AuthSessionMissingError - session is completely invalid
+          if (error.name === 'AuthSessionMissingError' ||
+              error.message?.includes('AuthSessionMissingError') ||
+              error.message?.includes('session_not_found')) {
+            console.warn('[Auth] Session missing - attempting recovery from file...');
+            const recovered = await this.recoverFromStaleToken();
+            if (!recovered) {
+              // Session is completely invalid - force re-login
+              console.error('[Auth] Recovery failed - clearing session, user needs to re-login');
+              this.authState = {
+                isAuthenticated: false,
+                user: null,
+                session: null,
+                userRole: null
+              };
+              this.clearSavedSession();
+              // Notify renderer to show login
+              if (this.window && !this.window.isDestroyed()) {
+                this.window.webContents.send('auth-session-expired');
+              }
+            }
+            this.isRefreshing = false;
+            return;
+          }
+
+          // Network errors - just wait for next cycle
+          if (error.message?.includes('network') ||
+              error.message?.includes('connection') ||
+              error.message?.includes('fetch') ||
+              error.message?.includes('offline')) {
+            console.warn('[Auth] Network error during refresh - will retry next cycle');
+            this.isRefreshing = false;
+            return;
+          }
+
+          this.isRefreshing = false;
           return;
         }
 
         if (data.session) {
+          // Update both in-memory state AND Supabase SDK internal state
           this.authState.session = data.session;
+          this.authState.user = data.user || this.authState.user;
 
           // Salva la nuova sessione nel file locale
           await this.saveSessionToFile(data.session);
+
+          console.log('[Auth] Token refreshed successfully, new expiry:', new Date(
+            (data.session.expires_at || 0) < 20000000000
+              ? (data.session.expires_at || 0) * 1000
+              : (data.session.expires_at || 0)
+          ).toISOString());
         }
       }
     } catch (error) {
-      console.error('Error checking/refreshing token:', error);
+      console.error('[Auth] Error checking/refreshing token:', error);
+    } finally {
+      this.isRefreshing = false;
     }
+  }
+
+  /**
+   * Attempt to recover from a stale/already-used refresh token
+   * by reloading the latest session from the file (which may have been
+   * updated by another code path) and re-syncing with Supabase.
+   */
+  private async recoverFromStaleToken(): Promise<boolean> {
+    try {
+      // 1. Try to load the latest session from file
+      const savedSession = this.loadSessionFromFile();
+      if (!savedSession) {
+        console.warn('[Auth Recovery] No saved session file found');
+        return false;
+      }
+
+      // 2. Check if the file has a different refresh token (updated by another path)
+      const currentToken = this.authState.session?.refresh_token;
+      if (savedSession.refresh_token === currentToken) {
+        // Same token - file wasn't updated, try setSession as last resort
+        console.warn('[Auth Recovery] File has same stale token, trying setSession...');
+
+        const { data, error } = await this.supabase.auth.setSession({
+          access_token: savedSession.access_token,
+          refresh_token: savedSession.refresh_token
+        });
+
+        if (error) {
+          console.error('[Auth Recovery] setSession failed:', error.message);
+          return false;
+        }
+
+        if (data.session) {
+          this.authState.session = data.session;
+          this.authState.user = data.user || this.authState.user;
+          await this.saveSessionToFile(data.session);
+          console.log('[Auth Recovery] Recovered via setSession');
+          return true;
+        }
+
+        return false;
+      }
+
+      // 3. File has a newer refresh token - try to use it
+      console.log('[Auth Recovery] File has newer refresh token, attempting refresh...');
+      const { data, error } = await this.supabase.auth.refreshSession({
+        refresh_token: savedSession.refresh_token
+      });
+
+      if (error) {
+        console.error('[Auth Recovery] Refresh with file token failed:', error.message);
+        return false;
+      }
+
+      if (data.session) {
+        this.authState.session = data.session;
+        this.authState.user = data.user || this.authState.user;
+        await this.saveSessionToFile(data.session);
+        console.log('[Auth Recovery] Recovered with newer file token');
+        return true;
+      }
+
+      return false;
+    } catch (error) {
+      console.error('[Auth Recovery] Exception:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Create an offline auth state from a JWT token for network-error scenarios.
+   * Allows the app to work offline with the last known user data.
+   */
+  private createOfflineSessionFromJwt(savedSession: { access_token: string; refresh_token: string }): AuthState | null {
+    try {
+      const tokenParts = savedSession.access_token.split('.');
+      if (tokenParts.length === 3) {
+        const payload = JSON.parse(Buffer.from(tokenParts[1], 'base64').toString('utf-8'));
+
+        if (payload && payload.sub) {
+          return {
+            isAuthenticated: true,
+            user: {
+              id: payload.sub,
+              email: payload.email || 'Utente offline',
+              ...payload.user_metadata
+            },
+            session: {
+              access_token: savedSession.access_token,
+              refresh_token: savedSession.refresh_token,
+              expires_at: payload.exp ? payload.exp * 1000 : undefined
+            },
+            userRole: null
+          };
+        }
+      }
+    } catch (jwtError) {
+      console.error('[Auth] Error parsing JWT for offline mode:', jwtError);
+    }
+    return null;
+  }
+
+  /**
+   * Setup Supabase auth state change listener.
+   * This ensures that when the SDK internally refreshes the token,
+   * we save the new session to file and update our in-memory state.
+   */
+  private setupAuthStateListener(): void {
+    this.supabase.auth.onAuthStateChange(async (event, session) => {
+      // Only handle token refresh events from SDK internal auto-refresh
+      if (event === 'TOKEN_REFRESHED' && session) {
+        console.log('[Auth Listener] SDK auto-refreshed token, syncing to file and state...');
+
+        // Update in-memory state
+        this.authState.session = session;
+        this.authState.user = session.user || this.authState.user;
+
+        // Persist to file (new refresh token!)
+        await this.saveSessionToFile(session);
+      } else if (event === 'SIGNED_OUT') {
+        console.log('[Auth Listener] User signed out');
+        this.authState = {
+          isAuthenticated: false,
+          user: null,
+          session: null,
+          userRole: null
+        };
+        this.clearSavedSession();
+      }
+    });
   }
 
   // Salva la sessione in un file locale

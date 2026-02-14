@@ -96,7 +96,24 @@ function initializeAuth() {
     window.api.receive('auth-error', handleAuthError);
     window.api.receive('token-used', handleTokenUsed);
     window.api.receive('auth-refresh-completed', handleAuthRefreshCompleted);
+    window.api.receive('auth-session-expired', handleSessionExpired);
   }
+}
+
+// Handle session expired event (refresh token cascade failure)
+function handleSessionExpired() {
+  console.warn('[Auth] Session expired - refresh token cascade failed, showing login');
+  // Reset UI to logged-out state
+  const authState = {
+    isAuthenticated: false,
+    user: null,
+    session: null,
+    userRole: null
+  };
+  handleAuthStatus(authState);
+
+  // Show a user-friendly message
+  showAuthError('login', 'Sessione scaduta. Effettua nuovamente il login.');
 }
 
 // Handle login form submission

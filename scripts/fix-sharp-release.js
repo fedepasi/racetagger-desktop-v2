@@ -4,8 +4,8 @@ const { execSync } = require('child_process');
 
 /**
  * Post-build script per correggere le dipendenze Sharp nell'app rilasciata
- * Questo script viene eseguito dopo il packaging di Electron per assicurare
- * che Sharp funzioni correttamente con tutte le sue dipendenze native.
+ * Cross-platform: gestisce macOS (.app), Windows (unpacked), e Linux (AppImage)
+ * Verifica che Sharp e libvips siano correttamente inclusi e funzionanti
  */
 
 console.log('🔧 [Sharp Fix] Starting Sharp post-build fix...');
@@ -13,181 +13,268 @@ console.log('🔧 [Sharp Fix] Starting Sharp post-build fix...');
 function findAppBundle(buildDir) {
   const items = fs.readdirSync(buildDir);
   for (const item of items) {
-    if (item.endsWith('.app') && fs.statSync(path.join(buildDir, item)).isDirectory()) {
-      return path.join(buildDir, item);
+    const fullPath = path.join(buildDir, item);
+    if (item.endsWith('.app') && fs.statSync(fullPath).isDirectory()) {
+      return fullPath;
     }
   }
   return null;
 }
 
-function fixSharpDependencies(context) {
-  try {
-    // Determina il percorso dell'app bundle
-    let appPath;
-    if (context && context.appOutDir) {
-      // Chiamato da electron-builder
+/**
+ * Determine the unpacked resources path based on platform and context
+ */
+function getUnpackedPath(context) {
+  let appPath;
+  const platform = context?.electronPlatformName || process.platform;
+
+  if (context && context.appOutDir) {
+    // Called from electron-builder hook
+    if (platform === 'darwin') {
       const appName = context.packager.appInfo.productFilename + '.app';
       appPath = path.join(context.appOutDir, appName);
+      return path.join(appPath, 'Contents', 'Resources', 'app.asar.unpacked');
     } else {
-      // Chiamato manualmente, cerca l'app nella directory release
-      const releaseDir = path.join(process.cwd(), 'release');
-      const platformDirs = fs.readdirSync(releaseDir).filter(d => 
-        fs.statSync(path.join(releaseDir, d)).isDirectory()
-      );
-      
-      for (const platformDir of platformDirs) {
-        const fullPlatformPath = path.join(releaseDir, platformDir);
-        const appBundle = findAppBundle(fullPlatformPath);
-        if (appBundle) {
-          appPath = appBundle;
-          break;
+      // Windows/Linux: resources are in the root output dir
+      return path.join(context.appOutDir, 'resources', 'app.asar.unpacked');
+    }
+  } else {
+    // Called manually, search release directory
+    const releaseDir = path.join(process.cwd(), 'release');
+    if (!fs.existsSync(releaseDir)) {
+      throw new Error('Release directory not found');
+    }
+
+    const platformDirs = fs.readdirSync(releaseDir).filter(d =>
+      fs.statSync(path.join(releaseDir, d)).isDirectory()
+    );
+
+    for (const platformDir of platformDirs) {
+      const fullPlatformPath = path.join(releaseDir, platformDir);
+
+      // macOS: look for .app bundle
+      const appBundle = findAppBundle(fullPlatformPath);
+      if (appBundle) {
+        return path.join(appBundle, 'Contents', 'Resources', 'app.asar.unpacked');
+      }
+
+      // Windows/Linux: look for resources/app.asar.unpacked
+      const winUnpacked = path.join(fullPlatformPath, 'resources', 'app.asar.unpacked');
+      if (fs.existsSync(winUnpacked)) {
+        return winUnpacked;
+      }
+    }
+
+    throw new Error('Cannot find app bundle in release directory');
+  }
+}
+
+function fixSharpDependencies(context) {
+  try {
+    const platform = context?.electronPlatformName || process.platform;
+    const arch = context?.arch || process.arch;
+
+    const unpackedPath = getUnpackedPath(context);
+    console.log(`📁 [Sharp Fix] Unpacked path: ${unpackedPath}`);
+    console.log(`📁 [Sharp Fix] Platform: ${platform}, Arch: ${arch}`);
+
+    if (!fs.existsSync(unpackedPath)) {
+      throw new Error(`Unpacked path does not exist: ${unpackedPath}`);
+    }
+
+    // Percorsi critici
+    const sharpPath = path.join(unpackedPath, 'node_modules', 'sharp');
+    const imgPath = path.join(unpackedPath, 'node_modules', '@img');
+
+    // Verifica che Sharp esista
+    if (!fs.existsSync(sharpPath)) {
+      throw new Error(`Sharp not found at: ${sharpPath}`);
+    }
+
+    if (!fs.existsSync(imgPath)) {
+      throw new Error(`@img packages not found at: ${imgPath}`);
+    }
+
+    console.log('✅ [Sharp Fix] Sharp and @img packages found');
+
+    // Cross-platform: detect correct Sharp binary package
+    const sharpPlatformPkg = `sharp-${platform}-${arch}`;
+    const sharpPlatformPath = path.join(imgPath, sharpPlatformPkg);
+
+    // Find the Sharp binary (.node file)
+    let sharpBinaryPath = null;
+    const expectedBinaryPath = path.join(sharpPlatformPath, 'lib', `sharp-${platform}-${arch}.node`);
+
+    if (fs.existsSync(expectedBinaryPath)) {
+      sharpBinaryPath = expectedBinaryPath;
+    } else {
+      // Search for any .node file in the platform package
+      if (fs.existsSync(sharpPlatformPath)) {
+        const libDir = path.join(sharpPlatformPath, 'lib');
+        if (fs.existsSync(libDir)) {
+          const nodeFiles = fs.readdirSync(libDir).filter(f => f.endsWith('.node'));
+          if (nodeFiles.length > 0) {
+            sharpBinaryPath = path.join(libDir, nodeFiles[0]);
+          }
         }
       }
     }
 
-    if (!appPath || !fs.existsSync(appPath)) {
-      throw new Error(`Cannot find app bundle. Searched in: ${appPath}`);
-    }
-
-    console.log(`📁 [Sharp Fix] Found app at: ${appPath}`);
-
-    // Percorsi critici
-    const resourcesPath = path.join(appPath, 'Contents', 'Resources');
-    const unpackedPath = path.join(resourcesPath, 'app.asar.unpacked');
-    const sharpPath = path.join(unpackedPath, 'node_modules', 'sharp');
-    const imgPath = path.join(unpackedPath, 'node_modules', '@img');
-
-    // Verifica che i percorsi esistano
-    const criticalPaths = [resourcesPath, unpackedPath, sharpPath, imgPath];
-    for (const criticalPath of criticalPaths) {
-      if (!fs.existsSync(criticalPath)) {
-        throw new Error(`Critical path missing: ${criticalPath}`);
+    if (!sharpBinaryPath) {
+      console.warn(`⚠️ [Sharp Fix] Sharp binary not found for ${platform}-${arch}`);
+      console.warn(`   Expected at: ${expectedBinaryPath}`);
+      console.warn(`   Listing @img contents:`);
+      if (fs.existsSync(imgPath)) {
+        fs.readdirSync(imgPath).forEach(item => {
+          console.warn(`   - ${item}`);
+        });
       }
+      console.warn('   App will fall back to Jimp for image processing');
+      return;
     }
 
-    console.log('✅ [Sharp Fix] All critical paths exist');
+    console.log(`✅ [Sharp Fix] Sharp binary: ${path.relative(unpackedPath, sharpBinaryPath)}`);
 
-    // Verifica Sharp binary
-    const sharpBinaryPath = path.join(imgPath, 'sharp-darwin-arm64', 'lib', 'sharp-darwin-arm64.node');
-
-    // Trova dinamicamente la versione di libvips
-    const libvipsDir = path.join(imgPath, 'sharp-libvips-darwin-arm64', 'lib');
+    // Find libvips
+    const libvipsPkg = `sharp-libvips-${platform}-${arch}`;
+    const libvipsDir = path.join(imgPath, libvipsPkg, 'lib');
     let libvipsPath = null;
 
     if (fs.existsSync(libvipsDir)) {
       const files = fs.readdirSync(libvipsDir);
-      const libvipsFile = files.find(f => f.startsWith('libvips-cpp.') && f.endsWith('.dylib'));
+      let libvipsFile;
+
+      if (platform === 'darwin') {
+        libvipsFile = files.find(f => f.startsWith('libvips-cpp.') && f.endsWith('.dylib'));
+      } else if (platform === 'win32') {
+        libvipsFile = files.find(f => f === 'libvips-cpp.dll' || (f.startsWith('libvips') && f.endsWith('.dll')));
+      } else {
+        // Linux
+        libvipsFile = files.find(f => f.startsWith('libvips-cpp.so'));
+      }
+
       if (libvipsFile) {
         libvipsPath = path.join(libvipsDir, libvipsFile);
       }
     }
 
-    if (!fs.existsSync(sharpBinaryPath)) {
-      throw new Error(`Sharp binary missing: ${sharpBinaryPath}`);
+    if (!libvipsPath) {
+      console.warn(`⚠️ [Sharp Fix] libvips not found for ${platform}-${arch}`);
+      console.warn(`   Expected in: ${libvipsDir}`);
+      console.warn('   App will fall back to Jimp');
+      return;
     }
 
-    if (!libvipsPath || !fs.existsSync(libvipsPath)) {
-      throw new Error(`libvips missing in: ${libvipsDir}`);
-    }
+    console.log(`✅ [Sharp Fix] libvips: ${path.relative(unpackedPath, libvipsPath)}`);
 
-    console.log('✅ [Sharp Fix] Sharp binary and libvips found');
-
-    // Crea il symlink sharp.node se non esiste (richiesto da alcune versioni)
-    const symlinkPath = path.join(imgPath, 'sharp-darwin-arm64', 'sharp.node');
-    if (!fs.existsSync(symlinkPath)) {
-      try {
-        fs.symlinkSync('./lib/sharp-darwin-arm64.node', symlinkPath);
-        console.log('✅ [Sharp Fix] Created sharp.node symlink');
-      } catch (symlinkError) {
-        // Fallback: copia il file
-        fs.copyFileSync(sharpBinaryPath, symlinkPath);
-        console.log('✅ [Sharp Fix] Copied sharp.node (fallback)');
-      }
-    }
-
-    // Verifica e correggi i permessi
-    const executablePaths = [sharpBinaryPath, symlinkPath];
-    for (const execPath of executablePaths) {
-      if (fs.existsSync(execPath)) {
+    // macOS: Create symlink sharp.node if needed
+    if (platform === 'darwin') {
+      const symlinkPath = path.join(sharpPlatformPath, 'sharp.node');
+      if (!fs.existsSync(symlinkPath)) {
         try {
-          fs.chmodSync(execPath, 0o755);
-          console.log(`✅ [Sharp Fix] Set executable permissions on ${path.basename(execPath)}`);
-        } catch (chmodError) {
-          console.warn(`⚠️ [Sharp Fix] Could not set permissions on ${execPath}: ${chmodError.message}`);
+          fs.symlinkSync(`./lib/sharp-${platform}-${arch}.node`, symlinkPath);
+          console.log('✅ [Sharp Fix] Created sharp.node symlink');
+        } catch (symlinkError) {
+          // Fallback: copy the file
+          fs.copyFileSync(sharpBinaryPath, symlinkPath);
+          console.log('✅ [Sharp Fix] Copied sharp.node (fallback)');
         }
       }
     }
 
-    // Verifica le dipendenze dinamiche con otool (se disponibile)
-    try {
-      const otoolOutput = execSync(`otool -L "${libvipsPath}"`, { encoding: 'utf8' });
-      const hasSystemLibs = otoolOutput.includes('/usr/lib/libSystem.B.dylib');
-      
-      if (hasSystemLibs) {
-        console.log('✅ [Sharp Fix] libvips has correct system library links');
-      } else {
-        console.warn('⚠️ [Sharp Fix] libvips may have incorrect library links');
+    // Set executable permissions (non-Windows only)
+    if (platform !== 'win32') {
+      try {
+        fs.chmodSync(sharpBinaryPath, 0o755);
+        console.log(`✅ [Sharp Fix] Set executable permissions on Sharp binary`);
+      } catch (chmodError) {
+        console.warn(`⚠️ [Sharp Fix] Could not set permissions: ${chmodError.message}`);
       }
-    } catch (otoolError) {
-      console.warn('⚠️ [Sharp Fix] Could not verify library links (otool not available)');
     }
 
-    // Crea un file di configurazione per il runtime
+    // macOS: Verify dynamic library links with otool
+    if (platform === 'darwin') {
+      try {
+        const otoolOutput = execSync(`otool -L "${libvipsPath}"`, { encoding: 'utf8' });
+        const hasSystemLibs = otoolOutput.includes('/usr/lib/libSystem.B.dylib');
+        if (hasSystemLibs) {
+          console.log('✅ [Sharp Fix] libvips has correct system library links');
+        } else {
+          console.warn('⚠️ [Sharp Fix] libvips may have incorrect library links');
+        }
+      } catch (otoolError) {
+        console.warn('⚠️ [Sharp Fix] Could not verify library links (otool not available)');
+      }
+    }
+
+    // Windows: Verify DLL accessibility
+    if (platform === 'win32') {
+      const dllFiles = fs.readdirSync(libvipsDir).filter(f => f.endsWith('.dll'));
+      console.log(`✅ [Sharp Fix] Found ${dllFiles.length} DLLs in libvips directory`);
+    }
+
+    // Verify architecture (non-Windows)
+    if (platform !== 'win32') {
+      try {
+        const fileOutput = execSync(`file "${sharpBinaryPath}"`, { encoding: 'utf8' });
+        console.log(`   Architecture: ${fileOutput.trim().split(':').pop().trim()}`);
+      } catch {
+        console.warn('   ⚠️ Could not verify binary architecture');
+      }
+    }
+
+    // Create runtime configuration
     const configPath = path.join(unpackedPath, 'sharp-config.json');
     const config = {
       timestamp: new Date().toISOString(),
-      platform: process.platform,
-      arch: process.arch,
+      platform,
+      arch,
       sharpBinary: path.relative(unpackedPath, sharpBinaryPath),
       libvips: path.relative(unpackedPath, libvipsPath),
+      sharpPlatformPkg,
+      libvipsPkg,
       verified: true
     };
-    
+
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
     console.log('✅ [Sharp Fix] Created Sharp runtime configuration');
 
-    // Test finale: prova a caricare Sharp
+    // Test: try to load Sharp
     try {
-      // Salva il CWD originale
       const originalCwd = process.cwd();
-      
-      // Cambia temporaneamente directory per il test
-      process.chdir(unpackedPath);
-      
-      // Pulisce la cache e prova a caricare Sharp
-      const sharpModulePath = path.join(sharpPath, 'lib', 'index.js');
-      delete require.cache[sharpModulePath];
-      
-      // Imposta le variabili d'ambiente
+      process.chdir(path.join(unpackedPath, '..'));
+
+      // Set library paths
+      if (platform === 'darwin') {
+        process.env.DYLD_LIBRARY_PATH = `${libvipsDir}:${process.env.DYLD_LIBRARY_PATH || ''}`;
+      } else if (platform === 'linux') {
+        process.env.LD_LIBRARY_PATH = `${libvipsDir}:${process.env.LD_LIBRARY_PATH || ''}`;
+      } else if (platform === 'win32') {
+        process.env.PATH = `${libvipsDir};${process.env.PATH || ''}`;
+      }
+
       process.env.SHARP_IGNORE_GLOBAL_LIBVIPS = '1';
       process.env.SHARP_FORCE_GLOBAL_LIBVIPS = '0';
-      
+
+      const sharpModulePath = path.join(sharpPath, 'lib', 'index.js');
+      delete require.cache[sharpModulePath];
       const sharp = require(sharpPath);
-      
-      // Test minimo - solo check che Sharp si carichi
+
       if (sharp.format) {
-        // Verifica che Sharp sia caricato correttamente
         console.log('✅ [Sharp Fix] Sharp formats available:', Object.keys(sharp.format));
       }
-      
-      // Ripristina CWD
+
       process.chdir(originalCwd);
-      
       console.log('✅ [Sharp Fix] Sharp test successful!');
-      
     } catch (testError) {
       console.warn(`⚠️ [Sharp Fix] Sharp test failed: ${testError.message}`);
       console.warn('⚠️ [Sharp Fix] App may fall back to Jimp at runtime');
     }
 
     console.log('🎉 [Sharp Fix] Sharp post-build fix completed successfully!');
-    
+
   } catch (error) {
     console.error(`❌ [Sharp Fix] Failed to fix Sharp dependencies: ${error.message}`);
-    console.error('❌ [Sharp Fix] Stack trace:', error.stack);
-    
-    // Non usciamo con errore per non bloccare il build
-    // L'app userà il fallback a Jimp
     console.warn('⚠️ [Sharp Fix] Build will continue, but app may use Jimp fallback');
   }
 }

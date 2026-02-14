@@ -50,9 +50,24 @@ export function registerImageHandlers(): void {
             return `file://${thumbnailPath}`;
           }
 
-          // Generate thumbnail using rawConverter
-          const { rawConverter } = await import('../utils/raw-converter');
-          const generatedThumbPath = await rawConverter.extractThumbnailFromRaw(filePath, thumbnailPath);
+          // Generate thumbnail using native raw-preview-extractor (no dcraw needed)
+          const { rawPreviewExtractor } = await import('../utils/raw-preview-native');
+          const result = await rawPreviewExtractor.extractPreview(filePath, {
+            targetMinSize: 50 * 1024,   // 50KB min for thumbnails
+            targetMaxSize: 500 * 1024,  // 500KB max for thumbnails
+            timeout: 5000,
+            preferQuality: 'thumbnail'
+          });
+
+          let generatedThumbPath = thumbnailPath;
+          if (result.success && result.data) {
+            const fsPromises = await import('fs/promises');
+            await fsPromises.writeFile(thumbnailPath, result.data);
+          } else {
+            // Fallback: try rawConverter if native extraction fails
+            const { rawConverter } = await import('../utils/raw-converter');
+            generatedThumbPath = await rawConverter.extractThumbnailFromRaw(filePath, thumbnailPath);
+          }
 
           if (fs.existsSync(generatedThumbPath)) {
             return `file://${generatedThumbPath}`;

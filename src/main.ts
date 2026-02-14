@@ -3,18 +3,13 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { promises as fsPromises } from 'fs';
 // import * as os from 'os'; // REMOVED - unused
+import { diagnosticLogger } from './utils/diagnostic-logger';
 
 // --- CONSOLE LOGGING DISABLE FOR PRODUCTION ---
-// NOTE: This check is commented out to prevent initialization errors
-// It should be executed after app.ready() event in production builds
-// if (app.isPackaged) {
-//   const allConsoleMethods = ['log', 'warn', 'error', 'info', 'debug', 'trace'];
-//
-//   allConsoleMethods.forEach(method => {
-//     // Override each method with an empty function
-//     (console as any)[method] = () => {};
-//   });
-// }
+// NOTE: Console logging is now CAPTURED by diagnosticLogger instead of disabled.
+// The diagnostic logger intercepts console.* and writes to a log file while
+// preserving original console output in development mode.
+// This replaces the previous approach of silencing all console methods.
 
 // Safe console error handler to prevent EPIPE errors from crashing the app
 const safeConsoleError = (...args: any[]) => {
@@ -49,6 +44,11 @@ process.stderr.on('error', (error) => {
   // Re-throw other errors
   throw error;
 });
+
+// Initialize diagnostic logger EARLY - captures all subsequent console output to file
+// This MUST happen before any significant logging to ensure complete capture
+diagnosticLogger.initialize();
+
 import {
   initializeDatabaseSchema, // Alias per initializeLocalCacheSchema
   createProjectOnline,
@@ -125,7 +125,8 @@ import * as piexif from 'piexifjs';
 import { createImageProcessor, initializeImageProcessor } from './utils/native-modules';
 import { createXmpSidecar, xmpSidecarExists } from './utils/xmp-manager';
 import { writeKeywordsToImage } from './utils/metadata-writer';
-import { rawConverter } from './utils/raw-converter'; // Import the singleton instance
+import { rawConverter } from './utils/raw-converter'; // Import for temp cleanup only
+import { rawPreviewExtractor } from './utils/raw-preview-native'; // Native RAW preview extraction
 import { unifiedImageProcessor, UnifiedImageFile, UnifiedProcessingResult, UnifiedProcessorConfig } from './unified-image-processor';
 import { FolderOrganizerConfig } from './utils/folder-organizer';
 import { getFaceDetectionBridge } from './face-detection-bridge';
@@ -1013,74 +1014,89 @@ async function preprocessImageIfNeeded(
 
   if (isRaw) {
     try {
-      // Crea percorsi per file temporanei
-      const tmp = require('os').tmpdir();
-      const outputJpeg = path.join(tmp, `racetagger_raw_${Date.now()}_${Math.random().toString(36).substring(2,8)}.jpg`);
-      
-      // Primo passo: converti RAW in DNG
-      const baseFilename = path.basename(imagePath, path.extname(imagePath));
-      const dngFilePath = path.join(path.dirname(imagePath), `${baseFilename}.dng`);
-      
+      // ===== RAW Preview Extraction via native library (no dcraw/ImageMagick) =====
+      // Strategy: raw-preview-extractor (native C++) → Sharp/Jimp resize → JPEG buffer
+
+      let rawBuffer: Buffer | undefined;
+
+      // Try 1: extractFullPreview (highest quality embedded JPEG, typically 2-6MP)
       try {
-        // Tenta di usare il metodo ottimizzato
-        await rawConverter.convertRawToDng(imagePath, dngFilePath);
-        
-        // Secondo passo: usa il metodo ottimizzato per convertire DNG in JPEG
-        const extractedPath = await rawConverter.convertDngToJpegOptimized(
-          dngFilePath,
-          outputJpeg,
-          95,        // Alta qualità JPEG
-          1440       // Limita il lato lungo a 1440px (preset dell'app)
-        );
-
-        const buffer = await fsPromises.readFile(extractedPath);
-
-        let xmpPath = null;
-        if (xmpSidecarExists(imagePath)) {
-          xmpPath = imagePath + '.xmp';
+        const fullResult = await rawPreviewExtractor.extractFullPreview(imagePath, { timeout: 15000 });
+        if (fullResult.success && fullResult.data) {
+          rawBuffer = fullResult.data;
+          if (DEBUG_MODE) console.log(`[RAW] extractFullPreview OK: ${(rawBuffer.length / 1024).toFixed(0)}KB`);
         }
-
-        let previewPath = null;
-        if (config && config.savePreviewImages !== false) {
-          previewPath = await saveImagePreview(imagePath, buffer, config);
-        }
-
-        return {
-          buffer,
-          mimeType: 'image/jpeg',
-          isRawConverted: true,
-          originalFormat: ext.substring(1),
-          xmpPath,
-          previewPath,
-          tempDngPath: dngFilePath // Traccia il file DNG temporaneo per la pulizia
-        };
-      } catch (optimizedError: any) {
-        console.error(`Optimized conversion failed: ${optimizedError.message || 'Unknown error'}`);
-
-        const fallbackPath = await rawConverter.convertRawToJpeg(imagePath, outputJpeg);
-
-        const buffer = await fsPromises.readFile(fallbackPath);
-
-        let xmpPath = null;
-        if (xmpSidecarExists(imagePath)) {
-          xmpPath = imagePath + '.xmp';
-        }
-
-        let previewPath = null;
-        if (config && config.savePreviewImages !== false) {
-          previewPath = await saveImagePreview(imagePath, buffer, config);
-        }
-
-        return {
-          buffer,
-          mimeType: 'image/jpeg',
-          isRawConverted: true,
-          originalFormat: ext.substring(1),
-          xmpPath,
-          previewPath,
-          tempDngPath: dngFilePath // Traccia il file DNG temporaneo per la pulizia (anche per fallback)
-        };
+      } catch (e: any) {
+        if (DEBUG_MODE) console.log(`[RAW] extractFullPreview failed: ${e.message}`);
       }
+
+      // Try 2: extractPreview with medium quality (1-2MP, ~500KB-2MB)
+      if (!rawBuffer) {
+        try {
+          const previewResult = await rawPreviewExtractor.extractPreview(imagePath, {
+            targetMinSize: 200 * 1024,
+            targetMaxSize: 3 * 1024 * 1024,
+            timeout: 10000,
+            preferQuality: 'preview'
+          });
+          if (previewResult.success && previewResult.data) {
+            rawBuffer = previewResult.data;
+            if (DEBUG_MODE) console.log(`[RAW] extractPreview OK: ${(rawBuffer.length / 1024).toFixed(0)}KB`);
+          }
+        } catch (e: any) {
+          if (DEBUG_MODE) console.log(`[RAW] extractPreview failed: ${e.message}`);
+        }
+      }
+
+      if (!rawBuffer) {
+        throw new Error(`Could not extract preview from RAW file: ${path.basename(imagePath)}`);
+      }
+
+      // Resize with Sharp/Jimp if needed (limit to 1440px max dimension, quality 95)
+      try {
+        const processor = await createImageProcessor(rawBuffer);
+        const metadata = await processor.metadata();
+        const maxDim = Math.max(metadata.width || 0, metadata.height || 0);
+
+        if (maxDim > 1440) {
+          // Resize maintaining aspect ratio
+          const scale = 1440 / maxDim;
+          const newWidth = Math.round((metadata.width || 1440) * scale);
+          const newHeight = Math.round((metadata.height || 1440) * scale);
+          rawBuffer = await processor
+            .resize(newWidth, newHeight, { fit: 'inside', withoutEnlargement: true })
+            .jpeg({ quality: 95, progressive: true })
+            .toBuffer();
+        } else {
+          // Just ensure JPEG output at high quality
+          rawBuffer = await processor
+            .jpeg({ quality: 95, progressive: true })
+            .toBuffer();
+        }
+      } catch (resizeError: any) {
+        // If resize fails, use the raw buffer as-is (it's already a valid JPEG)
+        if (DEBUG_MODE) console.log(`[RAW] Resize skipped: ${resizeError.message}`);
+      }
+
+      let xmpPath = null;
+      if (xmpSidecarExists(imagePath)) {
+        xmpPath = imagePath + '.xmp';
+      }
+
+      let previewPath = null;
+      if (config && config.savePreviewImages !== false) {
+        previewPath = await saveImagePreview(imagePath, rawBuffer, config);
+      }
+
+      return {
+        buffer: rawBuffer,
+        mimeType: 'image/jpeg',
+        isRawConverted: true,
+        originalFormat: ext.substring(1),
+        xmpPath,
+        previewPath,
+        tempDngPath: null // No DNG temp file needed with native extraction
+      };
     } catch (error: any) {
       console.error(`Error preprocessing RAW file: ${error.message}`);
       throw new Error(`Failed to process RAW file: ${error.message}`);
@@ -2421,31 +2437,67 @@ async function handleRawPreviewExtraction(event: IpcMainEvent) {
     const baseFilename = path.basename(rawFilePath, path.extname(rawFilePath));
     const previewPath = path.join(path.dirname(rawFilePath), `${baseFilename}_preview.jpg`);
     
-    // Convert RAW to DNG using the new converter.
-    // Tenta di convertire con il metodo che utilizza dcraw+ImageMagick in alta risoluzione
-    let extractedPath;
+    // Extract preview via native raw-preview-extractor (no dcraw/ImageMagick needed)
+    let previewBuffer: Buffer;
+    let extractedPath = previewPath;
+
     try {
-      // Primo passo: converti RAW in DNG
-      const baseFilename = path.basename(rawFilePath, path.extname(rawFilePath));
-      const dngFilePath = path.join(path.dirname(rawFilePath), `${baseFilename}.dng`);
-      await rawConverter.convertRawToDng(rawFilePath, dngFilePath);
-      
-      // Secondo passo: usa il metodo ottimizzato per convertire DNG in JPEG
-      // maxSize = 1440 per limitare il lato lungo a 1440px
-      // jpegQuality = 95 per garantire alta qualità
-      extractedPath = await rawConverter.convertDngToJpegOptimized(
-        dngFilePath, 
-        previewPath, 
-        95,        // Alta qualità JPEG
-        1440       // Limita il lato lungo a 1440px (preset dell'app)
-      );
-    } catch (optimizedError: any) {
-      console.error(`Optimized full-resolution conversion failed: ${optimizedError.message || 'Unknown error'}`);
-      extractedPath = await rawConverter.convertRawToJpeg(rawFilePath, previewPath);
+      // Try extractFullPreview first (highest quality embedded JPEG)
+      let rawBuffer: Buffer | undefined;
+
+      const fullResult = await rawPreviewExtractor.extractFullPreview(rawFilePath, { timeout: 15000 });
+      if (fullResult.success && fullResult.data) {
+        rawBuffer = fullResult.data;
+      }
+
+      // Fallback to standard preview extraction
+      if (!rawBuffer) {
+        const stdResult = await rawPreviewExtractor.extractPreview(rawFilePath, {
+          targetMinSize: 200 * 1024,
+          targetMaxSize: 5 * 1024 * 1024,
+          timeout: 10000,
+          preferQuality: 'full'
+        });
+        if (stdResult.success && stdResult.data) {
+          rawBuffer = stdResult.data;
+        }
+      }
+
+      if (!rawBuffer) {
+        throw new Error('Could not extract preview from RAW file');
+      }
+
+      // Resize with Sharp/Jimp if needed (1440px max, quality 95)
+      try {
+        const processor = await createImageProcessor(rawBuffer);
+        const metadata = await processor.metadata();
+        const maxDim = Math.max(metadata.width || 0, metadata.height || 0);
+
+        if (maxDim > 1440) {
+          const scale = 1440 / maxDim;
+          const newWidth = Math.round((metadata.width || 1440) * scale);
+          const newHeight = Math.round((metadata.height || 1440) * scale);
+          previewBuffer = await processor
+            .resize(newWidth, newHeight, { fit: 'inside', withoutEnlargement: true })
+            .jpeg({ quality: 95, progressive: true })
+            .toBuffer();
+        } else {
+          previewBuffer = await processor
+            .jpeg({ quality: 95, progressive: true })
+            .toBuffer();
+        }
+      } catch {
+        // If resize fails, use the raw buffer as-is
+        previewBuffer = rawBuffer;
+      }
+
+      // Write preview to disk
+      await fsPromises.writeFile(previewPath, previewBuffer);
+    } catch (nativeError: any) {
+      console.error(`Native RAW preview extraction failed: ${nativeError.message}`);
+      throw new Error(`Failed to extract RAW preview: ${nativeError.message}`);
     }
-    
-    // Leggi l'anteprima estratta per includerla nella risposta
-    const previewBuffer = await fsPromises.readFile(extractedPath);
+
     const previewBase64 = previewBuffer.toString('base64');
     
     // Invia il risultato al renderer
@@ -3760,6 +3812,9 @@ async function performCleanup(): Promise<void> {
 
     // Cleanup auth service resources
     authService.cleanup();
+
+    // Flush and close diagnostic logger
+    diagnosticLogger.shutdown();
 
     // Cleanup all temp files at shutdown
     try {

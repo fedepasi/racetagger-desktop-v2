@@ -73,6 +73,8 @@ export async function initializeImageProcessor(): Promise<void> {
     if (isPackaged) {
       const path = require('path');
       const fs = require('fs');
+      const platform = process.platform;  // 'darwin' | 'win32' | 'linux'
+      const arch = process.arch;          // 'arm64' | 'x64'
 
       const unpackedPath = path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules');
       const sharpPath = path.join(unpackedPath, 'sharp');
@@ -82,31 +84,53 @@ export async function initializeImageProcessor(): Promise<void> {
         throw new Error(`Sharp not found at ${sharpPath}`);
       }
 
-      // Verifica binari nativi
-      const darwinArm64Path = path.join(unpackedPath, '@img', 'sharp-darwin-arm64');
-      const binaryPath = path.join(darwinArm64Path, 'lib', 'sharp-darwin-arm64.node');
+      // Cross-platform: detect correct @img package for current platform/arch
+      // Packages follow pattern: @img/sharp-{platform}-{arch}
+      const sharpPlatformPkg = `sharp-${platform}-${arch}`;
+      const sharpPlatformPath = path.join(unpackedPath, '@img', sharpPlatformPkg);
+      const binaryPath = path.join(sharpPlatformPath, 'lib', `sharp-${platform}-${arch}.node`);
 
-      const libvipsDir = path.join(unpackedPath, '@img', 'sharp-libvips-darwin-arm64', 'lib');
+      // Libvips package follows pattern: @img/sharp-libvips-{platform}-{arch}
+      const libvipsPkg = `sharp-libvips-${platform}-${arch}`;
+      const libvipsDir = path.join(unpackedPath, '@img', libvipsPkg, 'lib');
       let libvipsPath: string | null = null;
+
+      if (!fs.existsSync(binaryPath)) {
+        throw new Error(`Sharp native binary not found at ${binaryPath} (platform: ${platform}, arch: ${arch})`);
+      }
 
       if (fs.existsSync(libvipsDir)) {
         const files = fs.readdirSync(libvipsDir);
-        const libvipsFile = files.find((f: string) => f.startsWith('libvips-cpp.') && f.endsWith('.dylib'));
+        // Find the main libvips shared library based on platform
+        let libvipsFile: string | undefined;
+        if (platform === 'darwin') {
+          libvipsFile = files.find((f: string) => f.startsWith('libvips-cpp.') && f.endsWith('.dylib'));
+        } else if (platform === 'win32') {
+          libvipsFile = files.find((f: string) => f === 'libvips-cpp.dll' || (f.startsWith('libvips') && f.endsWith('.dll')));
+        } else {
+          // Linux
+          libvipsFile = files.find((f: string) => f.startsWith('libvips-cpp.so'));
+        }
         if (libvipsFile) {
           libvipsPath = path.join(libvipsDir, libvipsFile);
         }
       }
 
-      if (!fs.existsSync(binaryPath)) {
-        throw new Error(`Sharp native binary not found at ${binaryPath}`);
-      }
-
       if (!libvipsPath || !fs.existsSync(libvipsPath)) {
-        throw new Error(`Sharp libvips not found in: ${libvipsDir}`);
+        throw new Error(`Sharp libvips not found in: ${libvipsDir} (platform: ${platform}, arch: ${arch})`);
       }
 
-      // Imposta DYLD_LIBRARY_PATH
-      process.env.DYLD_LIBRARY_PATH = `${libvipsDir}:${process.env.DYLD_LIBRARY_PATH || ''}`;
+      // Platform-specific library path setup
+      if (platform === 'darwin') {
+        process.env.DYLD_LIBRARY_PATH = `${libvipsDir}:${process.env.DYLD_LIBRARY_PATH || ''}`;
+      } else if (platform === 'linux') {
+        process.env.LD_LIBRARY_PATH = `${libvipsDir}:${process.env.LD_LIBRARY_PATH || ''}`;
+      } else if (platform === 'win32') {
+        // Windows: Add DLL directory to PATH so Sharp can find libvips
+        process.env.PATH = `${libvipsDir};${process.env.PATH || ''}`;
+      }
+
+      console.log(`[ImageProcessor] Sharp binary: ${sharpPlatformPkg}, libvips: ${libvipsPkg}`);
 
       // Cambia directory temporaneamente
       const originalCwd = process.cwd();

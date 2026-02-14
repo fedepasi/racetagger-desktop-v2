@@ -40,6 +40,7 @@ import { registerFaceRecognitionHandlers } from './face-recognition-handlers';
 import { registerPresetFaceHandlers } from './preset-face-handlers';
 import { registerVersionHandlers } from './version-handlers';
 import { registerFeedbackHandlers } from './feedback-handlers';
+import { registerDiagnosticHandlers } from './diagnostic-handlers';
 
 /**
  * Initialize IPC context with mainWindow reference
@@ -100,8 +101,11 @@ export function registerAllHandlers(): void {
   // Feedback handlers (5)
   registerFeedbackHandlers();
 
+  // Diagnostic handlers (5)
+  registerDiagnosticHandlers();
+
   console.log('[IPC] ========================================');
-  console.log('[IPC] All handlers registered (128 modular handlers)');
+  console.log('[IPC] All handlers registered (133 modular handlers)');
   console.log('[IPC] ========================================');
 }
 

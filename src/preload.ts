@@ -42,6 +42,7 @@ const validSendReceiveChannels: string[] = [
   // Category and auth refresh channels
   'categories-updated',
   'auth-refresh-completed',
+  'auth-session-expired',
   // Face Detection IPC channels (main -> renderer -> main)
   'face-detection-request', 'face-detection-response',
   'face-detection-single-request', 'face-detection-single-response',
@@ -108,6 +109,12 @@ const validInvokeChannels: string[] = [
   'get-dependency-status',
   'get-recent-errors',
   'open-github-issues',
+  // Remote Diagnostics
+  'collect-full-diagnostics',
+  'upload-diagnostics-remote',
+  'get-main-process-logs',
+  'get-diagnostic-log-path',
+  'open-diagnostic-log-folder',
   // Access Code
   'check-access-code',
   'verify-access-code',

@@ -42,9 +42,10 @@
     "build:win:x64": "tsc && electron-builder --win --x64",
     "build:win:arm64": "tsc && electron-builder --win --arm64",
     "build:win:all": "npm run build:win:x64 && npm run build:win:arm64",
+    "rebuild:native": "node scripts/rebuild-all-native.js",
+    "rebuild:native:verbose": "node scripts/rebuild-all-native.js --verbose",
     "rebuild:win": "scripts/rebuild-native-windows.ps1",
     "setup:win": "scripts/setup-windows-dev.ps1",
-    "setup:imagemagick": "scripts/setup-imagemagick-windows.ps1",
     "generate:icons": "node scripts/generate-icons.js"
   },
   "build": {
@@ -211,8 +212,12 @@
     "typescript": "^5.9.2"
   },
   "optionalDependencies": {
+    "@img/sharp-win32-x64": "^0.34.3",
     "@img/sharp-win32-arm64": "^0.34.3",
-    "@img/sharp-win32-x64": "^0.34.3"
+    "@img/sharp-libvips-win32-x64": "^0.34.3",
+    "@img/sharp-libvips-win32-arm64": "^0.34.3",
+    "@img/sharp-linux-x64": "^0.34.3",
+    "@img/sharp-libvips-linux-x64": "^0.34.3"
   },
   "cpu": [
     "x64",
