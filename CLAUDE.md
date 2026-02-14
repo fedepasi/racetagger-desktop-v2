@@ -17,7 +17,7 @@ Professional Electron desktop application for AI-powered race number detection i
 
 The Supabase PostgreSQL database (**project: `taompbzifylmdzgbbrpv`**) is shared between this desktop app and the Next.js web app at `../racetagger-app/`. Key implications:
 
-- **Schema changes** require migration files in `../racetagger-app/supabase/migrations/` AND corresponding SQLite schema updates in `src/database-service.ts`
+- **Schema changes** require migration files in `../racetagger-app/supabase/migrations/`
 - **Edge Functions** in `supabase/functions/` serve both platforms (desktop uses `analyzeImageDesktopV2-V6`, web uses `analyzeImageWeb`)
 - **Token system** (`user_tokens`, `token_transactions`, `batch_token_reservations`) is consumed by both apps - logic must stay in sync
 - **RLS policies** must account for both web auth (cookies) and desktop auth (JWT bearer tokens)
@@ -26,9 +26,9 @@ The Supabase PostgreSQL database (**project: `taompbzifylmdzgbbrpv`**) is shared
 ## Tech Stack
 
 - **Framework:** Electron 36.9.5, TypeScript 5.9.2, Node.js 18+
-- **Image Processing:** Sharp 0.34.3, jimp 1.6.0, raw-preview-extractor (custom in `/vendor/`)
-- **RAW Conversion:** dcraw (external binary), raw-preview-extractor (embedded previews)
-- **Database:** better-sqlite3 11.10.0 (local cache), Supabase 2.30.0 (cloud primary)
+- **Image Processing:** Sharp 0.34.3, raw-preview-extractor (custom in `/vendor/`)
+- **RAW Preview:** raw-preview-extractor (native C++ N-API) + ExifTool fallback
+- **Database:** Supabase 2.30.0 (cloud, source of truth) + in-memory caches (categories, presets)
 - **AI/ML:** Google Gemini (Flash/Pro/Lite via Edge Functions), onnxruntime-node 1.23.2 (local inference)
 - **Face Recognition:** face-api.js 0.22.2, canvas 3.2.0 (DISABLED - Coming Soon)
 - **Build:** electron-builder 24.13.0, cross-platform (macOS, Windows, Linux)
@@ -53,8 +53,7 @@ The Supabase PostgreSQL database (**project: `taompbzifylmdzgbbrpv`**) is shared
 ├── yolo-model-registry.ts         # YOLO model variant registry
 │
 ├── auth-service.ts                # Supabase auth + token pre-authorization (1,266 lines)
-├── database-service.ts            # SQLite connection pool + Supabase sync (4,286 lines)
-├── database-migration.ts          # SQLite schema migration framework (171 lines)
+├── database-service.ts            # Supabase CRUD + in-memory caches (~3,000 lines)
 ├── user-preferences-service.ts    # User settings persistence
 ├── consent-service.ts             # Training consent management
 ├── email-service.ts               # Brevo email integration
@@ -93,8 +92,8 @@ The Supabase PostgreSQL database (**project: `taompbzifylmdzgbbrpv`**) is shared
 │   └── ml-interfaces.ts           # ML pipeline interfaces (549 lines)
 │
 ├── utils/                         # Utilities
-│   ├── raw-converter.ts           # dcraw-based RAW processing (1,805 lines) ★
-│   ├── raw-preview-native.ts      # Native RAW preview extraction (634 lines)
+│   ├── raw-converter.ts           # Temp file management (~94 lines)
+│   ├── raw-preview-native.ts      # Native RAW preview extraction + ExifTool fallback (~542 lines)
 │   ├── crop-context-extractor.ts  # Crop + context multi-image extraction (940 lines)
 │   ├── analysis-logger.ts         # JSONL logging system (1,024 lines)
 │   ├── metadata-writer.ts         # EXIF/XMP/sidecar writing (828 lines)
@@ -109,8 +108,7 @@ The Supabase PostgreSQL database (**project: `taompbzifylmdzgbbrpv`**) is shared
 │   ├── disk-monitor.ts            # Disk space management
 │   ├── performance-monitor.ts     # Real-time metrics
 │   ├── performance-timer.ts       # High-res timing
-│   ├── dcraw-installer.ts         # Auto dcraw installation
-│   ├── native-tool-manager.ts     # ExifTool management
+│   ├── native-tool-manager.ts     # ExifTool management (~312 lines)
 │   ├── logger.ts                  # Structured logging
 │   ├── system-info.ts             # System diagnostics
 │   ├── hardware-detector.ts       # Hardware capability detection
@@ -243,7 +241,7 @@ The Supabase PostgreSQL database (**project: `taompbzifylmdzgbbrpv`**) is shared
 └── shared/                        # Shared utilities
 
 /scripts/                          # Build scripts, utilities
-/vendor/                           # Native dependencies (dcraw, ExifTool, raw-preview-extractor)
+/vendor/                           # Native dependencies (ExifTool, raw-preview-extractor)
 /ml-training/                      # ML model training pipeline (Python, ONNX conversion)
 /dist/                             # Compiled TypeScript output (generated)
 /release/                          # Built installers (generated)
@@ -298,7 +296,7 @@ The image processing flows through a multi-stage pipeline orchestrated by `unifi
 
 ```
 1. Image Discovery    → Scan folder, detect formats (RAW vs standard)
-2. RAW Conversion     → dcraw → JPEG (or raw-preview-extractor fallback)
+2. RAW Preview        → raw-preview-extractor (native) or ExifTool fallback
 3. Scene Classif.     → Local ONNX model classifies scene type (track/paddock/podium/portrait)
 4. Segmentation       → YOLOv8-seg isolates subjects (generic-segmenter.ts)
 5. Crop Extraction    → Extract crops per subject + negative/context image
@@ -361,28 +359,23 @@ All channels are whitelisted (57 send/receive + 171 invoke channels).
 
 ### Database Architecture
 
-**Dual-Mode Storage:**
+**Supabase-Only (v1.2.0+):**
 ```
 Desktop App
-├── SQLite (better-sqlite3) ← Local cache for offline + performance
-│   ├── WAL mode, 40MB cache, 256MB mmap
-│   ├── Connection pool (2-8 connections)
-│   └── Statement caching (up to 100 prepared statements)
-│
 └── Supabase PostgreSQL ← Source of truth (cloud)
     ├── 85+ tables with RLS policies
     ├── 41+ Edge Functions (Deno runtime)
     └── 7 storage buckets
+
+In-Memory Caches (module-level variables with TTL):
+├── categoriesCache (60s TTL) — sport categories
+└── presetsCache (30s TTL) — participant presets
 ```
 
-**Migration Framework (`database-migration.ts`):**
-- `SchemaVersions` table tracks applied migrations
-- Migrations run sequentially by version number
-- Currently 1 migration applied (add `raw_analysis` column)
-- New migrations: Add to `migrations` array with version + migrate function
+NOTE: SQLite (better-sqlite3) was removed in v1.2.0. All data is fetched from Supabase with in-memory caching for frequently accessed data (categories, presets).
 
 **Key Database Operations:**
-- `database-service.ts` (4,286 lines): SQLite initialization, CRUD ops, Supabase sync
+- `database-service.ts` (~3,000 lines): Supabase CRUD, in-memory caches, CSV storage, export destinations
 - `auth-service.ts` (1,266 lines): Session persistence, token balance, pre-authorization
 
 ## Token System
@@ -493,15 +486,35 @@ When `sport_categories.crop_config.enabled = true`:
 
 ## RAW Processing
 
-**Primary: dcraw** (`utils/raw-converter.ts`, 1,805 lines)
+**Primary: raw-preview-extractor** (`vendor/raw-preview-extractor/`)
+- Custom C++ N-API addon extracting embedded JPEG previews from RAW files
 - Formats: NEF, ARW, CR2, CR3, ORF, RAW, RW2, DNG
-- Auto-installation via `dcraw-installer.ts`
-- Batch processing with configurable workers
+- Fast extraction (200KB-2MB previews)
 
-**Fallback: raw-preview-extractor** (`vendor/raw-preview-extractor/`)
-- Custom module extracting embedded JPEG previews
-- Fast but lower resolution (200KB-2MB)
-- Used when dcraw unavailable or fails
+**Fallback: ExifTool** (`vendor/darwin/exiftool`, `vendor/win32/exiftool.exe`)
+- Perl-based metadata tool used as fallback for preview extraction
+- Managed by `native-tool-manager.ts` (ExifTool only since v1.2.0)
+
+NOTE: dcraw and ImageMagick were removed in v1.2.0. All RAW processing uses native raw-preview-extractor + ExifTool fallback.
+
+## Participant Driver Data Structure
+
+**Canonical source:** `preset_participant_drivers` table (separate from `preset_participants`).
+
+Each participant's drivers are stored as rows in `preset_participant_drivers`:
+- `driver_name` (text): Full driver name
+- `driver_metatag` (text, nullable): Metadata tag for the driver
+- `driver_order` (integer): Sort order (0 = primary driver, 1 = co-driver, etc.)
+
+**In code**, the `Participant` interface (`smart-matcher.ts`) and `PresetParticipant` interface (`database-service.ts`) include:
+- `preset_participant_drivers?: ParticipantDriver[]` — array loaded via Supabase nested select
+- `nome?: string` — legacy CSV fallback (comma-separated names for simple CSV imports without driver records)
+
+**Helper functions** (exported from `smart-matcher.ts`):
+- `getParticipantDriverNames(participant)` — returns driver names sorted by `driver_order`, falls back to `nome`
+- `getPrimaryDriverName(participant)` — returns first driver name
+
+**IMPORTANT:** The DB columns `nome_pilota`, `nome_navigatore`, `nome_terzo`, `nome_quarto` still exist in the `preset_participants` table but are **deprecated and no longer used in code**. All driver logic uses `preset_participant_drivers` exclusively.
 
 ## SmartMatcher (`matching/smart-matcher.ts`, 2,253 lines)
 
@@ -577,8 +590,8 @@ ENABLE_STREAMING_PIPELINE=true                # Force streaming mode
 - Sign ignore: vendor data files, Windows vendor
 
 **ASAR Unpack:** Native modules that need filesystem access:
-- `sharp`, `@img/*`, `better-sqlite3`, `jimp`, `raw-preview-extractor`
-- `vendor/**/*` (dcraw, ExifTool)
+- `sharp`, `@img/*`, `raw-preview-extractor`
+- `vendor/**/*` (ExifTool)
 
 **TypeScript Config:**
 - Target: ES2020, Module: CommonJS
@@ -624,7 +637,6 @@ ENABLE_STREAMING_PIPELINE=true                # Force streaming mode
 **Database:**
 - NEVER modify production Supabase schema without migration file
 - NEVER modify existing migration files (create new ones)
-- NEVER modify SQLite schema without matching Supabase migration
 - NEVER use `SELECT *` (specify columns for performance)
 - NEVER disable RLS in production
 
@@ -682,18 +694,14 @@ ENABLE_STREAMING_PIPELINE=true                # Force streaming mode
 
 **Database schema change:**
 1. Create migration in `../racetagger-app/supabase/migrations/YYYYMMDDHHMMSS_description.sql`
-2. Update SQLite schema in `src/database-service.ts` (mirror tables)
-3. Add migration in `src/database-migration.ts` if existing data needs transformation
-4. Update types in `src/ipc/types.ts` or `src/types/`
-5. Deploy migration to Supabase, test both apps
+2. Update types in `src/ipc/types.ts` or `src/types/`
+3. Update relevant functions in `src/database-service.ts`
+4. Deploy migration to Supabase, test both apps
 
 **Debugging:**
 ```bash
 # Debug mode with verbose logging
 DEBUG_MODE=true npm run dev:debug
-
-# Check dcraw availability
-# Monitor in renderer console for [dcraw] logs
 
 # Performance profiling
 npm run benchmark

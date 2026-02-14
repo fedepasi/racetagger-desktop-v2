@@ -168,6 +168,13 @@
                 <input type="password" id="register-confirm-password" required minlength="8" autocomplete="new-password" placeholder="Confirm your password">
               </div>
 
+              <!-- Referral Code (optional) -->
+              <div class="form-group referral-code-group">
+                <label for="register-referral-code">Referral code <span class="optional-label">(optional)</span></label>
+                <input type="text" id="register-referral-code" autocomplete="off" placeholder="Enter referral code if you have one">
+                <p class="field-hint">Received an invite? Enter the code to reward your referrer.</p>
+              </div>
+
               <!-- Password Requirements -->
               <div class="password-requirements">
                 <p class="requirements-title">Password requirements:</p>
@@ -216,10 +223,6 @@
         <a href="#" class="nav-item" data-section="analysis">
           <div class="nav-icon">🔍</div>
           <div class="nav-text">Analysis</div>
-        </a>
-        <a href="#" class="nav-item" data-section="progetti">
-          <div class="nav-icon">📁</div>
-          <div class="nav-text">Projects</div>
         </a>
         <a href="#" class="nav-item" data-section="participants">
           <div class="nav-icon">👥</div>
@@ -344,11 +347,8 @@
   <!-- Home Page Logic -->
   <script src="js/home.js"></script>
 
-  <!-- Support Feedback Modal -->
+  <!-- Unified Support Modal (feedback + diagnostics) -->
   <script src="js/feedback-modal.js"></script>
-
-  <!-- Remote Diagnostics -->
-  <script src="js/remote-diagnostics.js"></script>
 
   <!-- Face Recognition -->
   <script src="js/vendor/face-api.min.js"></script>
@@ -365,30 +365,6 @@
       <div class="modal-body">
         <img id="modal-image" class="modal-image" src="" alt="Enlarged image">
       </div>
-    </div>
-  </div>
-
-  <!-- Modal for Project Creation/Editing -->
-  <div id="project-modal" class="modal-overlay" style="display: none;">
-    <div class="modal-content">
-      <h2 id="project-modal-title">New Project</h2>
-      <form id="project-form">
-        <div class="form-group">
-          <label for="project-name-input">Project Name:</label>
-          <input type="text" id="project-name-input" class="form-control" required>
-        </div>
-        <div class="form-group">
-          <label for="project-csv-input">Base CSV File (optional):</label>
-          <input type="file" id="project-csv-input" class="form-control" accept=".csv">
-          <small id="project-csv-info" class="form-text"></small>
-        </div>
-        <input type="hidden" id="project-id-input"> <!-- For edit mode -->
-        <div class="modal-actions">
-          <button type="button" id="cancel-project-modal" class="btn btn-secondary">Cancel</button>
-          <button type="submit" id="save-project-button" class="btn btn-primary">Save Project</button>
-        </div>
-        <div id="project-modal-error" class="error-message" style="display: none;"></div>
-      </form>
     </div>
   </div>
 
@@ -578,12 +554,18 @@
     </div>
   </div>
 
-  <!-- Feedback FAB (Floating Action Button) -->
-  <button class="feedback-fab" id="feedback-fab" onclick="openFeedbackModal()" title="Send Feedback">
-    <svg class="feedback-fab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-    </svg>
-  </button>
+  <!-- Support FAB (Floating Action Button) + First-time tooltip -->
+  <div class="feedback-fab-wrapper" id="feedback-fab-wrapper">
+    <div class="feedback-fab-tooltip" id="feedback-fab-tooltip">
+      <span class="feedback-fab-tooltip-text">Report a bug, request a feature, or share your feedback — we're listening!</span>
+      <button class="feedback-fab-tooltip-close" id="feedback-fab-tooltip-close" aria-label="Close">&times;</button>
+    </div>
+    <button class="feedback-fab" id="feedback-fab" onclick="openFeedbackModal()" title="Support">
+      <svg class="feedback-fab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+      </svg>
+    </button>
+  </div>
 
 </body>
 </html>

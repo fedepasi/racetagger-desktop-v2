@@ -565,6 +565,8 @@ class LogVisualizer {
     const contentDiv = document.getElementById('lv-folder-org-content');
     if (!contentDiv) return;
 
+    const hasPreset = this.presetParticipants && this.presetParticipants.length > 0;
+
     const folderOrgHTML = `
       <div class="folder-org-config">
         <div class="config-section">
@@ -597,13 +599,13 @@ class LogVisualizer {
                 <div class="form-text">Example: "42"</div>
               </div>
             </label>
-            <label class="radio-option">
+            ${hasPreset ? `<label class="radio-option">
               <input type="radio" name="post-folder-pattern" value="number_name">
               <div class="radio-content">
                 <div class="radio-title">👤 Number + Name</div>
-                <div class="form-text">Example: "42_John_Doe"</div>
+                <div class="form-text">Example: "42 John Doe"</div>
               </div>
-            </label>
+            </label>` : ''}
           </div>
         </div>
 
@@ -2417,7 +2419,7 @@ class LogVisualizer {
         .filter(Boolean);
     }
     // Fallback: parse nome field
-    const nome = participant.nome || participant.nome_pilota || '';
+    const nome = participant.nome || '';
     if (!nome) return [];
     return nome.split(',').map(s => s.trim()).filter(Boolean);
   }

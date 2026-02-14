@@ -1196,11 +1196,6 @@ body {
   gap: var(--spacing-sm);
 }
 
-#project-modal-error {
-  margin-top: var(--spacing-md);
-}
-
-
 /* Responsive adjustments */
 @media (max-width: 768px) {
   .app-container {

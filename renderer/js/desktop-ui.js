@@ -3,9 +3,6 @@
  * Handles desktop-specific UI interactions like window controls and navigation
  */
 
-// DOM Elements (globali per questo script)
-let projectModal, projectModalTitle, projectForm, projectNameInput, projectCsvInput, projectCsvInfo, projectIdInput, cancelProjectModalBtn, projectModalError;
-
 document.addEventListener('DOMContentLoaded', () => {
   const windowClose = document.querySelector('.window-control.window-close');
   const windowMinimize = document.querySelector('.window-control.window-minimize');
@@ -67,42 +64,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  const createNewProjectBtn = document.getElementById('create-new-project-btn');
-  if (createNewProjectBtn) {
-    createNewProjectBtn.addEventListener('click', () => openProjectModal('create'));
-  }
-
-  projectModal = document.getElementById('project-modal');
-  projectModalTitle = document.getElementById('project-modal-title');
-  projectForm = document.getElementById('project-form');
-  projectNameInput = document.getElementById('project-name-input');
-  projectCsvInput = document.getElementById('project-csv-input');
-  projectCsvInfo = document.getElementById('project-csv-info');
-  projectIdInput = document.getElementById('project-id-input');
-  cancelProjectModalBtn = document.getElementById('cancel-project-modal');
-  projectModalError = document.getElementById('project-modal-error');
-
-  if (cancelProjectModalBtn && projectModal) {
-    cancelProjectModalBtn.addEventListener('click', () => {
-      projectModal.style.display = 'none';
-    });
-  }
-
-  if (projectForm && projectModal && projectNameInput && projectCsvInput && projectIdInput && projectModalTitle && projectModalError && projectCsvInfo) {
-    projectForm.addEventListener('submit', handleProjectFormSubmit);
-  }
-  
-  if (projectCsvInput && projectCsvInfo) {
-    projectCsvInput.addEventListener('change', () => {
-      if (projectCsvInput.files && projectCsvInput.files.length > 0) {
-        projectCsvInfo.textContent = `Selected file: ${projectCsvInput.files[0].name}`;
-      } else {
-        if (!projectIdInput.value) { 
-            projectCsvInfo.textContent = '';
-        }
-      }
-    });
-  }
   
   const activeNavItem = document.querySelector('.sidebar-nav .nav-item.active .nav-text');
   if (activeNavItem) {
@@ -184,145 +145,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 
-async function handleProjectFormSubmit(e) {
-  e.preventDefault();
-  projectModalError.style.display = 'none';
-  projectModalError.textContent = '';
-
-  const name = projectNameInput.value.trim();
-  const csvFile = projectCsvInput.files ? projectCsvInput.files[0] : null;
-  const currentProjectId = projectIdInput.value;
-  const mode = projectModal.dataset.mode || 'create';
-
-  if (!name) {
-    projectModalError.textContent = 'Project name is required.';
-    projectModalError.style.display = 'block';
-    return;
-  }
-
-  if (!window.api || !window.api.invoke) {
-    projectModalError.textContent = 'API non disponibile. Esegui l\'applicazione in Electron per creare progetti.';
-    projectModalError.style.display = 'block';
-    return;
-  }
-
-  try {
-    let projectDataResult;
-    let operationSuccess = false;
-
-    if (mode === 'create') {
-      const createResult = await window.api.invoke('db-create-project', { name: name });
-      
-      // Controllo di sicurezza per gestire risposte null o undefined
-      if (!createResult) {
-        throw new Error('Invalid response from server during project creation.');
-      }
-      
-      if (!createResult.success || !createResult.data) {
-        throw new Error(createResult.error || 'Error during project creation.');
-      }
-      projectDataResult = createResult.data;
-      alert(`Project "${projectDataResult.name}" created with ID: ${projectDataResult.id}`);
-      operationSuccess = true;
-      
-      if (csvFile && projectDataResult.id) {
-        const fileBuffer = await csvFile.arrayBuffer();
-        const uploadResult = await window.api.invoke('db-upload-project-csv', {
-          projectId: projectDataResult.id,
-          csvFileBuffer: new Uint8Array(fileBuffer),
-          csvFileName: csvFile.name
-        });
-        
-        // Controllo di sicurezza per gestire risposte null o undefined
-        if (!uploadResult) {
-          throw new Error('Risposta non valida dal server durante il caricamento del CSV.');
-        }
-        
-        if (!uploadResult.success) {
-          throw new Error(uploadResult.error || 'Error during CSV upload.');
-        }
-        alert(`CSV file "${csvFile.name}" associated with project.`);
-        projectDataResult = uploadResult.data; 
-      }
-    } else if (mode === 'edit' && currentProjectId) {
-      const updatePayload = { name: name };
-      const updateResult = await window.api.invoke('db-update-project', { id: currentProjectId, projectData: updatePayload });
-      
-      // Controllo di sicurezza per gestire risposte null o undefined
-      if (!updateResult) {
-        throw new Error('Risposta non valida dal server durante la modifica del progetto.');
-      }
-      
-      if (!updateResult.success || !updateResult.data) {
-        throw new Error(updateResult.error || 'Error during project modification.');
-      }
-      projectDataResult = updateResult.data;
-      alert(`Project "${projectDataResult.name}" modified successfully.`);
-      operationSuccess = true;
-
-      if (csvFile) { 
-        const fileBuffer = await csvFile.arrayBuffer();
-        const uploadResult = await window.api.invoke('db-upload-project-csv', {
-          projectId: currentProjectId,
-          csvFileBuffer: new Uint8Array(fileBuffer),
-          csvFileName: csvFile.name
-        });
-        
-        // Controllo di sicurezza per gestire risposte null o undefined
-        if (!uploadResult) {
-          throw new Error('Risposta non valida dal server durante l\'aggiornamento del CSV.');
-        }
-        
-        if (!uploadResult.success) {
-          throw new Error(uploadResult.error || 'Error during CSV update.');
-        }
-        alert(`CSV file "${csvFile.name}" updated for project.`);
-        projectDataResult = uploadResult.data;
-      }
-    } else {
-      throw new Error('Modalità non valida o ID progetto mancante per la modifica.');
-    }
-    
-    if (operationSuccess) {
-      projectModal.style.display = 'none';
-      loadAllProjects();
-    }
-  } catch (error) {
-    console.error(`Error saving project (mode: ${mode}):`, error);
-    projectModalError.textContent = `Error: ${error.message}`;
-    projectModalError.style.display = 'block';
-  }
-}
-
-function openProjectModal(mode, project = null) {
-  if (!projectModal || !projectModalTitle || !projectForm || !projectNameInput || !projectCsvInput || !projectIdInput || !projectModalError || !projectCsvInfo) {
-    console.error('Modal elements not found! Make sure the DOM is loaded.');
-    return;
-  }
-
-  projectModal.dataset.mode = mode;
-  projectForm.reset();  // Questa era la riga 145 problematica
-  projectCsvInfo.textContent = '';
-  projectModalError.style.display = 'none';
-  projectModalError.textContent = '';
-
-  if (mode === 'create') {
-    projectModalTitle.textContent = 'New Project';
-    projectIdInput.value = '';
-    projectNameInput.value = '';
-  } else if (mode === 'edit' && project) {
-    projectModalTitle.textContent = 'Edit Project';
-    projectIdInput.value = project.id;
-    projectNameInput.value = project.name;
-    if (project.base_csv_storage_path) {
-      projectCsvInfo.textContent = `CSV attuale: ${project.base_csv_storage_path.split('/').pop()}`;
-    } else {
-      projectCsvInfo.textContent = 'No base CSV currently associated.';
-    }
-  }
-  projectModal.style.display = 'flex';
-}
-
 function handleNavigation(sectionName) {
   const contentSections = document.querySelectorAll('.content-section');
   contentSections.forEach(section => section.classList.remove('active-section'));
@@ -340,7 +162,6 @@ function handleNavigation(sectionName) {
 
     // Section-specific initialization
     if (sectionName === 'home') { loadRecentPresets(); }
-    else if (sectionName === 'progetti') { loadAllProjects(); }
     // Settings section is handled via the section-changed event in settings.js
   } else {
     const homeSection = document.getElementById('section-home');
@@ -380,107 +201,6 @@ async function loadRecentPresets() {
   } else {
     recentProjectsList.innerHTML = '<li>API non disponibile. Esegui l\'applicazione in Electron per accedere ai preset.</li>';
   }
-}
-
-async function loadAllProjects() {
-  const projectsListContainer = document.getElementById('projects-list-container');
-  if (!projectsListContainer) { return; }
-
-  if (window.api && window.api.invoke) {
-    try {
-      projectsListContainer.innerHTML = '<p>Caricamento progetti...</p>';
-      const result = await window.api.invoke('db-get-all-projects');
-      
-      // Controllo di sicurezza per gestire risposte null o undefined
-      if (!result) {
-        projectsListContainer.innerHTML = '<p>Errore nel caricamento dei progetti: risposta non valida.</p>';
-        return;
-      }
-      
-      if (result.success && result.data && result.data.length > 0) {
-        projectsListContainer.innerHTML = `
-          <ul class="project-list">
-            ${result.data.map(project => `
-              <li class="project-list-item" data-project-id="${project.id}">
-                <span class="project-name">${project.name}</span>
-                <span class="project-date">Ultima modifica: ${new Date(project.updated_at).toLocaleDateString()}</span>
-                <div class="project-actions">
-                  <button class="btn btn-secondary btn-sm view-project-btn" data-project-id="${project.id}">Apri</button>
-                  <button class="btn btn-secondary btn-sm edit-project-btn" data-project-id="${project.id}" data-project-name="${project.name}" data-project-csv="${project.base_csv_storage_path || ''}">Modifica</button>
-                  <button class="btn btn-danger btn-sm delete-project-btn" data-project-id="${project.id}">Elimina</button>
-                </div>
-              </li>
-            `).join('')}
-          </ul>`;
-        addProjectActionListeners();
-      } else if (result && result.success) {
-        projectsListContainer.innerHTML = '<p>No projects found. Start by creating one!</p>';
-      } else {
-        projectsListContainer.innerHTML = `<p>Error loading projects: ${result && result.error ? result.error : 'Unknown error'}</p>`;
-      }
-    } catch (error) {
-      projectsListContainer.innerHTML = `<p>Critical error loading projects: ${error.message}</p>`;
-    }
-  } else {
-    projectsListContainer.innerHTML = '<p>API non disponibile. Esegui l\'applicazione in Electron per accedere ai progetti.</p>';
-  }
-}
-
-function addProjectActionListeners() {
-  document.querySelectorAll('.view-project-btn').forEach(button => {
-    button.addEventListener('click', (event) => {
-      const projectId = event.currentTarget.dataset.projectId;
-      if (projectId) {
-        alert(`TODO: Open project ${projectId}`);
-      }
-    });
-  });
-
-  document.querySelectorAll('.edit-project-btn').forEach(button => {
-    button.addEventListener('click', (event) => {
-      const target = event.currentTarget;
-      const projectId = target.dataset.projectId;
-      const projectName = target.dataset.projectName;
-      const projectCsvAttr = target.dataset.projectCsv;
-      const projectCsv = projectCsvAttr && projectCsvAttr !== 'null' && projectCsvAttr !== 'undefined' ? projectCsvAttr : null;
-
-      if (projectId && projectName) {
-        openProjectModal('edit', { id: projectId, name: projectName, base_csv_storage_path: projectCsv });
-      }
-    });
-  });
-
-  document.querySelectorAll('.delete-project-btn').forEach(button => {
-    button.addEventListener('click', async (event) => {
-      const projectId = event.currentTarget.dataset.projectId;
-      if (projectId) {
-        if (confirm(`Sei sicuro di voler eliminare il progetto ID: ${projectId}? Questa azione è irreversibile.`)) {
-          if (window.api && window.api.invoke) {
-            try {
-              const result = await window.api.invoke('db-delete-project', projectId);
-              
-              // Controllo di sicurezza per gestire risposte null o undefined
-              if (!result) {
-                alert(`Error during deletion: invalid server response.`);
-                return;
-              }
-              
-              if (result.success) {
-                alert(`Project ${projectId} deleted successfully.`);
-                loadAllProjects();
-              } else {
-                alert(`Error during deletion: ${result.error}`);
-              }
-            } catch (error) {
-              alert(`Critical error during deletion: ${error.message}`);
-            }
-          } else {
-            alert('API not available. Run the application in Electron to delete projects.');
-          }
-        }
-      }
-    });
-  });
 }
 
 function updateUserInfo(user) {
@@ -741,6 +461,5 @@ function setupModelDownloadListeners() {
 
 window.desktopUI = {
   updateUserInfo,
-  openProjectModal,
   getResizeConfig
 };

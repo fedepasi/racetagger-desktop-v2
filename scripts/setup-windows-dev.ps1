@@ -7,9 +7,6 @@ param(
     [string]$Architecture = "both",
     
     [Parameter()]
-    [switch]$SkipImageMagick,
-    
-    [Parameter()]
     [switch]$SkipNodeModules,
     
     [Parameter()]
@@ -167,9 +164,7 @@ Write-Step "Setting up vendor directory structure..."
 
 $VendorDirs = @(
     "vendor\win32\x64",
-    "vendor\win32\arm64",
-    "vendor\win32\x64\imagemagick",
-    "vendor\win32\arm64\imagemagick"
+    "vendor\win32\arm64"
 )
 
 foreach ($dir in $VendorDirs) {
@@ -179,35 +174,7 @@ foreach ($dir in $VendorDirs) {
     }
 }
 
-# 5. ImageMagick Setup
-if (-not $SkipImageMagick) {
-    Write-Step "Setting up ImageMagick portable..."
-    
-    $imageMagickScript = "scripts\setup-imagemagick-windows.ps1"
-    if (Test-Path $imageMagickScript) {
-        try {
-            $params = @{
-                Architecture = $Architecture
-            }
-            if ($Force) { $params.Force = $true }
-            
-            & $imageMagickScript @params
-            Write-Success "ImageMagick setup completed"
-        }
-        catch {
-            Write-Warning "ImageMagick setup failed: $($_.Exception.Message)"
-            Write-Info "You can run the setup manually later: .\scripts\setup-imagemagick-windows.ps1"
-        }
-    }
-    else {
-        Write-Warning "ImageMagick setup script not found at $imageMagickScript"
-    }
-}
-else {
-    Write-Info "Skipping ImageMagick setup (--SkipImageMagick specified)"
-}
-
-# 6. TypeScript Compilation
+# 5. TypeScript Compilation
 Write-Step "Compiling TypeScript..."
 
 try {
@@ -296,13 +263,7 @@ Write-Host ""
 
 Write-Host "Vendor Tools:" -ForegroundColor $Colors.Info
 Write-Host "- ExifTool: vendor\win32\{arch}\exiftool.exe" -ForegroundColor White
-Write-Host "- dcraw:    vendor\win32\{arch}\dcraw.exe" -ForegroundColor White
-if (-not $SkipImageMagick) {
-    Write-Host "- ImageMagick: vendor\win32\{arch}\imagemagick\magick.exe" -ForegroundColor White
-}
 Write-Host ""
 
 Write-Host "For troubleshooting, check:" -ForegroundColor $Colors.Info
-Write-Host "- vendor\win32\README.md" -ForegroundColor White
-Write-Host "- vendor\win32\imagemagick-setup.md" -ForegroundColor White
 Write-Host "- CLAUDE.md" -ForegroundColor White

@@ -52,12 +52,8 @@ export function registerAppHandlers(): void {
         return { required: false, installed: true };
       }
 
-      const { rawConverter } = await import('../utils/raw-converter');
-      if (DEBUG_MODE) console.log('[IPC] Checking Adobe DNG Converter installation...');
-      const isInstalled = await rawConverter.isDngConverterInstalled();
-      console.log(`[IPC] Adobe DNG Converter installed: ${isInstalled}`);
-
-      return { required: true, installed: isInstalled };
+      // DNG Converter no longer used (dcraw removed in v1.2.0)
+      return { required: false, installed: false };
     } catch (error) {
       console.error('[IPC] Error checking Adobe DNG Converter:', error);
       return { required: true, installed: false, error: String(error) };

@@ -5,7 +5,7 @@ import * as os from 'os';
 import { CleanupManager, getCleanupManager } from './cleanup-manager';
 
 /**
- * Opzioni per l'estrazione preview nativa
+ * Options for native preview extraction
  */
 export interface NativePreviewOptions {
   targetMinSize?: number;    // 200KB default
@@ -13,11 +13,11 @@ export interface NativePreviewOptions {
   timeout?: number;          // 5000ms default
   preferQuality?: 'thumbnail' | 'preview' | 'full';
   includeMetadata?: boolean;
-  useNativeLibrary?: boolean; // Flag per abilitare/disabilitare libreria nativa
+  useNativeLibrary?: boolean;
 }
 
 /**
- * Risultato estrazione preview nativa
+ * Result of preview extraction
  */
 export interface NativePreviewResult {
   success: boolean;
@@ -26,7 +26,7 @@ export interface NativePreviewResult {
   height?: number;
   format?: string;
   extractionTimeMs?: number;
-  method?: 'native' | 'dcraw-fallback';
+  method?: 'native' | 'exiftool';
   error?: string;
   metadata?: {
     orientation?: number;
@@ -38,21 +38,21 @@ export interface NativePreviewResult {
 }
 
 /**
- * Statistiche di performance per confronto
+ * Performance statistics
  */
 export interface PreviewExtractionStats {
   totalExtractions: number;
   nativeSuccesses: number;
-  dcrawFallbacks: number;
+  exiftoolFallbacks: number;
   failures: number;
   averageTimeMs: number;
   nativeAverageTimeMs: number;
-  dcrawAverageTimeMs: number;
+  exiftoolAverageTimeMs: number;
 }
 
 /**
- * Wrapper per l'estrazione veloce di preview da file RAW
- * Supporta sia la libreria nativa che fallback a dcraw
+ * RAW preview extractor using native library (raw-preview-extractor) with ExifTool fallback.
+ * dcraw and ImageMagick removed in v1.2.0.
  */
 export class RawPreviewExtractor {
   private cleanupManager: CleanupManager;
@@ -60,64 +60,55 @@ export class RawPreviewExtractor {
   private nativeLibraryAvailable: boolean = false;
 
   constructor() {
-    this.cleanupManager = getCleanupManager(); // PERFORMANCE: Use singleton to avoid memory leak
+    this.cleanupManager = getCleanupManager();
     this.stats = {
       totalExtractions: 0,
       nativeSuccesses: 0,
-      dcrawFallbacks: 0,
+      exiftoolFallbacks: 0,
       failures: 0,
       averageTimeMs: 0,
       nativeAverageTimeMs: 0,
-      dcrawAverageTimeMs: 0
+      exiftoolAverageTimeMs: 0
     };
-    
+
     this.checkNativeLibraryAvailability();
   }
 
-  /**
-   * Verifica se la libreria nativa è disponibile
-   */
   private async checkNativeLibraryAvailability(): Promise<void> {
     try {
-      // Tenta di importare la libreria nativa
       const nativeLib = await import('raw-preview-extractor');
       this.nativeLibraryAvailable = true;
-      // Native library available
     } catch (error: any) {
       this.nativeLibraryAvailable = false;
-      // Native library not available, using dcraw fallback only
     }
   }
 
   /**
-   * Estrae preview da file RAW con strategia a cascata:
-   * 1. Libreria nativa (se disponibile e abilitata)
-   * 2. Fallback a dcraw
+   * Extract preview from RAW file with cascade strategy:
+   * 1. Native library (raw-preview-extractor, if available)
+   * 2. ExifTool fallback (always available)
    */
   async extractPreview(filePath: string, options: NativePreviewOptions = {}): Promise<NativePreviewResult> {
     const startTime = Date.now();
     this.stats.totalExtractions++;
 
-    // Opzioni con default
     const opts: Required<NativePreviewOptions> = {
-      targetMinSize: options.targetMinSize || 200 * 1024,        // 200KB
-      targetMaxSize: options.targetMaxSize || 3 * 1024 * 1024,   // 3MB
-      timeout: options.timeout || 5000,                          // 5s
+      targetMinSize: options.targetMinSize || 200 * 1024,
+      targetMaxSize: options.targetMaxSize || 3 * 1024 * 1024,
+      timeout: options.timeout || 5000,
       preferQuality: options.preferQuality || 'preview',
       includeMetadata: options.includeMetadata || false,
-      useNativeLibrary: options.useNativeLibrary !== false       // default true
+      useNativeLibrary: options.useNativeLibrary !== false
     };
 
-
     try {
-      // Strategia 1: Libreria nativa (se disponibile e abilitata)
+      // Strategy 1: Native library
       if (this.nativeLibraryAvailable && opts.useNativeLibrary) {
         try {
           const nativeResult = await this.extractWithNativeLibrary(filePath, opts);
           if (nativeResult.success) {
             const extractionTime = Date.now() - startTime;
             this.updateStats('native', extractionTime);
-            
             return {
               ...nativeResult,
               extractionTimeMs: extractionTime,
@@ -125,24 +116,24 @@ export class RawPreviewExtractor {
             };
           }
         } catch (nativeError: any) {
-          // Native library failed, falling back to dcraw
+          // Native failed, fall through to ExifTool
         }
       }
 
-      // Strategia 2: Fallback a dcraw (sempre disponibile)
-      const dcrawResult = await this.extractWithDcrawFallback(filePath, opts);
+      // Strategy 2: ExifTool fallback
+      const exiftoolResult = await this.extractWithExifTool(filePath, opts);
       const extractionTime = Date.now() - startTime;
-      
-      if (dcrawResult.success) {
-        this.updateStats('dcraw', extractionTime);
+
+      if (exiftoolResult.success) {
+        this.updateStats('exiftool', extractionTime);
       } else {
         this.stats.failures++;
       }
 
       return {
-        ...dcrawResult,
+        ...exiftoolResult,
         extractionTimeMs: extractionTime,
-        method: 'dcraw-fallback'
+        method: 'exiftool'
       };
 
     } catch (error: any) {
@@ -156,14 +147,12 @@ export class RawPreviewExtractor {
   }
 
   /**
-   * Estrazione con libreria nativa
+   * Extract with native raw-preview-extractor library
    */
   private async extractWithNativeLibrary(filePath: string, options: Required<NativePreviewOptions>): Promise<NativePreviewResult> {
     try {
-
       const nativeLib = await import('raw-preview-extractor');
 
-      // Opzioni per extractPreview - RawPreviewOptions ha targetSize come oggetto {min, max}
       const extractOptions = {
         targetSize: {
           min: options.targetMinSize,
@@ -174,7 +163,6 @@ export class RawPreviewExtractor {
         includeMetadata: options.includeMetadata
       };
 
-      // Usa extractPreview che ritorna ExtractorResult con preview?: RawPreview
       const result = await nativeLib.extractPreview(filePath, extractOptions);
 
       if (result.success && result.preview) {
@@ -183,7 +171,7 @@ export class RawPreviewExtractor {
           data: result.preview.data,
           width: result.preview.width,
           height: result.preview.height,
-          format: 'JPEG', // Il preview estratto è sempre JPEG
+          format: 'JPEG',
           metadata: result.preview.metadata ? {
             orientation: result.preview.metadata.orientation,
             camera: result.preview.metadata.camera,
@@ -208,259 +196,222 @@ export class RawPreviewExtractor {
   }
 
   /**
-   * Estrazione con ExifTool fallback
-   * Usa ExifTool per estrarre le preview JPEG embedded dai file RAW
+   * Resolve ExifTool path based on platform and dev/prod environment
    */
-  private async extractWithDcrawFallback(filePath: string, options: Required<NativePreviewOptions>): Promise<NativePreviewResult> {
+  private resolveExifToolPath(): string {
+    const platform = process.platform;
+
+    let isDev = true;
     try {
+      const { app } = require('electron');
+      isDev = !app || !app.isPackaged;
+    } catch {
+      isDev = true;
+    }
 
-      // Verifica che il file esista
+    let vendorDir: string;
+    if (isDev) {
+      vendorDir = path.join(__dirname, '../../../vendor', platform);
+    } else {
+      vendorDir = path.join(process.resourcesPath, 'app.asar.unpacked', 'vendor', platform);
+    }
+
+    if (platform === 'win32') {
+      const exiftoolExe = path.join(vendorDir, 'exiftool.exe');
+      const perlExe = path.join(vendorDir, 'perl.exe');
+      const exiftoolPl = path.join(vendorDir, 'exiftool.pl');
+
+      if (fs.existsSync(exiftoolExe)) {
+        return `"${exiftoolExe}"`;
+      } else if (fs.existsSync(perlExe) && fs.existsSync(exiftoolPl)) {
+        return `"${perlExe}" "${exiftoolPl}"`;
+      } else {
+        console.warn(`[RawPreviewExtractor] Windows ExifTool not found. Checked: ${exiftoolExe}, ${perlExe}`);
+        return `"${exiftoolExe}"`;
+      }
+    }
+
+    return path.join(vendorDir, 'exiftool');
+  }
+
+  /**
+   * Extract embedded JPEG preview from RAW file using ExifTool (-PreviewImage tag)
+   */
+  private async extractWithExifTool(filePath: string, options: Required<NativePreviewOptions>): Promise<NativePreviewResult> {
+    try {
       if (!fs.existsSync(filePath)) {
-        return {
-          success: false,
-          error: `File not found: ${filePath}`
-        };
+        return { success: false, error: `File not found: ${filePath}` };
       }
 
-      // Determina il percorso di ExifTool in base alla piattaforma e ambiente
-      const platform = process.platform;
-      let exiftoolPath: string;
+      const exiftoolPath = this.resolveExifToolPath();
 
-      // Determina se siamo in development o production
-      let isDev = true;
-      try {
-        const { app } = require('electron');
-        isDev = !app || !app.isPackaged;
-      } catch {
-        isDev = true;
+      const { exec } = await import('child_process');
+      const { promisify } = await import('util');
+      const execAsync = promisify(exec);
+
+      const tempDir = os.tmpdir();
+      const randomId = Math.random().toString(36).substring(2, 15);
+      const tempOutputPath = path.join(tempDir, `exiftool_preview_${randomId}.jpg`);
+
+      const command = `${exiftoolPath} -b -PreviewImage "${filePath}" > "${tempOutputPath}"`;
+
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('ExifTool timeout after 30 seconds')), 30000);
+      });
+
+      await Promise.race([
+        execAsync(command, { maxBuffer: 50 * 1024 * 1024 }),
+        timeoutPromise
+      ]);
+
+      if (!fs.existsSync(tempOutputPath)) {
+        return { success: false, error: 'ExifTool extraction failed - no output file' };
       }
 
-      let vendorDir: string;
-      if (isDev) {
-        // In development: da dist/utils/ alla root del progetto, poi a vendor/
-        vendorDir = path.join(__dirname, '../../../vendor', platform);
-      } else {
-        // In production: vendor files sono unpacked dall'asar
-        vendorDir = path.join(process.resourcesPath, 'app.asar.unpacked', 'vendor', platform);
+      const stats = await fsPromises.stat(tempOutputPath);
+      if (stats.size === 0) {
+        await fsPromises.unlink(tempOutputPath);
+        return { success: false, error: 'ExifTool extraction failed - empty preview' };
       }
 
-      if (platform === 'win32') {
-        // Windows: Try multiple ExifTool configurations
-        // 1. Standalone exiftool.exe (Phil Harvey's distribution or Oliver Betz's launcher)
-        const exiftoolExe = path.join(vendorDir, 'exiftool.exe');
-        // 2. Perl distribution: perl.exe + exiftool.pl
-        const perlExe = path.join(vendorDir, 'perl.exe');
-        const exiftoolPl = path.join(vendorDir, 'exiftool.pl');
+      const thumbnailData = await fsPromises.readFile(tempOutputPath);
+      try { await fsPromises.unlink(tempOutputPath); } catch { /* non-critical */ }
 
-        if (fs.existsSync(exiftoolExe)) {
-          exiftoolPath = `"${exiftoolExe}"`;
-        } else if (fs.existsSync(perlExe) && fs.existsSync(exiftoolPl)) {
-          exiftoolPath = `"${perlExe}" "${exiftoolPl}"`;
-        } else {
-          // Neither found — log warning and use exiftool.exe as default (may fail)
-          console.warn(`[RawPreviewExtractor] Windows ExifTool not found. Checked: ${exiftoolExe}, ${perlExe}`);
-          exiftoolPath = `"${exiftoolExe}"`; // Will fail gracefully
-        }
-      } else if (platform === 'darwin') {
-        // macOS
-        exiftoolPath = path.join(vendorDir, 'exiftool');
-      } else {
-        // Linux
-        exiftoolPath = path.join(vendorDir, 'exiftool');
+      return {
+        success: true,
+        data: thumbnailData,
+        width: 0,
+        height: 0,
+        format: 'JPEG',
+        metadata: { orientation: 1 }
+      };
+
+    } catch (error: any) {
+      return { success: false, error: `ExifTool fallback error: ${error.message}` };
+    }
+  }
+
+  /**
+   * Extract full/high-quality preview (JpgFromRaw) using ExifTool
+   */
+  private async extractJpgFromRawWithExifTool(filePath: string, timeout: number): Promise<NativePreviewResult> {
+    const startTime = Date.now();
+
+    try {
+      if (!fs.existsSync(filePath)) {
+        return { success: false, error: `File not found: ${filePath}` };
       }
 
-      try {
-        const { exec } = await import('child_process');
-        const { promisify } = await import('util');
-        const execAsync = promisify(exec);
+      const exiftoolPath = this.resolveExifToolPath();
 
-        // Genera percorso output temporaneo
-        const tempDir = os.tmpdir();
-        const randomId = Math.random().toString(36).substring(2, 15);
-        const tempOutputPath = path.join(tempDir, `exiftool_preview_${randomId}.jpg`);
+      const { exec } = await import('child_process');
+      const { promisify } = await import('util');
+      const execAsync = promisify(exec);
 
-        // Usa ExifTool per estrarre la preview JPEG embedded
-        const command = `${exiftoolPath} -b -PreviewImage "${filePath}" > "${tempOutputPath}"`;
+      const tempDir = os.tmpdir();
+      const randomId = Math.random().toString(36).substring(2, 15);
+      const tempOutputPath = path.join(tempDir, `exiftool_jpgfromraw_${randomId}.jpg`);
 
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error('ExifTool timeout after 30 seconds')), 30000);
+      const command = `${exiftoolPath} -b -JpgFromRaw "${filePath}" > "${tempOutputPath}"`;
+
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('ExifTool timeout')), timeout);
+      });
+
+      await Promise.race([
+        execAsync(command, { maxBuffer: 50 * 1024 * 1024 }),
+        timeoutPromise
+      ]);
+
+      if (!fs.existsSync(tempOutputPath)) {
+        return { success: false, error: 'ExifTool JpgFromRaw extraction failed - no output' };
+      }
+
+      const stats = await fsPromises.stat(tempOutputPath);
+      if (stats.size === 0) {
+        await fsPromises.unlink(tempOutputPath);
+        // Fallback: try -PreviewImage tag instead
+        return this.extractWithExifTool(filePath, {
+          targetMinSize: 200 * 1024,
+          targetMaxSize: 10 * 1024 * 1024,
+          timeout: timeout,
+          preferQuality: 'full',
+          includeMetadata: false,
+          useNativeLibrary: false
         });
-
-        await Promise.race([
-          execAsync(command, { maxBuffer: 50 * 1024 * 1024 }), // 50MB buffer
-          timeoutPromise
-        ]);
-
-        // Verifica che il file sia stato creato e non sia vuoto
-        if (!fs.existsSync(tempOutputPath)) {
-          return {
-            success: false,
-            error: 'ExifTool extraction failed - no output file'
-          };
-        }
-
-        const stats = await fsPromises.stat(tempOutputPath);
-        if (stats.size === 0) {
-          await fsPromises.unlink(tempOutputPath);
-          return {
-            success: false,
-            error: 'ExifTool extraction failed - empty preview'
-          };
-        }
-
-        // Leggi il file generato
-        const thumbnailData = await fsPromises.readFile(tempOutputPath);
-
-        // Cleanup temporary file
-        try {
-          await fsPromises.unlink(tempOutputPath);
-        } catch (cleanupError) {
-          // Could not cleanup temp file - non-critical
-        }
-
-        return {
-          success: true,
-          data: thumbnailData,
-          width: 0, // ExifTool doesn't provide dimensions in this mode
-          height: 0,
-          format: 'JPEG',
-          metadata: {
-            orientation: 1
-          }
-        };
-
-      } catch (converterError: any) {
-        return {
-          success: false,
-          error: `ExifTool extraction failed: ${converterError.message}`
-        };
       }
 
+      const data = await fsPromises.readFile(tempOutputPath);
+      try { await fsPromises.unlink(tempOutputPath); } catch { /* non-critical */ }
+
+      return {
+        success: true,
+        data,
+        width: 0,
+        height: 0,
+        format: 'JPEG',
+        extractionTimeMs: Date.now() - startTime,
+        method: 'exiftool'
+      };
     } catch (error: any) {
       return {
         success: false,
-        error: `ExifTool fallback error: ${error.message}`
+        error: `JpgFromRaw extraction failed: ${error.message}`,
+        extractionTimeMs: Date.now() - startTime
       };
     }
   }
 
-  /**
-   * Aggiorna statistiche di performance
-   */
-  private updateStats(method: 'native' | 'dcraw', extractionTimeMs: number): void {
+  private updateStats(method: 'native' | 'exiftool', extractionTimeMs: number): void {
     if (method === 'native') {
       this.stats.nativeSuccesses++;
-      this.stats.nativeAverageTimeMs = 
+      this.stats.nativeAverageTimeMs =
         (this.stats.nativeAverageTimeMs * (this.stats.nativeSuccesses - 1) + extractionTimeMs) / this.stats.nativeSuccesses;
     } else {
-      this.stats.dcrawFallbacks++;
-      this.stats.dcrawAverageTimeMs = 
-        (this.stats.dcrawAverageTimeMs * (this.stats.dcrawFallbacks - 1) + extractionTimeMs) / this.stats.dcrawFallbacks;
+      this.stats.exiftoolFallbacks++;
+      this.stats.exiftoolAverageTimeMs =
+        (this.stats.exiftoolAverageTimeMs * (this.stats.exiftoolFallbacks - 1) + extractionTimeMs) / this.stats.exiftoolFallbacks;
     }
 
-    const totalSuccesses = this.stats.nativeSuccesses + this.stats.dcrawFallbacks;
-    this.stats.averageTimeMs = 
+    const totalSuccesses = this.stats.nativeSuccesses + this.stats.exiftoolFallbacks;
+    this.stats.averageTimeMs =
       (this.stats.averageTimeMs * (totalSuccesses - 1) + extractionTimeMs) / totalSuccesses;
   }
 
-  /**
-   * Ottiene statistiche di performance
-   */
   getStats(): PreviewExtractionStats {
     return { ...this.stats };
   }
 
-  /**
-   * Resetta le statistiche
-   */
   resetStats(): void {
     this.stats = {
       totalExtractions: 0,
       nativeSuccesses: 0,
-      dcrawFallbacks: 0,
+      exiftoolFallbacks: 0,
       failures: 0,
       averageTimeMs: 0,
       nativeAverageTimeMs: 0,
-      dcrawAverageTimeMs: 0
+      exiftoolAverageTimeMs: 0
     };
   }
 
-  /**
-   * Verifica se un formato è supportato dalla libreria nativa
-   */
   isSupportedFormat(filePath: string): boolean {
     const ext = path.extname(filePath).toLowerCase();
     const supportedFormats = ['.cr2', '.cr3', '.nef', '.arw', '.dng', '.raf', '.orf', '.rw2'];
     return supportedFormats.includes(ext);
   }
 
-  /**
-   * Ottiene informazioni sulla disponibilità dei metodi di estrazione
-   */
   getCapabilities(): {
     nativeAvailable: boolean;
-    dcrawAvailable: boolean;
+    exiftoolAvailable: boolean;
     supportedFormats: string[];
   } {
     return {
       nativeAvailable: this.nativeLibraryAvailable,
-      dcrawAvailable: true, // dcraw è sempre disponibile come fallback
+      exiftoolAvailable: true,
       supportedFormats: ['.cr2', '.cr3', '.nef', '.arw', '.dng', '.raf', '.orf', '.rw2']
     };
   }
 
-  /**
-   * Test di benchmark per confrontare performance
-   */
-  async runBenchmark(testFiles: string[], iterations: number = 3): Promise<{
-    nativeResults: number[];
-    dcrawResults: number[];
-    nativeAverage: number;
-    dcrawAverage: number;
-    speedup: number;
-  }> {
-    const nativeResults: number[] = [];
-    const dcrawResults: number[] = [];
-
-
-    for (const file of testFiles) {
-      if (!fs.existsSync(file)) {
-        continue;
-      }
-
-      // Test con native library (se disponibile)
-      if (this.nativeLibraryAvailable) {
-        for (let i = 0; i < iterations; i++) {
-          const start = Date.now();
-          await this.extractPreview(file, { useNativeLibrary: true });
-          nativeResults.push(Date.now() - start);
-        }
-      }
-
-      // Test con dcraw fallback
-      for (let i = 0; i < iterations; i++) {
-        const start = Date.now();
-        await this.extractPreview(file, { useNativeLibrary: false });
-        dcrawResults.push(Date.now() - start);
-      }
-    }
-
-    const nativeAverage = nativeResults.length > 0 ? 
-      nativeResults.reduce((a, b) => a + b, 0) / nativeResults.length : 0;
-    
-    const dcrawAverage = dcrawResults.length > 0 ? 
-      dcrawResults.reduce((a, b) => a + b, 0) / dcrawResults.length : 0;
-
-    const speedup = nativeAverage > 0 ? dcrawAverage / nativeAverage : 0;
-
-    return {
-      nativeResults,
-      dcrawResults,
-      nativeAverage,
-      dcrawAverage,
-      speedup
-    };
-  }
   /**
    * Extract full/high quality preview from a RAW file.
    * Targets the largest embedded JPEG (JpgFromRaw), typically 2-8MB, full resolution.
@@ -469,7 +420,6 @@ export class RawPreviewExtractor {
     const startTime = Date.now();
 
     if (!this.nativeLibraryAvailable) {
-      // Fallback to ExifTool with -JpgFromRaw tag
       return this.extractJpgFromRawWithExifTool(filePath, options?.timeout || 30000);
     }
 
@@ -507,7 +457,6 @@ export class RawPreviewExtractor {
 
   /**
    * Extract all available JPEG previews from a RAW file.
-   * Returns all embedded previews sorted by size, useful for calibration.
    */
   async extractAllPreviews(filePath: string): Promise<{
     success: boolean;
@@ -548,109 +497,46 @@ export class RawPreviewExtractor {
   }
 
   /**
-   * Extract JpgFromRaw using ExifTool (fallback for extractFullPreview)
+   * Run benchmark comparing native vs ExifTool performance
    */
-  private async extractJpgFromRawWithExifTool(filePath: string, timeout: number): Promise<NativePreviewResult> {
-    const startTime = Date.now();
+  async runBenchmark(testFiles: string[], iterations: number = 3): Promise<{
+    nativeResults: number[];
+    exiftoolResults: number[];
+    nativeAverage: number;
+    exiftoolAverage: number;
+    speedup: number;
+  }> {
+    const nativeResults: number[] = [];
+    const exiftoolResults: number[] = [];
 
-    try {
-      if (!fs.existsSync(filePath)) {
-        return { success: false, error: `File not found: ${filePath}` };
-      }
+    for (const file of testFiles) {
+      if (!fs.existsSync(file)) continue;
 
-      const platform = process.platform;
-      let isDev = true;
-      try {
-        const { app } = require('electron');
-        isDev = !app || !app.isPackaged;
-      } catch {
-        isDev = true;
-      }
-
-      let vendorDir: string;
-      if (isDev) {
-        vendorDir = path.join(__dirname, '../../../vendor', platform);
-      } else {
-        vendorDir = path.join(process.resourcesPath, 'app.asar.unpacked', 'vendor', platform);
-      }
-
-      let exiftoolPath: string;
-      if (platform === 'win32') {
-        // Windows: Try multiple ExifTool configurations
-        const exiftoolExe = path.join(vendorDir, 'exiftool.exe');
-        const perlExe = path.join(vendorDir, 'perl.exe');
-        const exiftoolPl = path.join(vendorDir, 'exiftool.pl');
-
-        if (fs.existsSync(exiftoolExe)) {
-          exiftoolPath = `"${exiftoolExe}"`;
-        } else if (fs.existsSync(perlExe) && fs.existsSync(exiftoolPl)) {
-          exiftoolPath = `"${perlExe}" "${exiftoolPl}"`;
-        } else {
-          exiftoolPath = `"${exiftoolExe}"`;
+      if (this.nativeLibraryAvailable) {
+        for (let i = 0; i < iterations; i++) {
+          const start = Date.now();
+          await this.extractPreview(file, { useNativeLibrary: true });
+          nativeResults.push(Date.now() - start);
         }
-      } else {
-        exiftoolPath = path.join(vendorDir, 'exiftool');
       }
 
-      const { exec } = await import('child_process');
-      const { promisify } = await import('util');
-      const execAsync = promisify(exec);
-
-      const tempDir = os.tmpdir();
-      const randomId = Math.random().toString(36).substring(2, 15);
-      const tempOutputPath = path.join(tempDir, `exiftool_jpgfromraw_${randomId}.jpg`);
-
-      // Try JpgFromRaw first (full resolution), then PreviewImage as fallback
-      const command = `${exiftoolPath} -b -JpgFromRaw "${filePath}" > "${tempOutputPath}"`;
-
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('ExifTool timeout')), timeout);
-      });
-
-      await Promise.race([
-        execAsync(command, { maxBuffer: 50 * 1024 * 1024 }),
-        timeoutPromise
-      ]);
-
-      if (!fs.existsSync(tempOutputPath)) {
-        return { success: false, error: 'ExifTool JpgFromRaw extraction failed - no output' };
+      for (let i = 0; i < iterations; i++) {
+        const start = Date.now();
+        await this.extractPreview(file, { useNativeLibrary: false });
+        exiftoolResults.push(Date.now() - start);
       }
-
-      const stats = await fsPromises.stat(tempOutputPath);
-      if (stats.size === 0) {
-        await fsPromises.unlink(tempOutputPath);
-        // Fallback to PreviewImage
-        return this.extractWithDcrawFallback(filePath, {
-          targetMinSize: 200 * 1024,
-          targetMaxSize: 10 * 1024 * 1024,
-          timeout: timeout,
-          preferQuality: 'full',
-          includeMetadata: false,
-          useNativeLibrary: false
-        });
-      }
-
-      const data = await fsPromises.readFile(tempOutputPath);
-      try { await fsPromises.unlink(tempOutputPath); } catch { /* non-critical */ }
-
-      return {
-        success: true,
-        data,
-        width: 0,  // Will be detected by sharp in caller
-        height: 0,
-        format: 'JPEG',
-        extractionTimeMs: Date.now() - startTime,
-        method: 'dcraw-fallback'
-      };
-    } catch (error: any) {
-      return {
-        success: false,
-        error: `JpgFromRaw extraction failed: ${error.message}`,
-        extractionTimeMs: Date.now() - startTime
-      };
     }
+
+    const nativeAverage = nativeResults.length > 0 ?
+      nativeResults.reduce((a, b) => a + b, 0) / nativeResults.length : 0;
+
+    const exiftoolAverage = exiftoolResults.length > 0 ?
+      exiftoolResults.reduce((a, b) => a + b, 0) / exiftoolResults.length : 0;
+
+    const speedup = nativeAverage > 0 ? exiftoolAverage / nativeAverage : 0;
+
+    return { nativeResults, exiftoolResults, nativeAverage, exiftoolAverage, speedup };
   }
 }
 
-// Istanza singleton per uso globale
 export const rawPreviewExtractor = new RawPreviewExtractor();

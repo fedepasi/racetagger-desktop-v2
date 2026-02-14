@@ -202,8 +202,8 @@ serve(async (req: Request): Promise<Response> => {
       .filter((p: any) => p.numero && p.numero.toString().trim().length > 0)
       .map((p: any) => ({
         numero: p.numero.toString().trim(),
-        // Convert drivers array to comma-separated string for nome_pilota
-        nome_pilota: Array.isArray(p.drivers)
+        // Comma-separated driver names for legacy nome field
+        nome: Array.isArray(p.drivers)
           ? p.drivers.filter((d: string) => d && d.trim()).join(', ')
           : (p.nome || p.drivers || ''),
         squadra: p.squadra || '',
@@ -211,7 +211,7 @@ serve(async (req: Request): Promise<Response> => {
         // Convert sponsors array to array (keep as-is if already array)
         sponsors: Array.isArray(p.sponsors) ? p.sponsors : [],
         nationality: p.nationality || '',
-        // Keep raw drivers array for frontend tag display
+        // Keep raw drivers array for creating preset_participant_drivers records
         drivers: Array.isArray(p.drivers) ? p.drivers.filter((d: string) => d && d.trim()) : []
       }));
 

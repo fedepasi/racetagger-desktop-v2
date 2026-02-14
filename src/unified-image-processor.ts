@@ -4,14 +4,14 @@ import * as fsPromises from 'fs/promises';
 import { EventEmitter } from 'events';
 import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_CONFIG, APP_CONFIG, RESIZE_PRESETS, ResizePreset, DEBUG_MODE } from './config';
-import { getSupabaseClient, getSportCategories, db } from './database-service';
+import { getSupabaseClient, getSportCategories } from './database-service';
 import { authService } from './auth-service';
 import { getSharp, createImageProcessor } from './utils/native-modules';
 import { rawPreviewExtractor } from './utils/raw-preview-native';
 import { createXmpSidecar } from './utils/xmp-manager';
 import { writeDescriptionToImage, writeKeywordsToImage, writeSpecialInstructions, writeExtendedDescription, writePersonInImage, buildPersonShownString } from './utils/metadata-writer';
 import { CleanupManager, getCleanupManager } from './utils/cleanup-manager';
-import { SmartMatcher, MatchResult, AnalysisResult as SmartMatcherAnalysisResult } from './matching/smart-matcher';
+import { SmartMatcher, MatchResult, AnalysisResult as SmartMatcherAnalysisResult, getParticipantDriverNames, getPrimaryDriverName } from './matching/smart-matcher';
 import { CacheManager } from './matching/cache-manager';
 import { AnalysisLogger, CorrectionData } from './utils/analysis-logger';
 import { TemporalClusterManager, ImageTimestamp } from './matching/temporal-clustering';
@@ -435,26 +435,12 @@ class UnifiedImageWorker extends EventEmitter {
 
   /**
    * PERFORMANCE: Quick check descriptor count without initializing bridge
-   * Saves 200-500ms when preset has no face descriptors
+   * Returns -1 to proceed with full initialization (face recognition currently disabled)
    */
   private async checkPresetDescriptorCount(presetId: string): Promise<number> {
-    try {
-      const result = db.prepare(`
-        SELECT COUNT(*) as count
-        FROM driver_face_descriptors
-        WHERE preset_id = ?
-      `).get(presetId) as { count: number } | undefined;
-
-      return result?.count || 0;
-    } catch (error: any) {
-      // Silently handle "table doesn't exist" error (safe fallback to full init)
-      if (error?.code === 'SQLITE_ERROR' && error?.message?.includes('no such table')) {
-        return -1; // Table doesn't exist yet, proceed with full initialization
-      }
-      // Log other errors
-      log.warn('Failed to pre-check descriptor count:', error);
-      return -1; // Proceed with full initialization on error (safe fallback)
-    }
+    // Face recognition is disabled (Coming Soon)
+    // Return -1 to proceed with full initialization if face recognition is re-enabled
+    return -1;
   }
 
   /**
@@ -2591,7 +2577,7 @@ class UnifiedImageWorker extends EventEmitter {
             }
 
             // Add driver name (from match or participant)
-            const driverName = match.drivers[0] || participant?.nome_pilota || participant?.nome;
+            const driverName = match.drivers[0] || (participant ? getPrimaryDriverName(participant) : undefined);
             if (driverName) {
               // Split name into individual words (filter words > 1 char)
               const nameWords = driverName.split(/\s+/).filter((w: string) => w.length > 1);
@@ -4179,9 +4165,13 @@ class UnifiedImageWorker extends EventEmitter {
 
       const participant = match.entry;
 
-      // Build participant data object for template replacement
+      // Get all driver names from preset_participant_drivers
+      const driverNames = getParticipantDriverNames(participant);
+      const primaryName = driverNames[0] || '';
+
+      // Build participant data for primary driver
       const participantData = {
-        name: participant.nome_pilota || participant.nome || '',
+        name: primaryName,
         surname: '', // Will be extracted from name in buildPersonShownString
         number: participant.numero || participant.number || '',
         team: participant.squadra || participant.team || '',
@@ -4198,18 +4188,18 @@ class UnifiedImageWorker extends EventEmitter {
       }
 
       // Handle additional drivers (co-driver, navigator, etc.)
-      if (participant.nome_navigatore) {
-        const navigatorData = {
-          name: participant.nome_navigatore,
+      for (let dIdx = 1; dIdx < driverNames.length; dIdx++) {
+        const additionalDriverData = {
+          name: driverNames[dIdx],
           surname: '',
           number: participantData.number,
           team: participantData.team,
           car_model: participantData.car_model,
-          nationality: participant.nazionalita_navigatore || '',
+          nationality: '',
         };
-        const navigatorShown = buildPersonShownString(template, navigatorData);
-        if (navigatorShown) {
-          personStrings.push(navigatorShown);
+        const driverShown = buildPersonShownString(template, additionalDriverData);
+        if (driverShown) {
+          personStrings.push(driverShown);
         }
       }
     }
@@ -4276,17 +4266,8 @@ class UnifiedImageWorker extends EventEmitter {
         }
       }
 
-      // Apply driver corrections
-      const correctedDrivers: string[] = [];
-      if (participant.nome_pilota) correctedDrivers.push(participant.nome_pilota);
-      if (participant.nome_navigatore) correctedDrivers.push(participant.nome_navigatore);
-      if (participant.nome_terzo) correctedDrivers.push(participant.nome_terzo);
-      if (participant.nome_quarto) correctedDrivers.push(participant.nome_quarto);
-
-      // Fallback to legacy CSV format
-      if (correctedDrivers.length === 0 && participant.nome) {
-        correctedDrivers.push(participant.nome);
-      }
+      // Apply driver corrections from preset_participant_drivers
+      const correctedDrivers: string[] = getParticipantDriverNames(participant);
 
       if (correctedDrivers.length > 0) {
         const originalDrivers = vehicle.drivers || [];
@@ -4447,7 +4428,7 @@ class UnifiedImageWorker extends EventEmitter {
    * Helper method to generate a hash for participant data (for caching)
    */
   private generateParticipantHash(participants: any[]): string {
-    const key = participants.map(p => `${p.numero || p.number || 'none'}_${p.nome_pilota || p.nome || 'none'}`).join('|');
+    const key = participants.map(p => `${p.numero || p.number || 'none'}_${getPrimaryDriverName(p) || 'none'}`).join('|');
     return Buffer.from(key).toString('base64').substring(0, 32);
   }
 
@@ -4503,7 +4484,7 @@ class UnifiedImageWorker extends EventEmitter {
       .slice(0, 3)
       .map(candidate => ({
         participantNumber: candidate.participant.numero || candidate.participant.number,
-        participantName: candidate.participant.nome_pilota || candidate.participant.nome,
+        participantName: getPrimaryDriverName(candidate.participant),
         score: candidate.score,
         confidence: candidate.confidence,
         evidenceCount: candidate.evidence.length,
@@ -4616,14 +4597,12 @@ class UnifiedImageWorker extends EventEmitter {
           vehicleKeywords.push(participant.numero);
         }
 
-        // Add driver information from nome_pilota field (split individual names)
-        if (participant.nome_pilota) {
+        // Add driver information from preset_participant_drivers
+        const driverNames = getParticipantDriverNames(participant);
+        for (const dName of driverNames) {
           // Split names and add each as individual keyword
-          const driverNames = participant.nome_pilota.split(/[,&\/\-\s]+/).map((name: string) => name.trim()).filter((name: string) => name);
-          vehicleKeywords.push(...driverNames);
-        } else if (participant.nome) {
-          // Legacy CSV support - single name
-          vehicleKeywords.push(participant.nome.trim());
+          const nameWords = dName.split(/[,&\/\-\s]+/).map((name: string) => name.trim()).filter((name: string) => name);
+          vehicleKeywords.push(...nameWords);
         }
 
         // Add team information (no prefix)
@@ -4682,17 +4661,11 @@ class UnifiedImageWorker extends EventEmitter {
         parts.push(`Team: ${participant.squadra}`);
       }
 
-      // Add driver information
-      const drivers: string[] = [];
-      if (participant.nome_pilota) drivers.push(participant.nome_pilota);
-      if (participant.nome_navigatore) drivers.push(participant.nome_navigatore);
-      if (participant.nome_terzo) drivers.push(participant.nome_terzo);
-      if (participant.nome_quarto) drivers.push(participant.nome_quarto);
+      // Add driver information from preset_participant_drivers
+      const drivers = getParticipantDriverNames(participant);
 
       if (drivers.length > 0) {
         parts.push(`Drivers: ${drivers.join(', ')}`);
-      } else if (participant.nome) {
-        parts.push(`Driver: ${participant.nome}`);
       }
 
       return parts.join(' | ');
@@ -5178,15 +5151,7 @@ class UnifiedImageWorker extends EventEmitter {
   private extractDriversFromMatch(csvMatch: any): string[] | undefined {
     if (!csvMatch?.entry) return undefined;
 
-    const participant = csvMatch.entry;
-    const drivers: string[] = [];
-
-    if (participant.nome_pilota) drivers.push(participant.nome_pilota);
-    if (participant.nome_navigatore) drivers.push(participant.nome_navigatore);
-    if (participant.nome_terzo) drivers.push(participant.nome_terzo);
-    if (participant.nome_quarto) drivers.push(participant.nome_quarto);
-    if (participant.nome && drivers.length === 0) drivers.push(participant.nome); // Legacy support
-
+    const drivers = getParticipantDriverNames(csvMatch.entry);
     return drivers.length > 0 ? drivers : undefined;
   }
 }
@@ -6304,8 +6269,16 @@ export class UnifiedImageProcessor extends EventEmitter {
         try {
           const inFlightPromises = Array.from(activeWorkers.values()).map(tracker =>
             tracker.promise
-              .then(result => { results.push(result); this.processedImages++; })
-              .catch(error => console.warn(`[UnifiedProcessor] In-flight worker for ${tracker.fileName} failed during cancel:`, error))
+              .then(result => {
+                results.push(result);
+                this.processedImages++;
+                // Track for pre-auth token system during cancellation too
+                if (result.success) { this.trackImageProcessed(); } else { this.trackImageError(); }
+              })
+              .catch(error => {
+                console.warn(`[UnifiedProcessor] In-flight worker for ${tracker.fileName} failed during cancel:`, error);
+                this.trackImageError();
+              })
           );
           await Promise.allSettled(inFlightPromises);
         } catch (error) {
@@ -6330,6 +6303,13 @@ export class UnifiedImageProcessor extends EventEmitter {
         activeWorkers.delete(workerId);
         results.push(result);
         this.processedImages++;
+
+        // Track token consumption for pre-auth system (P0 fix: these were never called!)
+        if (result.success) {
+          this.trackImageProcessed();
+        } else {
+          this.trackImageError();
+        }
 
         // Check for ghost vehicle warning and increment counter
         if (result.csvMatch?.ghostVehicleWarning) {

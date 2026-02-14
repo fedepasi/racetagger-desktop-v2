@@ -50,25 +50,12 @@ process.stderr.on('error', (error) => {
 diagnosticLogger.initialize();
 
 import {
-  initializeDatabaseSchema, // Alias per initializeLocalCacheSchema
-  createProjectOnline,
-  // getProjectsOnline, // REMOVED - used in auth-handlers.ts
-  getProjectByIdOnline,
-  updateProjectOnline,
-  deleteProjectOnline,
   createExecutionOnline,
   getSportCategoryIdByName,
-  getExecutionsByProjectIdOnline,
   getExecutionByIdOnline,
   updateExecutionOnline,
   deleteExecutionOnline,
-  getRecentProjectsFromCache,
-  uploadCsvToStorage,
-  Project,
   Execution,
-  // syncAllUserDataToSupabase, // REMOVED - used in database-handlers.ts
-  // clearAllUserData, // REMOVED - used in database-handlers.ts
-  // getUserDataStats, // REMOVED - used in database-handlers.ts
   saveCsvToSupabase,
   loadLastUsedCsvFromSupabase,
   // Nuove funzioni per il tracciamento delle impostazioni
@@ -78,17 +65,7 @@ import {
   getUserSettingsAnalytics,
   extractSettingsFromConfig,
   getSupabaseClient,
-  // Funzioni per preset partecipanti
-  ParticipantPreset,
-  PresetParticipant,
-  createParticipantPreset,
-  getUserParticipantPresets,
-  getParticipantPresetById,
-  savePresetParticipants,
-  updatePresetLastUsed,
-  deleteParticipantPreset,
-  importParticipantsFromCSV,
-  // Nuove funzioni Supabase
+  // Funzioni per preset partecipanti Supabase
   SportCategory,
   ParticipantPresetSupabase,
   PresetParticipantSupabase,
@@ -97,7 +74,6 @@ import {
   getCachedSportCategories,
   getCachedParticipantPresets,
   refreshCategoriesCache,
-  // getSportCategories, // REMOVED - used in supabase-handlers.ts
   getSportCategoryByCode,
   createParticipantPresetSupabase,
   getUserParticipantPresetsSupabase,
@@ -198,7 +174,7 @@ type BatchProcessConfig = {
   folderPath: string;
   csvData?: CsvEntry[];
   updateExif: boolean;
-  projectId?: string;
+  projectId?: string; // DEPRECATED: Projects removed. This will always be null.
   executionName?: string;
   model?: string;                      // Modello AI da utilizzare per l'analisi
   category?: string;                   // Categoria di sport per prompt dedicato
@@ -854,93 +830,85 @@ async function handleCsvLoading(event: IpcMainEvent, fileData: { buffer: Uint8Ar
   
   try {
     if (!mainWindow) return;
-    const { buffer: rawBuffer, name: fileName, projectId } = fileData;
+    const { buffer: rawBuffer, name: fileName } = fileData;
     const actualBuffer = Buffer.from(rawBuffer); // Assicura sia un Buffer
 
-    if (projectId) {
-      const storagePath = await uploadCsvToStorage(projectId, actualBuffer, fileName);
-      const updatedProject = await updateProjectOnline(projectId, { base_csv_storage_path: storagePath });
-      mainWindow.webContents.send('csv-loaded', {
-        filename: fileName, message: `CSV associato al progetto ${projectId}`, project: updatedProject
-      });
-    } else {
-      // Supporta il caricamento CSV anche senza progetto per analisi one-shot
-      // Leggi il contenuto del CSV
-      const csvContent = actualBuffer.toString('utf-8');
-      const lines = csvContent.split(/\r?\n/);
-      
-      // Salta l'intestazione e conta le righe di dati
-      const entries = lines.length > 1 ? lines.length - 1 : 0;
-      
-      // Processa il CSV per uso globale temporaneo
-      if (entries > 0) {
-        try {
-          // Estrai l'intestazione
-          const headers = parseCSVLine(lines[0]);
+    // Load CSV for standalone one-shot analysis
+    // Leggi il contenuto del CSV
+    const csvContent = actualBuffer.toString('utf-8');
+    const lines = csvContent.split(/\r?\n/);
 
-          // Processa le righe di dati
-          const csvEntries: CsvEntry[] = [];
-          for (let i = 1; i < lines.length; i++) {
-            if (lines[i].trim() === '') continue;
-            
-            const values = parseCSVLine(lines[i]);
-            const entry: CsvEntry = { numero: '', metatag: '' };
-            
-            // Mappa i valori alle colonne
-            for (let j = 0; j < headers.length && j < values.length; j++) {
-              const header = headers[j].toLowerCase().trim();
-              const value = values[j] ? values[j].trim() : '';
-              
-              if (header === 'numero') {
-                entry.numero = value;
-              } else if (header === 'nome') {
-                entry.nome = value;
-              } else if (header === 'categoria') {
-                entry.categoria = value;
-              } else if (header === 'squadra') {
-                entry.squadra = value;
-              } else if (header === 'metatag') {
-                entry.metatag = value;
-              } else {
-                // Campi aggiuntivi
-                entry[header] = value;
-              }
-            }
-            
-            // Se non c'è un metatag ma ci sono altri campi, crea un metatag automatico
-            if (!entry.metatag && (entry.nome || entry.categoria || entry.squadra)) {
-              const parts = [];
-              if (entry.nome) parts.push(entry.nome);
-              if (entry.categoria) parts.push(entry.categoria);
-              if (entry.squadra) parts.push(entry.squadra);
-              entry.metatag = parts.join(' - ');
-            }
-            
-            // Aggiungi solo se ha almeno un numero di gara
-            if (entry.numero) {
-              csvEntries.push(entry);
+    // Salta l'intestazione e conta le righe di dati
+    const entries = lines.length > 1 ? lines.length - 1 : 0;
+
+    // Processa il CSV per uso globale temporaneo
+    if (entries > 0) {
+      try {
+        // Estrai l'intestazione
+        const headers = parseCSVLine(lines[0]);
+
+        // Processa le righe di dati
+        const csvEntries: CsvEntry[] = [];
+        for (let i = 1; i < lines.length; i++) {
+          if (lines[i].trim() === '') continue;
+
+          const values = parseCSVLine(lines[i]);
+          const entry: CsvEntry = { numero: '', metatag: '' };
+
+          // Mappa i valori alle colonne
+          for (let j = 0; j < headers.length && j < values.length; j++) {
+            const header = headers[j].toLowerCase().trim();
+            const value = values[j] ? values[j].trim() : '';
+
+            if (header === 'numero') {
+              entry.numero = value;
+            } else if (header === 'nome') {
+              entry.nome = value;
+            } else if (header === 'categoria') {
+              entry.categoria = value;
+            } else if (header === 'squadra') {
+              entry.squadra = value;
+            } else if (header === 'metatag') {
+              entry.metatag = value;
+            } else {
+              // Campi aggiuntivi
+              entry[header] = value;
             }
           }
-          
-          // Salva i dati CSV per uso globale
-          globalCsvData = csvEntries;
 
-          mainWindow.webContents.send('csv-loaded', {
-            filename: fileName, 
-            entries: csvEntries.length, 
-            message: `CSV caricato con ${csvEntries.length} voci valide`
-          });
-        } catch (parseError) {
-          console.error('Error parsing CSV:', parseError);
-          mainWindow.webContents.send('csv-error', 'Errore nel parsing del CSV. Verifica il formato.');
+          // Se non c'è un metatag ma ci sono altri campi, crea un metatag automatico
+          if (!entry.metatag && (entry.nome || entry.categoria || entry.squadra)) {
+            const parts = [];
+            if (entry.nome) parts.push(entry.nome);
+            if (entry.categoria) parts.push(entry.categoria);
+            if (entry.squadra) parts.push(entry.squadra);
+            entry.metatag = parts.join(' - ');
+          }
+
+          // Aggiungi solo se ha almeno un numero di gara
+          if (entry.numero) {
+            csvEntries.push(entry);
+          }
         }
-      } else {
+
+        // Salva i dati CSV per uso globale
+        globalCsvData = csvEntries;
+
         mainWindow.webContents.send('csv-loaded', {
-          filename: fileName, 
-          entries: 0, 
-          message: 'CSV caricato, ma non contiene dati validi'
+          filename: fileName,
+          entries: csvEntries.length,
+          message: `CSV caricato con ${csvEntries.length} voci valide`
         });
+      } catch (parseError) {
+        console.error('Error parsing CSV:', parseError);
+        mainWindow.webContents.send('csv-error', 'Errore nel parsing del CSV. Verifica il formato.');
       }
+    } else {
+      mainWindow.webContents.send('csv-loaded', {
+        filename: fileName,
+        entries: 0,
+        message: 'CSV caricato, ma non contiene dati validi'
+      });
     }
   } catch (error: any) {
     console.error('Error during CSV loading:', error);
@@ -1015,7 +983,7 @@ async function preprocessImageIfNeeded(
   if (isRaw) {
     try {
       // ===== RAW Preview Extraction via native library (no dcraw/ImageMagick) =====
-      // Strategy: raw-preview-extractor (native C++) → Sharp/Jimp resize → JPEG buffer
+      // Strategy: raw-preview-extractor (native C++) → Sharp resize → JPEG buffer
 
       let rawBuffer: Buffer | undefined;
 
@@ -1052,7 +1020,7 @@ async function preprocessImageIfNeeded(
         throw new Error(`Could not extract preview from RAW file: ${path.basename(imagePath)}`);
       }
 
-      // Resize with Sharp/Jimp if needed (limit to 1440px max dimension, quality 95)
+      // Resize with Sharp if needed (limit to 1440px max dimension, quality 95)
       try {
         const processor = await createImageProcessor(rawBuffer);
         const metadata = await processor.metadata();
@@ -1315,7 +1283,7 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
       }
 
       const newExecution = await createExecutionOnline({
-        project_id: config.projectId || null, // NULL per executions standalone
+        project_id: null, // Projects removed - always null
         name: executionName,
         execution_at: new Date().toISOString(),
         status: 'running',
@@ -1739,7 +1707,7 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
       }
 
       const newExecution = await createExecutionOnline({
-        project_id: config.projectId || null, // NULL per executions standalone
+        project_id: null, // Projects removed - always null
         name: executionName,
         execution_at: new Date().toISOString(),
         status: 'running',
@@ -2467,7 +2435,7 @@ async function handleRawPreviewExtraction(event: IpcMainEvent) {
         throw new Error('Could not extract preview from RAW file');
       }
 
-      // Resize with Sharp/Jimp if needed (1440px max, quality 95)
+      // Resize with Sharp if needed (1440px max, quality 95)
       try {
         const processor = await createImageProcessor(rawBuffer);
         const metadata = await processor.metadata();
@@ -2739,23 +2707,10 @@ async function logStartupHealthReport(startupMs: number): Promise<void> {
       // If sharp can be required it's loaded; fast-mode was already confirmed at initializeImageProcessor
       results.push({ name: 'Sharp', status: 'OK', detail: 'working (fast mode)' });
     } catch {
-      results.push({ name: 'Sharp', status: 'WARN', detail: 'fallback to Jimp (slow mode)' });
+      results.push({ name: 'Sharp', status: 'FAIL', detail: 'not available — image processing will fail' });
     }
 
-    // 2. better-sqlite3
-    try {
-      const { db } = require('./database-service');
-      if (db) {
-        const walMode = db.pragma('journal_mode', { simple: true });
-        results.push({ name: 'better-sqlite3', status: 'OK', detail: `working (${walMode} mode)` });
-      } else {
-        results.push({ name: 'better-sqlite3', status: 'FAIL', detail: 'not initialized' });
-      }
-    } catch (e: any) {
-      results.push({ name: 'better-sqlite3', status: 'FAIL', detail: e.message || 'load error' });
-    }
-
-    // 3. Supabase cache
+    // 2. Supabase cache
     try {
       const categories = getCachedSportCategories();
       const presets = getCachedParticipantPresets();
@@ -2783,13 +2738,13 @@ async function logStartupHealthReport(startupMs: number): Promise<void> {
       results.push({ name: 'Auth Session', status: 'WARN', detail: 'check failed' });
     }
 
-    // 5. Native tools (dcraw, ExifTool, ImageMagick)
+    // 5. Native tools (ExifTool)
     try {
       const { nativeToolManager } = require('./utils/native-tool-manager');
       const diag: any = await withTimeout(nativeToolManager.getSystemDiagnostics(), null as any);
       if (diag && diag.tools) {
         for (const [toolName, info] of Object.entries(diag.tools) as [string, any][]) {
-          const displayName = toolName === 'exiftool' ? 'ExifTool' : toolName === 'dcraw' ? 'dcraw' : 'ImageMagick';
+          const displayName = toolName === 'exiftool' ? 'ExifTool' : toolName;
           if (info.working) {
             const loc = info.path ? ` (${info.path})` : '';
             results.push({ name: displayName, status: 'OK', detail: `working${loc}` });
@@ -2914,7 +2869,7 @@ app.whenReady().then(async () => { // Added async here
     isDev = true; // Default to dev mode if check fails
   }
 
-  // Initialize image processor (Sharp/Jimp) ONCE at startup
+  // Initialize image processor (Sharp) ONCE at startup
   if (DEBUG_MODE) console.log('[RaceTagger] Initializing image processor...');
   await initializeImageProcessor();
 
@@ -2963,8 +2918,6 @@ app.whenReady().then(async () => { // Added async here
   } catch (cleanupError) {
     console.error('[Main Process] Error during startup cleanup:', cleanupError);
   }
-
-  initializeDatabaseSchema();
 
   // Initialize Supabase cache after authentication is ready
   try {
@@ -3185,18 +3138,27 @@ app.whenReady().then(async () => { // Added async here
               event.aiResponse.vehicles.forEach((vehicle: any) => {
                 if (vehicle.participantMatch) {
                   const match = vehicle.participantMatch;
+                  const entry = match.entry || match; // entry contains full participant data
+                  // Get primary driver name from preset_participant_drivers array
+                  let driverName = '';
+                  if (entry.preset_participant_drivers?.length > 0) {
+                    const sorted = [...entry.preset_participant_drivers].sort((a: any, b: any) => a.driver_order - b.driver_order);
+                    driverName = sorted[0]?.driver_name || '';
+                  } else if (entry.nome) {
+                    driverName = entry.nome; // Legacy CSV fallback
+                  }
                   csvDataList.push({
-                    numero: match.numero,
-                    nome: match.nome_pilota || match.nome,
-                    categoria: match.categoria,
-                    squadra: match.squadra,
-                    metatag: match.metatag,
-                    folder_1: match.folder_1,
-                    folder_2: match.folder_2,
-                    folder_3: match.folder_3,
-                    folder_1_path: match.folder_1_path,
-                    folder_2_path: match.folder_2_path,
-                    folder_3_path: match.folder_3_path
+                    numero: entry.numero,
+                    nome: driverName,
+                    categoria: entry.categoria,
+                    squadra: entry.squadra,
+                    metatag: entry.metatag,
+                    folder_1: entry.folder_1,
+                    folder_2: entry.folder_2,
+                    folder_3: entry.folder_3,
+                    folder_1_path: entry.folder_1_path,
+                    folder_2_path: entry.folder_2_path,
+                    folder_3_path: entry.folder_3_path
                   });
                 }
               });

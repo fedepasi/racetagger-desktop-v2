@@ -25,22 +25,28 @@ describe('SmartMatcher System', () => {
   const mockParticipants: Participant[] = [
     {
       numero: 42,
-      nome_pilota: "John Smith",
-      nome_navigatore: "Jane Doe",
+      preset_participant_drivers: [
+        { driver_name: "John Smith", driver_order: 0 },
+        { driver_name: "Jane Doe", driver_order: 1 }
+      ],
       squadra: "Racing Team Alpha",
       sponsor: ["Ferrari", "Pirelli"],
       categoria: "GT3"
     },
     {
       numero: 86,
-      nome_pilota: "Michael Johnson",
+      preset_participant_drivers: [
+        { driver_name: "Michael Johnson", driver_order: 0 }
+      ],
       squadra: "Speed Demons",
       sponsor: ["Mercedes", "Shell"],
       categoria: "GT3"
     },
     {
       numero: 123,
-      nome_pilota: "Sarah Wilson",
+      preset_participant_drivers: [
+        { driver_name: "Sarah Wilson", driver_order: 0 }
+      ],
       squadra: "Thunder Racing",
       sponsor: ["BMW", "Castrol"],
       categoria: "LMP2"
@@ -87,7 +93,7 @@ describe('SmartMatcher System', () => {
       const result = await smartMatcher.findMatches(analysis, mockParticipants);
 
       expect(result.bestMatch).toBeTruthy();
-      expect(result.bestMatch?.participant.nome_pilota).toBe("John Smith");
+      expect(result.bestMatch?.participant.preset_participant_drivers?.[0]?.driver_name).toBe("John Smith");
       expect(result.bestMatch?.score).toBeGreaterThan(50);
     });
 
@@ -236,7 +242,7 @@ describe('SmartMatcher System', () => {
       ];
 
       const participants: Participant[] = [
-        { numero: 48, nome_pilota: "Test Driver" }
+        { numero: 48, preset_participant_drivers: [{ driver_name: "Test Driver", driver_order: 0 }] }
       ];
 
       const correctedEvidence = await ocrCorrector.correctEvidence(evidence, participants);
@@ -258,7 +264,7 @@ describe('SmartMatcher System', () => {
       ];
 
       const participants: Participant[] = [
-        { numero: 21, nome_pilota: "Test Driver" }
+        { numero: 21, preset_participant_drivers: [{ driver_name: "Test Driver", driver_order: 0 }] }
       ];
 
       const correctedEvidence = await ocrCorrector.correctEvidence(evidence, participants);
@@ -277,7 +283,7 @@ describe('SmartMatcher System', () => {
       ];
 
       const participants: Participant[] = [
-        { numero: 24, nome_pilota: "Test Driver" }
+        { numero: 24, preset_participant_drivers: [{ driver_name: "Test Driver", driver_order: 0 }] }
       ];
 
       const correctedEvidence = await ocrCorrector.correctEvidence(evidence, participants);
@@ -297,7 +303,7 @@ describe('SmartMatcher System', () => {
       ];
 
       const participants: Participant[] = [
-        { numero: 186, nome_pilota: "Test Driver" }
+        { numero: 186, preset_participant_drivers: [{ driver_name: "Test Driver", driver_order: 0 }] }
       ];
 
       const correctedEvidence = await ocrCorrector.correctEvidence(evidence, participants);
@@ -326,8 +332,8 @@ describe('SmartMatcher System', () => {
 
     test('should analyze and suggest optimal sport', () => {
       const motorsportParticipants = [
-        { numero: 42, nome_pilota: "John", nome_navigatore: "Jane", sponsor: ["Ferrari"] },
-        { numero: 86, nome_pilota: "Mike", nome_navigatore: "Sara", sponsor: ["BMW"] }
+        { numero: 42, preset_participant_drivers: [{ driver_name: "John", driver_order: 0 }, { driver_name: "Jane", driver_order: 1 }], sponsor: ["Ferrari"] },
+        { numero: 86, preset_participant_drivers: [{ driver_name: "Mike", driver_order: 0 }, { driver_name: "Sara", driver_order: 1 }], sponsor: ["BMW"] }
       ];
 
       const runningParticipants = [
@@ -443,7 +449,7 @@ describe('SmartMatcher System', () => {
       const participantsWithCorrectNumber: Participant[] = [
         {
           numero: 48, // Correct number
-          nome_pilota: "Test Driver",
+          preset_participant_drivers: [{ driver_name: "Test Driver", driver_order: 0 }],
           squadra: "Test Team"
         }
       ];
@@ -498,7 +504,7 @@ describe('SmartMatcher System', () => {
       for (let i = 1; i <= 1000; i++) {
         largeParticipantSet.push({
           numero: i,
-          nome_pilota: `Driver ${i}`,
+          preset_participant_drivers: [{ driver_name: `Driver ${i}`, driver_order: 0 }],
           squadra: `Team ${i % 50}`, // 50 teams
           sponsor: [`Sponsor ${i % 100}`] // 100 sponsors
         });

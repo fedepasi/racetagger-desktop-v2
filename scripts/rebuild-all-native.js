@@ -7,8 +7,7 @@
  * for the correct Electron version. Handles:
  *
  * 1. raw-preview-extractor (custom C++ addon - vendor/raw-preview-extractor)
- * 2. better-sqlite3 (SQLite binding)
- * 3. sharp (image processing)
+ * 2. sharp (image processing)
  *
  * Usage:
  *   node scripts/rebuild-all-native.js              # Rebuild all for current platform
@@ -28,7 +27,7 @@ const os = require('os');
 const ROOT_DIR = path.resolve(__dirname, '..');
 const RAW_EXTRACTOR_DIR = path.join(ROOT_DIR, 'vendor', 'raw-preview-extractor');
 
-const CRITICAL_MODULES = ['sharp', 'better-sqlite3'];
+const CRITICAL_MODULES = ['sharp'];
 const VENDOR_MODULES = ['raw-preview-extractor'];
 
 // ==================== Argument Parsing ====================
@@ -125,9 +124,6 @@ function testModule(moduleName) {
   switch (moduleName) {
     case 'sharp':
       testCmd = `node -e "const s = require('sharp'); console.log('Sharp loaded, versions:', JSON.stringify(s.versions || {}));"`;
-      break;
-    case 'better-sqlite3':
-      testCmd = `node -e "const db = require('better-sqlite3')(':memory:'); db.exec('SELECT 1'); console.log('better-sqlite3 OK');"`;
       break;
     case 'raw-preview-extractor':
       testCmd = `node -e "

@@ -55,6 +55,8 @@ const validSendReceiveChannels: string[] = [
   'model-download-progress',
   'model-download-complete',
   'model-download-error',
+  // App update download progress channel
+  'update-download-progress',
   // Startup health report (main → renderer DevTools console)
   'startup-health-report',
 ];
@@ -84,6 +86,8 @@ const validInvokeChannels: string[] = [
   'get-max-supported-edge-function-version',
   'open-download-url',
   'quit-app-for-update',
+  'download-update',
+  'launch-installer',
   // Image/File Operations
   'analyze-image',
   'select-folder',
@@ -103,15 +107,13 @@ const validInvokeChannels: string[] = [
   'get-supabase-image-url',
   // Feedback
   'submit-feedback',
-  // Support Feedback System
+  // Unified Support System (feedback + diagnostics)
   'submit-support-feedback',
   'get-system-diagnostics',
   'get-dependency-status',
   'get-recent-errors',
   'open-github-issues',
-  // Remote Diagnostics
-  'collect-full-diagnostics',
-  'upload-diagnostics-remote',
+  // Diagnostic utilities (log viewer)
   'get-main-process-logs',
   'get-diagnostic-log-path',
   'open-diagnostic-log-folder',
@@ -126,17 +128,10 @@ const validInvokeChannels: string[] = [
   'window-minimize', 
   'window-maximize',
   // Database Operations
-  'db-create-project',
-  'db-get-project-by-id',
-  'db-get-all-projects',
-  'db-update-project',
-  'db-delete-project',
   'db-create-execution',
-  'db-get-executions-by-project-id',
   'db-get-execution-by-id',
   'db-update-execution',
   'db-delete-execution',
-  'db-get-recent-projects',
   'list-files-in-folder',
   'count-folder-images',
   // Home Page Statistics

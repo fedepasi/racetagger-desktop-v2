@@ -29,14 +29,18 @@ export interface AnalysisResult {
   temporalNeighbors?: ImageTimestamp[];
 }
 
+export interface ParticipantDriver {
+  id?: string;
+  driver_name: string;
+  driver_metatag?: string | null;
+  driver_order: number;
+}
+
 export interface Participant {
   numero?: string | number;
   number?: string | number;
-  nome_pilota?: string;
-  nome_navigatore?: string;
-  nome_terzo?: string;
-  nome_quarto?: string;
-  nome?: string; // Legacy CSV support
+  preset_participant_drivers?: ParticipantDriver[];
+  nome?: string; // Legacy CSV fallback (single name from CSV import)
   squadra?: string;
   team?: string;
   sponsor?: string | string[];
@@ -45,6 +49,34 @@ export interface Participant {
   category?: string;
   plate_number?: string; // License plate for car recognition
   metatag?: string;
+}
+
+/**
+ * Extract driver names from a participant using the canonical preset_participant_drivers array.
+ * Falls back to the legacy `nome` field for CSV-imported participants without drivers.
+ * Returns names sorted by driver_order.
+ */
+export function getParticipantDriverNames(participant: Participant): string[] {
+  if (participant.preset_participant_drivers && participant.preset_participant_drivers.length > 0) {
+    return participant.preset_participant_drivers
+      .sort((a, b) => a.driver_order - b.driver_order)
+      .map(d => d.driver_name)
+      .filter(Boolean);
+  }
+  // Legacy CSV fallback
+  if (participant.nome) {
+    return [participant.nome];
+  }
+  return [];
+}
+
+/**
+ * Get the primary driver name (first driver by order).
+ * Falls back to legacy `nome` field.
+ */
+export function getPrimaryDriverName(participant: Participant): string | undefined {
+  const names = getParticipantDriverNames(participant);
+  return names.length > 0 ? names[0] : undefined;
 }
 
 export interface MatchCandidate {
@@ -297,7 +329,7 @@ export class SmartMatcher {
   private analyzePresetUniqueness(participants: Participant[]): void {
     // Generate hash of participants to detect preset changes
     const participantsHash = participants
-      .map(p => `${p.numero || p.number}_${p.nome_pilota}`)
+      .map(p => `${p.numero || p.number}_${getPrimaryDriverName(p) || ''}`)
       .join('|');
 
     // Check if we already have cached analysis for this exact preset
@@ -319,14 +351,9 @@ export class SmartMatcher {
         numberOccurrences.set(number, (numberOccurrences.get(number) || 0) + 1);
       }
 
-      // Count driver names (all variants)
-      const drivers = [
-        participant.nome_pilota,
-        participant.nome_navigatore,
-        participant.nome_terzo,
-        participant.nome_quarto,
-        participant.nome
-      ].filter(Boolean).map(name => String(name).toLowerCase().trim());
+      // Count driver names from preset_participant_drivers
+      const drivers = getParticipantDriverNames(participant)
+        .map(name => name.toLowerCase().trim());
 
       for (const driver of drivers) {
         if (driver) {
@@ -474,13 +501,8 @@ export class SmartMatcher {
    * Used for coherence validation when applying uniqueness boost
    */
   private participantHasDriver(participant: Participant, driverValue: string): boolean {
-    const participantDrivers = [
-      participant.nome_pilota,
-      participant.nome_navigatore,
-      participant.nome_terzo,
-      participant.nome_quarto,
-      participant.nome
-    ].filter(Boolean).map(name => String(name).toLowerCase().trim());
+    const participantDrivers = getParticipantDriverNames(participant)
+      .map(name => name.toLowerCase().trim());
 
     const cleanDriverValue = driverValue.toLowerCase().trim();
 
@@ -961,13 +983,8 @@ export class SmartMatcher {
     evidence: Evidence
   ): { score: number; reason: string } {
     const evidenceName = String(evidence.value).toLowerCase().trim();
-    const participantNames = [
-      participant.nome_pilota,
-      participant.nome_navigatore,
-      participant.nome_terzo,
-      participant.nome_quarto,
-      participant.nome // Legacy support
-    ].filter(Boolean).map(name => String(name).toLowerCase().trim());
+    const participantNames = getParticipantDriverNames(participant)
+      .map(name => name.toLowerCase().trim());
 
     let bestScore = 0;
     let bestReason = 'No name match found';
@@ -1919,7 +1936,7 @@ export class SmartMatcher {
         if (!hasValidDriverMatch) {
           return {
             score: 0,
-            reason: `Fuzzy number match rejected: driver names don't match (${driverEvidence.map(e => e.value).join(', ')} vs ${this.getParticipantDriverNames(participant).join(', ')})`,
+            reason: `Fuzzy number match rejected: driver names don't match (${driverEvidence.map(e => e.value).join(', ')} vs ${this.getParticipantDriverNamesLower(participant).join(', ')})`,
             confidence: 0
           };
         }
@@ -2065,7 +2082,7 @@ export class SmartMatcher {
    * Returns true if names match or there's reasonable similarity
    */
   private validateDriverNameCoherence(participant: Participant, driverEvidence: Evidence[]): boolean {
-    const participantNames = this.getParticipantDriverNames(participant);
+    const participantNames = this.getParticipantDriverNamesLower(participant);
 
     if (participantNames.length === 0) {
       // No participant names to compare against, allow fuzzy match
@@ -2094,18 +2111,11 @@ export class SmartMatcher {
   }
 
   /**
-   * Extract all driver names from participant data
+   * Extract all driver names from participant data (lowercased for matching)
    */
-  private getParticipantDriverNames(participant: Participant): string[] {
-    const names = [
-      participant.nome_pilota,
-      participant.nome_navigatore,
-      participant.nome_terzo,
-      participant.nome_quarto,
-      participant.nome // Legacy support
-    ].filter(Boolean).map(name => String(name).toLowerCase().trim());
-
-    return names;
+  private getParticipantDriverNamesLower(participant: Participant): string[] {
+    return getParticipantDriverNames(participant)
+      .map(name => name.toLowerCase().trim());
   }
 
   /**
@@ -2162,7 +2172,7 @@ export class SmartMatcher {
 
     // Check each participant for strong name matches
     for (const participant of participants) {
-      const participantNames = this.getParticipantDriverNames(participant);
+      const participantNames = this.getParticipantDriverNamesLower(participant);
       if (participantNames.length === 0) continue;
 
       let nameMatchScore = 0;
@@ -2234,12 +2244,12 @@ export class SmartMatcher {
         type: 'FAST_TRACK',
         field: 'driverName',
         originalValue: analysisResult.drivers?.join(', ') || '',
-        correctedValue: this.getParticipantDriverNames(bestCandidate.participant).join(', '),
+        correctedValue: this.getParticipantDriverNamesLower(bestCandidate.participant).join(', '),
         reason: `Fast-track name matching bypassed OCR corrections due to high-confidence name match (score: ${bestCandidate.score.toFixed(1)})`,
         confidence: bestCandidate.confidence,
         details: {
           recognizedNames: analysisResult.drivers,
-          participantNames: this.getParticipantDriverNames(bestCandidate.participant),
+          participantNames: this.getParticipantDriverNamesLower(bestCandidate.participant),
           threshold: fastTrackThreshold,
           scoreBreakdown: bestCandidate.reasoning
         }

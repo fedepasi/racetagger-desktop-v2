@@ -287,6 +287,73 @@
             25% { transform: translateX(-5px); }
             75% { transform: translateX(5px); }
         }
+
+        /* Download Progress Bar */
+        .download-progress-container {
+            margin: 1.5rem 0;
+            padding: 1rem 1.5rem;
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 12px;
+        }
+
+        .progress-bar-wrapper {
+            width: 100%;
+            height: 8px;
+            background: #e9ecef;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 0.75rem;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+
+        .progress-info {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.85rem;
+            color: #6c757d;
+        }
+
+        .progress-percent {
+            font-weight: 600;
+            color: #333;
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            color: white;
+        }
+
+        .btn-success:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(40, 167, 69, 0.4);
+        }
+
+        @media (prefers-color-scheme: dark) {
+            .download-progress-container {
+                background: #2a2a2a;
+                border-color: #404040;
+            }
+
+            .progress-bar-wrapper {
+                background: #404040;
+            }
+
+            .progress-info {
+                color: #888;
+            }
+
+            .progress-percent {
+                color: #e0e0e0;
+            }
+        }
     </style>
 </head>
 <body>
@@ -316,19 +383,37 @@
                 </div>
             </div>
 
+            <!-- Download Progress Bar (hidden by default) -->
+            <div class="download-progress-container hidden" id="downloadProgressContainer">
+                <div class="progress-bar-wrapper">
+                    <div class="progress-bar-fill" id="progressBarFill"></div>
+                </div>
+                <div class="progress-info">
+                    <span class="progress-percent" id="progressPercent">0%</span>
+                    <span id="progressDetails">0 MB / 0 MB</span>
+                    <span id="progressSpeed">0 MB/s</span>
+                </div>
+            </div>
+
             <div class="update-actions">
                 <button class="btn btn-primary" id="downloadBtn" onclick="downloadUpdate()">
-                    <span id="downloadBtnText">📥 Download Update</span>
+                    <span id="downloadBtnText">📥 Scarica Aggiornamento</span>
                     <div class="loading-spinner hidden" id="downloadSpinner"></div>
                 </button>
-                
+
+                <!-- Install button (hidden until download completes) -->
+                <button class="btn btn-success hidden" id="installBtn" onclick="installUpdate()">
+                    <span id="installBtnText">🚀 Installa e Riavvia</span>
+                    <div class="loading-spinner hidden" id="installSpinner"></div>
+                </button>
+
                 <button class="btn btn-secondary" id="checkAgainBtn" onclick="checkAgain()">
-                    <span id="checkAgainBtnText">🔄 Check Again</span>
+                    <span id="checkAgainBtnText">🔄 Controlla di Nuovo</span>
                     <div class="loading-spinner hidden" id="checkSpinner"></div>
                 </button>
 
                 <button class="btn btn-secondary hidden" id="quitBtn" onclick="quitApp()">
-                    ❌ Quit App
+                    ❌ Esci dall'App
                 </button>
             </div>
 

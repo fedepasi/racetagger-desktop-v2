@@ -1,12 +1,16 @@
 /**
  * Version IPC Handlers
  *
- * Handles app version checking and force update functionality.
+ * Handles app version checking, force update functionality,
+ * and in-app installer download + launch.
  */
 
-import { ipcMain, app } from 'electron';
+import { ipcMain, app, shell } from 'electron';
+import * as fs from 'fs';
+import * as path from 'path';
 import {
   getSupabase,
+  getMainWindow,
   getVersionCheckResult,
   setVersionCheckResult,
   isForceUpdateRequired,
@@ -70,6 +74,87 @@ async function checkAppVersion(): Promise<VersionCheckResult | null> {
   }
 }
 
+// ==================== Download Update Function ====================
+
+/**
+ * Download installer from URL to temp directory with progress tracking.
+ * Sends 'update-download-progress' events to the renderer.
+ * Returns the local file path of the downloaded installer.
+ */
+async function downloadUpdate(downloadUrl: string): Promise<string> {
+  const mainWindow = getMainWindow();
+
+  console.log(`[Version] Starting download from: ${downloadUrl}`);
+
+  const response = await fetch(downloadUrl);
+  if (!response.ok) {
+    throw new Error(`Download failed: ${response.status} ${response.statusText}`);
+  }
+
+  // Get total size from Content-Length header
+  const contentLength = response.headers.get('content-length');
+  const totalBytes = contentLength ? parseInt(contentLength, 10) : 0;
+  const totalMB = totalBytes / (1024 * 1024);
+
+  // Determine filename from URL
+  const urlPath = new URL(downloadUrl).pathname;
+  const fileName = path.basename(urlPath);
+  const tempDir = app.getPath('temp');
+  const filePath = path.join(tempDir, fileName);
+
+  console.log(`[Version] Downloading to: ${filePath} (${totalMB.toFixed(1)} MB)`);
+
+  // Stream download with progress
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error('Failed to get response reader');
+  }
+
+  const chunks: Uint8Array[] = [];
+  let downloadedBytes = 0;
+  let lastProgressTime = Date.now();
+  let lastDownloadedBytes = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    chunks.push(value);
+    downloadedBytes += value.length;
+
+    // Send progress every 200ms to avoid flooding the renderer
+    const now = Date.now();
+    if (now - lastProgressTime >= 200 || downloadedBytes === totalBytes) {
+      const elapsedSec = (now - lastProgressTime) / 1000;
+      const bytesInInterval = downloadedBytes - lastDownloadedBytes;
+      const speedMBs = elapsedSec > 0 ? (bytesInInterval / (1024 * 1024)) / elapsedSec : 0;
+
+      const percent = totalBytes > 0 ? Math.round((downloadedBytes / totalBytes) * 100) : 0;
+      const downloadedMB = downloadedBytes / (1024 * 1024);
+
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('update-download-progress', {
+          percent,
+          downloadedMB: Math.round(downloadedMB * 10) / 10,
+          totalMB: Math.round(totalMB * 10) / 10,
+          speedMBs: Math.round(speedMBs * 10) / 10
+        });
+      }
+
+      lastProgressTime = now;
+      lastDownloadedBytes = downloadedBytes;
+    }
+  }
+
+  // Write file to disk
+  const fileBuffer = Buffer.concat(chunks.map(chunk => Buffer.from(chunk)));
+  fs.writeFileSync(filePath, fileBuffer);
+
+  console.log(`[Version] Download complete: ${filePath} (${(downloadedBytes / (1024 * 1024)).toFixed(1)} MB)`);
+
+  return filePath;
+}
+
 // ==================== Register Handlers ====================
 
 export function registerVersionHandlers(): void {
@@ -106,7 +191,49 @@ export function registerVersionHandlers(): void {
     app.quit();
   });
 
-  console.log('[IPC] Version handlers registered (4 handlers)');
+  // Download update installer to temp directory
+  ipcMain.handle('download-update', async (_, downloadUrl: string) => {
+    try {
+      if (!downloadUrl) {
+        throw new Error('No download URL provided');
+      }
+      const filePath = await downloadUpdate(downloadUrl);
+      return { success: true, filePath };
+    } catch (error) {
+      console.error('[Version] Download error:', error);
+      return { success: false, error: String(error) };
+    }
+  });
+
+  // Launch downloaded installer and quit app
+  ipcMain.handle('launch-installer', async (_, filePath: string) => {
+    try {
+      if (!filePath || !fs.existsSync(filePath)) {
+        throw new Error('Installer file not found');
+      }
+
+      console.log(`[Version] Launching installer: ${filePath}`);
+
+      // Open the installer with the system default handler
+      const errorMessage = await shell.openPath(filePath);
+      if (errorMessage) {
+        throw new Error(`Failed to open installer: ${errorMessage}`);
+      }
+
+      // Give the OS a moment to start the installer, then quit
+      setTimeout(() => {
+        setForceUpdateRequired(false);
+        app.quit();
+      }, 1500);
+
+      return { success: true };
+    } catch (error) {
+      console.error('[Version] Launch installer error:', error);
+      return { success: false, error: String(error) };
+    }
+  });
+
+  console.log('[IPC] Version handlers registered (6 handlers)');
 }
 
 // Export for use during app startup

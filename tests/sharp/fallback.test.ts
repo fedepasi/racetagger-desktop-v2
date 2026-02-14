@@ -2,7 +2,7 @@ import { TempDirectory } from '../helpers/temp-directory';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 
-describe('Sharp Fallback to Jimp', () => {
+describe('Sharp Image Processing', () => {
   let tempDir: TempDirectory;
 
   const SAMPLE_JPEG = path.join(__dirname, '../fixtures/images/sample.jpg');
@@ -166,17 +166,7 @@ describe('Sharp Fallback to Jimp', () => {
     expect(result).toBe(mock);
   });
 
-  test('Jimp is available as fallback', async () => {
-    try {
-      const Jimp = require('jimp');
-      expect(Jimp).toBeDefined();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.log('⏭️  Jimp not available:', message);
-    }
-  });
-
-  test('ImageProcessor interface is consistent between Sharp and Jimp', async () => {
+  test('ImageProcessor interface methods are complete', async () => {
     let createImageProcessor: any;
     try {
       createImageProcessor = require('../../src/utils/native-modules').createImageProcessor;

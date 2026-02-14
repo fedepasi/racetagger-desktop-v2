@@ -1,8 +1,14 @@
 /**
- * Feedback Modal Module
+ * Unified Support Modal (v1.2.0)
  *
- * IIFE that creates a feedback modal for submitting bug reports,
- * feature requests, and general feedback to GitHub Issues.
+ * Single support tool that replaces both "Send Feedback" and "Send Diagnostics".
+ * When submitted:
+ * 1. Creates GitHub Issue with user feedback + basic diagnostics
+ * 2. Background: uploads full diagnostic report (incl. 1000 lines of main process logs)
+ *    to Supabase Storage + sends admin email notification
+ *
+ * User only sees: title + description + type tabs → Submit
+ * Full diagnostics are ALWAYS collected and uploaded automatically.
  */
 (function () {
   'use strict';
@@ -26,7 +32,7 @@
   function createModal() {
     if (modal) return;
 
-    const overlay = document.createElement('div');
+    var overlay = document.createElement('div');
     overlay.className = 'feedback-modal-overlay';
     overlay.id = 'feedback-modal-overlay';
     overlay.addEventListener('click', function (e) {
@@ -36,7 +42,7 @@
     overlay.innerHTML = `
       <div class="feedback-modal">
         <div class="feedback-modal-header">
-          <h2>Send Feedback</h2>
+          <h2>Support</h2>
           <button class="feedback-modal-close" id="feedback-close-btn">&times;</button>
         </div>
 
@@ -61,11 +67,8 @@
               <div class="feedback-char-count" id="feedback-desc-count">0 / ${DESC_MAX}</div>
             </div>
 
-            <div class="feedback-diagnostics-section">
-              <label class="feedback-diagnostics-toggle">
-                <input type="checkbox" id="feedback-include-diagnostics" checked>
-                Include system diagnostics
-              </label>
+            <div class="feedback-diagnostics-note">
+              System diagnostics and logs will be automatically included to help us resolve your issue faster.
             </div>
           </div>
 
@@ -73,8 +76,8 @@
           <div id="feedback-success-state" style="display: none;">
             <div class="feedback-result">
               <div class="feedback-result-icon">&#10003;</div>
-              <h3>Feedback Submitted</h3>
-              <p>Thank you! Your feedback has been received.</p>
+              <h3>Report Sent</h3>
+              <p>Thank you! Your feedback and full system diagnostics have been received.</p>
             </div>
           </div>
 
@@ -112,7 +115,7 @@
 
     // Tabs
     document.getElementById('feedback-tabs').addEventListener('click', function (e) {
-      const tab = e.target.closest('.feedback-tab');
+      var tab = e.target.closest('.feedback-tab');
       if (!tab || isSubmitting) return;
       document.querySelectorAll('.feedback-tab').forEach(function (t) { t.classList.remove('active'); });
       tab.classList.add('active');
@@ -173,14 +176,9 @@
     }
   }
 
-  // ==================== Diagnostics Loading ====================
+  // ==================== Diagnostics Loading (for GitHub Issue body) ====================
 
   async function loadDiagnostics() {
-    var contentEl = document.getElementById('feedback-diagnostics-content');
-    if (!contentEl) return;
-
-    contentEl.innerHTML = '<div class="feedback-diagnostics-loading">Loading diagnostics...</div>';
-
     try {
       var results = await Promise.all([
         window.api.invoke('get-system-diagnostics'),
@@ -193,42 +191,8 @@
         dependencies: results[1],
         recentErrors: results[2],
       };
-
-      var lines = [];
-
-      // System info
-      var sys = diagnosticsData.system;
-      lines.push('-- System --');
-      lines.push('App: v' + sys.appVersion + '  Electron: ' + sys.electronVersion + '  Node: ' + sys.nodeVersion);
-      lines.push('OS: ' + sys.os + ' ' + sys.osVersion + ' (' + sys.arch + ')');
-      lines.push('CPU: ' + sys.cpu + ' (' + sys.cpuCores + 'C/' + sys.cpuThreads + 'T)');
-      lines.push('RAM: ' + sys.ramAvailable + '/' + sys.ramTotal + ' GB');
-      if (sys.gpu) lines.push('GPU: ' + sys.gpu);
-      lines.push('Disk: ' + sys.diskType + ' ' + sys.diskAvailable + '/' + sys.diskTotal + ' GB');
-
-      // Dependencies
-      lines.push('');
-      lines.push('-- Dependencies --');
-      diagnosticsData.dependencies.forEach(function (dep) {
-        var status = dep.working ? 'OK' : (dep.exists ? 'EXISTS (not working)' : 'MISSING');
-        lines.push(dep.name + ': ' + status + (dep.error ? ' [' + dep.error + ']' : ''));
-      });
-
-      // Recent errors
-      if (diagnosticsData.recentErrors.length > 0) {
-        lines.push('');
-        lines.push('-- Recent Errors (' + diagnosticsData.recentErrors.length + ') --');
-        diagnosticsData.recentErrors.slice(0, 5).forEach(function (err) {
-          lines.push('[' + err.severity + '/' + err.category + '] ' + err.message);
-        });
-      } else {
-        lines.push('');
-        lines.push('-- No recent errors --');
-      }
-
-      contentEl.textContent = lines.join('\n');
     } catch (err) {
-      contentEl.textContent = 'Failed to load diagnostics: ' + (err.message || err);
+      console.warn('[Support] Failed to pre-load diagnostics:', err);
       diagnosticsData = null;
     }
   }
@@ -240,7 +204,6 @@
 
     var titleInput = document.getElementById('feedback-title');
     var descInput = document.getElementById('feedback-description');
-    var includeDiag = document.getElementById('feedback-include-diagnostics');
     var submitBtn = document.getElementById('feedback-submit-btn');
 
     var title = titleInput.value.trim();
@@ -264,10 +227,11 @@
         type: currentType,
         title: title,
         description: description,
-        includeDiagnostics: includeDiag.checked,
+        includeDiagnostics: true,  // Always include
       };
 
-      if (includeDiag.checked && diagnosticsData) {
+      // Attach basic diagnostics for GitHub Issue body
+      if (diagnosticsData) {
         submission.diagnostics = diagnosticsData;
       }
 
@@ -354,17 +318,13 @@
     var bugTab = document.querySelector('.feedback-tab[data-type="bug"]');
     if (bugTab) bugTab.classList.add('active');
 
-    // Reset diagnostics checkbox
-    var diagCheckbox = document.getElementById('feedback-include-diagnostics');
-    if (diagCheckbox) diagCheckbox.checked = true;
-
     // Reset view states
     resetToForm();
 
-    // Show modal, hide FAB
+    // Show modal, hide FAB wrapper
     modal.style.display = 'flex';
-    var fab = document.getElementById('feedback-fab');
-    if (fab) fab.style.display = 'none';
+    var fabWrapper = document.getElementById('feedback-fab-wrapper');
+    if (fabWrapper) fabWrapper.style.display = 'none';
     updatePlaceholders();
 
     // Check auth
@@ -383,7 +343,7 @@
     document.getElementById('feedback-auth-warning').style.display = 'none';
     document.getElementById('feedback-submit-btn').disabled = false;
 
-    // Load diagnostics in background
+    // Load basic diagnostics in background (for GitHub Issue body)
     loadDiagnostics();
   }
 
@@ -391,8 +351,60 @@
     if (modal) {
       modal.style.display = 'none';
     }
+    var fabWrapper = document.getElementById('feedback-fab-wrapper');
+    if (fabWrapper) fabWrapper.style.display = 'flex';
+  }
+
+  // ==================== FAB First-Time Tooltip ====================
+
+  function initFabTooltip() {
+    var tooltip = document.getElementById('feedback-fab-tooltip');
+    var closeBtn = document.getElementById('feedback-fab-tooltip-close');
+    if (!tooltip || !closeBtn) return;
+
+    var STORAGE_KEY = 'racetagger_fab_tooltip_dismissed';
+
+    // Check if already dismissed
+    try {
+      if (localStorage.getItem(STORAGE_KEY)) return;
+    } catch (e) {
+      // localStorage not available, show anyway
+    }
+
+    // Show tooltip after a short delay (let the app load first)
+    setTimeout(function () {
+      tooltip.classList.add('visible');
+    }, 2000);
+
+    // Dismiss on X click
+    closeBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      dismissTooltip();
+    });
+
+    // Also dismiss when FAB is clicked (opening the modal)
     var fab = document.getElementById('feedback-fab');
-    if (fab) fab.style.display = 'flex';
+    if (fab) {
+      fab.addEventListener('click', function () {
+        dismissTooltip();
+      });
+    }
+
+    function dismissTooltip() {
+      tooltip.classList.remove('visible');
+      try {
+        localStorage.setItem(STORAGE_KEY, '1');
+      } catch (e) {
+        // Ignore
+      }
+    }
+  }
+
+  // Init tooltip when DOM is ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initFabTooltip);
+  } else {
+    initFabTooltip();
   }
 
   // ==================== Global API ====================

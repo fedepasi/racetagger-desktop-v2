@@ -28,7 +28,6 @@
   const migratedPages = new Set([
     'home',
     'settings',
-    'projects',
     'destinations',
     'participants',
     'analysis'
@@ -135,9 +134,7 @@
    */
   function handleLegacyNavigation(sectionName) {
     // Map route names to section names if different
-    const sectionMap = {
-      'projects': 'progetti'
-    };
+    const sectionMap = {};
 
     const actualSection = sectionMap[sectionName] || sectionName;
 
@@ -168,8 +165,6 @@
     // Section-specific initialization
     if (actualSection === 'home' && typeof window.loadRecentPresets === 'function') {
       window.loadRecentPresets();
-    } else if (actualSection === 'progetti' && typeof window.loadAllProjects === 'function') {
-      window.loadAllProjects();
     }
 
     currentPage = sectionName;
@@ -196,18 +191,6 @@
         // Also explicitly call if SettingsManager is available
         if (typeof window.SettingsManager !== 'undefined' && window.SettingsManager.initialize) {
           window.SettingsManager.initialize();
-        }
-        break;
-
-      case 'projects':
-        // Load projects list
-        if (typeof window.loadAllProjects === 'function') {
-          window.loadAllProjects();
-        }
-        // Re-attach event listener for create button (dynamically loaded)
-        const createBtn = document.getElementById('create-new-project-btn');
-        if (createBtn && typeof window.openProjectModal === 'function') {
-          createBtn.addEventListener('click', () => window.openProjectModal('create'));
         }
         break;
 
@@ -362,10 +345,6 @@
         updateNavActiveState('destinations');
         loadPage('destinations');
       })
-      .on('/projects', () => {
-        updateNavActiveState('progetti');
-        loadPage('projects');
-      })
       .on('/settings', () => {
         updateNavActiveState('settings');
         loadPage('settings');
@@ -401,7 +380,6 @@
           'analysis': '/analysis',
           'participants': '/participants',
           'destinations': '/destinations',
-          'progetti': '/projects',
           'settings': '/settings'
         };
 

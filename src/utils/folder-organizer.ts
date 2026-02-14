@@ -212,7 +212,11 @@ export class FolderOrganizer {
       // - If AT LEAST ONE custom folder -> use ONLY custom folders (copy to all)
       const foldersToCreate: FolderTarget[] = uniqueFolderTargets.length > 0
         ? uniqueFolderTargets
-        : numbers.map(num => ({ name: this.generateFolderName(num) }));
+        : numbers.map(num => {
+            // Find matching csvData for this race number to support number_name pattern
+            const matchingCsv = csvDataArray.find(csv => csv.numero === num);
+            return { name: this.generateFolderName(num, matchingCsv) };
+          });
 
       const baseDir = this.config.destinationPath || sourceDir || path.dirname(imagePath);
 
@@ -550,13 +554,33 @@ export class FolderOrganizer {
   }
 
   /**
-   * Generate default folder name (just race number)
+   * Generate folder name based on the configured pattern.
+   * For 'number_name', uses participant data to append driver name.
+   * For 'custom', uses parseFolderName with customPattern.
    */
-  private generateFolderName(raceNumber: string): string {
+  private generateFolderName(raceNumber: string, csvData?: CsvParticipantData): string {
     if (raceNumber === 'unknown') {
       return this.config.unknownFolderName;
     }
-    return raceNumber;
+
+    switch (this.config.pattern) {
+      case 'number_name': {
+        const name = csvData?.nome?.trim();
+        if (name) {
+          return this.sanitizeFileName(`${raceNumber} ${name}`);
+        }
+        return raceNumber; // Fallback if no name available
+      }
+      case 'custom': {
+        if (this.config.customPattern && csvData) {
+          return this.parseFolderName(this.config.customPattern, csvData);
+        }
+        return raceNumber;
+      }
+      case 'number':
+      default:
+        return raceNumber;
+    }
   }
 
   /**

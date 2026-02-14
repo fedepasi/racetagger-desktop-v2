@@ -1,24 +1,14 @@
 /**
  * Database IPC Handlers
  *
- * Handles local SQLite database operations for projects, executions, and presets.
+ * Handles database operations for executions and presets.
  */
 
 import { ipcMain } from 'electron';
 import { authService } from '../auth-service';
 import {
-  // Project operations
-  createProjectOnline,
-  getProjectsOnline,
-  getProjectByIdOnline,
-  updateProjectOnline,
-  deleteProjectOnline,
-  getRecentProjectsFromCache,
-  uploadCsvToStorage,
-  Project,
   // Execution operations
   createExecutionOnline,
-  getExecutionsByProjectIdOnline,
   getExecutionByIdOnline,
   updateExecutionOnline,
   deleteExecutionOnline,
@@ -29,15 +19,15 @@ import {
   getExecutionSettings,
   getUserSettingsAnalytics,
   // Preset operations
-  ParticipantPreset,
-  PresetParticipant,
-  createParticipantPreset,
-  getUserParticipantPresets,
-  getParticipantPresetById,
-  savePresetParticipants,
-  updatePresetLastUsed,
-  deleteParticipantPreset,
-  importParticipantsFromCSV
+  ParticipantPresetSupabase,
+  PresetParticipantSupabase,
+  createParticipantPresetSupabase,
+  getUserParticipantPresetsSupabase,
+  getParticipantPresetByIdSupabase,
+  savePresetParticipantsSupabase,
+  updatePresetLastUsedSupabase,
+  deleteParticipantPresetSupabase,
+  importParticipantsFromCSVSupabase
 } from '../database-service';
 import { createHandler } from './handler-factory';
 import { DEBUG_MODE } from '../config';
@@ -45,92 +35,12 @@ import { DEBUG_MODE } from '../config';
 export function registerDatabaseHandlers(): void {
   if (DEBUG_MODE) console.log('[IPC] Registering database handlers...');
 
-  // ==================== PROJECT HANDLERS ====================
-
-  ipcMain.handle('db-create-project', async (_, projectData: Omit<Project, 'id' | 'user_id' | 'created_at' | 'updated_at'>) => {
-    try {
-      const newProject = await createProjectOnline(projectData);
-      return { success: true, data: newProject };
-    } catch (e: any) {
-      return { success: false, error: e.message };
-    }
-  });
-
-  ipcMain.handle('db-upload-project-csv', async (_, { projectId, csvFileBuffer, csvFileName }: { projectId: string, csvFileBuffer: Uint8Array, csvFileName: string }) => {
-    try {
-      const buffer = Buffer.from(csvFileBuffer);
-      const storagePath = await uploadCsvToStorage(projectId, buffer, csvFileName);
-      const updatedProject = await updateProjectOnline(projectId, { base_csv_storage_path: storagePath });
-      return { success: true, data: updatedProject };
-    } catch (e: any) {
-      return { success: false, error: e.message };
-    }
-  });
-
-  ipcMain.handle('db-get-project-by-id', async (_, id: string) => {
-    try {
-      const project = await getProjectByIdOnline(id);
-      return { success: true, data: project };
-    } catch (e: any) {
-      return { success: false, error: e.message };
-    }
-  });
-
-  ipcMain.handle('db-get-all-projects', async () => {
-    try {
-      const projects = await getProjectsOnline();
-      console.log(`[DB] Fetched ${projects?.length || 0} projects`);
-      return { success: true, data: projects };
-    } catch (e: any) {
-      console.error('[DB] Error fetching projects:', e.message);
-      return { success: false, error: e.message || 'Unknown error fetching projects.' };
-    }
-  });
-
-  ipcMain.handle('db-update-project', async (_, { id, projectData }: { id: string, projectData: Partial<Omit<Project, 'id' | 'user_id' | 'created_at' | 'updated_at'>> }) => {
-    try {
-      const updatedProject = await updateProjectOnline(id, projectData);
-      return { success: true, data: updatedProject };
-    } catch (e: any) {
-      return { success: false, error: e.message };
-    }
-  });
-
-  ipcMain.handle('db-delete-project', async (_, id: string) => {
-    try {
-      await deleteProjectOnline(id);
-      return { success: true };
-    } catch (e: any) {
-      return { success: false, error: e.message };
-    }
-  });
-
-  ipcMain.handle('db-get-recent-projects', async (_, limit?: number) => {
-    try {
-      const userId = authService.getAuthState().user?.id;
-      if (!userId) return { success: true, data: [] };
-      const projects = getRecentProjectsFromCache(userId, limit);
-      return { success: true, data: projects };
-    } catch (e: any) {
-      return { success: false, error: e.message };
-    }
-  });
-
   // ==================== EXECUTION HANDLERS ====================
 
   ipcMain.handle('db-create-execution', async (_, executionData: Omit<Execution, 'id' | 'user_id' | 'created_at' | 'updated_at'>) => {
     try {
       const newExecution = await createExecutionOnline(executionData);
       return { success: true, data: newExecution };
-    } catch (e: any) {
-      return { success: false, error: e.message };
-    }
-  });
-
-  ipcMain.handle('db-get-executions-by-project-id', async (_, projectId: string) => {
-    try {
-      const executions = await getExecutionsByProjectIdOnline(projectId);
-      return { success: true, data: executions };
     } catch (e: any) {
       return { success: false, error: e.message };
     }
@@ -210,9 +120,9 @@ export function registerDatabaseHandlers(): void {
 
   // ==================== PRESET HANDLERS ====================
 
-  ipcMain.handle('db-create-participant-preset', async (_, presetData: Omit<ParticipantPreset, 'id' | 'created_at' | 'updated_at'>) => {
+  ipcMain.handle('db-create-participant-preset', async (_, presetData: Omit<ParticipantPresetSupabase, 'id' | 'created_at' | 'updated_at'>) => {
     try {
-      const preset = await createParticipantPreset(presetData);
+      const preset = await createParticipantPresetSupabase(presetData);
       return { success: true, data: preset };
     } catch (e: any) {
       return { success: false, error: e.message };
@@ -221,7 +131,7 @@ export function registerDatabaseHandlers(): void {
 
   ipcMain.handle('db-get-participant-presets', async () => {
     try {
-      const presets = await getUserParticipantPresets();
+      const presets = await getUserParticipantPresetsSupabase();
       return { success: true, data: presets };
     } catch (e: any) {
       return { success: false, error: e.message };
@@ -230,16 +140,16 @@ export function registerDatabaseHandlers(): void {
 
   ipcMain.handle('db-get-participant-preset-by-id', async (_, presetId: string) => {
     try {
-      const preset = await getParticipantPresetById(presetId);
+      const preset = await getParticipantPresetByIdSupabase(presetId);
       return { success: true, data: preset };
     } catch (e: any) {
       return { success: false, error: e.message };
     }
   });
 
-  ipcMain.handle('db-save-preset-participants', async (_, { presetId, participants }: { presetId: string, participants: Omit<PresetParticipant, 'id' | 'created_at'>[] }) => {
+  ipcMain.handle('db-save-preset-participants', async (_, { presetId, participants }: { presetId: string, participants: Omit<PresetParticipantSupabase, 'id' | 'created_at'>[] }) => {
     try {
-      await savePresetParticipants(presetId, participants);
+      await savePresetParticipantsSupabase(presetId, participants);
       return { success: true };
     } catch (e: any) {
       return { success: false, error: e.message };
@@ -248,7 +158,7 @@ export function registerDatabaseHandlers(): void {
 
   ipcMain.handle('db-update-preset-last-used', async (_, presetId: string) => {
     try {
-      await updatePresetLastUsed(presetId);
+      await updatePresetLastUsedSupabase(presetId);
       return { success: true };
     } catch (e: any) {
       return { success: false, error: e.message };
@@ -257,7 +167,7 @@ export function registerDatabaseHandlers(): void {
 
   ipcMain.handle('db-delete-participant-preset', async (_, presetId: string) => {
     try {
-      await deleteParticipantPreset(presetId);
+      await deleteParticipantPresetSupabase(presetId);
       return { success: true };
     } catch (e: any) {
       return { success: false, error: e.message };
@@ -266,12 +176,12 @@ export function registerDatabaseHandlers(): void {
 
   ipcMain.handle('db-import-participants-from-csv', async (_, { csvData, presetName }: { csvData: any[], presetName: string }) => {
     try {
-      const preset = await importParticipantsFromCSV(csvData, presetName);
+      const preset = await importParticipantsFromCSVSupabase(csvData, presetName);
       return { success: true, data: preset };
     } catch (e: any) {
       return { success: false, error: e.message };
     }
   });
 
-  console.log('[IPC] Database handlers registered (22 handlers)');
+  console.log('[IPC] Database handlers registered (15 handlers)');
 }

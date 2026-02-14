@@ -268,6 +268,7 @@ function handleRegister(event) {
   const email = document.getElementById('register-email').value.toLowerCase().trim();
   const password = document.getElementById('register-password').value;
   const confirmPassword = document.getElementById('register-confirm-password').value;
+  const referralCode = document.getElementById('register-referral-code').value.trim() || null;
 
   // Clear previous messages
   showAuthError('register', '');
@@ -299,7 +300,7 @@ function handleRegister(event) {
 
   // Send register request to main process
   if (window.api) {
-    window.api.send('register', { email, password });
+    window.api.send('register', { email, password, referralCode });
   }
 
   // Reset form state after timeout (in case of no response)
@@ -898,7 +899,6 @@ function updateSidebarVisibility() {
     
     // Identifica le sezioni da nascondere per utenti non admin
     const isAdminOnlySection =
-      iconText === '📁' || // Progetti
       iconText === '🧪' || // Test & Valutazione
       href === 'test-dashboard.html'; // Test & Valutazione (alternativo)
     
@@ -921,8 +921,8 @@ function updateSidebarVisibility() {
     if (currentActiveSection) {
       const sectionId = currentActiveSection.id;
       
-      // Se è su Progetti o Test & Valutazione, reindirizza ad Analisi
-      if (sectionId === 'section-progetti') {
+      // Se è su una sezione admin-only, reindirizza ad Analisi
+      if (false) { // Projects section removed in v1.2.0
         // Nascondi la sezione corrente e mostra Analisi
         currentActiveSection.classList.remove('active-section');
         

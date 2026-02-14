@@ -11,12 +11,8 @@ import { promises as fsPromises } from 'fs';
 import * as os from 'os';
 import { authService } from '../auth-service';
 import {
-  getProjectsOnline,
   cacheSupabaseData,
-  getUserDataStats,
   saveCsvToSupabase,
-  syncAllUserDataToSupabase,
-  clearAllUserData,
   getSportCategories
 } from '../database-service';
 import {
@@ -30,15 +26,14 @@ import { CsvEntry } from './types';
 // Local CSV data reference (updated on load/restore)
 let csvData: CsvEntry[] = [];
 
-// Sync user projects after authentication
-async function syncUserProjects(): Promise<void> {
+// Sync user data after authentication
+async function syncUserData(): Promise<void> {
   const authState = authService.getAuthState();
   if (authState.isAuthenticated && authState.user?.id) {
     try {
-      await getProjectsOnline();
       await cacheSupabaseData();
     } catch (error) {
-      console.error('[Auth] Error syncing projects:', error);
+      console.error('[Auth] Error syncing user data:', error);
     }
   }
 }
@@ -69,7 +64,7 @@ export function registerAuthHandlers(): void {
   ipcMain.on('check-auth-status', async (event: IpcMainEvent) => {
     const authState = authService.getAuthState();
     event.sender.send('auth-status', authState);
-    await syncUserProjects();
+    await syncUserData();
   });
 
   // ==================== Login ====================
@@ -80,7 +75,7 @@ export function registerAuthHandlers(): void {
 
       // Wait for data sync BEFORE sending login-result
       if (result.success) {
-        await syncUserProjects();
+        await syncUserData();
       }
 
       event.sender.send('login-result', result);
@@ -91,9 +86,9 @@ export function registerAuthHandlers(): void {
 
   // ==================== Register ====================
 
-  ipcMain.on('register', async (event: IpcMainEvent, data: { email: string; password: string }) => {
+  ipcMain.on('register', async (event: IpcMainEvent, data: { email: string; password: string; referralCode?: string | null }) => {
     try {
-      const result = await authService.register(data.email, data.password);
+      const result = await authService.register(data.email, data.password, undefined, data.referralCode || undefined);
       event.sender.send('register-result', result);
     } catch (error: any) {
       event.sender.send('register-result', { success: false, error: error.message || 'Registration error' });
@@ -114,9 +109,6 @@ export function registerAuthHandlers(): void {
         return;
       }
 
-      // Get data stats
-      const stats = await getUserDataStats(userId);
-
       // Save current CSV to Supabase
       const currentCsvData = getGlobalCsvData();
       if (currentCsvData && currentCsvData.length > 0) {
@@ -127,40 +119,8 @@ export function registerAuthHandlers(): void {
         }
       }
 
-      // Sync all user data
-      if (authService.isAuthenticated() && authService.isOnline()) {
-        try {
-          await syncAllUserDataToSupabase(userId);
-        } catch (syncError) {
-          console.error('[Auth] Sync error:', syncError);
-
-          // Ask user to confirm logout without sync
-          if (mainWindow) {
-            const response = await dialog.showMessageBox(mainWindow, {
-              type: 'warning',
-              title: 'Errore Sincronizzazione',
-              message: 'Impossibile sincronizzare i dati su Supabase',
-              detail: 'I dati locali potrebbero andare persi. Vuoi procedere comunque?',
-              buttons: ['Annulla Logout', 'Procedi Comunque'],
-              defaultId: 0,
-              cancelId: 0
-            });
-
-            if (response.response === 0) {
-              event.sender.send('logout-result', { success: false, error: 'Logout cancelled by user' });
-              return;
-            }
-          }
-        }
-      }
-
       // Execute logout
       const result = await authService.logout();
-
-      // Clear local data
-      if (userId) {
-        await clearAllUserData(userId);
-      }
 
       // Clear global variables
       csvData = [];
@@ -263,7 +223,7 @@ export function registerAuthHandlers(): void {
   // ==================== Auth Refresh ====================
 
   ipcMain.on('auth-refresh-completed-from-renderer', async () => {
-    await syncUserProjects();
+    await syncUserData();
   });
 
   // ==================== User Info ====================

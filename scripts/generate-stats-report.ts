@@ -331,7 +331,7 @@ ${stats.totalUsers > 0 ? `
 - **Performance**: Batch size 10, Timeout 30s, Retry 3x
 
 #### RAW Processing
-- **Converter**: dcraw-based (automatic fallback a Sharp.js)
+- **Converter**: raw-preview-extractor (native) + ExifTool fallback
 - **Formati**: NEF, ARW, CR2, CR3, ORF, RAW, RW2, DNG
 - **Batch Size**: 12 files (in modalità BALANCED)
 - **Cache**: Enabled per file convertiti
@@ -466,7 +466,7 @@ ${stats.totalTokensPurchased > 0 ? `
 - Analysis logs con user isolation
 
 ### Performance Benchmarks
-- **Conversione RAW**: ~2-3s per file (dcraw)
+- **Conversione RAW**: ~0.5-1s per file (raw-preview-extractor)
 - **AI Recognition**: ~1-2s per immagine (Gemini)
 - **Upload**: ~1s per immagine (parallel)
 - **Throughput**: ~120 analisi/minuto (BALANCED mode)

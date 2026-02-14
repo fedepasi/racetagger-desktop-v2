@@ -566,9 +566,9 @@ export class SportConfig {
     // Analyze team sizes
     const teamSizes = participants
       .map(p => {
-        const drivers = [p.nome_pilota, p.nome_navigatore, p.nome_terzo, p.nome_quarto]
-          .filter(Boolean);
-        return drivers.length;
+        const drivers = p.preset_participant_drivers?.length
+          || (p.nome ? 1 : 0);
+        return drivers;
       })
       .filter(size => size > 0);
 

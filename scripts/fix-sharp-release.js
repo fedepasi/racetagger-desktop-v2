@@ -72,7 +72,12 @@ function getUnpackedPath(context) {
 function fixSharpDependencies(context) {
   try {
     const platform = context?.electronPlatformName || process.platform;
-    const arch = context?.arch || process.arch;
+
+    // electron-builder passes arch as a numeric enum (1=x64, 3=arm64, etc.)
+    // We need the string form for package name resolution
+    const ARCH_MAP = { 0: 'ia32', 1: 'x64', 2: 'armv7l', 3: 'arm64', 4: 'universal' };
+    const rawArch = context?.arch ?? process.arch;
+    const arch = typeof rawArch === 'number' ? (ARCH_MAP[rawArch] || `unknown-${rawArch}`) : rawArch;
 
     const unpackedPath = getUnpackedPath(context);
     console.log(`📁 [Sharp Fix] Unpacked path: ${unpackedPath}`);
@@ -129,7 +134,7 @@ function fixSharpDependencies(context) {
           console.warn(`   - ${item}`);
         });
       }
-      console.warn('   App will fall back to Jimp for image processing');
+      console.error('   ❌ Sharp will NOT be available for image processing');
       return;
     }
 
@@ -161,7 +166,7 @@ function fixSharpDependencies(context) {
     if (!libvipsPath) {
       console.warn(`⚠️ [Sharp Fix] libvips not found for ${platform}-${arch}`);
       console.warn(`   Expected in: ${libvipsDir}`);
-      console.warn('   App will fall back to Jimp');
+      console.error('   ❌ Sharp will NOT be available for image processing');
       return;
     }
 
@@ -268,14 +273,14 @@ function fixSharpDependencies(context) {
       console.log('✅ [Sharp Fix] Sharp test successful!');
     } catch (testError) {
       console.warn(`⚠️ [Sharp Fix] Sharp test failed: ${testError.message}`);
-      console.warn('⚠️ [Sharp Fix] App may fall back to Jimp at runtime');
+      console.warn('⚠️ [Sharp Fix] Sharp may not work at runtime');
     }
 
     console.log('🎉 [Sharp Fix] Sharp post-build fix completed successfully!');
 
   } catch (error) {
     console.error(`❌ [Sharp Fix] Failed to fix Sharp dependencies: ${error.message}`);
-    console.warn('⚠️ [Sharp Fix] Build will continue, but app may use Jimp fallback');
+    console.warn('⚠️ [Sharp Fix] Build will continue, but Sharp may not work at runtime');
   }
 }
 

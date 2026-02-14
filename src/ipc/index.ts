@@ -18,7 +18,7 @@
  * - face-recognition-handlers.ts: Face detection and matching (6 handlers)
  * - preset-face-handlers.ts: Preset participant face photos (6 handlers)
  * - version-handlers.ts: App version checking (4 handlers)
- * - feedback-handlers.ts: Support feedback & diagnostics (5 handlers)
+ * - feedback-handlers.ts: Unified support (feedback + diagnostics upload) (5 handlers)
  *
  * Total: 128 handlers extracted into modular files
  * Note: Some complex handlers (analyze-folder) remain in main.ts due to dependencies
@@ -98,10 +98,10 @@ export function registerAllHandlers(): void {
   // Version handlers (4)
   registerVersionHandlers();
 
-  // Feedback handlers (5)
+  // Unified support handlers: feedback + diagnostics upload (5)
   registerFeedbackHandlers();
 
-  // Diagnostic handlers (5)
+  // Diagnostic log utilities (3)
   registerDiagnosticHandlers();
 
   console.log('[IPC] ========================================');

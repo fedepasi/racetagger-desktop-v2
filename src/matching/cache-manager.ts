@@ -1,9 +1,9 @@
 /**
  * CacheManager - Multi-level caching for matching operations
  *
- * This module implements a sophisticated caching system with three levels:
+ * This module implements a caching system with two active levels:
  * L1: In-memory cache for active session data
- * L2: SQLite cache for recent matches and patterns
+ * L2: Disabled (SQLite removed in v1.2.0)
  * L3: Supabase for persistent storage and sharing
  *
  * TODO_ML_INTEGRATION: This module can be enhanced with:
@@ -363,36 +363,13 @@ export class CacheManager {
   }
 
   /**
-   * L2 Cache Methods (SQLite)
+   * L2 Cache Methods
+   * NOTE: SQLite-based L2 cache removed in v1.2.0. L2 is now disabled.
+   * L1 (in-memory) and L3 (Supabase) provide sufficient caching.
    */
   private async initializeL2Cache(): Promise<void> {
-    try {
-      const Database = require('better-sqlite3');
-      const dbPath = path.join(app.getPath('userData'), 'cache.db');
-
-      this.l2Database = new Database(dbPath);
-
-      // Create tables
-      this.l2Database.exec(`
-        CREATE TABLE IF NOT EXISTS cache_entries (
-          key TEXT PRIMARY KEY,
-          value TEXT NOT NULL,
-          timestamp INTEGER NOT NULL,
-          ttl INTEGER NOT NULL,
-          access_count INTEGER DEFAULT 1,
-          last_access INTEGER NOT NULL,
-          sport TEXT,
-          category TEXT
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_timestamp ON cache_entries(timestamp);
-        CREATE INDEX IF NOT EXISTS idx_sport ON cache_entries(sport);
-        CREATE INDEX IF NOT EXISTS idx_category ON cache_entries(category);
-      `);
-
-    } catch (error) {
-      console.error('Failed to initialize L2 cache:', error);
-    }
+    // L2 SQLite cache removed in v1.2.0 — l2Database stays null
+    // All L2 methods gracefully handle null database
   }
 
   private async getFromL2(key: string): Promise<any | null> {

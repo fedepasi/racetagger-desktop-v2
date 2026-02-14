@@ -993,8 +993,12 @@ ipcMain.handle('dna:export-as-preset', async () => {
   // Converti DNA in formato preset partecipanti
   const participants = Array.from(currentSessionDNA.values()).map(dna => ({
     numero: dna.numero,
-    nome_pilota: dna.piloti[0]?.value || '',
-    nome_navigatore: dna.piloti[1]?.value || '',
+    // Driver names are stored via preset_participant_drivers table
+    nome: dna.piloti.map(p => p.value).filter(Boolean).join(', '),
+    preset_participant_drivers: dna.piloti.map((p, idx) => ({
+      driver_name: p.value || '',
+      driver_order: idx
+    })).filter(d => d.driver_name),
     squadra: dna.team[0]?.value || '',
     sponsor: dna.sponsors.map(s => s.value).join(', '),
     categoria: dna.categoria || ''

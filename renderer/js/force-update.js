@@ -1,13 +1,20 @@
 // Force Update Screen Logic
+// Handles version checking, in-app download with progress, and installer launch.
 let updateData = null;
 let isDownloading = false;
 let isChecking = false;
+let downloadedFilePath = null;
 
 // Initialize force update screen
 document.addEventListener('DOMContentLoaded', async () => {
     // Load version check result
     await loadUpdateData();
-    
+
+    // Listen for download progress events from main process
+    window.api.receive('update-download-progress', (progress) => {
+        updateProgressBar(progress);
+    });
+
     // Setup automatic check interval (every 30 seconds)
     setInterval(async () => {
         if (!isChecking && !isDownloading) {
@@ -73,11 +80,11 @@ function updateUI() {
     // Update version info
     const currentVersionEl = document.getElementById('currentVersion');
     const requiredVersionEl = document.getElementById('requiredVersion');
-    
+
     // Get current app version
     window.api.invoke('get-app-version').then(version => {
         currentVersionEl.textContent = version;
-    }).catch(error => {
+    }).catch(() => {
         currentVersionEl.textContent = 'Unknown';
     });
 
@@ -96,7 +103,7 @@ function updateUI() {
         quitBtn.classList.add('hidden');
     }
 
-    // Update download button
+    // Update download button state
     const downloadBtn = document.getElementById('downloadBtn');
     if (!updateData.download_url) {
         downloadBtn.disabled = true;
@@ -104,58 +111,126 @@ function updateUI() {
     }
 }
 
-// Download update
+// ==================== Download Update ====================
+
 async function downloadUpdate() {
     if (isDownloading || !updateData?.download_url) return;
 
     isDownloading = true;
+    downloadedFilePath = null;
+
     const downloadBtn = document.getElementById('downloadBtn');
     const downloadBtnText = document.getElementById('downloadBtnText');
     const downloadSpinner = document.getElementById('downloadSpinner');
+    const progressContainer = document.getElementById('downloadProgressContainer');
+    const installBtn = document.getElementById('installBtn');
+    const checkAgainBtn = document.getElementById('checkAgainBtn');
 
-    // Update button state
+    // Update UI for download state
     downloadBtn.disabled = true;
-    downloadBtnText.textContent = 'Aprendo download...';
+    downloadBtnText.textContent = 'Download in corso...';
     downloadSpinner.classList.remove('hidden');
+    progressContainer.classList.remove('hidden');
+    installBtn.classList.add('hidden');
+    checkAgainBtn.disabled = true;
+
+    // Reset progress bar
+    updateProgressBar({ percent: 0, downloadedMB: 0, totalMB: 0, speedMBs: 0 });
 
     try {
-        // Open download URL in external browser
-        const success = await window.api.invoke('open-download-url', updateData.download_url);
-        
-        if (success) {
-            downloadBtnText.textContent = '✅ Download Avviato';
-            
-            // Show success message and instructions
-            setTimeout(() => {
-                downloadBtnText.textContent = '📥 Scarica di Nuovo';
-                downloadBtn.disabled = false;
-                showSuccess('Download avviato! Installa l\'aggiornamento e riavvia l\'app.');
-            }, 2000);
-            
-            // Enable quit button for easier app restart
-            setTimeout(() => {
-                const quitBtn = document.getElementById('quitBtn');
-                quitBtn.classList.remove('hidden');
-            }, 3000);
+        // Call main process to download the installer
+        const result = await window.api.invoke('download-update', updateData.download_url);
+
+        if (result.success) {
+            downloadedFilePath = result.filePath;
+
+            // Download complete - show install button
+            downloadBtnText.textContent = '✅ Download Completato';
+            downloadSpinner.classList.add('hidden');
+            installBtn.classList.remove('hidden');
+
+            // Update progress to 100%
+            updateProgressBar({ percent: 100, downloadedMB: 0, totalMB: 0, speedMBs: 0 });
+
+            showSuccess('Download completato! Clicca "Installa e Riavvia" per procedere.');
         } else {
-            throw new Error('Failed to open download URL');
+            throw new Error(result.error || 'Download failed');
         }
     } catch (error) {
         downloadBtnText.textContent = '❌ Errore Download';
+        downloadSpinner.classList.add('hidden');
         shakeElement(downloadBtn);
-        showError('Errore nell\'apertura del download. Riprova o contatta il supporto.');
-        
+        showError('Errore durante il download. Riprova o contatta il supporto.');
+
+        // Allow retry after delay
         setTimeout(() => {
-            downloadBtnText.textContent = '📥 Scarica Aggiornamento';
+            downloadBtnText.textContent = '📥 Riprova Download';
             downloadBtn.disabled = false;
+            progressContainer.classList.add('hidden');
         }, 3000);
     } finally {
-        downloadSpinner.classList.add('hidden');
         isDownloading = false;
+        checkAgainBtn.disabled = false;
     }
 }
 
-// Check version again
+// ==================== Install Update ====================
+
+async function installUpdate() {
+    if (!downloadedFilePath) return;
+
+    const installBtn = document.getElementById('installBtn');
+    const installBtnText = document.getElementById('installBtnText');
+    const installSpinner = document.getElementById('installSpinner');
+
+    installBtn.disabled = true;
+    installBtnText.textContent = 'Avvio installazione...';
+    installSpinner.classList.remove('hidden');
+
+    try {
+        const result = await window.api.invoke('launch-installer', downloadedFilePath);
+
+        if (result.success) {
+            installBtnText.textContent = '✅ Installer avviato!';
+            installSpinner.classList.add('hidden');
+            showSuccess('Installer avviato! L\'app si chiuderà automaticamente...');
+        } else {
+            throw new Error(result.error || 'Failed to launch installer');
+        }
+    } catch (error) {
+        installBtnText.textContent = '❌ Errore';
+        installSpinner.classList.add('hidden');
+        shakeElement(installBtn);
+        showError('Errore nell\'avvio dell\'installer. Prova ad installare manualmente.');
+
+        // Allow retry
+        setTimeout(() => {
+            installBtnText.textContent = '🚀 Riprova Installazione';
+            installBtn.disabled = false;
+        }, 3000);
+    }
+}
+
+// ==================== Progress Bar ====================
+
+function updateProgressBar(progress) {
+    const fill = document.getElementById('progressBarFill');
+    const percentEl = document.getElementById('progressPercent');
+    const detailsEl = document.getElementById('progressDetails');
+    const speedEl = document.getElementById('progressSpeed');
+
+    if (fill) fill.style.width = `${progress.percent}%`;
+    if (percentEl) percentEl.textContent = `${progress.percent}%`;
+    if (detailsEl && progress.totalMB > 0) {
+        detailsEl.textContent = `${progress.downloadedMB} MB / ${progress.totalMB} MB`;
+    }
+    if (speedEl && progress.speedMBs > 0) {
+        speedEl.textContent = `${progress.speedMBs} MB/s`;
+    }
+}
+
+// ==================== Version Check ====================
+
 async function checkAgain() {
     if (isChecking) return;
 
@@ -171,10 +246,10 @@ async function checkAgain() {
 
     try {
         const result = await window.api.invoke('check-app-version');
-        
+
         if (result) {
             updateData = result;
-            
+
             // Check if update is still required
             if (!result.requires_update || !result.force_update_enabled) {
                 // Update no longer required - could close force update screen
@@ -184,7 +259,7 @@ async function checkAgain() {
                 }, 2000);
                 return;
             }
-            
+
             updateUI();
             checkBtnText.textContent = '✅ Aggiornato';
         } else {
@@ -222,17 +297,18 @@ async function checkVersionSilently() {
 async function quitApp() {
     const quitBtn = document.getElementById('quitBtn');
     quitBtn.disabled = true;
-    quitBtn.textContent = '🔄 Closing...';
+    quitBtn.textContent = '🔄 Chiusura...';
 
     try {
         await window.api.invoke('quit-app-for-update');
     } catch (error) {
         quitBtn.disabled = false;
-        quitBtn.textContent = '❌ Exit App';
+        quitBtn.textContent = '❌ Esci dall\'App';
     }
 }
 
-// Utility functions
+// ==================== Utility Functions ====================
+
 function showSuccess(message) {
     showNotification(message, 'success');
 }
@@ -260,7 +336,7 @@ function showNotification(message, type) {
         animation: slideIn 0.3s ease-out;
     `;
     notification.textContent = message;
-    
+
     // Add slide-in animation
     const style = document.createElement('style');
     style.textContent = `
@@ -276,9 +352,9 @@ function showNotification(message, type) {
         }
     `;
     document.head.appendChild(style);
-    
+
     document.body.appendChild(notification);
-    
+
     // Auto remove after 5 seconds
     setTimeout(() => {
         notification.style.animation = 'slideIn 0.3s ease-out reverse';
@@ -326,15 +402,20 @@ document.addEventListener('keydown', (e) => {
             quitApp();
         }
     }
-    
-    // Enter key to download
+
+    // Enter key to download or install
     if (e.key === 'Enter') {
+        const installBtn = document.getElementById('installBtn');
+        if (!installBtn.classList.contains('hidden') && !installBtn.disabled) {
+            installUpdate();
+            return;
+        }
         const downloadBtn = document.getElementById('downloadBtn');
         if (!downloadBtn.disabled) {
             downloadUpdate();
         }
     }
-    
+
     // F5 key to check again
     if (e.key === 'F5') {
         e.preventDefault();

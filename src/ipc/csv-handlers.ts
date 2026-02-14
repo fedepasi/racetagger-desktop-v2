@@ -10,7 +10,7 @@ import * as path from 'path';
 import { getMainWindow, getGlobalCsvData, setGlobalCsvData, safeSend } from './context';
 import { CsvEntry } from './types';
 import { authService } from '../auth-service';
-import { uploadCsvToStorage, updateProjectOnline, saveCsvToSupabase } from '../database-service';
+import { saveCsvToSupabase } from '../database-service';
 
 // ==================== Utilities ====================
 
@@ -138,7 +138,7 @@ async function handleStandaloneCSVLoading(event: IpcMainEvent, fileData: any): P
 // ==================== CSV Loading with Project Support ====================
 
 /**
- * Handle CSV loading with optional project association
+ * Handle CSV loading for one-shot analysis
  */
 async function handleCsvLoading(event: IpcMainEvent, fileData: { buffer: Uint8Array, name: string, projectId?: string, standalone?: boolean }): Promise<void> {
   const mainWindow = getMainWindow();
@@ -150,94 +150,85 @@ async function handleCsvLoading(event: IpcMainEvent, fileData: { buffer: Uint8Ar
 
   try {
     if (!mainWindow) return;
-    const { buffer: rawBuffer, name: fileName, projectId } = fileData;
+    const { buffer: rawBuffer, name: fileName } = fileData;
     const actualBuffer = Buffer.from(rawBuffer);
 
-    if (projectId) {
-      const storagePath = await uploadCsvToStorage(projectId, actualBuffer, fileName);
-      const updatedProject = await updateProjectOnline(projectId, { base_csv_storage_path: storagePath });
-      mainWindow.webContents.send('csv-loaded', {
-        filename: fileName, message: `CSV associato al progetto ${projectId}`, project: updatedProject
-      });
-    } else {
-      // Support CSV loading without project for one-shot analysis
+    // Support CSV loading for one-shot analysis
+    // Read CSV content
+    const csvContent = actualBuffer.toString('utf-8');
+    const lines = csvContent.split(/\r?\n/);
 
-      // Read CSV content
-      const csvContent = actualBuffer.toString('utf-8');
-      const lines = csvContent.split(/\r?\n/);
+    // Skip header and count data rows
+    const entries = lines.length > 1 ? lines.length - 1 : 0;
 
-      // Skip header and count data rows
-      const entries = lines.length > 1 ? lines.length - 1 : 0;
+    // Process CSV for global temporary use
+    if (entries > 0) {
+      try {
+        // Extract header
+        const headers = parseCSVLine(lines[0]);
 
-      // Process CSV for global temporary use
-      if (entries > 0) {
-        try {
-          // Extract header
-          const headers = parseCSVLine(lines[0]);
+        // Process data rows
+        const csvEntries: CsvEntry[] = [];
+        for (let i = 1; i < lines.length; i++) {
+          if (lines[i].trim() === '') continue;
 
-          // Process data rows
-          const csvEntries: CsvEntry[] = [];
-          for (let i = 1; i < lines.length; i++) {
-            if (lines[i].trim() === '') continue;
+          const values = parseCSVLine(lines[i]);
+          const entry: CsvEntry = { numero: '', metatag: '' };
 
-            const values = parseCSVLine(lines[i]);
-            const entry: CsvEntry = { numero: '', metatag: '' };
+          // Map values to columns
+          for (let j = 0; j < headers.length && j < values.length; j++) {
+            const header = headers[j].toLowerCase().trim();
+            const value = values[j] ? values[j].trim() : '';
 
-            // Map values to columns
-            for (let j = 0; j < headers.length && j < values.length; j++) {
-              const header = headers[j].toLowerCase().trim();
-              const value = values[j] ? values[j].trim() : '';
-
-              if (header === 'numero') {
-                entry.numero = value;
-              } else if (header === 'nome') {
-                entry.nome = value;
-              } else if (header === 'categoria') {
-                entry.categoria = value;
-              } else if (header === 'squadra') {
-                entry.squadra = value;
-              } else if (header === 'metatag') {
-                entry.metatag = value;
-              } else {
-                // Additional fields
-                entry[header] = value;
-              }
-            }
-
-            // If no metatag but has other fields, create automatic metatag
-            if (!entry.metatag && (entry.nome || entry.categoria || entry.squadra)) {
-              const parts = [];
-              if (entry.nome) parts.push(entry.nome);
-              if (entry.categoria) parts.push(entry.categoria);
-              if (entry.squadra) parts.push(entry.squadra);
-              entry.metatag = parts.join(' - ');
-            }
-
-            // Add only if has at least a race number
-            if (entry.numero) {
-              csvEntries.push(entry);
+            if (header === 'numero') {
+              entry.numero = value;
+            } else if (header === 'nome') {
+              entry.nome = value;
+            } else if (header === 'categoria') {
+              entry.categoria = value;
+            } else if (header === 'squadra') {
+              entry.squadra = value;
+            } else if (header === 'metatag') {
+              entry.metatag = value;
+            } else {
+              // Additional fields
+              entry[header] = value;
             }
           }
 
-          // Save CSV data for global use
-          setGlobalCsvData(csvEntries);
+          // If no metatag but has other fields, create automatic metatag
+          if (!entry.metatag && (entry.nome || entry.categoria || entry.squadra)) {
+            const parts = [];
+            if (entry.nome) parts.push(entry.nome);
+            if (entry.categoria) parts.push(entry.categoria);
+            if (entry.squadra) parts.push(entry.squadra);
+            entry.metatag = parts.join(' - ');
+          }
 
-          mainWindow.webContents.send('csv-loaded', {
-            filename: fileName,
-            entries: csvEntries.length,
-            message: `CSV caricato con ${csvEntries.length} voci valide`
-          });
-        } catch (parseError) {
-          console.error('[CSV] Parsing error:', parseError);
-          mainWindow.webContents.send('csv-error', 'Errore nel parsing del CSV. Verifica il formato.');
+          // Add only if has at least a race number
+          if (entry.numero) {
+            csvEntries.push(entry);
+          }
         }
-      } else {
+
+        // Save CSV data for global use
+        setGlobalCsvData(csvEntries);
+
         mainWindow.webContents.send('csv-loaded', {
           filename: fileName,
-          entries: 0,
-          message: 'CSV caricato, ma non contiene dati validi'
+          entries: csvEntries.length,
+          message: `CSV caricato con ${csvEntries.length} voci valide`
         });
+      } catch (parseError) {
+        console.error('[CSV] Parsing error:', parseError);
+        mainWindow.webContents.send('csv-error', 'Errore nel parsing del CSV. Verifica il formato.');
       }
+    } else {
+      mainWindow.webContents.send('csv-loaded', {
+        filename: fileName,
+        entries: 0,
+        message: 'CSV caricato, ma non contiene dati validi'
+      });
     }
   } catch (error: any) {
     console.error('[CSV] Error during loading:', error);

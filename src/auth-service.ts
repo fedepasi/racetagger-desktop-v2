@@ -790,7 +790,7 @@ export class AuthService {
   }
 
   // Gestisci la registrazione usando edge function unificata
-  async register(email: string, password: string, name?: string): Promise<{ success: boolean; error?: string; tokensGranted?: number }> {
+  async register(email: string, password: string, name?: string, referralCode?: string): Promise<{ success: boolean; error?: string; tokensGranted?: number }> {
     try {
       // Validate password strength
       if (password.length < 8) {
@@ -810,13 +810,18 @@ export class AuthService {
       const normalizedEmail = email.toLowerCase().trim();
 
       // Use unified registration edge function
+      const body: Record<string, string> = {
+        email: normalizedEmail,
+        password,
+        name: name || normalizedEmail.split('@')[0], // Extract name from email if not provided
+        source: 'desktop'
+      };
+      if (referralCode) {
+        body.referralCode = referralCode;
+      }
+
       const { data, error } = await this.supabase.functions.invoke('register-user-unified', {
-        body: {
-          email: normalizedEmail,
-          password,
-          name: name || normalizedEmail.split('@')[0], // Extract name from email if not provided
-          source: 'desktop'
-        }
+        body
       });
 
       if (error) {
@@ -1069,45 +1074,21 @@ export class AuthService {
       );
 
       const queryPromise = (async (): Promise<TokenBalance> => {
+        // v1.1.0: SINGLE SOURCE OF TRUTH — user_tokens contains everything
+        // All credits (purchases, bonuses, referrals, feedback, access codes) are in tokens_purchased
+        // All debits (batch consumption, per-image legacy) are in tokens_used
         const { data: userTokensData, error: userTokensError } = await this.supabase
           .from('user_tokens')
           .select('tokens_purchased, tokens_used')
           .eq('user_id', this.authState.user.id)
           .single();
 
-        // Query subscribers table for bonus tokens
-        const { data: subscriberData, error: subscriberError } = await this.supabase
-          .from('subscribers')
-          .select('base_tokens, bonus_tokens, earned_tokens, admin_bonus_tokens')
-          .eq('email', this.authState.user.email?.toLowerCase())
-          .single();
+        if (userTokensError) {
+          console.error('[AuthService] Error fetching user_tokens:', userTokensError);
+        }
 
-        // Query token_requests for approved tokens
-        const { data: tokenRequestsData, error: tokenRequestsError } = await this.supabase
-          .from('token_requests')
-          .select('tokens_requested, status')
-          .eq('user_id', this.authState.user.id)
-          .in('status', ['approved', 'completed']);
-
-        // Calculate total tokens from all sources
-        // SINGLE SOURCE OF TRUTH: user_tokens.tokens_purchased contains ALL purchased/granted tokens
-        // (includes base, bonus, Stripe purchases, access code grants)
-        const userTokensPurchased = userTokensData?.tokens_purchased || 0;
+        const totalTokens = userTokensData?.tokens_purchased || 0;
         const userTokensUsed = userTokensData?.tokens_used || 0;
-
-        // NOTE: subscribers.base_tokens and subscribers.bonus_tokens are DEPRECATED
-        // All purchased/granted tokens are now in user_tokens.tokens_purchased
-
-        // Additional separate sources:
-        const earnedTokens = subscriberData?.earned_tokens || 0;        // Referral rewards
-        const adminBonusTokens = subscriberData?.admin_bonus_tokens || 0; // Extra admin grants
-
-        // Sum up approved tokens from token_requests
-        const approvedTokensFromRequests = tokenRequestsData?.reduce((sum: number, request: any) =>
-          sum + (request.tokens_requested || 0), 0) || 0;
-
-        // FIXED: Use userTokensPurchased as base, not baseTokens + bonusTokens
-        const totalTokens = userTokensPurchased + earnedTokens + adminBonusTokens + approvedTokensFromRequests;
 
         return {
           total: totalTokens,
@@ -1151,18 +1132,14 @@ export class AuthService {
     try {
       // Import dei servizi database (dynamic import per evitare circular dependencies)
       const {
-        getProjectsOnline,
         loadLastUsedCsvFromSupabase,
         getSportCategories
       } = await import('./database-service');
 
-      // 1. Scarica e ripopola la cache dei Projects
-      await getProjectsOnline();
-
-      // 2. Carica le sport categories
+      // 1. Carica le sport categories
       await getSportCategories();
 
-      // 3. Ripristina l'ultimo CSV usato dall'utente
+      // 2. Ripristina l'ultimo CSV usato dall'utente
       const csvData = await loadLastUsedCsvFromSupabase();
 
       if (csvData && csvData.length > 0) {

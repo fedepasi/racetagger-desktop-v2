@@ -72,7 +72,12 @@ function getUnpackedPath(context) {
 function fixRawIngestDependencies(context) {
   try {
     const platform = context?.electronPlatformName || process.platform;
-    const arch = context?.arch || process.arch;
+
+    // electron-builder passes arch as a numeric enum (1=x64, 3=arm64, etc.)
+    // We need the string form for package name resolution
+    const ARCH_MAP = { 0: 'ia32', 1: 'x64', 2: 'armv7l', 3: 'arm64', 4: 'universal' };
+    const rawArch = context?.arch ?? process.arch;
+    const arch = typeof rawArch === 'number' ? (ARCH_MAP[rawArch] || `unknown-${rawArch}`) : rawArch;
 
     const unpackedPath = getUnpackedPath(context);
     console.log(`📁 [RAW-ingest Fix] Unpacked path: ${unpackedPath}`);

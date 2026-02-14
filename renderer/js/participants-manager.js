@@ -14,6 +14,34 @@ var editDriversTags = []; // Array of driver names for tag input
 var cachedSportCategories = []; // Cached sport categories for dropdown
 
 /**
+ * Get driver names from a participant using preset_participant_drivers array.
+ * Falls back to nome field for legacy CSV participants.
+ * @param {Object} participant
+ * @returns {string[]} Array of driver names sorted by driver_order
+ */
+function getDriverNamesFromParticipant(participant) {
+  if (participant?.preset_participant_drivers?.length > 0) {
+    return [...participant.preset_participant_drivers]
+      .sort((a, b) => a.driver_order - b.driver_order)
+      .map(d => d.driver_name)
+      .filter(Boolean);
+  }
+  if (participant?.nome) {
+    // Legacy: nome may contain comma-separated names
+    return participant.nome.split(',').map(n => n.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+/**
+ * Get primary driver name (first by driver_order).
+ */
+function getPrimaryDriverName(participant) {
+  const names = getDriverNamesFromParticipant(participant);
+  return names.length > 0 ? names[0] : '';
+}
+
+/**
  * Initialize participants manager
  */
 async function initParticipantsManager() {
@@ -694,7 +722,7 @@ async function autoMigrateDriverRecords(participant) {
     return false;
   }
 
-  const nome = participant.nome || participant.nome_pilota || '';
+  const nome = participant.nome || '';
   const hasMultipleDrivers = nome.includes(',');
 
   if (!hasMultipleDrivers) {
@@ -855,7 +883,7 @@ async function openParticipantEditModal(rowIndex = -1) {
       console.log('[Participants] Loaded', existingDriverRecords.length, 'existing drivers from DB');
     } else {
       // Fallback: parse nome field for backwards compatibility
-      const driversData = participant.drivers || participant.nome || participant.nome_pilota || '';
+      const driversData = participant.drivers || participant.nome || '';
       setDriversTags(driversData);
       console.log('[Participants] No driver records in DB, using nome field fallback');
     }
@@ -978,14 +1006,13 @@ async function saveParticipantEdit(closeAfterSave = true) {
     return;
   }
 
-  // Comma-separated for nome_pilota compatibility
+  // Comma-separated for nome field (legacy compatibility)
   const nome = driversArray.join(', ');
 
   const participant = {
     numero,
     nome,
-    nome_pilota: nome, // For compatibility
-    drivers: driversArray, // New: array of driver names
+    drivers: driversArray, // Array of driver names for preset_participant_drivers
     categoria: document.getElementById('edit-categoria').value.trim(),
     squadra: document.getElementById('edit-squadra').value.trim(),
     plate_number: document.getElementById('edit-plate-number').value.trim().toUpperCase(),
@@ -1625,7 +1652,7 @@ async function exportPresetJSON(presetId) {
       description: preset.description,
       participants: (preset.participants || []).map(p => ({
         number: p.numero,
-        driver: p.nome || p.nome_pilota,
+        driver: getPrimaryDriverName(p) || p.nome || '',
         team: p.squadra,
         category: p.categoria,
         plate_number: p.plate_number,
@@ -1729,7 +1756,7 @@ async function exportPresetCSV(presetId) {
 
       return [
         escapeCSV(p.numero || ''),
-        escapeCSV(p.nome || p.nome_pilota || ''),
+        escapeCSV(getDriverNamesFromParticipant(p).join(', ') || ''),
         escapeCSV(p.squadra || ''),
         escapeCSV(p.categoria || ''),
         escapeCSV(p.plate_number || ''),
@@ -1861,7 +1888,7 @@ function addParticipantRow(participant, rowIndex) {
   };
 
   const numero = escapeHtml(participant?.numero || '');
-  const nome = escapeHtml(participant?.nome || participant?.nome_pilota || '');
+  const nome = escapeHtml(getDriverNamesFromParticipant(participant).join(', ') || '');
   const categoria = participant?.categoria || '';
   const squadra = escapeHtml(participant?.squadra || '');
   const plateNumber = participant?.plate_number || '';
@@ -1947,8 +1974,7 @@ function duplicateParticipant(rowIndex) {
   // Create a deep copy of the participant
   const duplicatedParticipant = {
     numero: originalParticipant.numero || '',
-    nome: originalParticipant.nome || originalParticipant.nome_pilota || '',
-    nome_pilota: originalParticipant.nome || originalParticipant.nome_pilota || '',
+    nome: getDriverNamesFromParticipant(originalParticipant).join(', ') || '',
     drivers: originalParticipant.drivers ? [...originalParticipant.drivers] : [],
     categoria: originalParticipant.categoria || '',
     squadra: originalParticipant.squadra || '',
@@ -2048,7 +2074,7 @@ async function savePreset() {
     const participants = participantsData.map(p => ({
       id: p.id || undefined, // ✅ Include ID for UPSERT logic
       numero: p.numero || '',
-      nome: p.nome || p.nome_pilota || '',
+      nome: getDriverNamesFromParticipant(p).join(', ') || p.nome || '',
       categoria: p.categoria || '',
       squadra: p.squadra || '',
       plate_number: p.plate_number || '',
@@ -2969,7 +2995,7 @@ function renderDriversTags() {
 function syncDriversToHiddenInput() {
   const hiddenInput = document.getElementById('edit-nome');
   if (hiddenInput) {
-    // Join with comma and space for nome_pilota field
+    // Join with comma and space for nome field
     hiddenInput.value = editDriversTags.join(', ');
   }
 }
@@ -3519,8 +3545,8 @@ function populatePdfPreviewTable(participants) {
 
   previewParticipants.forEach(p => {
     const row = document.createElement('tr');
-    // Display drivers as nome_pilota (comma-separated) or fallback to nome
-    const driversDisplay = p.nome_pilota || p.nome || '-';
+    // Display drivers from preset_participant_drivers or fallback to nome
+    const driversDisplay = getDriverNamesFromParticipant(p).join(', ') || '-';
     row.innerHTML = `
       <td><strong>${escapeHtml(p.numero || '-')}</strong></td>
       <td>${escapeHtml(driversDisplay)}</td>
@@ -3556,11 +3582,11 @@ async function importPdfPreset() {
 
   try {
     // Map extracted participants to database format
-    // The Edge Function returns drivers as array and nome_pilota as comma-separated string
-    // Note: 'drivers' array is NOT saved to database (no column exists) - only used locally for UI
+    // The Edge Function returns drivers as array; nome is comma-separated for legacy compat
+    // Note: 'drivers' array is used to create preset_participant_drivers records
     const participants = pdfImportData.participants.map(p => ({
       numero: p.numero || '',
-      nome: p.nome_pilota || p.nome || '', // Use nome_pilota from Edge Function
+      nome: p.nome || '', // Comma-separated driver names
       categoria: p.categoria || '',
       squadra: p.squadra || '',
       sponsor: Array.isArray(p.sponsors) ? p.sponsors.join(', ') : (p.sponsor || ''),

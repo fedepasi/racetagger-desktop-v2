@@ -64,9 +64,8 @@ export function registerImageHandlers(): void {
             const fsPromises = await import('fs/promises');
             await fsPromises.writeFile(thumbnailPath, result.data);
           } else {
-            // Fallback: try rawConverter if native extraction fails
-            const { rawConverter } = await import('../utils/raw-converter');
-            generatedThumbPath = await rawConverter.extractThumbnailFromRaw(filePath, thumbnailPath);
+            // Native extraction failed, no further fallback available
+            return null;
           }
 
           if (fs.existsSync(generatedThumbPath)) {

@@ -113,9 +113,6 @@ function Test-Module($moduleName) {
             "sharp" {
                 node -e "const sharp = require('sharp'); console.log('Sharp version:', sharp.versions); sharp.cache(false);"
             }
-            "better-sqlite3" {
-                node -e "const db = require('better-sqlite3')(':memory:'); console.log('better-sqlite3 loaded successfully');"
-            }
             default {
                 node -e "console.log('Module $moduleName loaded:', require('$moduleName'));"
             }
@@ -131,14 +128,11 @@ function Test-Module($moduleName) {
 
 # Critical native modules for RaceTagger
 $CriticalModules = @(
-    "sharp",
-    "better-sqlite3"
+    "sharp"
 )
 
 # Optional native modules
-$OptionalModules = @(
-    "jimp"
-)
+$OptionalModules = @()
 
 Write-Host "`nRebuilding critical native modules..." -ForegroundColor Magenta
 

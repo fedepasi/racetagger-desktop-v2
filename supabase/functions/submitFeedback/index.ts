@@ -13,6 +13,7 @@ interface FeedbackRequest {
   title: string;
   description: string;
   includeDiagnostics: boolean;
+  diagnosticReportUrl?: string;  // Signed URL to full diagnostic report on Supabase Storage
   diagnostics?: {
     system: Record<string, unknown>;
     dependencies: Array<Record<string, unknown>>;
@@ -59,9 +60,15 @@ function getLabels(type: string): string[] {
 function formatIssueBody(
   description: string,
   userEmail: string,
-  diagnostics?: FeedbackRequest['diagnostics']
+  diagnostics?: FeedbackRequest['diagnostics'],
+  diagnosticReportUrl?: string
 ): string {
   let body = `## Description\n\n${description}\n\n---\n*Submitted by: ${userEmail}*\n`;
+
+  // Full diagnostic report link (uploaded to Supabase Storage)
+  if (diagnosticReportUrl) {
+    body += `\n**[View Full Diagnostic Report](${diagnosticReportUrl})** _(includes system info, dependencies, errors, and 1000 lines of main process logs — link valid for 7 days)_\n`;
+  }
 
   if (!diagnostics) return body;
 
@@ -210,7 +217,8 @@ serve(async (req: Request) => {
     const issueBody = formatIssueBody(
       body.description.trim(),
       user.email || user.id,
-      body.includeDiagnostics ? body.diagnostics : undefined
+      body.includeDiagnostics ? body.diagnostics : undefined,
+      body.diagnosticReportUrl
     );
     const labels = getLabels(body.type);
 
