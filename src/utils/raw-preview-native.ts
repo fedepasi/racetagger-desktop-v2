@@ -196,9 +196,11 @@ export class RawPreviewExtractor {
   }
 
   /**
-   * Resolve ExifTool path based on platform and dev/prod environment
+   * Resolve ExifTool executable path and optional Perl script arguments.
+   * Returns { exe, args } so callers can use execFile() instead of shell exec().
+   * On Windows, exiftool.exe is actually perl.exe and requires exiftool.pl as first arg.
    */
-  private resolveExifToolPath(): string {
+  private resolveExifToolInfo(): { exe: string; prefixArgs: string[] } {
     const platform = process.platform;
 
     let isDev = true;
@@ -221,21 +223,23 @@ export class RawPreviewExtractor {
       const perlExe = path.join(vendorDir, 'perl.exe');
       const exiftoolPl = path.join(vendorDir, 'exiftool.pl');
 
-      if (fs.existsSync(exiftoolExe)) {
-        return `"${exiftoolExe}"`;
+      if (fs.existsSync(exiftoolExe) && fs.existsSync(exiftoolPl)) {
+        // exiftool.exe is actually perl.exe; prepend exiftool.pl as first argument
+        return { exe: exiftoolExe, prefixArgs: [exiftoolPl] };
       } else if (fs.existsSync(perlExe) && fs.existsSync(exiftoolPl)) {
-        return `"${perlExe}" "${exiftoolPl}"`;
+        return { exe: perlExe, prefixArgs: [exiftoolPl] };
       } else {
         console.warn(`[RawPreviewExtractor] Windows ExifTool not found. Checked: ${exiftoolExe}, ${perlExe}`);
-        return `"${exiftoolExe}"`;
+        return { exe: exiftoolExe, prefixArgs: [] };
       }
     }
 
-    return path.join(vendorDir, 'exiftool');
+    return { exe: path.join(vendorDir, 'exiftool'), prefixArgs: [] };
   }
 
   /**
    * Extract embedded JPEG preview from RAW file using ExifTool (-PreviewImage tag)
+   * Uses execFile() to capture binary stdout — no shell redirection needed (cross-platform safe).
    */
   private async extractWithExifTool(filePath: string, options: Required<NativePreviewOptions>): Promise<NativePreviewResult> {
     try {
@@ -243,39 +247,37 @@ export class RawPreviewExtractor {
         return { success: false, error: `File not found: ${filePath}` };
       }
 
-      const exiftoolPath = this.resolveExifToolPath();
+      const { exe, prefixArgs } = this.resolveExifToolInfo();
 
-      const { exec } = await import('child_process');
-      const { promisify } = await import('util');
-      const execAsync = promisify(exec);
+      const { execFile } = await import('child_process');
 
-      const tempDir = os.tmpdir();
-      const randomId = Math.random().toString(36).substring(2, 15);
-      const tempOutputPath = path.join(tempDir, `exiftool_preview_${randomId}.jpg`);
+      // Use execFile (no shell) with binary stdout — safe on Windows with spaces in paths
+      const args = [...prefixArgs, '-b', '-PreviewImage', filePath];
 
-      const command = `${exiftoolPath} -b -PreviewImage "${filePath}" > "${tempOutputPath}"`;
+      const thumbnailData = await new Promise<Buffer>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('ExifTool timeout after 30 seconds')), 30000);
 
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('ExifTool timeout after 30 seconds')), 30000);
+        const child = execFile(exe, args, {
+          maxBuffer: 50 * 1024 * 1024,
+          encoding: 'buffer' as any  // Capture binary output
+        }, (error: any, stdout: any) => {
+          clearTimeout(timeout);
+          if (error) {
+            reject(new Error(`ExifTool failed: ${error.message}`));
+          } else {
+            resolve(Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout, 'binary'));
+          }
+        });
+
+        child.on('error', (err) => {
+          clearTimeout(timeout);
+          reject(err);
+        });
       });
 
-      await Promise.race([
-        execAsync(command, { maxBuffer: 50 * 1024 * 1024 }),
-        timeoutPromise
-      ]);
-
-      if (!fs.existsSync(tempOutputPath)) {
-        return { success: false, error: 'ExifTool extraction failed - no output file' };
-      }
-
-      const stats = await fsPromises.stat(tempOutputPath);
-      if (stats.size === 0) {
-        await fsPromises.unlink(tempOutputPath);
+      if (!thumbnailData || thumbnailData.length === 0) {
         return { success: false, error: 'ExifTool extraction failed - empty preview' };
       }
-
-      const thumbnailData = await fsPromises.readFile(tempOutputPath);
-      try { await fsPromises.unlink(tempOutputPath); } catch { /* non-critical */ }
 
       return {
         success: true,
@@ -293,6 +295,7 @@ export class RawPreviewExtractor {
 
   /**
    * Extract full/high-quality preview (JpgFromRaw) using ExifTool
+   * Uses execFile() with binary stdout capture — no shell redirection (cross-platform safe).
    */
   private async extractJpgFromRawWithExifTool(filePath: string, timeout: number): Promise<NativePreviewResult> {
     const startTime = Date.now();
@@ -302,34 +305,35 @@ export class RawPreviewExtractor {
         return { success: false, error: `File not found: ${filePath}` };
       }
 
-      const exiftoolPath = this.resolveExifToolPath();
+      const { exe, prefixArgs } = this.resolveExifToolInfo();
 
-      const { exec } = await import('child_process');
-      const { promisify } = await import('util');
-      const execAsync = promisify(exec);
+      const { execFile } = await import('child_process');
 
-      const tempDir = os.tmpdir();
-      const randomId = Math.random().toString(36).substring(2, 15);
-      const tempOutputPath = path.join(tempDir, `exiftool_jpgfromraw_${randomId}.jpg`);
+      // Use execFile (no shell) with binary stdout
+      const args = [...prefixArgs, '-b', '-JpgFromRaw', filePath];
 
-      const command = `${exiftoolPath} -b -JpgFromRaw "${filePath}" > "${tempOutputPath}"`;
+      const data = await new Promise<Buffer>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('ExifTool timeout')), timeout);
 
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('ExifTool timeout')), timeout);
+        const child = execFile(exe, args, {
+          maxBuffer: 50 * 1024 * 1024,
+          encoding: 'buffer' as any  // Capture binary output
+        }, (error: any, stdout: any) => {
+          clearTimeout(timer);
+          if (error) {
+            reject(new Error(`ExifTool failed: ${error.message}`));
+          } else {
+            resolve(Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout, 'binary'));
+          }
+        });
+
+        child.on('error', (err) => {
+          clearTimeout(timer);
+          reject(err);
+        });
       });
 
-      await Promise.race([
-        execAsync(command, { maxBuffer: 50 * 1024 * 1024 }),
-        timeoutPromise
-      ]);
-
-      if (!fs.existsSync(tempOutputPath)) {
-        return { success: false, error: 'ExifTool JpgFromRaw extraction failed - no output' };
-      }
-
-      const stats = await fsPromises.stat(tempOutputPath);
-      if (stats.size === 0) {
-        await fsPromises.unlink(tempOutputPath);
+      if (!data || data.length === 0) {
         // Fallback: try -PreviewImage tag instead
         return this.extractWithExifTool(filePath, {
           targetMinSize: 200 * 1024,
@@ -340,9 +344,6 @@ export class RawPreviewExtractor {
           useNativeLibrary: false
         });
       }
-
-      const data = await fsPromises.readFile(tempOutputPath);
-      try { await fsPromises.unlink(tempOutputPath); } catch { /* non-critical */ }
 
       return {
         success: true,

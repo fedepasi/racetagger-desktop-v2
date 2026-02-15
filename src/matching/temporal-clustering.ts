@@ -152,7 +152,8 @@ export class TemporalClusterManager {
       }
     } catch {
       // Fallback for standalone testing
-      const vendorDir = path.join(__dirname, '../../vendor', platform);
+      // __dirname is dist/src/matching/, so ../../../vendor reaches project root
+      const vendorDir = path.join(__dirname, '../../../vendor', platform);
       if (platform === 'win32') {
         const perlExe = path.join(vendorDir, 'perl.exe');
         const exiftoolPl = path.join(vendorDir, 'exiftool.pl');
