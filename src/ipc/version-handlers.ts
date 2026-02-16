@@ -27,8 +27,8 @@ import { VersionCheckResult } from './types';
 async function checkAppVersion(): Promise<VersionCheckResult | null> {
   try {
     const currentVersion = app.getVersion();
-    const platform = process.platform === 'darwin' ? 'macos' :
-                    process.platform === 'win32' ? 'windows' : 'linux';
+    // Send process.platform directly (darwin/win32/linux) to match app_version_config table
+    const platform = process.platform;
 
     console.log(`[Version] Checking version: ${currentVersion} on ${platform}`);
 

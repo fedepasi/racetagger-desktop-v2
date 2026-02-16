@@ -701,8 +701,8 @@ export class AuthService {
   async checkVersionBeforeAuth(): Promise<boolean> {
     try {
       const currentVersion = require('electron').app?.getVersion() || '1.0.0';
-      const platform = process.platform === 'darwin' ? 'macos' :
-                      process.platform === 'win32' ? 'windows' : 'linux';
+      // Send process.platform directly (darwin/win32/linux) to match app_version_config table
+      const platform = process.platform;
 
       const { data, error } = await this.supabase.functions.invoke('check-app-version', {
         body: {
