@@ -637,6 +637,626 @@ Organizer Dashboard:
 
 ---
 
+### 3.11 Face Recognition con AuraFace v1 (ONNX)
+
+**Problema**: La feature face recognition è completamente implementata ma disabilitata ("Coming Soon"). Usa face-api.js (modelli 2019, 128-dim, 99.38% LFW) che è obsoleto, non più mantenuto, e inadeguato per condizioni reali (profili, scarsa luce, angolazioni). L'architettura attuale richiede un bridge IPC renderer↔main complesso con timeout 30s.
+
+**Soluzione**: Sostituire face-api.js con **AuraFace v1** (ResNet100, Apache 2.0) + **YuNet** (face detector, Apache 2.0), entrambi ONNX. Tutto il processing migra nel main process, eliminando il bridge IPC e le dipendenze face-api.js + canvas dal renderer.
+
+```
+Architettura Target:
+┌─────────────────────────────────────────────────────┐
+│                    Main Process (ONNX)               │
+├─────────────────────────────────────────────────────┤
+│                                                      │
+│  ┌──────────────┐     ┌──────────────────┐          │
+│  │   YuNet      │ ──▶ │   AuraFace v1    │          │
+│  │  Detection   │     │   Embedding      │          │
+│  │  (~90KB)     │     │   (~250MB)       │          │
+│  │  640×640     │     │   112×112→512-d  │          │
+│  └──────────────┘     └──────────────────┘          │
+│         │                      │                     │
+│         │    ┌─────────────────┘                     │
+│         ▼    ▼                                       │
+│  ┌──────────────────┐                               │
+│  │  Cosine Matcher  │                               │
+│  │  (512-dim)       │                               │
+│  └────────┬─────────┘                               │
+│           │                                          │
+│     ┌─────┼─────┐                                   │
+│     ▼           ▼                                   │
+│  ┌────────┐ ┌──────────────┐                        │
+│  │ Preset │ │ Sport Cat.   │                        │
+│  │ Faces  │ │ Global Faces │                        │
+│  └────────┘ └──────────────┘                        │
+└─────────────────────────────────────────────────────┘
+
+Eliminati:
+✗ face-api.js (renderer)
+✗ face-detection-bridge.ts (IPC)
+✗ canvas npm package
+```
+
+**Perché AuraFace v1**:
+
+| Criterio | face-api.js (attuale) | AuraFace v1 | InsightFace buffalo_l |
+|----------|----------------------|-------------|----------------------|
+| Accuratezza LFW | 99.38% | 99.65% | 99.83% |
+| Accuratezza CFP-FP (profilo) | ~90% | 95.19% | ~98% |
+| Accuratezza AgeDB-30 | ~93% | 96.10% | ~98% |
+| Embedding dim | 128 | **512** | 512 |
+| Matching | Euclidea | **Cosine similarity** | Cosine similarity |
+| Licenza | MIT | **Apache 2.0** | ⚠️ Commerciale a pagamento |
+| Runtime | Browser (Canvas) | **ONNX (main process)** | ONNX |
+| Mantenuto | ❌ No (2019) | ✅ Sì (2024+) | ✅ Sì |
+
+InsightFace ha accuratezza superiore ma i modelli pre-addestrati richiedono licenza commerciale a pagamento. AuraFace è la scelta giusta: Apache 2.0 pulita, salto significativo su benchmark difficili (+5% su profili), e si integra direttamente con onnxruntime-node già nel progetto.
+
+**Funzionalità**:
+- Face detection locale con YuNet ONNX (Apache 2.0, ~90KB, <50ms)
+- Face embedding con AuraFace v1 ONNX (Apache 2.0, ~250MB, <100ms)
+- Cosine similarity matching (512-dim, più discriminativo del 128-dim euclideo)
+- Tutto nel main process: nessun bridge IPC, nessuna dipendenza browser
+- Context-aware matching: portrait (0.65), action (0.58), podium (0.60), auto (0.62)
+- Compatibilità con pipeline esistente (scene classifier, generic segmenter, unified processor)
+- Upload foto: detection server-side via Edge Function o locale nel main process
+- Migrazione graduale descriptors da 128-dim a 512-dim
+
+---
+
+#### FASE 1: Fondamenta ONNX (3 giorni)
+
+**Obiettivo**: Creare i servizi ONNX per detection e embedding
+
+**Step 1.1: FaceDetectorService**
+```
+File: src/face-detector-service.ts (NUOVO, ~700 righe)
+Pattern: Segui src/scene-classifier-onnx.ts (singleton, lazy loading)
+
+Input: Buffer immagine (qualsiasi dimensione)
+  → Resize a 640×640 con Sharp
+  → Normalizzazione
+Output: Array<DetectedFaceRegion>
+  → { x, y, width, height, confidence, landmarks[5] }
+  → NMS filtering (IoU 0.5)
+
+Modello: YuNet (~90KB ONNX, Apache 2.0)
+  → Bundled in src/assets/models/yunet/
+  → Nessun download necessario
+```
+
+**Step 1.2: FaceEmbeddingService**
+```
+File: src/face-embedding-service.ts (NUOVO, ~600 righe)
+Pattern: Segui src/scene-classifier-onnx.ts (singleton, lazy loading)
+
+Input: Buffer immagine volto (croppato dal detector)
+  → Resize a 112×112 RGB
+  → Normalizzazione: (pixel - 127.5) / 128.0
+Output: number[] (512 dimensioni)
+
+Modello: AuraFace v1 (~250MB ONNX, Apache 2.0)
+  → Download on-demand via ModelManager
+  → Cache in ~/.racetagger/models/auraface-v1/
+  → SHA256 validation
+```
+
+**Step 1.3: FaceRecognitionOnnxProcessor (orchestratore)**
+```
+File: src/face-recognition-onnx-processor.ts (NUOVO, ~800 righe)
+
+Metodo principale:
+async detectAndEmbed(imagePath: string): Promise<FaceEmbedding[]>
+  1. Carica immagine con Sharp (gestisce EXIF rotation)
+  2. FaceDetectorService.detect(buffer) → bounding boxes
+  3. Per ogni face box: crop + FaceEmbeddingService.embed(crop) → 512-dim
+  4. Ritorna array di { faceIndex, boundingBox, embedding[512], confidence }
+
+Performance target:
+  → Detection: <50ms
+  → Embedding: <100ms per volto
+  → Totale: <200ms per immagine con 1 volto
+```
+
+**Files coinvolti - Fase 1**:
+- `src/face-detector-service.ts` — NUOVO
+- `src/face-embedding-service.ts` — NUOVO
+- `src/face-recognition-onnx-processor.ts` — NUOVO
+- `src/assets/models/yunet/` — NUOVO (modello bundled)
+- `src/model-manager.ts` — Aggiungere AuraFace al registry
+
+---
+
+#### FASE 2: Migrazione Database (2 giorni)
+
+**Obiettivo**: Supportare descriptor 512-dim mantenendo backward compatibility
+
+**Step 2.1: Schema Migration**
+```sql
+-- File: supabase/migrations/YYYYMMDD_auraface_descriptor_512.sql
+
+-- Aggiungere colonna 512-dim (coesiste con 128-dim)
+ALTER TABLE preset_participant_face_photos
+  ADD COLUMN face_descriptor_512 float8[] DEFAULT NULL;
+
+ALTER TABLE sport_category_faces
+  ADD COLUMN face_descriptor_512 float8[] DEFAULT NULL;
+
+-- Indice per performance matching
+CREATE INDEX idx_face_photos_descriptor_512
+  ON preset_participant_face_photos USING gin(face_descriptor_512)
+  WHERE face_descriptor_512 IS NOT NULL;
+
+-- Commento deprecazione
+COMMENT ON COLUMN preset_participant_face_photos.face_descriptor
+  IS 'DEPRECATED v1.2.0: Use face_descriptor_512 (AuraFace v1)';
+```
+
+**Step 2.2: Aggiornare FaceRecognitionProcessor**
+```
+File: src/face-recognition-processor.ts (MODIFICA)
+
+Cambiamenti:
+1. Descriptor validation: accettare sia 128 che 512 dimensioni
+2. Matching: euclidean distance → cosine similarity
+3. Soglie: invertite (cosine: più alto = più simile)
+   - portrait: 0.65
+   - action: 0.58
+   - podium: 0.60
+   - auto: 0.62
+4. Dual-read mode: leggere face_descriptor_512 || face_descriptor
+
+Nuova funzione:
+cosineSimilarity(d1: number[], d2: number[]): number
+  → dot(d1, d2) / (norm(d1) * norm(d2))
+  → Range: -1.0 a 1.0 (in pratica 0.0 a 1.0 per volti)
+```
+
+**Step 2.3: Servizio Migrazione Batch**
+```
+File: src/face-descriptor-migration-service.ts (NUOVO, ~400 righe)
+
+Scopo: Ricalcolare descriptor 512-dim dalle foto esistenti
+
+Flusso:
+1. Query foto con face_descriptor_512 IS NULL
+2. Download immagine da Supabase Storage
+3. detectAndEmbed() → nuovo 512-dim descriptor
+4. UPDATE face_descriptor_512
+
+Trigger: IPC handler admin-only (manuale)
+Fallback: foto senza volto → skip con warning
+Progress: callback per UI admin
+```
+
+**Strategia migrazione (reversibile)**:
+```
+Giorno 1:  Deploy migration → aggiunge colonne 512-dim
+           App legge: face_descriptor_512 || face_descriptor (dual-read)
+           App scrive: SOLO face_descriptor_512 (nuovi upload)
+
+Giorno 2+: Admin lancia batch recompute per foto esistenti
+           Progress: X/Y completate
+
+Giorno 14: Feature flag → leggi SOLO face_descriptor_512
+           Vecchi 128-dim ignorati
+
+Giorno 30: Cleanup migration → DROP face_descriptor (opzionale)
+```
+
+**Files coinvolti - Fase 2**:
+- `supabase/migrations/YYYYMMDD_auraface_descriptor_512.sql` — NUOVO
+- `src/face-recognition-processor.ts` — MODIFICA (cosine + 512-dim)
+- `src/face-descriptor-migration-service.ts` — NUOVO
+- `src/database-service.ts` — MODIFICA (dual-read queries)
+- `src/config.ts` — Aggiungere feature flag `AURAFACE_ENABLED`
+
+---
+
+#### FASE 3: Eliminare Bridge IPC (2 giorni)
+
+**Obiettivo**: Rimuovere l'architettura renderer↔main, tutto nel main process
+
+**Step 3.1: Aggiornare IPC Handlers**
+```
+File: src/ipc/face-recognition-handlers.ts (MODIFICA)
+
+Semplificazione da 6 a 5 handler:
+1. face-recognition-initialize → init ONNX models (non più face-api.js)
+2. face-detect-and-embed → NUOVO: detection + embedding in main process
+3. face-recognition-match → matchEmbeddings (cosine 512-dim)
+4. face-recognition-status → status ONNX models
+5. face-recognition-clear → clear descriptors
+
+Rimosso: face-recognition-load-from-database
+  → integrato in initialize
+```
+
+**Step 3.2: Aggiornare Preload**
+```
+File: src/preload.ts (MODIFICA)
+
+Rimuovere canali send/receive (non servono più):
+- face-detection-request / face-detection-response
+- face-detection-single-request / face-detection-single-response
+- face-descriptor-request / face-descriptor-response
+
+Aggiungere canali invoke:
+- face-detect-and-embed
+```
+
+**Step 3.3: File da eliminare**
+```
+ELIMINARE: src/face-detection-bridge.ts (357 righe)
+  → Non serve più: detection nel main process via ONNX
+
+ELIMINARE: renderer/js/face-detector.js (468 righe)
+  → Non serve più: face-api.js rimosso
+
+RIMUOVERE da package.json:
+  - face-api.js@0.22.2
+  - canvas@3.2.0 (se non usato altrove)
+  → Riduce bundle size e problemi native rebuild
+```
+
+**Files coinvolti - Fase 3**:
+- `src/face-detection-bridge.ts` — ELIMINARE
+- `renderer/js/face-detector.js` — ELIMINARE
+- `src/ipc/face-recognition-handlers.ts` — MODIFICA
+- `src/preload.ts` — MODIFICA (rimuovi/aggiungi canali)
+- `src/ipc/index.ts` — MODIFICA (rimuovi registrazione bridge)
+- `package.json` — Rimuovere face-api.js, canvas
+
+---
+
+#### FASE 4: Upload Foto Semplificato (3 giorni)
+
+**Obiettivo**: Photo upload con face detection nel main process
+
+**Step 4.1: Aggiornare preset-face-handlers.ts**
+```
+File: src/ipc/preset-face-handlers.ts (MODIFICA)
+
+Handler 'preset-face-upload-photo' aggiornato:
+1. Riceve: { photoData (base64), participantId/driverId, ... }
+2. Salva in Supabase Storage (invariato)
+3. NUOVO: Detect + embed nel main process
+   → FaceRecognitionOnnxProcessor.detectAndEmbed(buffer)
+   → Prendi primo volto (upload reference = 1 volto atteso)
+4. Salva descriptor 512-dim in face_descriptor_512
+5. Ritorna: { success, photo, faceDetected, confidence }
+
+Se nessun volto trovato:
+  → Ritorna { faceDetected: false }
+  → UI chiede conferma all'utente (invariato)
+```
+
+**Step 4.2: Semplificare Renderer**
+```
+File: renderer/js/preset-face-manager.js (MODIFICA)
+
+Rimozioni:
+- Rimuovere import/uso di faceDetector
+- Rimuovere auto-init face-api.js
+- Rimuovere chiamate detectSingleFace()
+- Rimuovere gestione IPC face-detection
+
+Semplificazione uploadPhoto():
+  PRIMA: readFile → detectFace(renderer) → invoke upload
+  DOPO:  readFile → invoke upload (detection nel main)
+
+Il main process fa tutto:
+  renderer manda solo l'immagine, riceve descriptor + confidence
+```
+
+**Step 4.3: Aggiornare Driver Face Manager**
+```
+File: renderer/js/driver-face-manager.js (MODIFICA)
+
+Rimozioni:
+- Rimuovere FACE_RECOGNITION_ENABLED flag
+- Rimuovere check face-api.js init
+- Rimuovere import face-detector
+
+Rimane invariato:
+- UI driver panels, metatag input
+- Photo grid rendering
+- Driver sync logic
+```
+
+**Files coinvolti - Fase 4**:
+- `src/ipc/preset-face-handlers.ts` — MODIFICA
+- `renderer/js/preset-face-manager.js` — SEMPLIFICA
+- `renderer/js/driver-face-manager.js` — MODIFICA (rimuovi flag)
+
+---
+
+#### FASE 5: Integrazione Pipeline (2 giorni)
+
+**Obiettivo**: Collegare ONNX face recognition nel processing pipeline
+
+**Step 5.1: Aggiornare Unified Image Processor**
+```
+File: src/unified-image-processor.ts (MODIFICA)
+
+Cambiamenti:
+1. initializeFaceRecognition():
+   PRIMA: getFaceDetectionBridge().loadDescriptorsForPreset()
+   DOPO:  FaceRecognitionOnnxProcessor.initialize()
+          + FaceRecognitionProcessor.loadFromPreset() (512-dim)
+
+2. performFaceRecognition():
+   PRIMA: getFaceDetectionBridge().detectAndMatch(imagePath, context)
+   DOPO:  FaceRecognitionOnnxProcessor.detectAndEmbed(imagePath)
+          + FaceRecognitionProcessor.matchEmbeddings(embeddings, context)
+
+3. getRecognitionStrategy():
+   Invariato (scene classifier + segmentation logic rimane)
+
+4. Metadata writing:
+   Invariato (keywords + metatag logic rimane)
+
+Import changes:
+  - RIMUOVERE: import getFaceDetectionBridge
+  - AGGIUNGERE: import FaceRecognitionOnnxProcessor
+```
+
+**Step 5.2: Aggiornare Analysis Logger**
+```
+File: src/utils/analysis-logger.ts (MODIFICA)
+
+Nuovo tipo log entry:
+{
+  type: 'FACE_RECOGNITION',
+  detection_method: 'yunet',
+  embedding_model: 'auraface-v1',
+  descriptor_dimension: 512,
+  faces_detected: number,
+  faces_matched: number,
+  detection_time_ms: number,
+  embedding_time_ms: number,
+  matching_time_ms: number,
+  matches: [{ face_index, person_name, similarity_score }]
+}
+```
+
+**Files coinvolti - Fase 5**:
+- `src/unified-image-processor.ts` — MODIFICA (replace bridge calls)
+- `src/utils/analysis-logger.ts` — MODIFICA (nuovo log type)
+- `src/utils/metadata-writer.ts` — MINIMA modifica (confidence format)
+
+---
+
+#### FASE 6: UI — Rimuovere "Coming Soon" (2 giorni)
+
+**Obiettivo**: Attivare l'UI face recognition e rimuovere overlay disabled
+
+**Step 6.1: Attivare Participants Page**
+```
+File: renderer/pages/participants.html (MODIFICA)
+
+Rimuovere:
+- Classe .driver-face-section--disabled
+- Div .coming-soon-overlay-abs (overlay + card)
+- Div .coming-soon-preview (preview blurrata)
+
+Mantenere:
+- Driver panels funzionali
+- Photo grid per driver
+- Metatag input fields
+- 5 photo slots per driver
+```
+
+**Step 6.2: Aggiornare CSS**
+```
+File: renderer/css/participants.css (MODIFICA)
+
+Rimuovere:
+- .coming-soon-overlay-abs styles
+- .coming-soon-preview blur
+- .badge-face "COMING SOON" badge
+- .driver-face-section--disabled styles
+
+Mantenere:
+- .driver-face-panel styles
+- .photo-grid styles
+- .metatag-input styles
+```
+
+**Step 6.3: Aggiornare Face Recognition UI**
+```
+File: renderer/js/face-recognition-ui.js (MODIFICA)
+
+Aggiornare:
+- Confidence display: cosine similarity % (0-100%)
+- Badge rendering per match results
+- Inline indicator aggiornato
+
+File: renderer/js/log-visualizer.js (MODIFICA)
+
+Aggiungere:
+- Rendering per log type FACE_RECOGNITION
+- Mostrare detection_method + embedding_model
+- Mostrare similarity score per match
+```
+
+**Step 6.4: Rimuovere flag disabled**
+```
+File: renderer/js/driver-face-manager.js (MODIFICA)
+  - Rimuovere: const FACE_RECOGNITION_ENABLED = false;
+  - Rimuovere: tutti i check su FACE_RECOGNITION_ENABLED
+  - Il codice funziona come se fosse sempre enabled
+```
+
+**Files coinvolti - Fase 6**:
+- `renderer/pages/participants.html` — MODIFICA
+- `renderer/css/participants.css` — MODIFICA
+- `renderer/js/face-recognition-ui.js` — MODIFICA
+- `renderer/js/log-visualizer.js` — MODIFICA
+- `renderer/js/driver-face-manager.js` — MODIFICA (rimuovi flag)
+- `renderer/index.html` — Rimuovere script face-detector.js
+
+---
+
+#### FASE 7: Testing e Tuning (3 giorni)
+
+**Obiettivo**: Validare accuratezza, performance e migration
+
+**Step 7.1: Unit Tests**
+```
+Files NUOVI:
+- tests/face-detector-service.test.ts
+  → Validate bounding box format
+  → NMS filtering corretto
+  → Gestione immagini senza volti
+
+- tests/face-embedding-service.test.ts
+  → Output: esattamente 512 dimensioni
+  → Normalizzazione corretta
+  → Determinismo (stessa immagine → stesso embedding)
+
+- tests/face-recognition-cosine.test.ts
+  → Cosine similarity range [0, 1]
+  → Stesso volto → similarity > 0.8
+  → Volti diversi → similarity < 0.5
+  → Threshold context-aware corretto
+```
+
+**Step 7.2: Performance Benchmark**
+```
+File NUOVO: tests/performance/face-recognition-benchmark.ts
+
+Target:
+| Operazione              | Target   | Accettabile |
+|-------------------------|----------|-------------|
+| YuNet detection (1 face)| <50ms    | <100ms      |
+| AuraFace embedding      | <100ms   | <150ms      |
+| Cosine matching (100 ref)| <3ms    | <5ms        |
+| Totale per immagine     | <200ms   | <300ms      |
+| Memory peak             | <300MB   | <400MB      |
+
+Confronto: face-api.js (500-1200ms) → AuraFace (<200ms) = 3-6x faster
+```
+
+**Step 7.3: Test Migrazione**
+```
+Scenari:
+1. DB con solo descriptor 128-dim → dual-read → nessun crash
+2. Batch recompute 10 foto → tutti 512-dim → match corretto
+3. Mix 128+512 descriptor → matching funziona per entrambi
+4. Nuova foto upload → solo 512-dim → match corretto
+5. Rollback: disabilita AuraFace → torna a 128-dim → funziona
+```
+
+**Step 7.4: Tuning Soglie Cosine Similarity**
+```
+Procedura:
+1. Dataset test: 50+ volti, 5+ foto ciascuno, condizioni varie
+2. Calcolare confusion matrix per threshold 0.50-0.75 (step 0.02)
+3. Trovare punto ottimale FP vs FN per ogni contesto
+4. Validare su holdout set
+5. Documentare soglie finali in config.ts
+```
+
+**Files coinvolti - Fase 7**:
+- `tests/face-detector-service.test.ts` — NUOVO
+- `tests/face-embedding-service.test.ts` — NUOVO
+- `tests/face-recognition-cosine.test.ts` — NUOVO
+- `tests/performance/face-recognition-benchmark.ts` — NUOVO
+
+---
+
+#### Riepilogo Effort e Timeline
+
+| Fase | Durata | Focus |
+|------|--------|-------|
+| 1 | 3 giorni | Servizi ONNX (detector + embedder + orchestratore) |
+| 2 | 2 giorni | DB migration 128→512 + cosine similarity |
+| 3 | 2 giorni | Eliminare bridge IPC + cleanup face-api.js |
+| 4 | 3 giorni | Upload foto nel main process |
+| 5 | 2 giorni | Integrazione unified-image-processor |
+| 6 | 2 giorni | UI: rimuovere "Coming Soon", attivare feature |
+| 7 | 3 giorni | Testing, benchmark, tuning soglie |
+| **Totale** | **~17 giorni (~3.5 settimane)** | |
+
+#### File Inventory Completo
+
+**Nuovi (8 files)**:
+- `src/face-detector-service.ts` (~700 righe)
+- `src/face-embedding-service.ts` (~600 righe)
+- `src/face-recognition-onnx-processor.ts` (~800 righe)
+- `src/face-descriptor-migration-service.ts` (~400 righe)
+- `supabase/migrations/YYYYMMDD_auraface_descriptor_512.sql`
+- `tests/face-detector-service.test.ts`
+- `tests/face-embedding-service.test.ts`
+- `tests/face-recognition-cosine.test.ts`
+
+**Modificati (12 files)**:
+- `src/face-recognition-processor.ts` — cosine + 512-dim
+- `src/unified-image-processor.ts` — replace bridge con ONNX
+- `src/ipc/face-recognition-handlers.ts` — semplifica handler
+- `src/ipc/preset-face-handlers.ts` — detection nel main
+- `src/ipc/index.ts` — rimuovi registrazione bridge
+- `src/preload.ts` — aggiorna canali IPC
+- `src/config.ts` — feature flags + threshold
+- `src/database-service.ts` — dual-read 128/512
+- `src/model-manager.ts` — aggiungere AuraFace al registry
+- `renderer/js/preset-face-manager.js` — semplifica upload
+- `renderer/js/driver-face-manager.js` — rimuovi flag disabled
+- `renderer/pages/participants.html` — rimuovi Coming Soon
+
+**Eliminati (3 files)**:
+- `src/face-detection-bridge.ts` (357 righe)
+- `renderer/js/face-detector.js` (468 righe)
+- `src/assets/models/face-api/` (directory modelli face-api.js)
+
+**NPM packages**:
+- Rimuovere: `face-api.js`, `canvas` (meno problemi native rebuild)
+- Nessun nuovo package (usa onnxruntime-node già installato)
+
+#### Business Impact
+
+| Metrica | Valore |
+|---------|--------|
+| Accuratezza profili (CFP-FP) | +5% (90% → 95.19%) |
+| Velocità processing | 3-6x faster (1200ms → 200ms) |
+| Dipendenze native | -2 packages (face-api.js, canvas) |
+| Costo per utente | €0 (tutto locale, Apache 2.0) |
+| Use case abilitati | Paddock, podio, interviste, team photo |
+| Differenziazione | Face recognition locale in app motorsport |
+
+#### Rischi e Mitigazione
+
+| Rischio | Impatto | Mitigazione |
+|---------|---------|-------------|
+| AuraFace meno preciso di InsightFace | Medio | Per il nostro use case (non sorveglianza) è più che sufficiente |
+| Migrazione DB rompe dati esistenti | Alto | Migration reversibile, dual-read, batch recompute graduale |
+| ONNX memory footprint (+300MB) | Basso | Lazy loading, modelli caricati solo se feature attiva |
+| YuNet non trova volti con casco | Nessuno | Expected: face rec è per paddock/podio, non pista |
+| Tuning soglie cosine errato | Medio | Dataset test + confusion matrix + threshold configurabile |
+
+#### Rollback Strategy
+
+```
+Livello 1 (immediato): Feature flag AURAFACE_ENABLED = false
+  → Torna a leggere face_descriptor (128-dim)
+  → Face recognition disabilitato (come ora)
+
+Livello 2 (parziale): Mantieni dual-read
+  → 128-dim e 512-dim coesistono
+  → Nessuna perdita dati
+
+Livello 3 (completo): Revert migration
+  → DROP colonne 512-dim
+  → Restore face-api.js (branch git)
+```
+
+**Effort**: ~3.5 settimane
+**Priorità**: Dopo stabilizzazione v1.1.0
+**Files coinvolti**: 8 nuovi + 12 modificati + 3 eliminati
+
+---
+
 ## 4. Prioritizzazione
 
 ### Matrice Impatto/Effort
@@ -667,14 +1287,15 @@ EFF │                    │                    │ EFFORT
 |---|---------|-----------|
 | 1 | **D2P Sales** | Revenue game-changer |
 | 2 | **On-Device AI** | Differenziazione tecnica |
-| 3 | **API Platform** | Enable ecosystem |
-| 4 | **Real-Time Mode** | Premium feature |
-| 5 | **Auto-Culling** | Time saver, quick win |
-| 6 | **Multi-Sport** | Market expansion |
-| 7 | **Mobile App** | Field workflow |
-| 8 | **Multi-Photographer** | Team support |
-| 9 | **Video Analysis** | Content expansion |
-| 10 | **B2B Dashboard** | Enterprise sales |
+| 3 | **Face Recognition (AuraFace)** | Feature già implementata, sblocca valore immediato |
+| 4 | **API Platform** | Enable ecosystem |
+| 5 | **Real-Time Mode** | Premium feature |
+| 6 | **Auto-Culling** | Time saver, quick win |
+| 7 | **Multi-Sport** | Market expansion |
+| 8 | **Mobile App** | Field workflow |
+| 9 | **Multi-Photographer** | Team support |
+| 10 | **Video Analysis** | Content expansion |
+| 11 | **B2B Dashboard** | Enterprise sales |
 
 ---
 

@@ -261,6 +261,12 @@ body:has(.feedback-modal-overlay[style*="display: flex"]) .feedback-fab-wrapper 
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
 }
 
+.feedback-form-group input.feedback-input-error,
+.feedback-form-group textarea.feedback-input-error {
+  border-color: var(--accent-danger, #ef4444);
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1);
+}
+
 .feedback-form-group textarea {
   resize: vertical;
   min-height: 120px;
@@ -281,17 +287,12 @@ body:has(.feedback-modal-overlay[style*="display: flex"]) .feedback-fab-wrapper 
   color: var(--accent-danger, #ef4444);
 }
 
-/* ---- Diagnostics Note ---- */
+/* ---- Required Field Indicator ---- */
 
-.feedback-diagnostics-note {
-  margin-top: 12px;
-  padding: 10px 14px;
-  background: var(--bg-medium, #f8fafc);
-  border: 1px solid var(--border-color, #e2e8f0);
-  border-radius: var(--radius-md, 8px);
-  font-size: 12px;
-  color: var(--text-secondary, #64748b);
-  line-height: 1.5;
+.feedback-required {
+  color: var(--accent-danger, #ef4444);
+  font-weight: 600;
+  margin-left: 2px;
 }
 
 /* ---- Footer ---- */
