@@ -11,11 +11,13 @@ import * as fs from 'fs';
 export interface ImageProcessor {
   resize(width: number, height: number, options?: any): ImageProcessor;
   rotate(angle?: number): ImageProcessor;
+  flip(): ImageProcessor;
+  flop(): ImageProcessor;
   jpeg(options?: any): ImageProcessor;
   png(options?: any): ImageProcessor;
   webp(options?: any): ImageProcessor;
   toBuffer(): Promise<Buffer>;
-  metadata(): Promise<{ width?: number; height?: number; format?: string }>;
+  metadata(): Promise<{ width?: number; height?: number; format?: string; orientation?: number }>;
 }
 
 // ============================================================================
@@ -182,6 +184,16 @@ class SharpProcessor implements ImageProcessor {
 
   rotate(angle?: number): ImageProcessor {
     this.sharpInstance = this.sharpInstance.rotate(angle);
+    return this;
+  }
+
+  flip(): ImageProcessor {
+    this.sharpInstance = this.sharpInstance.flip();
+    return this;
+  }
+
+  flop(): ImageProcessor {
+    this.sharpInstance = this.sharpInstance.flop();
     return this;
   }
 

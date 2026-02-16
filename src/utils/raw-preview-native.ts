@@ -334,7 +334,8 @@ export class RawPreviewExtractor {
       });
 
       if (!data || data.length === 0) {
-        // Fallback: try -PreviewImage tag instead
+        // JpgFromRaw tag doesn't exist (common with Sony ARW) — try -PreviewImage instead
+        console.log(`[RawPreviewExtractor] -JpgFromRaw returned empty for ${path.basename(filePath)}, trying -PreviewImage...`);
         return this.extractWithExifTool(filePath, {
           targetMinSize: 200 * 1024,
           targetMaxSize: 10 * 1024 * 1024,
@@ -355,11 +356,24 @@ export class RawPreviewExtractor {
         method: 'exiftool'
       };
     } catch (error: any) {
-      return {
-        success: false,
-        error: `JpgFromRaw extraction failed: ${error.message}`,
-        extractionTimeMs: Date.now() - startTime
-      };
+      // JpgFromRaw extraction failed — try -PreviewImage as fallback (Sony ARW often lacks JpgFromRaw tag)
+      console.log(`[RawPreviewExtractor] -JpgFromRaw failed for ${path.basename(filePath)}: ${error.message}. Trying -PreviewImage...`);
+      try {
+        return await this.extractWithExifTool(filePath, {
+          targetMinSize: 200 * 1024,
+          targetMaxSize: 10 * 1024 * 1024,
+          timeout: timeout,
+          preferQuality: 'full',
+          includeMetadata: false,
+          useNativeLibrary: false
+        });
+      } catch (fallbackErr: any) {
+        return {
+          success: false,
+          error: `JpgFromRaw and PreviewImage extraction both failed: ${fallbackErr.message}`,
+          extractionTimeMs: Date.now() - startTime
+        };
+      }
     }
   }
 
@@ -411,6 +425,42 @@ export class RawPreviewExtractor {
       exiftoolAvailable: true,
       supportedFormats: ['.cr2', '.cr3', '.nef', '.arw', '.dng', '.raf', '.orf', '.rw2']
     };
+  }
+
+  /**
+   * Read the EXIF Orientation tag from a RAW file using ExifTool.
+   * Returns the numeric orientation value (1-8), or 1 if not available.
+   * This reads from the RAW file's main IFD, which is the authoritative source —
+   * embedded JPEG previews (especially in NEF) may not carry the correct orientation.
+   */
+  async readOrientation(filePath: string): Promise<number> {
+    try {
+      const { exe, prefixArgs } = this.resolveExifToolInfo();
+      const { execFile } = await import('child_process');
+
+      return new Promise<number>((resolve) => {
+        const args = [...prefixArgs, '-Orientation', '-n', '-s3', filePath];
+
+        execFile(exe, args, { timeout: 5000, encoding: 'utf8' }, (error, stdout) => {
+          if (error || !stdout) {
+            resolve(1); // Default: no rotation
+            return;
+          }
+          const val = parseInt(stdout.trim(), 10);
+          resolve(val >= 1 && val <= 8 ? val : 1);
+        });
+      });
+    } catch {
+      return 1;
+    }
+  }
+
+  /**
+   * Extract full preview using ExifTool only (bypassing native lib).
+   * Use this when the native lib's extractFullPreview() returns a suboptimal preview.
+   */
+  async extractFullPreviewWithExifTool(filePath: string, options?: { timeout?: number }): Promise<NativePreviewResult> {
+    return this.extractJpgFromRawWithExifTool(filePath, options?.timeout || 30000);
   }
 
   /**

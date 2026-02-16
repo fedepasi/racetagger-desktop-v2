@@ -3283,11 +3283,51 @@ class UnifiedImageWorker extends EventEmitter {
           try {
             const fullResult = await rawPreviewExtractor.extractFullPreview(imageFile.originalPath, { timeout: 15000 });
             if (fullResult.success && fullResult.data) {
-              previewData = fullResult.data;
-              previewWidth = fullResult.width || 0;
-              previewHeight = fullResult.height || 0;
-              extractionMethod = 'calibrated-full';
-              previewOrientation = fullResult.metadata?.orientation;
+              // Verify dimensions — native extractFullPreview() may return a smaller preview
+              // than what extractAllPreviews() found during calibration (common with ARW on Windows)
+              let extractedWidth = fullResult.width || 0;
+              let extractedHeight = fullResult.height || 0;
+              if (extractedWidth === 0 || extractedHeight === 0) {
+                try {
+                  const verifyProcessor = await createImageProcessor(fullResult.data);
+                  const verifyMeta = await verifyProcessor.metadata();
+                  extractedWidth = verifyMeta.width || 0;
+                  extractedHeight = verifyMeta.height || 0;
+                } catch { /* non-critical */ }
+              }
+
+              // Validate the extracted buffer is actually JPEG (magic bytes 0xFF 0xD8)
+              const isValidJpeg = fullResult.data.length >= 2 &&
+                fullResult.data[0] === 0xFF && fullResult.data[1] === 0xD8;
+
+              // Check if extracted preview is large enough compared to calibration
+              const expectedWidth = strategy.bestWidth || 0;
+              const isPreviewTooSmall = expectedWidth > 0 && extractedWidth > 0 && extractedWidth < expectedWidth * 0.5;
+
+              // Flag suspiciously large buffers (>15MB) — native lib may return uncompressed pixel data
+              // or JPEG lossless that Sharp can't handle well. A proper JPEG preview is typically 1-8MB.
+              const dataSizeKB = Math.round(fullResult.data.length / 1024);
+              const isSuspiciouslyLarge = fullResult.data.length > 15 * 1024 * 1024;
+
+              let shouldReject = false;
+              if (!isValidJpeg) {
+                console.warn(`[RAW-Extract] ${imageFile.fileName}: Native extractFullPreview returned non-JPEG data (${dataSizeKB}KB). Trying ExifTool...`);
+                shouldReject = true;
+              } else if (isPreviewTooSmall) {
+                console.warn(`[RAW-Extract] ${imageFile.fileName}: Native extractFullPreview returned ${extractedWidth}x${extractedHeight} but calibration expected ~${strategy.bestWidth}x${strategy.bestHeight}. Trying ExifTool...`);
+                shouldReject = true;
+              } else if (isSuspiciouslyLarge) {
+                console.warn(`[RAW-Extract] ${imageFile.fileName}: Native extractFullPreview returned unusually large JPEG (${dataSizeKB}KB for ${extractedWidth}x${extractedHeight}). Trying ExifTool for a standard JPEG preview...`);
+                shouldReject = true;
+              }
+
+              if (!shouldReject) {
+                previewData = fullResult.data;
+                previewWidth = extractedWidth;
+                previewHeight = extractedHeight;
+                extractionMethod = 'calibrated-full';
+                previewOrientation = fullResult.metadata?.orientation;
+              }
             }
           } catch (fullErr: any) {
             console.warn(`[RAW-Extract] extractFullPreview failed for ${imageFile.fileName}, falling back: ${fullErr.message}`);
@@ -3315,9 +3355,95 @@ class UnifiedImageWorker extends EventEmitter {
           }
         }
 
-        // Fallback: try extractFullPreview first, then standard extractPreview
+        // Fallback 1: ExifTool -JpgFromRaw (or -PreviewImage if JpgFromRaw fails)
         if (!previewData) {
-          // Try full preview first (best quality)
+          try {
+            const exifResult = await rawPreviewExtractor.extractFullPreviewWithExifTool(imageFile.originalPath, { timeout: 15000 });
+            if (exifResult.success && exifResult.data && exifResult.data.length > 100 * 1024) {
+              // Verify dimensions — ExifTool JpgFromRaw may return a small preview (e.g., Sony A1 returns 1616x1080)
+              let exifWidth = exifResult.width || 0;
+              let exifHeight = exifResult.height || 0;
+              if (exifWidth === 0 || exifHeight === 0) {
+                try {
+                  const exifProc = await createImageProcessor(exifResult.data);
+                  const exifMeta = await exifProc.metadata();
+                  exifWidth = exifMeta.width || 0;
+                  exifHeight = exifMeta.height || 0;
+                } catch { /* non-critical */ }
+              }
+              // Accept if ≥1920px wide (high-res), or if no strategy info to compare against
+              const minAcceptableWidth = strategy ? Math.min(strategy.bestWidth * 0.5, 1920) : 1920;
+              if (exifWidth >= minAcceptableWidth) {
+                previewData = exifResult.data;
+                previewWidth = exifWidth;
+                previewHeight = exifHeight;
+                extractionMethod = 'fallback-exiftool-jpgfromraw';
+                previewOrientation = exifResult.metadata?.orientation;
+              } else {
+                console.warn(`[RAW-Extract] ${imageFile.fileName}: ExifTool JpgFromRaw returned ${exifWidth}x${exifHeight} (too small, need ≥${minAcceptableWidth}px). Trying extractAllPreviews...`);
+              }
+            }
+          } catch {
+            // Continue to next fallback
+          }
+        }
+
+        // Fallback 2: extractAllPreviews — enumerate all embedded JPEGs and pick the best valid one.
+        // This is the most robust method for cameras like Sony A1 where:
+        // - JpgFromRaw tag points to a small preview (1616x1080)
+        // - extractFullPreview returns corrupted/non-JPEG tile data
+        // - But extractAllPreviews correctly finds the real HQ preview (e.g., 5616x3744)
+        if (!previewData) {
+          try {
+            const allResult = await rawPreviewExtractor.extractAllPreviews(imageFile.originalPath);
+            if (allResult.success && allResult.previews.length > 0) {
+              // Find the best valid JPEG preview: largest dimensions, reasonable size (< 15MB)
+              let bestPreview: typeof allResult.previews[0] | null = null;
+              let bestPixels = 0;
+
+              for (const p of allResult.previews) {
+                // Skip non-JPEG and suspiciously large buffers (tile concatenations)
+                if (!p.data || p.data.length < 100 * 1024 || p.data.length > 15 * 1024 * 1024) continue;
+                if (p.data[0] !== 0xFF || p.data[1] !== 0xD8) continue;
+
+                // Get actual dimensions
+                let pw = p.width || 0;
+                let ph = p.height || 0;
+                if (pw === 0 || ph === 0) {
+                  try {
+                    const pProc = await createImageProcessor(p.data);
+                    const pMeta = await pProc.metadata();
+                    pw = pMeta.width || 0;
+                    ph = pMeta.height || 0;
+                  } catch { continue; }
+                }
+
+                const pixels = pw * ph;
+                if (pixels > bestPixels && pw >= 1920) {
+                  bestPixels = pixels;
+                  bestPreview = p;
+                  // Store detected dimensions on the preview object
+                  p.width = pw;
+                  p.height = ph;
+                }
+              }
+
+              if (bestPreview) {
+                previewData = bestPreview.data;
+                previewWidth = bestPreview.width;
+                previewHeight = bestPreview.height;
+                extractionMethod = 'fallback-all-previews';
+                previewOrientation = undefined; // Will be read from RAW file later
+                console.log(`[RAW-Extract] ${imageFile.fileName}: extractAllPreviews found best preview: ${previewWidth}x${previewHeight} (${Math.round(previewData.length / 1024)}KB)`);
+              }
+            }
+          } catch {
+            // Continue to next fallback
+          }
+        }
+
+        // Fallback 3: native extractFullPreview (may work for some camera models)
+        if (!previewData) {
           try {
             const fullResult = await rawPreviewExtractor.extractFullPreview(imageFile.originalPath, { timeout: 15000 });
             if (fullResult.success && fullResult.data) {
@@ -3381,29 +3507,64 @@ class UnifiedImageWorker extends EventEmitter {
           global.gc();
         }
 
-        // Applica rotazione automatica basata sui metadata EXIF se disponibili
-        if (previewOrientation && previewOrientation !== 1) {
-          try {
-            const processor = await createImageProcessor(tempJpegPath);
-            let rotatedBuffer = await processor
-              .rotate()  // Auto-rotate based on EXIF orientation data
-              .jpeg({ quality: 90 })  // Maintain good quality
+        // Apply rotation based on the RAW file's EXIF Orientation.
+        // The embedded JPEG preview (especially in NEF) often has Orientation=1 even for
+        // portrait shots — the real orientation is in the RAW file's main IFD.
+        // So we read it from the original RAW file via ExifTool and apply explicit rotation.
+        try {
+          // First try Sharp auto-rotate (works if JPEG has correct EXIF orientation)
+          const processor = await createImageProcessor(tempJpegPath);
+          const jpegMeta = await processor.metadata();
+          const jpegOrientation = jpegMeta.orientation || 1;
+
+          if (jpegOrientation !== 1) {
+            // JPEG has orientation info — use Sharp auto-rotate
+            let rotatedBuffer = await (await createImageProcessor(tempJpegPath))
+              .rotate()
+              .jpeg({ quality: 90 })
               .toBuffer();
-
-            // Scrivi l'immagine ruotata sovrascrivendo il file temporaneo
             await fsPromises.writeFile(tempJpegPath, rotatedBuffer);
-
-            // MEMORY FIX: Rilascia esplicitamente il Buffer di rotazione
             const rotatedBufferSize = rotatedBuffer.length;
-            rotatedBuffer = null as any; // Nullifica reference per permettere GC
+            rotatedBuffer = null as any;
+            if (rotatedBufferSize > 1024 * 1024 && global.gc) { global.gc(); }
+            workerLog.info(`[RAW-Rotate] ${imageFile.fileName}: Applied JPEG EXIF orientation ${jpegOrientation}`);
+          } else {
+            // JPEG has orientation=1 — read from the original RAW file (authoritative source)
+            const rawOrientation = await rawPreviewExtractor.readOrientation(imageFile.originalPath);
+            if (rawOrientation !== 1) {
+              // Map EXIF orientation to Sharp rotation angle
+              // 1=0°, 2=flip, 3=180°, 4=flip+180°, 5=flip+270°, 6=90°CW, 7=flip+90°, 8=270°CW
+              let angle = 0;
+              let flip = false;
+              let flop = false;
+              switch (rawOrientation) {
+                case 2: flop = true; break;                       // Horizontal flip
+                case 3: angle = 180; break;                       // Rotate 180°
+                case 4: flip = true; break;                       // Vertical flip
+                case 5: flop = true; angle = 270; break;          // Flip + rotate 270°
+                case 6: angle = 90; break;                        // Rotate 90° CW (portrait)
+                case 7: flop = true; angle = 90; break;           // Flip + rotate 90°
+                case 8: angle = 270; break;                       // Rotate 270° CW (portrait)
+              }
 
-            // Forza garbage collection per Buffer grandi (>1MB)
-            if (rotatedBufferSize > 1024 * 1024 && global.gc) {
-              global.gc();
+              let sharpPipeline = (await createImageProcessor(tempJpegPath));
+              if (flip) sharpPipeline = sharpPipeline.flip();
+              if (flop) sharpPipeline = sharpPipeline.flop();
+              if (angle !== 0) sharpPipeline = sharpPipeline.rotate(angle);
+
+              let rotatedBuffer = await sharpPipeline
+                .jpeg({ quality: 90 })
+                .toBuffer();
+              await fsPromises.writeFile(tempJpegPath, rotatedBuffer);
+              const rotatedBufferSize = rotatedBuffer.length;
+              rotatedBuffer = null as any;
+              if (rotatedBufferSize > 1024 * 1024 && global.gc) { global.gc(); }
+              workerLog.info(`[RAW-Rotate] ${imageFile.fileName}: Applied RAW EXIF orientation ${rawOrientation} (angle=${angle}°, flip=${flip}, flop=${flop})`);
             }
-          } catch (rotationError) {
-            // Non bloccare il processo se la rotazione fallisce
           }
+        } catch (rotationError: any) {
+          // Non bloccare il processo se la rotazione fallisce
+          console.warn(`[RAW-Rotate] ${imageFile.fileName}: Rotation failed: ${rotationError.message}`);
         }
 
         return tempJpegPath;
