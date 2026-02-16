@@ -56,19 +56,15 @@
           <!-- Form State -->
           <div id="feedback-form-state">
             <div class="feedback-form-group">
-              <label for="feedback-title">Title</label>
-              <input type="text" id="feedback-title" maxlength="${TITLE_MAX}" placeholder="Brief summary of your feedback">
+              <label for="feedback-title">Title <span class="feedback-required">*</span></label>
+              <input type="text" id="feedback-title" maxlength="${TITLE_MAX}" placeholder="Brief summary of your feedback" required>
               <div class="feedback-char-count" id="feedback-title-count">0 / ${TITLE_MAX}</div>
             </div>
 
             <div class="feedback-form-group">
-              <label for="feedback-description">Description</label>
-              <textarea id="feedback-description" maxlength="${DESC_MAX}" placeholder="Provide details..."></textarea>
+              <label for="feedback-description">Description <span class="feedback-required">*</span></label>
+              <textarea id="feedback-description" maxlength="${DESC_MAX}" placeholder="Provide details..." required></textarea>
               <div class="feedback-char-count" id="feedback-desc-count">0 / ${DESC_MAX}</div>
-            </div>
-
-            <div class="feedback-diagnostics-note">
-              System diagnostics and logs will be automatically included to help us resolve your issue faster.
             </div>
           </div>
 
@@ -129,10 +125,12 @@
 
     titleInput.addEventListener('input', function () {
       updateCharCount('feedback-title-count', titleInput.value.length, TITLE_MAX);
+      titleInput.classList.remove('feedback-input-error');
     });
 
     descInput.addEventListener('input', function () {
       updateCharCount('feedback-desc-count', descInput.value.length, DESC_MAX);
+      descInput.classList.remove('feedback-input-error');
     });
 
     // Escape key
@@ -209,11 +207,17 @@
     var title = titleInput.value.trim();
     var description = descInput.value.trim();
 
+    // Clear previous validation states
+    titleInput.classList.remove('feedback-input-error');
+    descInput.classList.remove('feedback-input-error');
+
     if (!title) {
+      titleInput.classList.add('feedback-input-error');
       titleInput.focus();
       return;
     }
     if (!description) {
+      descInput.classList.add('feedback-input-error');
       descInput.focus();
       return;
     }
