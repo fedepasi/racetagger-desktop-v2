@@ -20,6 +20,7 @@ import { HardwareDetector } from './utils/hardware-detector';
 import { NetworkMonitor } from './utils/network-monitor';
 import { PerformanceTimer } from './utils/performance-timer';
 import { ErrorTracker } from './utils/error-tracker';
+import { errorTelemetryService } from './utils/error-telemetry-service';
 import { SceneClassifierONNX, SceneCategory, SceneClassificationResult } from './scene-classifier-onnx';
 import { OnnxDetector, getOnnxDetector, OnnxAnalysisResult } from './onnx-detector';
 import { ModelManager, getModelManager, ModelStatus } from './model-manager';
@@ -3989,6 +3990,15 @@ class UnifiedImageWorker extends EventEmitter {
       }
     } catch (edgeFunctionError: any) {
       console.error(`[UnifiedProcessor] Edge Function call failed for ${fileName}:`, edgeFunctionError.message);
+      // Report Edge Function failure to telemetry (non-blocking)
+      errorTelemetryService.reportCriticalError({
+        errorType: 'edge_function',
+        severity: 'recoverable',
+        error: edgeFunctionError,
+        executionId: this.config.executionId,
+        batchPhase: 'ai_analysis',
+        categoryName: this.config.category
+      });
       throw new Error(`Edge Function failed: ${edgeFunctionError.message || 'Network or server error'}`);
     }
 
@@ -6785,10 +6795,30 @@ export class UnifiedImageProcessor extends EventEmitter {
       }
     }
 
+    // Zero results anomaly detection: batch >20 images with 0 recognized numbers
+    const successfulResults = results.filter(r => r.success);
+    const totalImages = results.length;
+    if (totalImages > 20 && successfulResults.length > 0) {
+      const hasAnyNumbers = successfulResults.some(r =>
+        r.analysis && r.analysis.length > 0 && r.analysis.some((a: any) => a.number)
+      );
+      if (!hasAnyNumbers) {
+        errorTelemetryService.reportCriticalError({
+          errorType: 'zero_results',
+          severity: 'warning',
+          error: `Batch of ${totalImages} images completed with 0 recognized numbers`,
+          executionId: this.config.executionId,
+          batchPhase: 'batch_complete',
+          totalImages,
+          categoryName: this.config.category
+        });
+      }
+    }
+
     this.emit('batchComplete', {
-      successful: results.filter(r => r.success).length,
+      successful: successfulResults.length,
       errors: results.filter(r => !r.success).length,
-      total: results.length
+      total: totalImages
     });
 
     return results;

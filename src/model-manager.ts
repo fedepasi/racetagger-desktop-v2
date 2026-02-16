@@ -17,6 +17,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { errorTelemetryService } from './utils/error-telemetry-service';
 
 // Configuration
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://fwoqfgeviftmkxivtpkg.supabase.co';
@@ -298,7 +299,14 @@ export class ModelManager {
       .createSignedUrl(modelInfo.onnx_storage_path, 3600); // 1 hour expiry
 
     if (signedUrlError || !signedUrlData?.signedUrl) {
-      throw new Error(`Failed to get download URL: ${signedUrlError?.message}`);
+      const dlError = new Error(`Failed to get download URL: ${signedUrlError?.message}`);
+      errorTelemetryService.reportCriticalError({
+        errorType: 'onnx_model',
+        severity: 'fatal',
+        error: dlError,
+        batchPhase: 'model_download'
+      });
+      throw dlError;
     }
 
     // Prepare local path
@@ -343,7 +351,14 @@ export class ModelManager {
     const isValid = await this.validateChecksum(localPath, modelInfo.checksum_sha256);
     if (!isValid) {
       fs.unlinkSync(localPath);
-      throw new Error('Model checksum validation failed - file may be corrupted');
+      const checksumError = new Error('Model checksum validation failed - file may be corrupted');
+      errorTelemetryService.reportCriticalError({
+        errorType: 'onnx_model',
+        severity: 'fatal',
+        error: checksumError,
+        batchPhase: 'model_download'
+      });
+      throw checksumError;
     }
 
     // Update manifest

@@ -3,6 +3,7 @@ import { BrowserWindow, shell, app } from 'electron';
 import { SUPABASE_CONFIG } from './config';
 import * as fs from 'fs';
 import * as path from 'path';
+import { errorTelemetryService } from './utils/error-telemetry-service';
 
 // Tipi per lo stato dell'autenticazione e gestione token
 export interface AuthState {
@@ -701,8 +702,15 @@ export class AuthService {
   async checkVersionBeforeAuth(): Promise<boolean> {
     try {
       const currentVersion = require('electron').app?.getVersion() || '1.0.0';
-      // Send process.platform directly (darwin/win32/linux) to match app_version_config table
-      const platform = process.platform;
+      // Map process.platform + arch to edge function values (windows/macos/macos-intel)
+      let platform: string;
+      if (process.platform === 'darwin') {
+        platform = process.arch === 'arm64' ? 'macos' : 'macos-intel';
+      } else if (process.platform === 'win32') {
+        platform = 'windows';
+      } else {
+        platform = process.platform;
+      }
 
       const { data, error } = await this.supabase.functions.invoke('check-app-version', {
         body: {
@@ -1372,6 +1380,12 @@ export class AuthService {
       };
     } catch (error: any) {
       console.error('[PreAuth] Exception:', error);
+      errorTelemetryService.reportCriticalError({
+        errorType: 'token_reservation',
+        severity: 'fatal',
+        error: error,
+        batchPhase: 'pre_authorization'
+      });
       return {
         authorized: false,
         error: error.message || 'EXCEPTION'
@@ -1439,6 +1453,12 @@ export class AuthService {
       };
     } catch (error: any) {
       console.error('[Finalize] Exception:', error);
+      errorTelemetryService.reportCriticalError({
+        errorType: 'token_reservation',
+        severity: 'recoverable',
+        error: error,
+        batchPhase: 'finalize_reservation'
+      });
       return {
         success: false,
         consumed: 0,

@@ -45,6 +45,7 @@ export interface SubscriptionInfo {
 export interface PrivacySettings {
   trainingConsent: boolean;
   consentUpdatedAt: string | null;
+  errorTelemetryEnabled: boolean;
 }
 
 /**
@@ -126,7 +127,8 @@ class UserPreferencesService {
         },
         privacy: {
           trainingConsent: consentStatus.trainingConsent ?? true,
-          consentUpdatedAt: consentStatus.consentUpdatedAt || null
+          consentUpdatedAt: consentStatus.consentUpdatedAt || null,
+          errorTelemetryEnabled: true  // Default enabled, user can opt-out in settings
         }
       };
     } catch (error) {
@@ -195,7 +197,8 @@ class UserPreferencesService {
       },
       privacy: {
         trainingConsent: true, // Default to opt-in
-        consentUpdatedAt: null
+        consentUpdatedAt: null,
+        errorTelemetryEnabled: true  // Default enabled
       }
     };
   }

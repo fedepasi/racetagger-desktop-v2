@@ -41,6 +41,7 @@ import { registerPresetFaceHandlers } from './preset-face-handlers';
 import { registerVersionHandlers } from './version-handlers';
 import { registerFeedbackHandlers } from './feedback-handlers';
 import { registerDiagnosticHandlers } from './diagnostic-handlers';
+import { registerErrorTelemetryHandlers } from './error-telemetry-handlers';
 
 /**
  * Initialize IPC context with mainWindow reference
@@ -104,8 +105,11 @@ export function registerAllHandlers(): void {
   // Diagnostic log utilities (3)
   registerDiagnosticHandlers();
 
+  // Error telemetry handlers (3)
+  registerErrorTelemetryHandlers();
+
   console.log('[IPC] ========================================');
-  console.log('[IPC] All handlers registered (133 modular handlers)');
+  console.log('[IPC] All handlers registered (136 modular handlers)');
   console.log('[IPC] ========================================');
 }
 

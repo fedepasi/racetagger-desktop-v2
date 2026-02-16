@@ -231,6 +231,11 @@ const validInvokeChannels: string[] = [
   'export-destinations-get-matching',
   'export-to-destinations',  // Export images to configured destinations
   'export-tags-csv',         // Export visual tags as CSV
+
+  // Error Telemetry
+  'get-telemetry-status',
+  'set-telemetry-enabled',
+  'flush-telemetry-queue',
 ];
 
 

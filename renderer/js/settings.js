@@ -75,6 +75,17 @@ const SettingsManager = {
       consentToggle.checked = privacy.trainingConsent !== false; // Default to true
     }
 
+    // Error telemetry toggle
+    const telemetryToggle = document.getElementById('settings-error-telemetry');
+    if (telemetryToggle) {
+      try {
+        const telemetryStatus = await window.api.invoke('get-telemetry-status');
+        if (telemetryStatus && telemetryStatus.data) {
+          telemetryToggle.checked = telemetryStatus.data.enabled !== false;
+        }
+      } catch (e) { /* default to checked */ }
+    }
+
     // Consent timestamp
     const timestampEl = document.getElementById('settings-consent-updated');
     if (timestampEl) {
@@ -111,6 +122,14 @@ const SettingsManager = {
     if (consentToggle) {
       consentToggle.addEventListener('change', async (e) => {
         await this.handleConsentChange(e.target.checked);
+      });
+    }
+
+    // Error telemetry toggle
+    const telemetryToggle = document.getElementById('settings-error-telemetry');
+    if (telemetryToggle) {
+      telemetryToggle.addEventListener('change', async (e) => {
+        await this.handleTelemetryChange(e.target.checked);
       });
     }
 
@@ -158,6 +177,31 @@ const SettingsManager = {
       console.error('[Settings] Error saving training consent:', error);
       // Revert toggle on error
       if (toggle) toggle.checked = !newConsent;
+      this.showNotification('Error', 'Could not save preference. Please try again.', 'error');
+    }
+  },
+
+  /**
+   * Handle error telemetry toggle change
+   */
+  async handleTelemetryChange(enabled) {
+    const toggle = document.getElementById('settings-error-telemetry');
+
+    try {
+      const result = await window.api.invoke('set-telemetry-enabled', enabled);
+
+      if (result && result.success !== false) {
+        const message = enabled
+          ? 'Automatic error reporting enabled. This helps us improve RaceTagger.'
+          : 'Automatic error reporting disabled.';
+        this.showNotification('Settings Updated', message, 'success');
+      } else {
+        if (toggle) toggle.checked = !enabled;
+        this.showNotification('Error', 'Could not save preference. Please try again.', 'error');
+      }
+    } catch (error) {
+      console.error('[Settings] Error saving telemetry preference:', error);
+      if (toggle) toggle.checked = !enabled;
       this.showNotification('Error', 'Could not save preference. Please try again.', 'error');
     }
   },

@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as fsPromises from 'fs/promises';
 import * as os from 'os';
 import { CleanupManager, getCleanupManager } from './cleanup-manager';
+import { errorTelemetryService } from './error-telemetry-service';
 
 /**
  * Options for native preview extraction
@@ -138,6 +139,13 @@ export class RawPreviewExtractor {
 
     } catch (error: any) {
       this.stats.failures++;
+      // Report RAW conversion failure (both native + ExifTool failed)
+      errorTelemetryService.reportCriticalError({
+        errorType: 'raw_conversion',
+        severity: 'recoverable',
+        error: error,
+        batchPhase: 'raw_preview'
+      });
       return {
         success: false,
         error: `Preview extraction failed: ${error.message}`,

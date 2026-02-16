@@ -27,8 +27,15 @@ import { VersionCheckResult } from './types';
 async function checkAppVersion(): Promise<VersionCheckResult | null> {
   try {
     const currentVersion = app.getVersion();
-    // Send process.platform directly (darwin/win32/linux) to match app_version_config table
-    const platform = process.platform;
+    // Map process.platform + arch to edge function values (windows/macos/macos-intel)
+    let platform: string;
+    if (process.platform === 'darwin') {
+      platform = process.arch === 'arm64' ? 'macos' : 'macos-intel';
+    } else if (process.platform === 'win32') {
+      platform = 'windows';
+    } else {
+      platform = process.platform;
+    }
 
     console.log(`[Version] Checking version: ${currentVersion} on ${platform}`);
 
@@ -48,6 +55,18 @@ async function checkAppVersion(): Promise<VersionCheckResult | null> {
 
     if (error) {
       console.error('[Version] Check error:', error);
+      // Try to read the response body for more details
+      try {
+        if (error.context && typeof error.context.json === 'function') {
+          const errorBody = await error.context.json();
+          console.error('[Version] Error response body:', JSON.stringify(errorBody));
+        } else if (error.context && typeof error.context.text === 'function') {
+          const errorText = await error.context.text();
+          console.error('[Version] Error response text:', errorText);
+        }
+      } catch (bodyErr) {
+        console.error('[Version] Could not read error body:', bodyErr);
+      }
       return {
         requires_update: false,
         force_update_enabled: false,

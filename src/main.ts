@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import { promises as fsPromises } from 'fs';
 // import * as os from 'os'; // REMOVED - unused
 import { diagnosticLogger } from './utils/diagnostic-logger';
+import { errorTelemetryService } from './utils/error-telemetry-service';
 
 // --- CONSOLE LOGGING DISABLE FOR PRODUCTION ---
 // NOTE: Console logging is now CAPTURED by diagnosticLogger instead of disabled.
@@ -2897,6 +2898,17 @@ app.whenReady().then(async () => { // Added async here
     initializeIpcContext(mainWindow);
   }
 
+  // Initialize error telemetry service with Supabase and auth getters
+  try {
+    const { getSupabase } = require('./ipc/context');
+    errorTelemetryService.initialize(
+      () => getSupabase(),
+      () => authService.getAuthState()
+    );
+  } catch (telemetryInitError) {
+    console.warn('[Main] Error telemetry init failed (non-critical):', telemetryInitError);
+  }
+
   // Track app launch for analytics (non-blocking)
   trackAppLaunch().catch(err => {
     console.warn('[AppLaunch] Failed to track launch (non-critical):', err.message);
@@ -3732,14 +3744,21 @@ function parseCSVLine(line: string): string[] {
 
 process.on('uncaughtException', (error: Error) => {
   safeConsoleError('[Main Process] FATAL: Uncaught exception:', error);
+  // Report to telemetry (best-effort, non-blocking)
+  try {
+    errorTelemetryService.reportCriticalError({
+      errorType: 'uncaught',
+      severity: 'fatal',
+      error: error,
+      batchPhase: 'uncaught_exception'
+    });
+  } catch { /* never let telemetry crash the crash handler */ }
   if (mainWindow && !mainWindow.isDestroyed()) {
     dialog.showErrorBox('Application Error', `A critical unexpected error occurred: ${error.message}\n\nPlease report this error.\n\n${error.stack || ''}`);
   } else {
     // Fallback if mainWindow is not available or already destroyed
     dialog.showErrorBox('Critical Application Error', `A critical unexpected error occurred before the UI could be fully initialized: ${error.message}\n\nPlease report this error.\n\n${error.stack || ''}`);
   }
-  // Consider exiting the app more gracefully or logging to a persistent file
-  // For now, the error box is the primary notification.
 });
 
 // --- Graceful Shutdown Handlers ---
@@ -3773,6 +3792,9 @@ async function performCleanup(): Promise<void> {
 
     // Cleanup auth service resources
     authService.cleanup();
+
+    // Flush error telemetry queue before shutdown
+    try { errorTelemetryService.dispose(); } catch { /* safe */ }
 
     // Flush and close diagnostic logger
     diagnosticLogger.shutdown();

@@ -18,6 +18,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import sharp from 'sharp';
 import { getModelManager } from './model-manager';
+import { errorTelemetryService } from './utils/error-telemetry-service';
 import {
   getModelConfig,
   getClassName,
@@ -256,6 +257,13 @@ export class GenericSegmenter {
       if (errStack) console.error(`[GenericSegmenter] Stack: ${errStack}`);
       this.loadError = error instanceof Error ? error : new Error(errMsg);
       this.session = null;
+      // Report segmentation model loading failure
+      errorTelemetryService.reportCriticalError({
+        errorType: 'segmentation',
+        severity: 'fatal',
+        error: this.loadError,
+        batchPhase: 'segmentation_model_load'
+      });
       return false;
     } finally {
       this.isLoading = false;
