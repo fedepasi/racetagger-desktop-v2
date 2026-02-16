@@ -249,9 +249,12 @@ export class GenericSegmenter {
       this.updateRelevantClassIds();
 
       return true;
-    } catch (error) {
-      console.error('[GenericSegmenter] Model loading failed:', error);
-      this.loadError = error instanceof Error ? error : new Error(String(error));
+    } catch (error: any) {
+      const errMsg = error instanceof Error ? error.message : (error?.message || String(error));
+      const errStack = error instanceof Error ? error.stack : '';
+      console.error(`[GenericSegmenter] Model loading failed: ${errMsg}`);
+      if (errStack) console.error(`[GenericSegmenter] Stack: ${errStack}`);
+      this.loadError = error instanceof Error ? error : new Error(errMsg);
       this.session = null;
       return false;
     } finally {

@@ -141,31 +141,45 @@ function fixSharpDependencies(context) {
     console.log(`✅ [Sharp Fix] Sharp binary: ${path.relative(unpackedPath, sharpBinaryPath)}`);
 
     // Find libvips
-    const libvipsPkg = `sharp-libvips-${platform}-${arch}`;
-    const libvipsDir = path.join(imgPath, libvipsPkg, 'lib');
+    // Sharp 0.34+: libvips is bundled INSIDE @img/sharp-{platform}-{arch}/lib/
+    // Sharp <0.34: libvips is in a separate @img/sharp-libvips-{platform}-{arch}/lib/
+    let libvipsDir = null;
     let libvipsPath = null;
 
-    if (fs.existsSync(libvipsDir)) {
-      const files = fs.readdirSync(libvipsDir);
+    const findLibvipsIn = (dir) => {
+      if (!fs.existsSync(dir)) return null;
+      const files = fs.readdirSync(dir);
       let libvipsFile;
-
       if (platform === 'darwin') {
         libvipsFile = files.find(f => f.startsWith('libvips-cpp.') && f.endsWith('.dylib'));
       } else if (platform === 'win32') {
         libvipsFile = files.find(f => f === 'libvips-cpp.dll' || (f.startsWith('libvips') && f.endsWith('.dll')));
       } else {
-        // Linux
         libvipsFile = files.find(f => f.startsWith('libvips-cpp.so'));
       }
+      return libvipsFile ? path.join(dir, libvipsFile) : null;
+    };
 
-      if (libvipsFile) {
-        libvipsPath = path.join(libvipsDir, libvipsFile);
+    // Strategy 1: Check inside sharp platform package (Sharp 0.34+ bundled layout)
+    const sharpPlatformLibDir = path.join(sharpPlatformPath, 'lib');
+    libvipsPath = findLibvipsIn(sharpPlatformLibDir);
+    if (libvipsPath) {
+      libvipsDir = sharpPlatformLibDir;
+    }
+
+    // Strategy 2: Check separate libvips package (Sharp <0.34 layout)
+    if (!libvipsPath) {
+      const libvipsPkg = `sharp-libvips-${platform}-${arch}`;
+      const separateLibvipsDir = path.join(imgPath, libvipsPkg, 'lib');
+      libvipsPath = findLibvipsIn(separateLibvipsDir);
+      if (libvipsPath) {
+        libvipsDir = separateLibvipsDir;
       }
     }
 
     if (!libvipsPath) {
       console.warn(`⚠️ [Sharp Fix] libvips not found for ${platform}-${arch}`);
-      console.warn(`   Expected in: ${libvipsDir}`);
+      console.warn(`   Checked: ${sharpPlatformLibDir} and @img/sharp-libvips-${platform}-${arch}/lib`);
       console.error('   ❌ Sharp will NOT be available for image processing');
       return;
     }

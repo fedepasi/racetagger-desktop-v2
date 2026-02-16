@@ -202,9 +202,10 @@ export class OnnxDetector {
       this.currentModelPath = modelPath;
 
       return true;
-    } catch (error) {
-      console.error('[OnnxDetector] Model loading failed:', error);
-      this.loadError = error instanceof Error ? error : new Error(String(error));
+    } catch (error: any) {
+      const errMsg = error instanceof Error ? error.message : (error?.message || String(error));
+      console.error(`[OnnxDetector] Model loading failed: ${errMsg}`);
+      this.loadError = error instanceof Error ? error : new Error(errMsg);
       this.session = null;
       this.modelConfig = null;
 

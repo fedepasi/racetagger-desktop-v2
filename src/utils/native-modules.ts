@@ -64,18 +64,23 @@ export async function initializeImageProcessor(): Promise<void> {
       // Cross-platform: detect correct @img package
       const sharpPlatformPkg = `sharp-${platform}-${arch}`;
       const sharpPlatformPath = path.join(unpackedPath, '@img', sharpPlatformPkg);
-      const binaryPath = path.join(sharpPlatformPath, 'lib', `sharp-${platform}-${arch}.node`);
-
-      const libvipsPkg = `sharp-libvips-${platform}-${arch}`;
-      const libvipsDir = path.join(unpackedPath, '@img', libvipsPkg, 'lib');
-      let libvipsPath: string | null = null;
+      const sharpPlatformLibDir = path.join(sharpPlatformPath, 'lib');
+      const binaryPath = path.join(sharpPlatformLibDir, `sharp-${platform}-${arch}.node`);
 
       if (!fs.existsSync(binaryPath)) {
         throw new Error(`Sharp native binary not found at ${binaryPath} (platform: ${platform}, arch: ${arch})`);
       }
 
-      if (fs.existsSync(libvipsDir)) {
-        const files = fs.readdirSync(libvipsDir);
+      // Find libvips DLL/dylib/so
+      // Sharp 0.34+: libvips is bundled INSIDE @img/sharp-{platform}-{arch}/lib/
+      // Sharp <0.34: libvips is in a separate @img/sharp-libvips-{platform}-{arch}/lib/
+      let libvipsDir: string | null = null;
+      let libvipsPath: string | null = null;
+      let libvipsPkg = sharpPlatformPkg; // default: same package
+
+      const findLibvipsIn = (dir: string): string | null => {
+        if (!fs.existsSync(dir)) return null;
+        const files = fs.readdirSync(dir);
         let libvipsFile: string | undefined;
         if (platform === 'darwin') {
           libvipsFile = files.find((f: string) => f.startsWith('libvips-cpp.') && f.endsWith('.dylib'));
@@ -84,13 +89,29 @@ export async function initializeImageProcessor(): Promise<void> {
         } else {
           libvipsFile = files.find((f: string) => f.startsWith('libvips-cpp.so'));
         }
-        if (libvipsFile) {
-          libvipsPath = path.join(libvipsDir, libvipsFile);
+        return libvipsFile ? path.join(dir, libvipsFile) : null;
+      };
+
+      // Strategy 1: Check inside sharp platform package (Sharp 0.34+ bundled layout)
+      libvipsPath = findLibvipsIn(sharpPlatformLibDir);
+      if (libvipsPath) {
+        libvipsDir = sharpPlatformLibDir;
+        libvipsPkg = sharpPlatformPkg;
+      }
+
+      // Strategy 2: Check separate libvips package (Sharp <0.34 layout)
+      if (!libvipsPath) {
+        const separateLibvipsPkg = `sharp-libvips-${platform}-${arch}`;
+        const separateLibvipsDir = path.join(unpackedPath, '@img', separateLibvipsPkg, 'lib');
+        libvipsPath = findLibvipsIn(separateLibvipsDir);
+        if (libvipsPath) {
+          libvipsDir = separateLibvipsDir;
+          libvipsPkg = separateLibvipsPkg;
         }
       }
 
-      if (!libvipsPath || !fs.existsSync(libvipsPath)) {
-        throw new Error(`Sharp libvips not found in: ${libvipsDir} (platform: ${platform}, arch: ${arch})`);
+      if (!libvipsDir || !libvipsPath) {
+        throw new Error(`Sharp libvips not found in ${sharpPlatformLibDir} or @img/sharp-libvips-${platform}-${arch}/lib (platform: ${platform}, arch: ${arch})`);
       }
 
       // Platform-specific library path setup
@@ -102,7 +123,7 @@ export async function initializeImageProcessor(): Promise<void> {
         process.env.PATH = `${libvipsDir};${process.env.PATH || ''}`;
       }
 
-      console.log(`[ImageProcessor] Sharp binary: ${sharpPlatformPkg}, libvips: ${libvipsPkg}`);
+      console.log(`[ImageProcessor] Sharp binary: ${sharpPlatformPkg}, libvips: ${libvipsPkg} (dir: ${libvipsDir})`);
 
       const originalCwd = process.cwd();
       try {

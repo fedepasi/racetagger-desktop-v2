@@ -167,7 +167,8 @@
       "Bash(xcrun stapler validate:*)",
       "Bash(\".\\\\exiftool.exe\" -ver)",
       "Bash(otool -L:*)",
-      "Bash(lipo -info:*)"
+      "Bash(lipo -info:*)",
+      "Bash(dir:*)"
     ],
     "deny": [],
     "ask": []

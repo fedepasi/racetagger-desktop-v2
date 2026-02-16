@@ -2601,7 +2601,6 @@ async function trackAppLaunch(): Promise<void> {
   try {
     const os = require('os');
     const crypto = require('crypto');
-    const { v4: uuidv4 } = require('uuid');
 
     // Generate machine ID (same as in unified-image-processor)
     const machineIdSource = [
@@ -2613,8 +2612,8 @@ async function trackAppLaunch(): Promise<void> {
     ].join('|');
     const machineId = crypto.createHash('sha256').update(machineIdSource).digest('hex').substring(0, 16);
 
-    // Generate session ID for this launch
-    const sessionId = uuidv4();
+    // Generate session ID for this launch (use built-in crypto.randomUUID)
+    const sessionId = crypto.randomUUID();
 
     // Get hardware info
     const cpus = os.cpus();

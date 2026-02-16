@@ -426,8 +426,9 @@ class UnifiedImageWorker extends EventEmitter {
         log.warn(`Generic Segmenter not available - falling back to bbox-based crops`);
         this.genericSegmenterEnabled = false;
       }
-    } catch (error) {
-      log.warn(`Generic Segmenter initialization failed`, error);
+    } catch (error: any) {
+      const errMsg = error instanceof Error ? error.message : (error?.message || String(error));
+      log.warn(`Generic Segmenter initialization failed: ${errMsg}`);
       this.genericSegmenterEnabled = false;
       this.genericSegmenterLoaded = false;
     }
@@ -5669,14 +5670,86 @@ export class UnifiedImageProcessor extends EventEmitter {
           continue;
         }
 
-        // Sort previews by pixel count (largest first)
-        const sorted = [...allResult.previews].sort((a, b) =>
-          (b.width * b.height) - (a.width * a.height)
-        );
+        // Detect actual dimensions with Sharp when native lib reports 0x0
+        for (const p of allResult.previews) {
+          if ((p.width === 0 || p.height === 0) && p.data && p.data.length > 0) {
+            try {
+              const dimProcessor = await createImageProcessor(p.data);
+              const dimMeta = await dimProcessor.metadata();
+              if (dimMeta.width && dimMeta.height) {
+                p.width = dimMeta.width;
+                p.height = dimMeta.height;
+              }
+            } catch { /* non-critical */ }
+          }
+        }
+
+        // Sort previews by pixel count (largest first), fallback to byte size
+        const sorted = [...allResult.previews].sort((a, b) => {
+          const pixelDiff = (b.width * b.height) - (a.width * a.height);
+          if (pixelDiff !== 0) return pixelDiff;
+          return (b.data?.length || 0) - (a.data?.length || 0); // Fallback: sort by byte size
+        });
 
         // Log all available previews
         for (const p of sorted) {
           console.log(`[RAW-Calibration]   Found: ${p.quality} ${p.width}x${p.height} (${Math.round(p.data.length / 1024)}KB)`);
+        }
+
+        // Normalize quality labels based on actual dimensions.
+        // Some native extractors (e.g., raw-preview-extractor on Windows for NEF) label
+        // the full JpgFromRaw as "thumbnail". A preview ≥3000px wide is sensor-resolution
+        // and should be classified as "full" so the correct extraction method is used.
+        for (const p of sorted) {
+          if (p.quality !== 'full' && p.width >= 3000) {
+            console.log(`[RAW-Calibration]   Reclassified ${p.quality} ${p.width}x${p.height} → full (sensor-resolution preview)`);
+            p.quality = 'full';
+          }
+        }
+
+        // If crop-context is active and no preview is wide enough, probe extractFullPreview
+        // which uses ExifTool -JpgFromRaw for the full-resolution embedded JPEG
+        const maxAvailableWidth = sorted.length > 0 ? sorted[0].width : 0;
+        if (cropContextActive && maxAvailableWidth < 1920) {
+          console.log(`[RAW-Calibration]   Best preview ${maxAvailableWidth}px wide, probing extractFullPreview for JpgFromRaw...`);
+          try {
+            const fullProbe = await rawPreviewExtractor.extractFullPreview(sampleFile.originalPath, { timeout: 15000 });
+            if (fullProbe.success && fullProbe.data && fullProbe.data.length > 0) {
+              let fpWidth = fullProbe.width || 0;
+              let fpHeight = fullProbe.height || 0;
+              if (fpWidth === 0 || fpHeight === 0) {
+                try {
+                  const fpProcessor = await createImageProcessor(fullProbe.data);
+                  const fpMeta = await fpProcessor.metadata();
+                  fpWidth = fpMeta.width || 0;
+                  fpHeight = fpMeta.height || 0;
+                } catch { /* non-critical */ }
+              }
+              const fpSizeKB = Math.round(fullProbe.data.length / 1024);
+              console.log(`[RAW-Calibration]   JpgFromRaw probe: ${fpWidth}x${fpHeight} (${fpSizeKB}KB)`);
+
+              // If JpgFromRaw is significantly larger, use "full" strategy directly
+              if (fpWidth >= 1920 || fullProbe.data.length > (sorted[0]?.data?.length || 0) * 1.5) {
+                // Release probe buffer
+                fullProbe.data = null as any;
+                const targetMax = 8 * 1024 * 1024;
+                this.rawPreviewStrategies.set(ext, {
+                  method: 'full',
+                  bestWidth: fpWidth,
+                  bestHeight: fpHeight,
+                  bestSizeKB: fpSizeKB,
+                  targetMaxSize: targetMax,
+                  sampleFile: sampleFile.fileName
+                });
+                console.log(`[RAW-Calibration]   ✅ ${ext}: Using 'full' strategy (JpgFromRaw) → ${fpWidth}x${fpHeight} (${fpSizeKB}KB, maxTarget=${Math.round(targetMax / 1024 / 1024)}MB)`);
+                continue; // Skip normal strategy selection below
+              }
+              // Release probe buffer
+              fullProbe.data = null as any;
+            }
+          } catch (fpErr: any) {
+            console.warn(`[RAW-Calibration]   JpgFromRaw probe failed: ${fpErr.message}`);
+          }
         }
 
         // Choose strategy based on crop-context and available previews

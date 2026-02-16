@@ -596,18 +596,29 @@ function getModelPaths(modelConfig: YoloModelConfig): string[] {
   const modelFileName = path.basename(storagePath);
   const modelDir = path.dirname(storagePath);
 
-  // Build list of possible locations
-  return [
+  const paths: string[] = [
     // Development: models/detector/weights-detector-v1.onnx or models/generic/yolov8n-seg.onnx
     path.join(process.cwd(), 'models', storagePath),
     // Alternative: directly in models folder
     path.join(process.cwd(), 'models', modelFileName),
-    // Packaged app (asar.unpacked)
+    // Packaged app (asar.unpacked) - relative to compiled dist/src/
     path.join(__dirname, '..', 'models', storagePath),
     path.join(__dirname, '..', '..', 'models', storagePath),
     path.join(__dirname, '..', 'models', modelFileName),
     path.join(__dirname, '..', '..', 'models', modelFileName),
   ];
+
+  // Packaged app: also check process.resourcesPath (e.g., resources/models/)
+  if (process.resourcesPath) {
+    paths.push(
+      path.join(process.resourcesPath, 'models', storagePath),
+      path.join(process.resourcesPath, 'models', modelFileName),
+      path.join(process.resourcesPath, 'app.asar.unpacked', 'models', storagePath),
+      path.join(process.resourcesPath, 'app.asar.unpacked', 'models', modelFileName),
+    );
+  }
+
+  return paths;
 }
 
 // Add these methods to ModelManager class
@@ -621,14 +632,19 @@ ModelManager.prototype.ensureGenericModelAvailable = async function(
     throw new Error(`Unknown model: ${modelId}. Available models: ${Object.keys(YOLO_MODEL_REGISTRY).join(', ')}`);
   }
 
+  console.log(`[ModelManager] ensureGenericModelAvailable: ${modelId} (storagePath: ${modelConfig.storagePath})`);
+
   // Check 1: Look for bundled model in project directory (development or packaged app)
   const bundledPaths = getModelPaths(modelConfig);
 
   for (const bundledPath of bundledPaths) {
     if (fs.existsSync(bundledPath)) {
+      console.log(`[ModelManager] Found bundled model at: ${bundledPath}`);
       return bundledPath;
     }
   }
+
+  console.log(`[ModelManager] No bundled model found, checking cache... (searched ${bundledPaths.length} paths)`);
 
   // Check 2: Look for cached model in user directory
   const modelDir = path.dirname(modelConfig.storagePath);
@@ -643,8 +659,11 @@ ModelManager.prototype.ensureGenericModelAvailable = async function(
 
   // Check if already cached
   if (fs.existsSync(localPath)) {
+    console.log(`[ModelManager] Found cached model at: ${localPath}`);
     return localPath;
   }
+
+  console.log(`[ModelManager] Model not cached at: ${localPath}, downloading from Supabase...`);
 
   // Get signed URL from Supabase Storage
   const supabase = (this as any).getSupabase();
