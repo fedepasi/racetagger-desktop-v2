@@ -107,6 +107,11 @@ export interface UnifiedProcessingResult {
     updateData: any;
     timestamp: number;
   };
+  // Pending analysis_results insert (ONNX batch optimization - passed from worker to processor)
+  pendingAnalysisInsert?: {
+    data: any;
+    timestamp: number;
+  };
 }
 
 /**
@@ -217,6 +222,9 @@ class UnifiedImageWorker extends EventEmitter {
   private userTrainingConsent: boolean = true;
   // Visual Tagging cache (stores tags by imageId for metadata embedding)
   private visualTagsCache: Map<string, any> = new Map();
+  // Pending analysis_results insert data (for batch insert optimization with ONNX)
+  // Set by analyzeImageLocal(), read by Processor via getPendingAnalysisInsert()
+  private pendingAnalysisInsertData: any = null;
 
   private constructor(config: UnifiedProcessorConfig, analysisLogger?: AnalysisLogger, networkMonitor?: NetworkMonitor) {
     super();
@@ -728,39 +736,35 @@ class UnifiedImageWorker extends EventEmitter {
               }
             }));
 
-            const { error: analysisError } = await this.supabase
-              .from('analysis_results')
-              .insert({
-                image_id: imageId,
-                analysis_provider: `local-onnx_${this.category}`,
-                recognized_number: primaryResult.raceNumber || null,
-                additional_text: primaryResult.otherText || [],
-                confidence_score: primaryResult.confidence || 0,
-                confidence_level: confidenceLevel,
-                raw_response: {
-                  // Gemini-compatible format for management portal
-                  vehicles,
-                  totalVehicles: vehicles.length,
-                  // Original ONNX data
-                  analysis,
-                  inferenceMs,
-                  modelSource: 'local-onnx',
-                  modelCategory: this.category,
-                  timestamp: new Date().toISOString()
-                },
-                input_tokens: 0,  // No API tokens for local inference
-                output_tokens: 0,
-                estimated_cost_usd: 0,  // Free local processing
-                execution_time_ms: inferenceMs,
-                training_eligible: this.userTrainingConsent,
-                user_consent_at_analysis: this.userTrainingConsent
-              });
-
-            if (analysisError) {
-              log.error(`[Local ONNX] CRITICAL: Failed to save analysis results: ${analysisError.message}`);
-            } else {
-              log.info(`[Local ONNX] Analysis results saved for image ${imageId}`);
-            }
+            // Queue analysis_results insert for batch processing by the Processor
+            // With local ONNX (~200ms/image), 10+ concurrent inserts cause DB timeouts
+            // The insert data is returned as part of the worker result and accumulated by UnifiedImageProcessor
+            this.pendingAnalysisInsertData = {
+              image_id: imageId,
+              analysis_provider: `local-onnx_${this.category}`,
+              recognized_number: primaryResult.raceNumber || null,
+              additional_text: primaryResult.otherText || [],
+              confidence_score: primaryResult.confidence || 0,
+              confidence_level: confidenceLevel,
+              raw_response: {
+                // Gemini-compatible format for management portal
+                vehicles,
+                totalVehicles: vehicles.length,
+                // Original ONNX data
+                analysis,
+                inferenceMs,
+                modelSource: 'local-onnx',
+                modelCategory: this.category,
+                timestamp: new Date().toISOString()
+              },
+              input_tokens: 0,  // No API tokens for local inference
+              output_tokens: 0,
+              estimated_cost_usd: 0,  // Free local processing
+              execution_time_ms: inferenceMs,
+              training_eligible: this.userTrainingConsent,
+              user_consent_at_analysis: this.userTrainingConsent
+            };
+            log.info(`[Local ONNX] Analysis results queued for batch insert - image ${imageId}`);
           }
         } catch (dbError) {
           log.error(`[Local ONNX] CRITICAL: Database tracking failed: ${dbError}`);
@@ -3223,8 +3227,16 @@ class UnifiedImageWorker extends EventEmitter {
           ? (this.participantsData.length > 0 ? 'no_preset_match' : 'no_keywords')
           : undefined,
         // Pending database update (returned to processor for batch flushing)
-        pendingUpdate: pendingUpdateData
+        pendingUpdate: pendingUpdateData,
+        // Pending analysis_results insert (ONNX batch optimization)
+        pendingAnalysisInsert: this.pendingAnalysisInsertData ? {
+          data: this.pendingAnalysisInsertData,
+          timestamp: Date.now()
+        } : undefined
       };
+
+      // Clear the pending insert data after returning it
+      this.pendingAnalysisInsertData = null;
 
       return result;
 
@@ -5396,6 +5408,18 @@ export class UnifiedImageProcessor extends EventEmitter {
   private readonly UPDATE_TIMEOUT_MS = 3000; // Timeout per singolo update
 
   // ============================================================================
+  // BATCH DATABASE INSERTS for analysis_results (ONNX local inference optimization)
+  // With local ONNX, inference is ~200ms per image, causing 10+ concurrent inserts
+  // that overwhelm Supabase with statement timeouts. Batch them instead.
+  // ============================================================================
+  private pendingAnalysisInserts: Array<{
+    data: any;
+    timestamp: number;
+  }> = [];
+  private readonly BATCH_INSERT_THRESHOLD = 10; // Flush every 10 analysis inserts
+  private readonly INSERT_TIMEOUT_MS = 8000; // Timeout for batch insert (higher than update since it's a bulk operation)
+
+  // ============================================================================
   // RAW PREVIEW CALIBRATION (dynamic extraction strategy per extension)
   // ============================================================================
   private rawPreviewStrategies: Map<string, RawPreviewStrategy> = new Map();
@@ -5494,6 +5518,73 @@ export class UnifiedImageProcessor extends EventEmitter {
     } catch (error: any) {
       log.error(`[DBUpdate] Failed to flush updates: ${error.message}`);
       // Don't clear pending updates on critical error - they'll be retried
+    }
+  }
+
+  /**
+   * Flush pending analysis_results inserts as a single batch operation.
+   * With local ONNX inference (~200ms/image), 10 workers produce results nearly
+   * simultaneously, causing statement timeouts on individual inserts.
+   * Batching reduces DB calls from N to 1 and avoids connection contention.
+   */
+  private async flushPendingInserts(): Promise<void> {
+    if (this.pendingAnalysisInserts.length === 0) {
+      return;
+    }
+
+    const insertCount = this.pendingAnalysisInserts.length;
+    log.info(`[DBInsert] Flushing ${insertCount} pending analysis_results inserts...`);
+
+    try {
+      const { getSupabaseClient } = await import('./database-service');
+      const supabase = getSupabaseClient();
+
+      // Extract just the data objects for batch insert
+      const insertData = this.pendingAnalysisInserts.map(item => item.data);
+
+      // Single batch insert with timeout protection
+      const insertPromise = supabase
+        .from('analysis_results')
+        .insert(insertData);
+
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Batch insert timeout')), this.INSERT_TIMEOUT_MS)
+      );
+
+      const { error } = await Promise.race([insertPromise, timeoutPromise]) as any;
+
+      if (error) {
+        log.error(`[DBInsert] Batch insert failed: ${error.message}`);
+
+        // Fallback: try inserting one by one for partial success
+        let successCount = 0;
+        let errorCount = 0;
+        for (const item of insertData) {
+          try {
+            const { error: singleError } = await supabase
+              .from('analysis_results')
+              .insert(item);
+            if (singleError) {
+              errorCount++;
+              if (DEBUG_MODE) console.warn(`[DBInsert] Single insert failed for image ${item.image_id}:`, singleError.message);
+            } else {
+              successCount++;
+            }
+          } catch {
+            errorCount++;
+          }
+        }
+        log.info(`[DBInsert] Fallback complete: ${successCount} success, ${errorCount} errors`);
+      } else {
+        log.info(`[DBInsert] Batch insert complete: ${insertCount} analysis results saved`);
+      }
+
+      // Clear pending inserts after flush
+      this.pendingAnalysisInserts = [];
+
+    } catch (error: any) {
+      log.error(`[DBInsert] Failed to flush inserts: ${error.message}`);
+      // Don't clear pending inserts on critical error - they'll be retried
     }
   }
 
@@ -6648,6 +6739,12 @@ export class UnifiedImageProcessor extends EventEmitter {
     
     if (DEBUG_MODE) console.log(`[UnifiedProcessor] Batch completed: ${results.length} images processed successfully`);
 
+    // FINAL FLUSH: Send any remaining pending database inserts (ONNX analysis_results)
+    if (this.pendingAnalysisInserts.length > 0) {
+      console.log(`[Finalize] Flushing ${this.pendingAnalysisInserts.length} remaining analysis_results inserts...`);
+      await this.flushPendingInserts();
+    }
+
     // FINAL FLUSH: Send any remaining pending database updates
     if (this.pendingUpdates.length > 0) {
       console.log(`[Finalize] Flushing ${this.pendingUpdates.length} remaining database updates...`);
@@ -6935,6 +7032,18 @@ export class UnifiedImageProcessor extends EventEmitter {
       // Calculate temporal context in main process and pass to worker
       const temporalContext = this.getTemporalContext(imageFile.originalPath);
       const result = await worker.processImage(imageFile, this, temporalContext);
+
+      // BATCH INSERT ACCUMULATION: Collect pending analysis_results inserts from worker (ONNX optimization)
+      if (result.pendingAnalysisInsert) {
+        this.pendingAnalysisInserts.push(result.pendingAnalysisInsert);
+        console.log(`[Processor] Accumulated analysis insert from worker (${this.pendingAnalysisInserts.length} pending)`);
+
+        // PERIODIC FLUSH: Flush inserts every BATCH_INSERT_THRESHOLD images
+        if (this.pendingAnalysisInserts.length >= this.BATCH_INSERT_THRESHOLD) {
+          console.log(`[Processor] Insert threshold reached (${this.BATCH_INSERT_THRESHOLD}), flushing analysis inserts...`);
+          await this.flushPendingInserts();
+        }
+      }
 
       // BATCH UPDATE ACCUMULATION: Collect pending updates from worker
       if (result.pendingUpdate) {

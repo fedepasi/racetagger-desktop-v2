@@ -505,10 +505,10 @@ export class CacheManager {
         });
 
       if (error) {
-        console.error('Error writing to L3 cache:', error);
+        console.error('Error writing to L3 cache:', (error as any)?.message || JSON.stringify(error));
       }
     } catch (error) {
-      console.error('Error writing to L3 cache:', error);
+      console.error('Error writing to L3 cache:', (error as any)?.message || JSON.stringify(error));
     }
   }
 

@@ -62,7 +62,7 @@ The Supabase PostgreSQL database (**project: `taompbzifylmdzgbbrpv`**) is shared
 ├── face-recognition-processor.ts  # Face detection pipeline (440 lines) [DISABLED]
 ├── face-detection-bridge.ts       # Bridge for renderer face detection [DISABLED]
 │
-├── ipc/                           # Modular IPC handlers (128 handlers across 14 files)
+├── ipc/                           # Modular IPC handlers (136 handlers across 15 files)
 │   ├── index.ts                   # Central registration + re-exports
 │   ├── context.ts                 # Shared state (mainWindow, caches, Supabase client)
 │   ├── types.ts                   # IPC TypeScript interfaces (HandlerResult, BatchProcessConfig, etc.)
@@ -80,7 +80,8 @@ The Supabase PostgreSQL database (**project: `taompbzifylmdzgbbrpv`**) is shared
 │   ├── face-recognition-handlers.ts  # Face detection and matching (6 handlers)
 │   ├── preset-face-handlers.ts    # Preset participant face photos (6 handlers)
 │   ├── version-handlers.ts        # App version checking, force update (4 handlers)
-│   └── feedback-handlers.ts       # Support feedback & diagnostics (5 handlers)
+│   ├── feedback-handlers.ts       # Support feedback & diagnostics (5 handlers)
+│   └── error-telemetry-handlers.ts # Automatic error reporting (3 handlers)
 │
 ├── matching/                      # Participant matching algorithms
 │   ├── smart-matcher.ts           # Multi-evidence correlation (2,253 lines) ★
@@ -114,6 +115,7 @@ The Supabase PostgreSQL database (**project: `taompbzifylmdzgbbrpv`**) is shared
 │   ├── hardware-detector.ts       # Hardware capability detection
 │   ├── network-monitor.ts         # Network status monitoring
 │   ├── error-tracker.ts           # Error aggregation
+│   ├── error-telemetry-service.ts # Automatic error reporting to Supabase + GitHub (~350 lines)
 │   ├── filesystem-timestamp.ts    # File timestamp utilities
 │   └── mask-rle.ts                # Run-length encoding for masks
 │
@@ -197,7 +199,7 @@ The Supabase PostgreSQL database (**project: `taompbzifylmdzgbbrpv`**) is shared
     ├── benchmark-suite.ts         # Full benchmark suite
     └── test-runner.ts             # Benchmark runner
 
-/supabase/functions/               # Edge Functions (41 functions, Deno runtime)
+/supabase/functions/               # Edge Functions (42 functions, Deno runtime)
 ├── analyzeImageDesktop/           # V1 - Basic Gemini analysis
 ├── analyzeImageDesktopV2/         # V2 - SmartMatcher integration
 ├── analyzeImageDesktopV3/         # V3 - Temporal clustering
@@ -237,6 +239,7 @@ The Supabase PostgreSQL database (**project: `taompbzifylmdzgbbrpv`**) is shared
 ├── submit-social-share/           # Social share tracking
 ├── update-feedback-tokens/        # Feedback token grants
 ├── quick-register-from-feedback/  # Quick registration
+├── report-automatic-error/        # Automatic error telemetry → GitHub issues
 ├── test-auth-user-check/          # Auth testing
 └── shared/                        # Shared utilities
 
@@ -555,6 +558,39 @@ Multi-evidence participant matching:
 **Storage:**
 - Local: `.analysis-logs/` in user data folder
 - Remote: Supabase Storage bucket `analysis-logs` (auto-upload every 30s in dev)
+
+## Automatic Error Telemetry
+
+**Purpose:** Proactive error detection — automatically reports critical failures to Supabase and creates GitHub issues before users report them.
+
+**Architecture:** Desktop (fire-and-forget) → Edge Function `report-automatic-error` → Supabase DB + GitHub Issues API
+
+**Key Files:**
+- `src/utils/error-telemetry-service.ts` — Singleton service, fingerprinting, rate limiting, privacy sanitization
+- `supabase/functions/report-automatic-error/index.ts` — Edge Function: upsert report, create/comment GitHub issue
+- `src/ipc/error-telemetry-handlers.ts` — 3 IPC handlers (status, enable/disable, flush)
+
+**Database Tables:**
+- `error_reports` — Deduplicated by SHA-256 fingerprint (one row per unique error globally)
+- `error_occurrences` — Individual occurrence per user per event (with system info, log snapshot)
+- `error_issue_mappings` — Fingerprint → GitHub issue number mapping
+
+**Monitored Failure Points:**
+- RAW preview extraction failure (`raw-preview-native.ts`)
+- Edge Function errors during AI analysis (`unified-image-processor.ts`)
+- Zero recognized numbers on batch >20 images (`unified-image-processor.ts`)
+- ONNX model download/checksum failures (`model-manager.ts`)
+- Token reservation failures (`auth-service.ts`)
+- Segmentation model load failure (`generic-segmenter.ts`)
+- Uncaught exceptions (`main.ts`)
+
+**Deduplication:** Global cross-user. One GitHub issue per unique error fingerprint. New users hitting the same error add a comment with updated count. Label `widespread` added when ≥5 users affected.
+
+**Rate Limits:** 5 reports per execution, 20 per day per user. 100% non-blocking (fire-and-forget).
+
+**Privacy:** All logs sanitized (paths, emails, names removed via regex). User opt-out toggle in Settings → Privacy.
+
+**GitHub Integration:** Uses `GITHUB_PAT` secret (same as `submitFeedback`). Creates issues with labels `[auto-report, {error_type}]`.
 
 ## Environment Variables
 

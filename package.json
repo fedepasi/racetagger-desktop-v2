@@ -34,13 +34,13 @@
     "regression-test": "npm run test:performance:quick",
     "generate-fixtures": "npx ts-node tests/scripts/generate-fixtures.ts",
     "download-test-files": "npx ts-node tests/scripts/download-test-files.ts",
-    "build:linux:x64": "tsc && electron-builder --linux --x64",
-    "build:mac:x64": "tsc && electron-builder --mac --x64",
-    "build:mac:arm64": "tsc && electron-builder --mac --arm64",
-    "build:mac:universal": "tsc && electron-builder --mac --universal",
-    "build:mac:all": "tsc && electron-builder --mac --x64 --arm64 --universal",
-    "build:win:x64": "tsc && electron-builder --win --x64",
-    "build:win:arm64": "tsc && electron-builder --win --arm64",
+    "build:linux:x64": "tsc && node scripts/validate-native-deps.js --platform=linux --arch=x64 && electron-builder --linux --x64",
+    "build:mac:x64": "tsc && node scripts/validate-native-deps.js --platform=darwin --arch=x64 && electron-builder --mac --x64",
+    "build:mac:arm64": "tsc && node scripts/validate-native-deps.js --platform=darwin --arch=arm64 && electron-builder --mac --arm64",
+    "build:mac:universal": "tsc && node scripts/validate-native-deps.js --platform=darwin --arch=arm64 && electron-builder --mac --universal",
+    "build:mac:all": "npm run build:mac:arm64 && npm run build:mac:x64",
+    "build:win:x64": "tsc && node scripts/validate-native-deps.js --platform=win32 --arch=x64 && electron-builder --win --x64",
+    "build:win:arm64": "tsc && node scripts/validate-native-deps.js --platform=win32 --arch=arm64 && electron-builder --win --arm64",
     "build:win:all": "npm run build:win:x64 && npm run build:win:arm64",
     "rebuild:native": "node scripts/rebuild-all-native.js",
     "rebuild:native:verbose": "node scripts/rebuild-all-native.js --verbose",
@@ -86,20 +86,8 @@
       "category": "public.app-category.photography",
       "icon": "racetagger-logo.icns",
       "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "arm64",
-            "x64"
-          ]
-        },
-        {
-          "target": "zip",
-          "arch": [
-            "arm64",
-            "x64"
-          ]
-        }
+        "dmg",
+        "zip"
       ],
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
@@ -116,24 +104,9 @@
     "afterPack": "scripts/post-pack-fixes.js",
     "win": {
       "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        },
-        {
-          "target": "portable",
-          "arch": [
-            "x64"
-          ]
-        },
-        {
-          "target": "zip",
-          "arch": [
-            "x64"
-          ]
-        }
+        "nsis",
+        "portable",
+        "zip"
       ],
       "icon": "resources/icon.ico",
       "publisherName": "RaceTagger",
