@@ -110,7 +110,22 @@ export function registerPresetFaceHandlers(): void {
 
       try {
         const onnxProcessor = FaceRecognitionOnnxProcessor.getInstance();
-        const onnxStatus = onnxProcessor.getStatus();
+        let onnxStatus = onnxProcessor.getStatus();
+
+        // Lazy-initialize ONNX pipeline if not yet ready
+        // (models are loaded on first face photo upload, not at app start)
+        if (!onnxStatus.ready) {
+          console.log(`[PresetFace IPC] ONNX not ready, initializing lazily...`);
+          const initOk = await onnxProcessor.initialize();
+          if (initOk) {
+            // After init, embedder may need separate loading if model was downloaded
+            await onnxProcessor.ensureEmbedderReady();
+            onnxStatus = onnxProcessor.getStatus();
+            console.log(`[PresetFace IPC] ONNX lazy init result: detector=${onnxStatus.detectorLoaded}, embedder=${onnxStatus.embedderLoaded}`);
+          } else {
+            console.warn(`[PresetFace IPC] ONNX lazy init failed, using legacy descriptor if provided`);
+          }
+        }
 
         if (onnxStatus.ready) {
           // Detect + embed from buffer
@@ -128,7 +143,7 @@ export function registerPresetFaceHandlers(): void {
             console.log(`[PresetFace IPC] ONNX: No face detected in uploaded photo`);
           }
         } else {
-          console.log(`[PresetFace IPC] ONNX not ready (detector: ${onnxStatus.detectorLoaded}, embedder: ${onnxStatus.embedderLoaded}), using legacy descriptor if provided`);
+          console.log(`[PresetFace IPC] ONNX still not ready after init attempt (detector: ${onnxStatus.detectorLoaded}, embedder: ${onnxStatus.embedderLoaded}), using legacy descriptor if provided`);
         }
       } catch (onnxError) {
         console.warn('[PresetFace IPC] ONNX detection failed, falling back to provided descriptor:', onnxError);
