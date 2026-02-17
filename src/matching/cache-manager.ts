@@ -485,7 +485,8 @@ export class CacheManager {
 
       return JSON.parse(data.value);
     } catch (error) {
-      console.error('Error reading from L3 cache:', error);
+      const errMsg = (error as any)?.message || JSON.stringify(error) || 'unknown';
+      console.error(`[L3Cache] Read exception: ${errMsg}`);
       return null;
     }
   }
@@ -505,10 +506,22 @@ export class CacheManager {
         });
 
       if (error) {
-        console.error('Error writing to L3 cache:', (error as any)?.message || JSON.stringify(error));
+        // Detailed error logging — Supabase errors often have code/details/hint beyond message
+        const errMsg = (error as any)?.message || 'unknown';
+        const errCode = (error as any)?.code || '';
+        const errDetails = (error as any)?.details || '';
+        const errHint = (error as any)?.hint || '';
+        console.error(`[L3Cache] Write error: ${errMsg} (code=${errCode}, details=${errDetails}, hint=${errHint})`);
+
+        // If table doesn't exist (42P01) or RLS blocks (42501), disable L3 to stop spam
+        if (errCode === '42P01' || errCode === '42501') {
+          console.warn(`[L3Cache] Disabling L3 cache due to persistent error: ${errCode}`);
+          this.l3Enabled = false;
+        }
       }
     } catch (error) {
-      console.error('Error writing to L3 cache:', (error as any)?.message || JSON.stringify(error));
+      const errMsg = (error as any)?.message || JSON.stringify(error) || 'unknown exception';
+      console.error(`[L3Cache] Write exception: ${errMsg}`);
     }
   }
 

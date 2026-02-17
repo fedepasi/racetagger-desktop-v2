@@ -5459,7 +5459,7 @@ export class UnifiedImageProcessor extends EventEmitter {
   // ============================================================================
   // WORKER POOL (v1.1.0+) - Reusable workers to avoid redundant ONNX initialization
   // ============================================================================
-  private USE_WORKER_POOL = false; // Set to false to disable worker pool (emergency fallback) - TEMPORARILY DISABLED FOR DEBUG
+  private USE_WORKER_POOL = true; // Re-enabled: ONNX workers are reused across images (avoids N×init overhead)
   private workerPool: UnifiedImageWorker[] = [];
   private availableWorkers: UnifiedImageWorker[] = [];
   private busyWorkers: Set<UnifiedImageWorker> = new Set();
@@ -5499,8 +5499,8 @@ export class UnifiedImageProcessor extends EventEmitter {
     data: any;
     timestamp: number;
   }> = [];
-  private readonly BATCH_INSERT_THRESHOLD = 10; // Flush every 10 analysis inserts
-  private readonly INSERT_TIMEOUT_MS = 8000; // Timeout for batch insert (higher than update since it's a bulk operation)
+  private readonly BATCH_INSERT_THRESHOLD = 5; // Flush every 5 analysis inserts (smaller batches = faster DB processing)
+  private readonly INSERT_TIMEOUT_MS = 20000; // 20s timeout for batch insert (Supabase RLS + triggers need time)
 
   // ============================================================================
   // RAW PREVIEW CALIBRATION (dynamic extraction strategy per extension)
@@ -5639,17 +5639,21 @@ export class UnifiedImageProcessor extends EventEmitter {
       if (error) {
         log.error(`[DBInsert] Batch insert failed: ${error.message}`);
 
-        // Fallback: try inserting one by one for partial success
+        // Fallback: try inserting one by one with small delay to avoid connection contention
         let successCount = 0;
         let errorCount = 0;
-        for (const item of insertData) {
+        for (let idx = 0; idx < insertData.length; idx++) {
+          const item = insertData[idx];
           try {
+            // Small staggered delay to avoid overwhelming Supabase
+            if (idx > 0) await new Promise(r => setTimeout(r, 200));
+
             const { error: singleError } = await supabase
               .from('analysis_results')
               .insert(item);
             if (singleError) {
               errorCount++;
-              if (DEBUG_MODE) console.warn(`[DBInsert] Single insert failed for image ${item.image_id}:`, singleError.message);
+              log.warn(`[DBInsert] Single insert failed for image ${item.image_id}: ${singleError.message} (code=${(singleError as any)?.code || ''})`);
             } else {
               successCount++;
             }
