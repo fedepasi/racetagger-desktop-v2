@@ -349,8 +349,8 @@ export const APP_CONFIG = {
     aurafaceModelName: 'auraface_v1.onnx',
     aurafaceEmbeddingDim: 512,
     aurafaceInputSize: 112,  // 112x112 px
-    // Supabase Storage bucket for model downloads
-    modelStorageBucket: 'ml-models',
+    // Supabase Storage bucket for model downloads (same bucket as other ONNX models)
+    modelStorageBucket: 'onnx-models',
     modelStoragePath: 'face-recognition/auraface-v1/',
     // Local cache directory: ~/.racetagger/models/
     localModelCacheDir: 'models',
