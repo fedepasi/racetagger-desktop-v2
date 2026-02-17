@@ -3149,7 +3149,8 @@ class UnifiedImageWorker extends EventEmitter {
         uploadReadyPath,
         processor,
         temporalContext,
-        visualTagsResult
+        visualTagsResult,
+        faceRecognitionResult
       );
       timing['6_smartMatcher'] = Date.now() - phaseStart;
 
@@ -4358,7 +4359,8 @@ class UnifiedImageWorker extends EventEmitter {
     processedImagePath: string,
     processor?: UnifiedImageProcessor,
     temporalContext?: { imageTimestamp: ImageTimestamp; temporalNeighbors: ImageTimestamp[] } | null,
-    visualTags?: { tags: any; usage: any } | null
+    visualTags?: { tags: any; usage: any } | null,
+    faceRecognitionResult?: FaceRecognitionResult | null
   ): Promise<{
     analysis: any[];
     csvMatch: any | null;
@@ -4368,6 +4370,34 @@ class UnifiedImageWorker extends EventEmitter {
   }> {
     let csvMatch: any = null;
     let description: string | null = null;
+
+    // Merge face recognition matches into csvMatches
+    // This ensures face-matched participants are included in metadata even when number recognition also runs
+    const faceMatchedCsvEntries: any[] = [];
+    if (faceRecognitionResult?.success && faceRecognitionResult.matches) {
+      const matchedFaces = faceRecognitionResult.matches.filter(m => m.matched && m.driverInfo);
+      for (const faceMatch of matchedFaces) {
+        const raceNumber = faceMatch.driverInfo?.raceNumber;
+        // Find matching participant in preset data
+        const participant = this.participantsData.find((p: any) =>
+          (raceNumber && (String(p.numero) === String(raceNumber) || String(p.number) === String(raceNumber))) ||
+          (faceMatch.driverInfo?.driverName && (
+            (p.nome && p.nome.includes(faceMatch.driverInfo.driverName)) ||
+            (p.drivers && p.drivers.some((d: any) => d.nome?.includes(faceMatch.driverInfo!.driverName)))
+          ))
+        );
+
+        if (participant) {
+          faceMatchedCsvEntries.push({
+            entry: participant,
+            matchedNumber: raceNumber || participant.numero,
+            confidence: faceMatch.similarity,
+            matchedBy: 'face_recognition'
+          });
+          log.info(`[FaceRecognition→Metadata] Face match merged: ${faceMatch.driverInfo?.driverName} → participant #${participant.numero}`);
+        }
+      }
+    }
 
     if (analysisResult.analysis && analysisResult.analysis.length > 0) {
       // Apply competition type filter based on sport category configuration
@@ -4382,7 +4412,31 @@ class UnifiedImageWorker extends EventEmitter {
       );
 
       // Enhanced intelligent matching using SmartMatcher with temporal context for ALL vehicles
-      const csvMatches = await this.findIntelligentMatches(analysisResult.analysis, imageFile, processor, temporalContext);
+      let csvMatches = await this.findIntelligentMatches(analysisResult.analysis, imageFile, processor, temporalContext);
+
+      // Merge face recognition matches (avoid duplicates by race number)
+      if (faceMatchedCsvEntries.length > 0) {
+        const existingNumbers = new Set(
+          (Array.isArray(csvMatches) ? csvMatches : csvMatches ? [csvMatches] : [])
+            .filter((m: any) => m?.entry?.numero)
+            .map((m: any) => String(m.entry.numero))
+        );
+
+        for (const faceEntry of faceMatchedCsvEntries) {
+          if (!existingNumbers.has(String(faceEntry.entry.numero))) {
+            if (Array.isArray(csvMatches)) {
+              csvMatches.push(faceEntry);
+            } else if (csvMatches) {
+              csvMatches = [csvMatches, faceEntry];
+            } else {
+              csvMatches = [faceEntry];
+            }
+            log.info(`[FaceRecognition→Metadata] Added face-only match for #${faceEntry.entry.numero} (not found by number recognition)`);
+          } else {
+            log.info(`[FaceRecognition→Metadata] Skipping #${faceEntry.entry.numero} - already matched by number recognition`);
+          }
+        }
+      }
 
       // Costruisci i keywords usando la logica esistente (utilizzeremo tutti i matches)
       const keywords = this.buildMetatag(analysisResult.analysis, csvMatches);
@@ -4390,6 +4444,12 @@ class UnifiedImageWorker extends EventEmitter {
 
       // Store all matches for further processing
       csvMatch = csvMatches;
+    } else if (faceMatchedCsvEntries.length > 0) {
+      // No AI analysis results, but face recognition found matches — use them directly
+      log.info(`[FaceRecognition→Metadata] No AI analysis results, using ${faceMatchedCsvEntries.length} face-only match(es)`);
+      csvMatch = faceMatchedCsvEntries;
+      const keywords = this.buildMetatag([], faceMatchedCsvEntries);
+      description = keywords && keywords.length > 0 ? keywords.join(', ') : null;
     }
 
     // Apply SmartMatcher corrections to analysis data for UI display (now handles all vehicles)
@@ -4419,6 +4479,12 @@ class UnifiedImageWorker extends EventEmitter {
           // If no match and using preset, vehicle was filtered out - don't include in csvMatch
         }
 
+        // Preserve face recognition matches appended beyond the analysis array
+        for (let i = originalAnalysis.length; i < csvMatch.length; i++) {
+          if (csvMatch[i]?.matchedBy === 'face_recognition' && csvMatch[i]?.entry) {
+            filteredCsvMatch.push(csvMatch[i]);
+          }
+        }
       }
     }
 

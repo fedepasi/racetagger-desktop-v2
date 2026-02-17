@@ -89,19 +89,19 @@ const COSINE_CONTEXT_CONFIG: Record<FaceContext, {
 }> = {
   portrait: {
     maxFaces: 1,
-    matchThreshold: 0.65
+    matchThreshold: 0.60
   },
   action: {
     maxFaces: 3,
-    matchThreshold: 0.58
+    matchThreshold: 0.55
   },
   podium: {
     maxFaces: 5,
-    matchThreshold: 0.60
+    matchThreshold: 0.55
   },
   auto: {
     maxFaces: 5,
-    matchThreshold: 0.62
+    matchThreshold: 0.55
   }
 };
 
