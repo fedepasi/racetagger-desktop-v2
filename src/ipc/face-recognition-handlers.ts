@@ -233,5 +233,43 @@ export function registerFaceRecognitionHandlers(): void {
     }
   });
 
-  console.log('[FaceRecognition IPC] Registered 9 face recognition handlers (ONNX pipeline)');
+  // Download AuraFace model from Supabase Storage (for first-time setup or updates)
+  ipcMain.handle('face-recognition-download-model', async () => {
+    try {
+      const { FaceEmbeddingService } = await import('../face-embedding-service');
+      const embedder = FaceEmbeddingService.getInstance();
+
+      if (embedder.isModelLoaded()) {
+        return { success: true, alreadyLoaded: true, message: 'AuraFace model already loaded' };
+      }
+
+      if (embedder.isModelAvailable()) {
+        // Model file exists but not loaded — load it
+        const loaded = await embedder.loadModel();
+        return { success: loaded, alreadyAvailable: true, message: loaded ? 'Model loaded from cache' : 'Model found but failed to load' };
+      }
+
+      // Download from Supabase Storage
+      const modelPath = await embedder.downloadModel((percent, dlMB, totalMB) => {
+        if (percent % 10 === 0) {
+          console.log(`[FaceRecognition IPC] AuraFace download: ${percent}% (${dlMB.toFixed(1)}/${totalMB.toFixed(1)} MB)`);
+        }
+      });
+
+      // Load the downloaded model
+      const loaded = await embedder.loadModel(modelPath);
+
+      return {
+        success: loaded,
+        downloaded: true,
+        modelPath,
+        message: loaded ? 'AuraFace downloaded and loaded successfully' : 'Downloaded but failed to load'
+      };
+    } catch (error) {
+      console.error('[FaceRecognition IPC] Download model error:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  console.log('[FaceRecognition IPC] Registered 10 face recognition handlers (ONNX pipeline)');
 }

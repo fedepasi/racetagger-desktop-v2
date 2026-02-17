@@ -195,6 +195,7 @@ const validInvokeChannels: string[] = [
   'face-recognition-detect-and-embed',
   'face-recognition-migrate-descriptors',
   'face-recognition-cancel-migration',
+  'face-recognition-download-model',
 
   // Preset Face Photos Operations
   'preset-face-upload-photo',

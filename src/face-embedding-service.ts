@@ -19,9 +19,15 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { app } from 'electron';
 import sharp from 'sharp';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { APP_CONFIG } from './config';
 
 // ONNX Runtime - lazy loaded
 let ort: typeof import('onnxruntime-node') | null = null;
+
+// Supabase config for model download
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://fwoqfgeviftmkxivtpkg.supabase.co';
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
 
 // ============================================
 // Type Definitions
@@ -154,9 +160,84 @@ export class FaceEmbeddingService {
   }
 
   /**
+   * Download AuraFace model from Supabase Storage bucket.
+   * Uses the configured bucket (ml-models) and path (face-recognition/auraface-v1/).
+   * Returns the local path where the model was saved.
+   */
+  public async downloadModel(
+    onProgress?: (percent: number, downloadedMB: number, totalMB: number) => void
+  ): Promise<string> {
+    const cacheDir = this.getModelCacheDir();
+    if (!fs.existsSync(cacheDir)) {
+      fs.mkdirSync(cacheDir, { recursive: true });
+    }
+
+    const localPath = path.join(cacheDir, AURAFACE_MODEL_FILENAME);
+    const bucketName = APP_CONFIG.faceRecognition.modelStorageBucket;
+    const storagePath = APP_CONFIG.faceRecognition.modelStoragePath + AURAFACE_MODEL_FILENAME;
+
+    console.log(`[FaceEmbeddingService] Downloading AuraFace from bucket '${bucketName}' path '${storagePath}'...`);
+
+    // Get signed URL from Supabase Storage
+    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    const { data: signedUrlData, error: signedUrlError } = await supabase.storage
+      .from(bucketName)
+      .createSignedUrl(storagePath, 3600); // 1 hour expiry
+
+    if (signedUrlError || !signedUrlData?.signedUrl) {
+      throw new Error(
+        `[FaceEmbeddingService] Failed to get download URL: ${signedUrlError?.message || 'no signed URL'}. ` +
+        `Bucket: ${bucketName}, Path: ${storagePath}`
+      );
+    }
+
+    // Download with progress
+    const response = await fetch(signedUrlData.signedUrl);
+    if (!response.ok) {
+      throw new Error(`[FaceEmbeddingService] Download failed: ${response.status} ${response.statusText}`);
+    }
+
+    const contentLength = response.headers.get('content-length');
+    const totalBytes = contentLength ? parseInt(contentLength, 10) : 0;
+    const totalMB = totalBytes / (1024 * 1024);
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error('[FaceEmbeddingService] Failed to get response reader');
+    }
+
+    const chunks: Uint8Array[] = [];
+    let downloadedBytes = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      chunks.push(value);
+      downloadedBytes += value.length;
+
+      if (onProgress && totalBytes > 0) {
+        const percent = Math.round((downloadedBytes / totalBytes) * 100);
+        const downloadedMB = downloadedBytes / (1024 * 1024);
+        onProgress(percent, downloadedMB, totalMB);
+      }
+    }
+
+    // Write to disk
+    const fileBuffer = Buffer.concat(chunks.map(chunk => Buffer.from(chunk)));
+    fs.writeFileSync(localPath, fileBuffer);
+
+    const finalSizeMB = (fileBuffer.length / (1024 * 1024)).toFixed(1);
+    console.log(`[FaceEmbeddingService] AuraFace downloaded: ${finalSizeMB}MB → ${localPath}`);
+
+    return localPath;
+  }
+
+  /**
    * Load the AuraFace ONNX model.
    * If modelPath is provided, uses that directly.
    * Otherwise searches in standard locations.
+   * If not found locally, attempts auto-download from Supabase Storage.
    */
   public async loadModel(modelPath?: string): Promise<boolean> {
     if (this.session) return true;
@@ -178,12 +259,23 @@ export class FaceEmbeddingService {
         throw new Error('ONNX Runtime initialization failed');
       }
 
-      const resolvedPath = modelPath || this.getModelPath();
+      let resolvedPath = modelPath || this.getModelPath();
+
+      // Auto-download if not found locally
       if (!resolvedPath) {
-        throw new Error(
-          'AuraFace model not found. Please download it first via ModelManager. ' +
-          `Expected in: ${this.getModelCacheDir()}`
-        );
+        console.log('[FaceEmbeddingService] Model not found locally, attempting auto-download...');
+        try {
+          resolvedPath = await this.downloadModel((percent, dlMB, totalMB) => {
+            if (percent % 10 === 0) {
+              console.log(`[FaceEmbeddingService] Download progress: ${percent}% (${dlMB.toFixed(1)}/${totalMB.toFixed(1)} MB)`);
+            }
+          });
+        } catch (downloadError: any) {
+          throw new Error(
+            `AuraFace model not found locally and auto-download failed: ${downloadError.message}. ` +
+            `Expected in: ${this.getModelCacheDir()}`
+          );
+        }
       }
 
       console.log(`[FaceEmbeddingService] Loading AuraFace v1 from: ${resolvedPath}`);
