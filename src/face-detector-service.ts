@@ -78,8 +78,11 @@ export class FaceDetectorService {
   private readonly ONNX_MODEL_NAME = 'face_detection_yunet_2023mar.onnx';
 
   // Detection thresholds
-  private readonly CONFIDENCE_THRESHOLD = 0.7;
-  private readonly NMS_IOU_THRESHOLD = 0.5;
+  private readonly CONFIDENCE_THRESHOLD = 0.6;
+  private readonly NMS_IOU_THRESHOLD = 0.3;
+
+  // YuNet feature pyramid strides
+  private readonly STRIDES = [8, 16, 32];
 
   private constructor() {}
 
@@ -301,55 +304,97 @@ export class FaceDetectorService {
   }
 
   /**
-   * Parse YuNet raw output into face detections.
-   * YuNet outputs [N, 15] where each row is:
-   *   [x, y, w, h, x_re, y_re, x_le, y_le, x_n, y_n, x_rm, y_rm, x_lm, y_lm, score]
-   * All coordinates are in input (640x640) pixel space.
+   * Decode YuNet multi-head output tensors into face detections.
+   *
+   * YuNet 2023mar uses an anchor-free SSD-style architecture with 3 feature pyramid
+   * levels (strides 8, 16, 32). Each level outputs 4 separate tensors:
+   *   - cls_X:  classification scores  [1, H/X * W/X, 1]
+   *   - obj_X:  objectness scores      [1, H/X * W/X, 1]
+   *   - bbox_X: bounding box offsets   [1, H/X * W/X, 4]
+   *   - kps_X:  keypoint offsets       [1, H/X * W/X, 10]
+   *
+   * Decoding (from OpenCV face_detect.cpp):
+   *   score = sqrt(clamp(cls, 0, 1) * clamp(obj, 0, 1))
+   *   cx = (col + bbox[0]) * stride;  cy = (row + bbox[1]) * stride
+   *   w  = exp(bbox[2]) * stride;     h  = exp(bbox[3]) * stride
+   *   x1 = cx - w/2;  y1 = cy - h/2
+   *   kp_x = (kps[2n] + col) * stride;  kp_y = (kps[2n+1] + row) * stride
    */
-  private parseOutput(
-    outputData: Float32Array,
-    numDetections: number,
-    originalWidth: number,
-    originalHeight: number
+  private decodeMultiScaleOutputs(
+    results: Record<string, any>
   ): DetectedFaceRegion[] {
     const faces: DetectedFaceRegion[] = [];
-    const stride = 15; // YuNet output stride
 
-    for (let i = 0; i < numDetections; i++) {
-      const offset = i * stride;
-      const score = outputData[offset + 14];
+    for (let i = 0; i < this.STRIDES.length; i++) {
+      const stride = this.STRIDES[i];
+      const suffix = `_${stride}`;
 
-      if (score < this.CONFIDENCE_THRESHOLD) continue;
+      // Read tensors for this stride level
+      const clsTensor = results[`cls${suffix}`];
+      const objTensor = results[`obj${suffix}`];
+      const bboxTensor = results[`bbox${suffix}`];
+      const kpsTensor = results[`kps${suffix}`];
 
-      // Bounding box in 640x640 space
-      const bx = outputData[offset + 0];
-      const by = outputData[offset + 1];
-      const bw = outputData[offset + 2];
-      const bh = outputData[offset + 3];
-
-      // Normalize to 0-1 range relative to original image
-      const x = Math.max(0, bx / this.INPUT_WIDTH);
-      const y = Math.max(0, by / this.INPUT_HEIGHT);
-      const width = Math.min(1 - x, bw / this.INPUT_WIDTH);
-      const height = Math.min(1 - y, bh / this.INPUT_HEIGHT);
-
-      // 5 landmarks (right_eye, left_eye, nose, right_mouth, left_mouth)
-      // Normalize to 0-1
-      const landmarks: [number, number][] = [];
-      for (let j = 0; j < 5; j++) {
-        const lx = outputData[offset + 4 + j * 2] / this.INPUT_WIDTH;
-        const ly = outputData[offset + 5 + j * 2] / this.INPUT_HEIGHT;
-        landmarks.push([lx, ly]);
+      if (!clsTensor || !objTensor || !bboxTensor || !kpsTensor) {
+        log.warn(`[FaceDetectorService] Missing output tensors for stride ${stride}`);
+        continue;
       }
 
-      faces.push({
-        x,
-        y,
-        width,
-        height,
-        confidence: score,
-        landmarks
-      });
+      const clsData = clsTensor.data as Float32Array;
+      const objData = objTensor.data as Float32Array;
+      const bboxData = bboxTensor.data as Float32Array;
+      const kpsData = kpsTensor.data as Float32Array;
+
+      // Grid dimensions for this stride
+      const cols = Math.floor(this.INPUT_WIDTH / stride);
+      const rows = Math.floor(this.INPUT_HEIGHT / stride);
+      const numCells = rows * cols;
+
+      for (let idx = 0; idx < numCells; idx++) {
+        // Score = sqrt(clamp(cls, 0, 1) * clamp(obj, 0, 1))
+        const clsScore = Math.min(1, Math.max(0, clsData[idx]));
+        const objScore = Math.min(1, Math.max(0, objData[idx]));
+        const score = Math.sqrt(clsScore * objScore);
+
+        if (score < this.CONFIDENCE_THRESHOLD) continue;
+
+        const row = Math.floor(idx / cols);
+        const col = idx % cols;
+
+        // Decode bounding box (center-form → corner-form, in input pixel space)
+        const cx = (col + bboxData[idx * 4 + 0]) * stride;
+        const cy = (row + bboxData[idx * 4 + 1]) * stride;
+        const w = Math.exp(bboxData[idx * 4 + 2]) * stride;
+        const h = Math.exp(bboxData[idx * 4 + 3]) * stride;
+        const x1 = cx - w / 2;
+        const y1 = cy - h / 2;
+
+        // Normalize to 0-1 range relative to input image
+        const nx = Math.max(0, x1 / this.INPUT_WIDTH);
+        const ny = Math.max(0, y1 / this.INPUT_HEIGHT);
+        const nw = Math.min(1 - nx, w / this.INPUT_WIDTH);
+        const nh = Math.min(1 - ny, h / this.INPUT_HEIGHT);
+
+        // Decode 5 landmarks: right_eye, left_eye, nose, right_mouth, left_mouth
+        const landmarks: [number, number][] = [];
+        for (let n = 0; n < 5; n++) {
+          const lx = (kpsData[idx * 10 + 2 * n] + col) * stride / this.INPUT_WIDTH;
+          const ly = (kpsData[idx * 10 + 2 * n + 1] + row) * stride / this.INPUT_HEIGHT;
+          landmarks.push([
+            Math.max(0, Math.min(1, lx)),
+            Math.max(0, Math.min(1, ly))
+          ]);
+        }
+
+        faces.push({
+          x: nx,
+          y: ny,
+          width: nw,
+          height: nh,
+          confidence: score,
+          landmarks
+        });
+      }
     }
 
     return faces;
@@ -403,21 +448,15 @@ export class FaceDetectorService {
       feeds[this.session.inputNames[0]] = inputTensor;
       const results = await this.session.run(feeds);
 
-      // Parse output
-      const outputName = this.session.outputNames[0];
-      const outputTensor = results[outputName];
-      const outputData = outputTensor.data as Float32Array;
-      const shape = outputTensor.dims; // [1, N, 15] or [N, 15]
-
-      const numDetections = shape.length === 3 ? shape[1] : shape[0];
-
-      // Parse raw detections
-      let faces = this.parseOutput(outputData, numDetections, originalWidth, originalHeight);
+      // Decode multi-scale YuNet outputs (cls, obj, bbox, kps at strides 8, 16, 32)
+      let faces = this.decodeMultiScaleOutputs(results);
 
       // Apply NMS
       faces = this.nms(faces);
 
       const inferenceTimeMs = Date.now() - startTime;
+
+      log.info(`[FaceDetectorService] Detected ${faces.length} face(s) in ${inferenceTimeMs}ms`);
 
       return {
         success: true,
