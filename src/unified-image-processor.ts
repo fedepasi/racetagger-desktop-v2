@@ -473,7 +473,7 @@ class UnifiedImageWorker extends EventEmitter {
   private async checkPresetDescriptorCount(presetId: string): Promise<number> {
     try {
       // Query through preset_participants → preset_participant_face_photos
-      // The face_photos table links via participant_id, not preset_id directly
+      // Photos can be linked via participant_id OR via driver_id (through preset_participant_drivers)
       const { data: participants, error: pError } = await this.supabase
         .from('preset_participants')
         .select('id')
@@ -485,18 +485,43 @@ class UnifiedImageWorker extends EventEmitter {
       }
 
       const participantIds = participants.map((p: any) => p.id);
-      const { count, error: fError } = await this.supabase
+      let totalCount = 0;
+
+      // 1. Count participant-level face photos (linked via participant_id)
+      const { count: participantPhotoCount, error: fError } = await this.supabase
         .from('preset_participant_face_photos')
         .select('id', { count: 'exact', head: true })
         .in('participant_id', participantIds)
         .or('face_descriptor_512.not.is.null,face_descriptor.not.is.null');
 
       if (fError) {
-        log.warn(`[FaceRecognition] Pre-check face photos query failed: ${fError.message}`);
-        return -1;
+        log.warn(`[FaceRecognition] Pre-check participant photos query failed: ${fError.message}`);
+      } else {
+        totalCount += participantPhotoCount ?? 0;
       }
 
-      return count ?? 0;
+      // 2. Count driver-level face photos (linked via driver_id through preset_participant_drivers)
+      const { data: drivers, error: dError } = await this.supabase
+        .from('preset_participant_drivers')
+        .select('id')
+        .in('participant_id', participantIds);
+
+      if (!dError && drivers && drivers.length > 0) {
+        const driverIds = drivers.map((d: any) => d.id);
+        const { count: driverPhotoCount, error: dfError } = await this.supabase
+          .from('preset_participant_face_photos')
+          .select('id', { count: 'exact', head: true })
+          .in('driver_id', driverIds)
+          .or('face_descriptor_512.not.is.null,face_descriptor.not.is.null');
+
+        if (dfError) {
+          log.warn(`[FaceRecognition] Pre-check driver photos query failed: ${dfError.message}`);
+        } else {
+          totalCount += driverPhotoCount ?? 0;
+        }
+      }
+
+      return totalCount;
     } catch (err: any) {
       log.warn(`[FaceRecognition] Pre-check error: ${err.message || err}`);
       return -1;
