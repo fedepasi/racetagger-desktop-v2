@@ -589,11 +589,42 @@ export class FaceRecognitionProcessor {
     };
   }
 
+  // Cache to prevent redundant DB loads when multiple workers call loadFromPreset
+  private _loadedPresetId: string | null = null;
+  private _loadingPromise: Promise<number> | null = null;
+
   /**
    * Load face descriptors from a participant preset.
    * Dual-read: prefers face_descriptor_512, falls back to face_descriptor.
+   * Cached: if already loaded for the same presetId, returns immediately.
+   * Deduped: if loading is in progress, waits for the same promise.
    */
   async loadFromPreset(presetId: string): Promise<number> {
+    // Already loaded for this preset - return cached count
+    if (this._loadedPresetId === presetId && this.storedFaces.size > 0) {
+      const totalDescriptors = this.storedFaces.size;
+      console.log(`[FaceRecognition] Descriptors already loaded for preset ${presetId}: ${totalDescriptors} descriptors (cached)`);
+      return totalDescriptors;
+    }
+
+    // Loading in progress - wait for it
+    if (this._loadingPromise) {
+      console.log(`[FaceRecognition] Waiting for in-progress descriptor load...`);
+      return this._loadingPromise;
+    }
+
+    // Start loading and cache the promise
+    this._loadingPromise = this._doLoadFromPreset(presetId);
+    try {
+      const result = await this._loadingPromise;
+      this._loadedPresetId = presetId;
+      return result;
+    } finally {
+      this._loadingPromise = null;
+    }
+  }
+
+  private async _doLoadFromPreset(presetId: string): Promise<number> {
     try {
       const { loadPresetFaceDescriptors } = await import('./database-service');
 
