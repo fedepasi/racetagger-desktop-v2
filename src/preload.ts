@@ -43,10 +43,11 @@ const validSendReceiveChannels: string[] = [
   'categories-updated',
   'auth-refresh-completed',
   'auth-session-expired',
-  // Face Detection IPC channels (main -> renderer -> main)
-  'face-detection-request', 'face-detection-response',
-  'face-detection-single-request', 'face-detection-single-response',
-  'face-descriptor-request', 'face-descriptor-response',
+  // Face Detection IPC channels — REMOVED: ONNX pipeline runs in main process
+  // Legacy channels kept for backward compatibility (no-op):
+  // 'face-detection-request', 'face-detection-response',
+  // 'face-detection-single-request', 'face-detection-single-response',
+  // 'face-descriptor-request', 'face-descriptor-response',
   // Export Destinations progress channels
   'export-started',
   'export-progress',
@@ -184,13 +185,16 @@ const validInvokeChannels: string[] = [
   // Local Thumbnail Operations
   'find-local-thumbnails',
 
-  // Face Recognition Operations
+  // Face Recognition Operations (ONNX pipeline — main process)
   'face-recognition-initialize',
   'face-recognition-load-descriptors',
   'face-recognition-match',
   'face-recognition-status',
   'face-recognition-clear',
   'face-recognition-load-from-database',
+  'face-recognition-detect-and-embed',
+  'face-recognition-migrate-descriptors',
+  'face-recognition-cancel-migration',
 
   // Preset Face Photos Operations
   'preset-face-upload-photo',

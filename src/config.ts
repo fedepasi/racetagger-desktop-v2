@@ -333,7 +333,11 @@ export const APP_CONFIG = {
   // Feature flags for experimental functionality
   features: {
     // ADMIN FEATURE: Folder organization - Easy to remove by setting to false
-    ENABLE_FOLDER_ORGANIZATION: true  // Enable folder organization by race number (admin-only)
+    ENABLE_FOLDER_ORGANIZATION: true,  // Enable folder organization by race number (admin-only)
+    // FACE RECOGNITION: AuraFace v1 ONNX (512-dim cosine similarity)
+    // When true: uses YuNet + AuraFace in main process (no face-api.js / canvas)
+    // When false: face recognition disabled (Coming Soon state)
+    AURAFACE_ENABLED: true
   },
   // Legacy performance optimizations (kept for backward compatibility)
   performance: {

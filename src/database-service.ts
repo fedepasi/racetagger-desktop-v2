@@ -980,7 +980,9 @@ export interface CreatePresetFacePhotoParams {
   user_id: string; // Required for RLS policy
   photo_url: string;
   storage_path: string;
-  face_descriptor?: number[];
+  face_descriptor?: number[];        // Legacy 128-dim (face-api.js)
+  face_descriptor_512?: number[];    // AuraFace v1 512-dim
+  descriptor_model?: string;         // 'face-api-js' | 'auraface-v1'
   photo_type?: 'reference' | 'action' | 'podium' | 'helmet_off';
   detection_confidence?: number;
   is_primary?: boolean;
@@ -2494,19 +2496,30 @@ export async function addPresetParticipantFacePhoto(params: CreatePresetFacePhot
     // Use authenticated client from authService for RLS policy compliance
     const authenticatedClient = authService.getSupabaseClient();
 
+    // Build insert object with optional 512-dim fields
+    const insertData: Record<string, any> = {
+      participant_id: params.participant_id,
+      driver_id: params.driver_id,
+      user_id: params.user_id,
+      photo_url: params.photo_url,
+      storage_path: params.storage_path,
+      face_descriptor: params.face_descriptor || null,
+      photo_type: params.photo_type || 'reference',
+      detection_confidence: params.detection_confidence || null,
+      is_primary: params.is_primary || false
+    };
+
+    // Include 512-dim descriptor if provided (AuraFace v1)
+    if (params.face_descriptor_512) {
+      insertData.face_descriptor_512 = params.face_descriptor_512;
+    }
+    if (params.descriptor_model) {
+      insertData.descriptor_model = params.descriptor_model;
+    }
+
     const { data, error } = await authenticatedClient
       .from('preset_participant_face_photos')
-      .insert({
-        participant_id: params.participant_id,
-        driver_id: params.driver_id,
-        user_id: params.user_id,
-        photo_url: params.photo_url,
-        storage_path: params.storage_path,
-        face_descriptor: params.face_descriptor || null,
-        photo_type: params.photo_type || 'reference',
-        detection_confidence: params.detection_confidence || null,
-        is_primary: params.is_primary || false
-      })
+      .insert(insertData)
       .select()
       .single();
 
@@ -2632,6 +2645,8 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
           id,
           photo_url,
           face_descriptor,
+          face_descriptor_512,
+          descriptor_model,
           photo_type,
           is_primary,
           detection_confidence
@@ -2649,17 +2664,25 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
       const facePhotos = (participant as any).preset_participant_face_photos || [];
 
       for (const photo of facePhotos) {
-        // Skip photos without descriptors
-        if (!photo.face_descriptor || !Array.isArray(photo.face_descriptor) || photo.face_descriptor.length !== 128) {
-          continue;
+        // Dual-read: prefer face_descriptor_512 (AuraFace 512-dim), fallback to face_descriptor (128-dim)
+        const descriptor512 = photo.face_descriptor_512;
+        const descriptor128 = photo.face_descriptor;
+
+        let descriptor: number[] | null = null;
+        if (descriptor512 && Array.isArray(descriptor512) && descriptor512.length === 512) {
+          descriptor = Array.from(descriptor512);
+        } else if (descriptor128 && Array.isArray(descriptor128) && descriptor128.length === 128) {
+          descriptor = Array.from(descriptor128);
         }
+
+        if (!descriptor) continue;
 
         descriptors.push({
           personId: participant.id,
           personName: participant.nome || `#${participant.numero}`,
           team: participant.squadra || '',
           carNumber: participant.numero,
-          descriptor: Array.from(photo.face_descriptor),
+          descriptor,
           referencePhotoUrl: photo.photo_url,
           source: 'preset',
           photoType: photo.photo_type || 'reference',
@@ -2701,12 +2724,13 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
             driver_id,
             photo_url,
             face_descriptor,
+            face_descriptor_512,
+            descriptor_model,
             photo_type,
             is_primary,
             detection_confidence
           `)
-          .in('driver_id', driverIds)
-          .not('face_descriptor', 'is', null);
+          .in('driver_id', driverIds);
 
         if (photosError) {
           console.error('[DB] Error loading driver face photos:', photosError);
@@ -2720,10 +2744,18 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
             const facePhotos = (driverPhotos || []).filter(p => p.driver_id === driver.id);
 
             for (const photo of facePhotos) {
-              // Skip photos without valid descriptors
-              if (!photo.face_descriptor || !Array.isArray(photo.face_descriptor) || photo.face_descriptor.length !== 128) {
-                continue;
+              // Dual-read: prefer face_descriptor_512 (AuraFace 512-dim), fallback to face_descriptor (128-dim)
+              const descriptor512 = photo.face_descriptor_512;
+              const descriptor128 = photo.face_descriptor;
+
+              let descriptor: number[] | null = null;
+              if (descriptor512 && Array.isArray(descriptor512) && descriptor512.length === 512) {
+                descriptor = Array.from(descriptor512);
+              } else if (descriptor128 && Array.isArray(descriptor128) && descriptor128.length === 128) {
+                descriptor = Array.from(descriptor128);
               }
+
+              if (!descriptor) continue;
 
               descriptors.push({
                 personId: driver.id,
@@ -2731,7 +2763,7 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
                 personMetatag: driver.driver_metatag || undefined,
                 team: participant?.squadra || '',
                 carNumber: participant?.numero || '',
-                descriptor: Array.from(photo.face_descriptor),
+                descriptor,
                 referencePhotoUrl: photo.photo_url,
                 source: 'preset',
                 photoType: photo.photo_type || 'reference',

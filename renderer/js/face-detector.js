@@ -429,11 +429,12 @@ function setupFaceDetectionIPC() {
 // ============================================
 
 function initFaceDetector() {
-  // Face recognition is disabled (coming soon) - skip model loading to save memory
-  const FACE_RECOGNITION_ENABLED = false;
+  // Face recognition now runs entirely in main process via ONNX (YuNet + AuraFace)
+  // This renderer-side face-api.js detector is deprecated and no longer loaded.
+  const FACE_RECOGNITION_IN_MAIN_PROCESS = true;
 
-  if (!FACE_RECOGNITION_ENABLED) {
-    console.log('[FaceDetector] Face recognition disabled (coming soon) - skipping model initialization');
+  if (FACE_RECOGNITION_IN_MAIN_PROCESS) {
+    console.log('[FaceDetector] Face recognition runs in main process (ONNX) - renderer detector not needed');
     // Still export the class/functions so nothing breaks, but don't load models
     return null;
   }

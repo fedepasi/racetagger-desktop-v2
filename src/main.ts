@@ -106,7 +106,7 @@ import { rawConverter } from './utils/raw-converter'; // Import for temp cleanup
 import { rawPreviewExtractor } from './utils/raw-preview-native'; // Native RAW preview extraction
 import { unifiedImageProcessor, UnifiedImageFile, UnifiedProcessingResult, UnifiedProcessorConfig } from './unified-image-processor';
 import { FolderOrganizerConfig } from './utils/folder-organizer';
-import { getFaceDetectionBridge } from './face-detection-bridge';
+// face-detection-bridge removed — ONNX pipeline runs in main process (no IPC bridge needed)
 import { getModelManager } from './model-manager';
 // Modular IPC handlers
 import { registerAllHandlers, initializeIpcContext, isForceUpdateRequired, checkAppVersion, isBatchProcessingCancelled, setBatchProcessingCancelled } from './ipc';
@@ -470,8 +470,7 @@ function createWindow() {
   // Set main window reference for auth service
   authService.setMainWindow(mainWindow);
 
-  // Set main window reference for face detection bridge (for IPC communication)
-  getFaceDetectionBridge().setMainWindow(mainWindow);
+  // Face recognition now runs entirely in main process via ONNX — no bridge needed
 
   // Enable @electron/remote for this window
   if (remoteEnable) {

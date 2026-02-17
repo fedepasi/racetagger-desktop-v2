@@ -11,8 +11,8 @@
  * - Each driver gets their own PresetFaceManager instance
  */
 
-// Feature flag: set to true to re-enable face recognition
-const FACE_RECOGNITION_ENABLED = false;
+// Feature flag: face recognition enabled (AuraFace v1 ONNX pipeline)
+const FACE_RECOGNITION_ENABLED = true;
 
 class DriverFaceManagerMulti {
   constructor() {
@@ -49,7 +49,7 @@ class DriverFaceManagerMulti {
    */
   async load(participantId, presetId, userId, isOfficial, driverNames = [], existingDrivers = null) {
     if (!FACE_RECOGNITION_ENABLED) {
-      console.log('[DriverFaceManagerMulti] Face recognition disabled (coming soon) - skipping load');
+      console.log('[DriverFaceManagerMulti] Face recognition disabled - skipping load');
       return;
     }
 

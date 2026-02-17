@@ -27,7 +27,28 @@ import { ModelManager, getModelManager, ModelStatus } from './model-manager';
 import { GenericSegmenter, getGenericSegmenter, SegmentationResult, GenericSegmenterOutput } from './generic-segmenter';
 import { parseSegmentationConfig, getDefaultModelId } from './yolo-model-registry';
 import { createComponentLogger } from './utils/logger';
-import { getFaceDetectionBridge, FaceRecognitionResult } from './face-detection-bridge';
+import { FaceRecognitionOnnxProcessor, FaceRecognitionOnnxResult, FaceWithEmbedding } from './face-recognition-onnx-processor';
+import { faceRecognitionProcessor, FaceContext, PersonMatch } from './face-recognition-processor';
+
+// Bridge-compatible result type for face recognition (replaces old face-detection-bridge)
+interface FaceRecognitionResult {
+  success: boolean;
+  matches: Array<{
+    matched: boolean;
+    driverInfo?: {
+      driverId: string;
+      driverName: string;
+      teamName: string;
+      raceNumber: string;
+    };
+    similarity: number;
+    faceIndex: number;
+  }>;
+  detectionTimeMs: number;
+  matchingTimeMs: number;
+  totalTimeMs: number;
+  error?: string;
+}
 import { consentService } from './consent-service';
 import {
   extractCropContext,
@@ -483,10 +504,15 @@ class UnifiedImageWorker extends EventEmitter {
       }
       // If -1 (error), proceed with full initialization (safe fallback)
 
-      await getFaceDetectionBridge().initialize();
+      // Initialize ONNX face recognition processor (YuNet + AuraFace)
+      const onnxProcessor = FaceRecognitionOnnxProcessor.getInstance();
+      await onnxProcessor.initialize();
+
+      // Initialize matching processor
+      await faceRecognitionProcessor.initialize();
 
       // Load face descriptors from the participant preset
-      const descriptorCount = await getFaceDetectionBridge().loadDescriptorsForPreset(this.config.presetId);
+      const descriptorCount = await faceRecognitionProcessor.loadFromPreset(this.config.presetId);
       log.info(`Face recognition: Loaded ${descriptorCount} descriptors from preset ${this.config.presetId}`);
 
       if (descriptorCount > 0) {
@@ -581,11 +607,68 @@ class UnifiedImageWorker extends EventEmitter {
     }
 
     try {
-      const result = await getFaceDetectionBridge().detectAndMatch(imagePath, context);
-      if (result.success && result.matches.length > 0) {
-        const matchedCount = result.matches.filter((m: any) => m.matched).length;
+      const startTime = Date.now();
+
+      // Step 1: Detect faces + generate embeddings via ONNX (main process)
+      const onnxProcessor = FaceRecognitionOnnxProcessor.getInstance();
+      const onnxResult = await onnxProcessor.detectAndEmbed(imagePath);
+
+      if (!onnxResult.success || onnxResult.faces.length === 0) {
+        return {
+          success: true,
+          matches: [],
+          detectionTimeMs: onnxResult.detectionTimeMs,
+          matchingTimeMs: 0,
+          totalTimeMs: Date.now() - startTime
+        };
+      }
+
+      // Step 2: Match embeddings against loaded descriptors
+      const matchStartTime = Date.now();
+      const embeddings = onnxResult.faces
+        .filter(f => f.embedding && f.embedding.length > 0)
+        .map(f => ({ faceIndex: f.faceIndex, embedding: f.embedding }));
+
+      const personMatches = faceRecognitionProcessor.matchEmbeddings(embeddings, context as FaceContext);
+      const matchingTimeMs = Date.now() - matchStartTime;
+
+      // Convert to bridge-compatible format
+      const matches: FaceRecognitionResult['matches'] = personMatches.map((pm: PersonMatch) => ({
+        matched: true,
+        driverInfo: {
+          driverId: pm.personId,
+          driverName: pm.personName,
+          teamName: pm.team,
+          raceNumber: pm.carNumber
+        },
+        similarity: pm.confidence,
+        faceIndex: pm.faceIndex
+      }));
+
+      // Add unmatched faces
+      for (let i = 0; i < onnxResult.faces.length; i++) {
+        if (!matches.some(m => m.faceIndex === i)) {
+          matches.push({
+            matched: false,
+            similarity: 0,
+            faceIndex: i
+          });
+        }
+      }
+
+      const result: FaceRecognitionResult = {
+        success: true,
+        matches,
+        detectionTimeMs: onnxResult.detectionTimeMs,
+        matchingTimeMs,
+        totalTimeMs: Date.now() - startTime
+      };
+
+      if (result.matches.length > 0) {
+        const matchedCount = result.matches.filter(m => m.matched).length;
         log.info(`Face recognition: ${matchedCount}/${result.matches.length} faces matched in ${result.totalTimeMs}ms`);
       }
+
       return result;
     } catch (error) {
       log.warn('Face recognition failed:', error);
