@@ -236,6 +236,7 @@ class UnifiedImageWorker extends EventEmitter {
   // Face Recognition (ONNX-based: YuNet detection + AuraFace embedding)
   private faceRecognitionEnabled: boolean = false;
   private faceDescriptorsLoaded: boolean = false;
+  private _dimMismatchWarned: boolean = false;
   // RAW preview calibration strategy (set by processor from calibration results)
   private rawPreviewStrategies: Map<string, RawPreviewStrategy> = new Map();
   private faceDescriptorCount: number = 0;
@@ -471,16 +472,28 @@ class UnifiedImageWorker extends EventEmitter {
    */
   private async checkPresetDescriptorCount(presetId: string): Promise<number> {
     try {
-      // Check for 512-dim descriptors first, then fall back to 128-dim
-      const { count, error } = await this.supabase
+      // Query through preset_participants → preset_participant_face_photos
+      // The face_photos table links via participant_id, not preset_id directly
+      const { data: participants, error: pError } = await this.supabase
+        .from('preset_participants')
+        .select('id')
+        .eq('preset_id', presetId);
+
+      if (pError || !participants || participants.length === 0) {
+        if (pError) log.warn(`[FaceRecognition] Pre-check participants query failed: ${pError.message}`);
+        return participants?.length === 0 ? 0 : -1;
+      }
+
+      const participantIds = participants.map((p: any) => p.id);
+      const { count, error: fError } = await this.supabase
         .from('preset_participant_face_photos')
         .select('id', { count: 'exact', head: true })
-        .eq('preset_id', presetId)
+        .in('participant_id', participantIds)
         .or('face_descriptor_512.not.is.null,face_descriptor.not.is.null');
 
-      if (error) {
-        log.warn(`[FaceRecognition] Pre-check query failed: ${error.message}`);
-        return -1; // Proceed with full init on error (safe fallback)
+      if (fError) {
+        log.warn(`[FaceRecognition] Pre-check face photos query failed: ${fError.message}`);
+        return -1;
       }
 
       return count ?? 0;
@@ -650,6 +663,16 @@ class UnifiedImageWorker extends EventEmitter {
       const embeddings = onnxResult.faces
         .filter(f => f.embedding && f.embedding.length > 0)
         .map(f => ({ faceIndex: f.faceIndex, embedding: f.embedding }));
+
+      // Warn once about dimension mismatch (512-dim AuraFace vs 128-dim face-api.js)
+      if (embeddings.length > 0 && !this._dimMismatchWarned) {
+        const storedDim = faceRecognitionProcessor.getDescriptorDimension();
+        const queryDim = embeddings[0].embedding.length;
+        if (storedDim > 0 && storedDim !== queryDim) {
+          log.warn(`[FaceRecognition] ⚠️  Dimension mismatch: stored descriptors are ${storedDim}-dim but AuraFace generates ${queryDim}-dim. Re-upload face photos to generate 512-dim descriptors.`);
+          this._dimMismatchWarned = true;
+        }
+      }
 
       const personMatches = faceRecognitionProcessor.matchEmbeddings(embeddings, context as FaceContext);
       const matchingTimeMs = Date.now() - matchStartTime;
