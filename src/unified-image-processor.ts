@@ -2688,12 +2688,15 @@ class UnifiedImageWorker extends EventEmitter {
       let faceRecognitionResult: FaceRecognitionResult | null = null;
 
       // STEP 3: Perform face recognition if strategy dictates
+      workerLog.info(`[RecogStrategy] useFaceRecognition=${recognitionStrategy.useFaceRecognition}, useNumberRecognition=${recognitionStrategy.useNumberRecognition}, context=${recognitionStrategy.context} for ${imageFile.fileName}`);
       if (recognitionStrategy.useFaceRecognition) {
         workerLog.info(`Face recognition enabled for ${sceneClassification?.category || 'unknown'} scene`);
         faceRecognitionResult = await this.performFaceRecognition(
           uploadReadyPath,
           recognitionStrategy.context
         );
+        const matchedCount = faceRecognitionResult?.matches?.filter(m => m.matched).length || 0;
+        workerLog.info(`[FaceRecogResult] success=${faceRecognitionResult?.success}, totalMatches=${faceRecognitionResult?.matches?.length || 0}, matchedFaces=${matchedCount} for ${imageFile.fileName}`);
       } else {
         workerLog.info(`Face recognition DISABLED (segmentation detected only vehicles)`);
       }
@@ -2713,6 +2716,7 @@ class UnifiedImageWorker extends EventEmitter {
 
         // FIX: Only use face-only results if we actually found matches
         // Otherwise, fall through to AI analysis for number recognition
+        workerLog.info(`[FaceOnlyPath] matchedDrivers=${matchedDrivers.length}, useNumberRecognition=${recognitionStrategy.useNumberRecognition} for ${imageFile.fileName}`);
         if (matchedDrivers.length > 0) {
           const processingTimeMs = Date.now() - startTime;
           workerLog.info(`Face-only recognition: ${matchedDrivers.length} drivers identified for ${imageFile.fileName}`);
@@ -2723,6 +2727,7 @@ class UnifiedImageWorker extends EventEmitter {
           // Write metadata from face recognition matches
           for (const match of matchedDrivers) {
             const raceNumber = match.raceNumber;
+            workerLog.info(`[FaceOnlyMeta] Writing metadata for raceNumber="${raceNumber}", drivers=${JSON.stringify(match.drivers)}, participantsData.length=${this.participantsData.length}`);
 
             // Find participant in preset data
             const participant = this.participantsData.length > 0
@@ -2731,6 +2736,8 @@ class UnifiedImageWorker extends EventEmitter {
                   String(p.number) === String(raceNumber)
                 )
               : null;
+
+            workerLog.info(`[FaceOnlyMeta] Participant lookup: raceNumber="${raceNumber}" → ${participant ? `FOUND (numero=${participant.numero}, nome=${participant.nome}, metatag=${participant.metatag || 'none'})` : 'NOT FOUND'}`);
 
             // Write metatag to XMP:Description if available
             if (participant?.metatag) {
@@ -2963,6 +2970,7 @@ class UnifiedImageWorker extends EventEmitter {
       // ============================================
       // Fase 3 & 4: Analysis (Local ONNX, Crop-Context V6, or Standard Cloud API)
       // ============================================
+      workerLog.info(`[FlowTrace] Reached AI analysis phase for ${imageFile.fileName} (faceRecognitionResult=${faceRecognitionResult ? `{success:${faceRecognitionResult.success}, matches:${faceRecognitionResult.matches?.length || 0}, matched:${faceRecognitionResult.matches?.filter(m => m.matched).length || 0}}` : 'null'})`);
       phaseStart = Date.now();
       let analysisResult: any;
       let storagePath: string | null = null;
@@ -4371,19 +4379,26 @@ class UnifiedImageWorker extends EventEmitter {
     let csvMatch: any = null;
     let description: string | null = null;
 
+    // DEBUG: Log what processAnalysisResults receives
+    log.info(`[processAnalysisResults] Called for ${imageFile.fileName}: faceRecognitionResult=${faceRecognitionResult ? `present(success=${faceRecognitionResult.success}, matches=${faceRecognitionResult.matches?.length || 0}, matchedFaces=${faceRecognitionResult.matches?.filter(m => m.matched).length || 0})` : 'NULL'}, analysisResult.analysis=${analysisResult?.analysis?.length || 0} items`);
+
     // Merge face recognition matches into csvMatches
     // This ensures face-matched participants are included in metadata even when number recognition also runs
     const faceMatchedCsvEntries: any[] = [];
     if (faceRecognitionResult?.success && faceRecognitionResult.matches) {
       const matchedFaces = faceRecognitionResult.matches.filter(m => m.matched && m.driverInfo);
+      log.info(`[FaceRecognition→Metadata] Processing ${matchedFaces.length} face match(es) for merge (total matches in result: ${faceRecognitionResult.matches.length})`);
       for (const faceMatch of matchedFaces) {
         const raceNumber = faceMatch.driverInfo?.raceNumber;
+        const driverName = faceMatch.driverInfo?.driverName;
+        log.info(`[FaceRecognition→Metadata] Looking up: raceNumber="${raceNumber}", driverName="${driverName}" in ${this.participantsData.length} participants`);
+
         // Find matching participant in preset data
         const participant = this.participantsData.find((p: any) =>
           (raceNumber && (String(p.numero) === String(raceNumber) || String(p.number) === String(raceNumber))) ||
-          (faceMatch.driverInfo?.driverName && (
-            (p.nome && p.nome.includes(faceMatch.driverInfo.driverName)) ||
-            (p.drivers && p.drivers.some((d: any) => d.nome?.includes(faceMatch.driverInfo!.driverName)))
+          (driverName && (
+            (p.nome && p.nome.includes(driverName)) ||
+            (p.drivers && p.drivers.some((d: any) => d.nome?.includes(driverName)))
           ))
         );
 
@@ -4394,9 +4409,13 @@ class UnifiedImageWorker extends EventEmitter {
             confidence: faceMatch.similarity,
             matchedBy: 'face_recognition'
           });
-          log.info(`[FaceRecognition→Metadata] Face match merged: ${faceMatch.driverInfo?.driverName} → participant #${participant.numero}`);
+          log.info(`[FaceRecognition→Metadata] ✅ Face match merged: ${driverName} → participant #${participant.numero}`);
+        } else {
+          log.warn(`[FaceRecognition→Metadata] ❌ No participant found for raceNumber="${raceNumber}", driverName="${driverName}"`);
         }
       }
+    } else if (faceRecognitionResult) {
+      log.info(`[FaceRecognition→Metadata] No face matches to merge (success=${faceRecognitionResult.success}, matches=${faceRecognitionResult.matches?.length || 0})`);
     }
 
     if (analysisResult.analysis && analysisResult.analysis.length > 0) {
