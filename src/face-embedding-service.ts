@@ -19,8 +19,11 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { app } from 'electron';
 import sharp from 'sharp';
+import { createComponentLogger } from './utils/logger';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { APP_CONFIG } from './config';
+
+const log = createComponentLogger('FaceEmbeddingService');
 
 // ONNX Runtime - lazy loaded
 let ort: typeof import('onnxruntime-node') | null = null;
@@ -112,7 +115,7 @@ export class FaceEmbeddingService {
       ort = require('onnxruntime-node');
       return true;
     } catch (error) {
-      console.error('[FaceEmbeddingService] Failed to load ONNX Runtime:', error);
+      log.error('[FaceEmbeddingService] Failed to load ONNX Runtime:', error);
       return false;
     }
   }
@@ -263,7 +266,7 @@ export class FaceEmbeddingService {
 
       // Auto-download if not found locally
       if (!resolvedPath) {
-        console.log('[FaceEmbeddingService] Model not found locally, attempting auto-download...');
+        log.info('[FaceEmbeddingService] Model not found locally, attempting auto-download...');
         try {
           resolvedPath = await this.downloadModel((percent, dlMB, totalMB) => {
             if (percent % 10 === 0) {
@@ -300,7 +303,7 @@ export class FaceEmbeddingService {
       return true;
     } catch (error) {
       this.loadError = error as Error;
-      console.error('[FaceEmbeddingService] Failed to load AuraFace:', error);
+      log.error('[FaceEmbeddingService] Failed to load AuraFace:', error);
       return false;
     } finally {
       this.isLoading = false;
@@ -322,9 +325,9 @@ export class FaceEmbeddingService {
       const feeds: Record<string, any> = {};
       feeds[this.session.inputNames[0]] = dummyTensor;
       await this.session.run(feeds);
-      console.log('[FaceEmbeddingService] Warm-up complete');
+      log.info('[FaceEmbeddingService] Warm-up complete');
     } catch (error) {
-      console.warn('[FaceEmbeddingService] Warm-up failed (non-critical):', error);
+      log.warn('[FaceEmbeddingService] Warm-up failed (non-critical):', error);
     }
   }
 
@@ -440,7 +443,7 @@ export class FaceEmbeddingService {
         inferenceTimeMs
       };
     } catch (error) {
-      console.error('[FaceEmbeddingService] Embedding failed:', error);
+      log.error('[FaceEmbeddingService] Embedding failed:', error);
       return {
         success: false,
         inferenceTimeMs: Date.now() - startTime,
@@ -484,7 +487,7 @@ export class FaceEmbeddingService {
     }
     this.loadError = null;
     FaceEmbeddingService.instance = null;
-    console.log('[FaceEmbeddingService] Disposed');
+    log.info('[FaceEmbeddingService] Disposed');
   }
 }
 

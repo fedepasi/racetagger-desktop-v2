@@ -233,7 +233,7 @@ class UnifiedImageWorker extends EventEmitter {
   private genericSegmenterLoaded: boolean = false;
   // Cache for segmentation results (avoid running segmentation twice per image)
   private cachedSegmentationResults: SegmentedDetection[] | null = null;
-  // Face Recognition (browser-based detection via IPC bridge)
+  // Face Recognition (ONNX-based: YuNet detection + AuraFace embedding)
   private faceRecognitionEnabled: boolean = false;
   private faceDescriptorsLoaded: boolean = false;
   // RAW preview calibration strategy (set by processor from calibration results)
@@ -465,18 +465,34 @@ class UnifiedImageWorker extends EventEmitter {
   }
 
   /**
-   * PERFORMANCE: Quick check descriptor count without initializing bridge
-   * Returns -1 to proceed with full initialization (face recognition currently disabled)
+   * PERFORMANCE: Quick check descriptor count before full initialization.
+   * Queries the database for the number of face descriptors (512-dim or 128-dim)
+   * in the given preset. Returns 0 if none, >0 if found, -1 on error.
    */
   private async checkPresetDescriptorCount(presetId: string): Promise<number> {
-    // Face recognition is disabled (Coming Soon)
-    // Return -1 to proceed with full initialization if face recognition is re-enabled
-    return -1;
+    try {
+      // Check for 512-dim descriptors first, then fall back to 128-dim
+      const { count, error } = await this.supabase
+        .from('preset_participant_face_photos')
+        .select('id', { count: 'exact', head: true })
+        .eq('preset_id', presetId)
+        .or('face_descriptor_512.not.is.null,face_descriptor.not.is.null');
+
+      if (error) {
+        log.warn(`[FaceRecognition] Pre-check query failed: ${error.message}`);
+        return -1; // Proceed with full init on error (safe fallback)
+      }
+
+      return count ?? 0;
+    } catch (err: any) {
+      log.warn(`[FaceRecognition] Pre-check error: ${err.message || err}`);
+      return -1;
+    }
   }
 
   /**
    * Initialize Face Recognition for driver identification
-   * Uses face-api.js in renderer (via IPC bridge) for detection + main process matching
+   * Uses ONNX pipeline (YuNet detection + AuraFace embedding) in main process.
    *
    * Face descriptors are loaded ONLY from the participant preset.
    * Each preset has its own face recognition database.
@@ -500,13 +516,19 @@ class UnifiedImageWorker extends EventEmitter {
       }
 
       if (preCheckCount > 0) {
-        log.info(`Face recognition: ${preCheckCount} descriptors found, initializing bridge...`);
+        log.info(`Face recognition: ${preCheckCount} descriptors found, initializing ONNX pipeline...`);
       }
       // If -1 (error), proceed with full initialization (safe fallback)
 
       // Initialize ONNX face recognition processor (YuNet + AuraFace)
       const onnxProcessor = FaceRecognitionOnnxProcessor.getInstance();
-      await onnxProcessor.initialize();
+      const onnxInitOk = await onnxProcessor.initialize();
+      if (!onnxInitOk) {
+        log.warn('Face recognition: ONNX pipeline failed to initialize (YuNet not loaded) - disabling');
+        this.faceRecognitionEnabled = false;
+        return;
+      }
+      log.info('Face recognition: ONNX pipeline initialized (YuNet + AuraFace)');
 
       // Initialize matching processor
       await faceRecognitionProcessor.initialize();
@@ -1086,8 +1108,8 @@ class UnifiedImageWorker extends EventEmitter {
     try {
       const startTime = Date.now();
 
-      // PERFORMANCE: Timeout segmentation to prevent hanging (30s max)
-      const SEGMENTATION_TIMEOUT_MS = 30000;
+      // PERFORMANCE: Timeout segmentation to prevent hanging (15s max, reduced from 30s)
+      const SEGMENTATION_TIMEOUT_MS = 15000;
       const result: GenericSegmenterOutput = await Promise.race([
         this.genericSegmenter.detect(imageBuffer),
         new Promise<GenericSegmenterOutput>((_, reject) =>
@@ -2571,7 +2593,7 @@ class UnifiedImageWorker extends EventEmitter {
       }
 
       // ============================================
-      // Fase 2.8: Determine Recognition Strategy based on Scene + Segmentation
+      // Fase 2.7: Segmentation for Recognition Strategy
       // ============================================
       phaseStart = Date.now();
 
@@ -2597,6 +2619,12 @@ class UnifiedImageWorker extends EventEmitter {
           segmentationForStrategy = null;
         }
       }
+      timing['2.7_segmentationStrategy'] = Date.now() - phaseStart;
+
+      // ============================================
+      // Fase 2.8: Face Recognition (ONNX - YuNet + AuraFace)
+      // ============================================
+      phaseStart = Date.now();
 
       // STEP 2: Determine recognition strategy (using segmentation results if available)
       const recognitionStrategy = this.getRecognitionStrategy(

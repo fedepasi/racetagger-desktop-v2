@@ -19,6 +19,9 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { app } from 'electron';
 import sharp from 'sharp';
+import { createComponentLogger } from './utils/logger';
+
+const log = createComponentLogger('FaceDetectorService');
 
 // ONNX Runtime - lazy loaded
 let ort: typeof import('onnxruntime-node') | null = null;
@@ -99,7 +102,7 @@ export class FaceDetectorService {
       ort = require('onnxruntime-node');
       return true;
     } catch (error) {
-      console.error('[FaceDetectorService] Failed to load ONNX Runtime:', error);
+      log.error('[FaceDetectorService] Failed to load ONNX Runtime:', error);
       return false;
     }
   }
@@ -184,7 +187,7 @@ export class FaceDetectorService {
       return true;
     } catch (error) {
       this.loadError = error as Error;
-      console.error('[FaceDetectorService] Failed to load YuNet:', error);
+      log.error('[FaceDetectorService] Failed to load YuNet:', error);
       return false;
     } finally {
       this.isLoading = false;
@@ -202,10 +205,10 @@ export class FaceDetectorService {
       const feeds: Record<string, any> = {};
       feeds[this.session.inputNames[0]] = dummyTensor;
       await this.session.run(feeds);
-      console.log('[FaceDetectorService] Warm-up complete');
+      log.info('[FaceDetectorService] Warm-up complete');
     } catch (error) {
       // Non-critical
-      console.warn('[FaceDetectorService] Warm-up failed (non-critical):', error);
+      log.warn('[FaceDetectorService] Warm-up failed (non-critical):', error);
     }
   }
 
@@ -424,7 +427,7 @@ export class FaceDetectorService {
         imageHeight: originalHeight
       };
     } catch (error) {
-      console.error('[FaceDetectorService] Detection failed:', error);
+      log.error('[FaceDetectorService] Detection failed:', error);
       return {
         success: false,
         faces: [],
@@ -470,7 +473,7 @@ export class FaceDetectorService {
     }
     this.loadError = null;
     FaceDetectorService.instance = null;
-    console.log('[FaceDetectorService] Disposed');
+    log.info('[FaceDetectorService] Disposed');
   }
 }
 

@@ -14,8 +14,11 @@
 
 import * as fs from 'fs';
 import sharp from 'sharp';
+import { createComponentLogger } from './utils/logger';
 import { FaceDetectorService, DetectedFaceRegion } from './face-detector-service';
 import { FaceEmbeddingService, AURAFACE_EMBEDDING_DIM } from './face-embedding-service';
+
+const log = createComponentLogger('FaceRecognitionOnnx');
 
 // ============================================
 // Type Definitions
@@ -123,21 +126,21 @@ export class FaceRecognitionOnnxProcessor {
       // Load YuNet (bundled, fast)
       const detectorLoaded = await this.detector.loadModel();
       if (!detectorLoaded) {
-        console.error('[FaceRecognitionOnnx] Failed to load YuNet detector');
+        log.error('[FaceRecognitionOnnx] Failed to load YuNet detector');
         return false;
       }
-      console.log('[FaceRecognitionOnnx] YuNet detector loaded');
+      log.info('[FaceRecognitionOnnx] YuNet detector loaded');
 
       // Try to load AuraFace (may not be available yet)
       if (this.embedder.isModelAvailable()) {
         const embedderLoaded = await this.embedder.loadModel();
         if (embedderLoaded) {
-          console.log('[FaceRecognitionOnnx] AuraFace embedder loaded');
+          log.info('[FaceRecognitionOnnx] AuraFace embedder loaded');
         } else {
-          console.warn('[FaceRecognitionOnnx] AuraFace available but failed to load');
+          log.warn('[FaceRecognitionOnnx] AuraFace available but failed to load');
         }
       } else {
-        console.info(
+        log.info(
           '[FaceRecognitionOnnx] AuraFace model not yet downloaded. ' +
           'Detection will work, embedding requires model download.'
         );
@@ -145,7 +148,7 @@ export class FaceRecognitionOnnxProcessor {
 
       return true;
     } catch (error) {
-      console.error('[FaceRecognitionOnnx] Initialization failed:', error);
+      log.error('[FaceRecognitionOnnx] Initialization failed:', error);
       return false;
     }
   }
@@ -316,7 +319,7 @@ export class FaceRecognitionOnnxProcessor {
               faceResult.embeddingDim = embeddingResult.embedding.length;
             }
           } catch (cropError) {
-            console.warn(
+            log.warn(
               `[FaceRecognitionOnnx] Failed to embed face ${i}:`,
               cropError instanceof Error ? cropError.message : cropError
             );
@@ -338,7 +341,7 @@ export class FaceRecognitionOnnxProcessor {
         imageHeight
       };
     } catch (error) {
-      console.error('[FaceRecognitionOnnx] Pipeline failed:', error);
+      log.error('[FaceRecognitionOnnx] Pipeline failed:', error);
       return {
         success: false,
         faces: [],
@@ -424,7 +427,7 @@ export class FaceRecognitionOnnxProcessor {
               faceResult.embeddingDim = embeddingResult.embedding.length;
             }
           } catch (cropError) {
-            console.warn(
+            log.warn(
               `[FaceRecognitionOnnx] Failed to embed face ${i} from buffer:`,
               cropError instanceof Error ? cropError.message : cropError
             );
@@ -446,7 +449,7 @@ export class FaceRecognitionOnnxProcessor {
         imageHeight
       };
     } catch (error) {
-      console.error('[FaceRecognitionOnnx] Buffer pipeline failed:', error);
+      log.error('[FaceRecognitionOnnx] Buffer pipeline failed:', error);
       return {
         success: false,
         faces: [],
@@ -482,7 +485,7 @@ export class FaceRecognitionOnnxProcessor {
     this.embedder.dispose();
     this.initPromise = null;
     FaceRecognitionOnnxProcessor.instance = null;
-    console.log('[FaceRecognitionOnnx] Processor disposed');
+    log.info('[FaceRecognitionOnnx] Processor disposed');
   }
 }
 
