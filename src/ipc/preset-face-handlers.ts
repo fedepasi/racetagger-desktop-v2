@@ -152,8 +152,8 @@ export function registerPresetFaceHandlers(): void {
 
       // Add 512-dim descriptor if ONNX detection succeeded
       if (faceDescriptor512) {
-        (createParams as any).face_descriptor_512 = faceDescriptor512;
-        (createParams as any).descriptor_model = descriptorModel;
+        createParams.face_descriptor_512 = faceDescriptor512;
+        createParams.descriptor_model = descriptorModel;
       }
 
       console.log('[PresetFace IPC] 💾 Saving photo with:', {

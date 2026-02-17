@@ -964,7 +964,9 @@ export interface PresetParticipantFacePhoto {
   driver_id: string | null;
   photo_url: string;
   storage_path: string;
-  face_descriptor: number[] | null;
+  face_descriptor: number[] | null;         // Legacy 128-dim (face-api.js)
+  face_descriptor_512: number[] | null;     // AuraFace v1 512-dim
+  descriptor_model: string | null;          // 'face-api-js' | 'auraface-v1'
   photo_type: 'reference' | 'action' | 'podium' | 'helmet_off';
   detection_confidence: number | null;
   is_primary: boolean;

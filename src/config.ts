@@ -339,6 +339,22 @@ export const APP_CONFIG = {
     // When false: face recognition disabled (Coming Soon state)
     AURAFACE_ENABLED: true
   },
+  // Face Recognition ONNX model configuration
+  faceRecognition: {
+    // YuNet face detector (~90KB, bundled with app)
+    yunetModelName: 'face_detection_yunet_2023mar.onnx',
+    yunetConfidenceThreshold: 0.7,
+    yunetNmsThreshold: 0.5,
+    // AuraFace v1 face embedder (~250MB, downloaded on-demand)
+    aurafaceModelName: 'auraface_v1.onnx',
+    aurafaceEmbeddingDim: 512,
+    aurafaceInputSize: 112,  // 112x112 px
+    // Supabase Storage bucket for model downloads
+    modelStorageBucket: 'ml-models',
+    modelStoragePath: 'face-recognition/auraface-v1/',
+    // Local cache directory: ~/.racetagger/models/
+    localModelCacheDir: 'models',
+  },
   // Legacy performance optimizations (kept for backward compatibility)
   performance: {
     enableAsyncExifProcessing: true,    // Use async yield processing for EXIF operations

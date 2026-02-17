@@ -350,8 +350,8 @@
   <!-- Unified Support Modal (feedback + diagnostics) -->
   <script src="js/feedback-modal.js"></script>
 
-  <!-- Face Recognition -->
-  <script src="js/vendor/face-api.min.js"></script>
+  <!-- Face Recognition (ONNX pipeline runs in main process — no renderer-side models needed) -->
+  <!-- face-api.min.js REMOVED — replaced by YuNet + AuraFace ONNX in main process -->
   <script src="js/face-detector.js"></script>
   <script src="js/face-recognition-ui.js"></script>
 
