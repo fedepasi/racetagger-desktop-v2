@@ -566,7 +566,10 @@ class UnifiedImageWorker extends EventEmitter {
         this.faceRecognitionEnabled = false;
         return;
       }
-      log.info('Face recognition: ONNX pipeline initialized (YuNet + AuraFace)');
+      // Ensure AuraFace embedder is loaded (may not have loaded during initialize if model was downloading)
+      await onnxProcessor.ensureEmbedderReady();
+      const onnxStatus = onnxProcessor.getStatus();
+      log.info(`Face recognition: ONNX pipeline initialized (detector: ${onnxStatus.detectorLoaded}, embedder: ${onnxStatus.embedderLoaded})`);
 
       // Initialize matching processor
       await faceRecognitionProcessor.initialize();
@@ -674,6 +677,7 @@ class UnifiedImageWorker extends EventEmitter {
       const onnxResult = await onnxProcessor.detectAndEmbed(imagePath);
 
       if (!onnxResult.success || onnxResult.faces.length === 0) {
+        log.info(`[FaceRecognition] No faces detected in image (detection: ${onnxResult.detectionTimeMs}ms)`);
         return {
           success: true,
           matches: [],
@@ -682,6 +686,8 @@ class UnifiedImageWorker extends EventEmitter {
           totalTimeMs: Date.now() - startTime
         };
       }
+
+      log.info(`[FaceRecognition] Detected ${onnxResult.faces.length} face(s), generating embeddings...`);
 
       // Step 2: Match embeddings against loaded descriptors
       const matchStartTime = Date.now();

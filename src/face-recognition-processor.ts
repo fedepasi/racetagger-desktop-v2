@@ -389,13 +389,16 @@ export class FaceRecognitionProcessor {
   ): PersonMatch[] {
     if (this.personDescriptors.size === 0) return [];
 
-    const config = this.isCosineSimilarityMode()
+    const useCosine = this.isCosineSimilarityMode();
+    const config = useCosine
       ? COSINE_CONTEXT_CONFIG[context]
       : EUCLIDEAN_CONTEXT_CONFIG[context];
 
     const matches: PersonMatch[] = [];
 
     for (const { faceIndex, embedding } of embeddings) {
+      // First, get best score WITHOUT threshold to log diagnostics
+      const bestNoThreshold = this.findBestScoreNoThreshold(embedding);
       const match = this.findBestMatch(embedding, config.matchThreshold, context);
 
       if (match) {
@@ -404,6 +407,11 @@ export class FaceRecognitionProcessor {
           const confidence = match.metric === 'cosine'
             ? match.score
             : 1 - match.score;
+
+          console.log(
+            `[FaceRecognition] ✅ Face ${faceIndex} MATCHED → ${storedFace.personName} ` +
+            `(${match.metric}: ${match.score.toFixed(3)}, threshold: ${config.matchThreshold})`
+          );
 
           matches.push({
             faceIndex,
@@ -418,10 +426,54 @@ export class FaceRecognitionProcessor {
             similarityMetric: match.metric
           });
         }
+      } else if (bestNoThreshold) {
+        // Log the best score even when below threshold (diagnostic)
+        const storedFace = this.storedFaces.get(bestNoThreshold.personId);
+        const personName = storedFace?.personName || bestNoThreshold.personId;
+        console.log(
+          `[FaceRecognition] ❌ Face ${faceIndex} NO MATCH - best: ${personName} ` +
+          `(${bestNoThreshold.metric}: ${bestNoThreshold.score.toFixed(3)}, threshold: ${config.matchThreshold})`
+        );
       }
     }
 
     return matches;
+  }
+
+  /**
+   * Find the best matching score without applying threshold (for diagnostics).
+   */
+  private findBestScoreNoThreshold(
+    descriptor: number[]
+  ): { personId: string; score: number; metric: 'cosine' | 'euclidean' } | null {
+    if (!descriptor || descriptor.length === 0) return null;
+    if (this.personDescriptors.size === 0) return null;
+
+    const useCosine = descriptor.length === 512 && this.descriptorDimension === 512;
+    let bestPersonId = '';
+    let bestScore = useCosine ? -Infinity : Infinity;
+
+    for (const [personId, descriptors] of this.personDescriptors.entries()) {
+      for (const refDescriptor of descriptors) {
+        if (refDescriptor.length !== descriptor.length) continue;
+        if (useCosine) {
+          const similarity = cosineSimilarity(descriptor, refDescriptor);
+          if (similarity > bestScore) {
+            bestScore = similarity;
+            bestPersonId = personId;
+          }
+        } else {
+          const distance = euclideanDistance128(descriptor, refDescriptor);
+          if (distance < bestScore) {
+            bestScore = distance;
+            bestPersonId = personId;
+          }
+        }
+      }
+    }
+
+    if (!bestPersonId) return null;
+    return { personId: bestPersonId, score: bestScore, metric: useCosine ? 'cosine' : 'euclidean' };
   }
 
   /**
