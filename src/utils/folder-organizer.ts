@@ -175,7 +175,9 @@ export class FolderOrganizer {
       : [];
 
     try {
-      const numbers = Array.isArray(raceNumbers) ? raceNumbers : [raceNumbers];
+      // Deduplicate race numbers to avoid copying the same file multiple times
+      // to the same folder (e.g., when crop+context detects 2 subjects both with number "5")
+      const numbers = [...new Set(Array.isArray(raceNumbers) ? raceNumbers : [raceNumbers])];
 
       // NEW LOGIC: Collect custom folders from ALL csvData entries
       const customFolderTargets: FolderTarget[] = [];

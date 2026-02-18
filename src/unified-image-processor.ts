@@ -4287,8 +4287,37 @@ class UnifiedImageWorker extends EventEmitter {
       }
     }
 
+    // Deduplicate vehicles with the same race number (e.g., crop+context detects
+    // 2 subjects in the same image both recognized as number "5")
+    // Keep the first occurrence (highest confidence from AI ordering)
+    const seenNumbers = new Set<string>();
+    const deduplicatedAnalysis: any[] = [];
+    const deduplicatedCsvMatch: any[] = [];
+    const filteredCsvMatchArray = Array.isArray(filteredCsvMatch) ? filteredCsvMatch : (filteredCsvMatch ? [filteredCsvMatch] : []);
+
+    for (let i = 0; i < correctedAnalysis.length; i++) {
+      const vehicle = correctedAnalysis[i];
+      const number = vehicle?.raceNumber?.toString();
+
+      if (number && seenNumbers.has(number)) {
+        // Duplicate number — skip this vehicle
+        if (DEBUG_MODE) console.log(`[Dedup] Skipping duplicate vehicle with raceNumber "${number}" (index ${i}) in ${imageFile.fileName}`);
+        continue;
+      }
+
+      if (number) seenNumbers.add(number);
+      deduplicatedAnalysis.push(vehicle);
+      if (filteredCsvMatchArray[i]) {
+        deduplicatedCsvMatch.push(filteredCsvMatchArray[i]);
+      }
+    }
+
+    // Replace corrected arrays with deduplicated versions
+    const finalAnalysis = deduplicatedAnalysis;
+    const finalCsvMatch = deduplicatedCsvMatch.length > 0 ? deduplicatedCsvMatch : filteredCsvMatch;
+
     // Build base keywords from recognition
-    let keywords = this.buildMetatag(correctedAnalysis, filteredCsvMatch) || [];
+    let keywords = this.buildMetatag(finalAnalysis, finalCsvMatch) || [];
 
     // Integrate visual tags into keywords if embedding is enabled
     if (visualTags?.tags && this.config.visualTagging?.embedInMetadata) {
@@ -4311,8 +4340,8 @@ class UnifiedImageWorker extends EventEmitter {
     }
 
     return {
-      analysis: correctedAnalysis,
-      csvMatch: filteredCsvMatch,
+      analysis: finalAnalysis,
+      csvMatch: finalCsvMatch,
       description,
       keywords: keywords.length > 0 ? keywords : null,
       visualTags: visualTags?.tags
@@ -6352,89 +6381,100 @@ export class UnifiedImageProcessor extends EventEmitter {
     });
 
     if (this.config.executionId) {
-      const { authService } = await import('./auth-service');
-      const authState = authService.getAuthState();
-      const userId = authState.isAuthenticated ? authState.user?.id : 'anonymous';
+      // If logger already exists (subsequent chunk in chunked processing), reuse it
+      // This prevents overwriting the JSONL file for each chunk
+      if (this.analysisLogger && isChunkProcessing) {
+        if (DEBUG_MODE) console.log(`[UnifiedProcessor] Reusing existing analysis logger for chunk (execution ${this.config.executionId})`);
+      } else {
+        const { authService } = await import('./auth-service');
+        const authState = authService.getAuthState();
+        const userId = authState.isAuthenticated ? authState.user?.id : 'anonymous';
 
-      this.analysisLogger = new AnalysisLogger(
-        this.config.executionId,
-        this.config.category || 'motorsport',
-        userId
-      );
+        // For chunked processing, use appendMode so subsequent chunks don't overwrite
+        // the JSONL file created by the first chunk
+        this.analysisLogger = new AnalysisLogger(
+          this.config.executionId,
+          this.config.category || 'motorsport',
+          userId,
+          { appendMode: isChunkProcessing }
+        );
 
-      // TIER 1 TELEMETRY: Collect enhanced system environment (optional, safe)
-      this.systemEnvironment = undefined;
+        // TIER 1 TELEMETRY: Collect enhanced system environment (optional, safe)
+        this.systemEnvironment = undefined;
 
-      try {
-        // Initialize telemetry trackers (optional)
-        this.hardwareDetector = new HardwareDetector();
-        this.networkMonitor = new NetworkMonitor();
-        this.performanceTimer = new PerformanceTimer();
-        this.errorTracker = new ErrorTracker();
+        try {
+          // Initialize telemetry trackers (optional)
+          this.hardwareDetector = new HardwareDetector();
+          this.networkMonitor = new NetworkMonitor();
+          this.performanceTimer = new PerformanceTimer();
+          this.errorTracker = new ErrorTracker();
 
-        // Collect hardware info (with 5s timeout)
-        const hardwareInfo = await Promise.race([
-          this.hardwareDetector.getHardwareInfo(),
-          new Promise((resolve) => setTimeout(() => resolve(undefined), 5000))
-        ]);
+          // Collect hardware info (with 5s timeout)
+          const hardwareInfo = await Promise.race([
+            this.hardwareDetector.getHardwareInfo(),
+            new Promise((resolve) => setTimeout(() => resolve(undefined), 5000))
+          ]);
 
-        // Collect network metrics (with 5s timeout)
-        const networkMetrics = await Promise.race([
-          this.networkMonitor.measureInitialMetrics(5000),
-          new Promise((resolve) => setTimeout(() => resolve({}), 5000))
-        ]);
+          // Collect network metrics (with 5s timeout)
+          const networkMetrics = await Promise.race([
+            this.networkMonitor.measureInitialMetrics(5000),
+            new Promise((resolve) => setTimeout(() => resolve({}), 5000))
+          ]);
 
-        // Collect environment info
-        const { app } = await import('electron');
-        const os = await import('os');
-        const crypto = await import('crypto');
+          // Collect environment info
+          const { app } = await import('electron');
+          const os = await import('os');
+          const crypto = await import('crypto');
 
-        // Generate a persistent machine ID based on hardware characteristics
-        // This ID remains consistent across app restarts but is unique per machine
-        const machineIdSource = [
-          os.hostname(),
-          os.platform(),
-          os.arch(),
-          os.cpus()[0]?.model || '',
-          os.totalmem().toString()
-        ].join('|');
-        const machineId = crypto.createHash('sha256').update(machineIdSource).digest('hex').substring(0, 16);
+          // Generate a persistent machine ID based on hardware characteristics
+          // This ID remains consistent across app restarts but is unique per machine
+          const machineIdSource = [
+            os.hostname(),
+            os.platform(),
+            os.arch(),
+            os.cpus()[0]?.model || '',
+            os.totalmem().toString()
+          ].join('|');
+          const machineId = crypto.createHash('sha256').update(machineIdSource).digest('hex').substring(0, 16);
 
-        this.systemEnvironment = {
-          hardware: hardwareInfo,
-          network: networkMetrics,
-          environment: {
-            node_version: process.version,
-            electron_version: process.versions.electron || 'N/A',
-            dcraw_version: undefined, // TODO: Add dcraw version detection
-            sharp_version: 'N/A', // TODO: Get Sharp version safely
-            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-            locale: app.getLocale()
-          },
-          // Device identification for license management
-          device: {
-            hostname: os.hostname(),
-            machineId: machineId, // Unique per machine, persistent across restarts
-            platform: os.platform(),
-            username: os.userInfo().username,
-            appVersion: app.getVersion()
-          }
-        };
+          this.systemEnvironment = {
+            hardware: hardwareInfo,
+            network: networkMetrics,
+            environment: {
+              node_version: process.version,
+              electron_version: process.versions.electron || 'N/A',
+              dcraw_version: undefined, // TODO: Add dcraw version detection
+              sharp_version: 'N/A', // TODO: Get Sharp version safely
+              timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+              locale: app.getLocale()
+            },
+            // Device identification for license management
+            device: {
+              hostname: os.hostname(),
+              machineId: machineId, // Unique per machine, persistent across restarts
+              platform: os.platform(),
+              username: os.userInfo().username,
+              appVersion: app.getVersion()
+            }
+          };
 
-        if (DEBUG_MODE) console.log('[UnifiedProcessor] ✅ Enhanced telemetry collected');
-      } catch (telemetryError) {
-        console.warn('[UnifiedProcessor] ⚠️ Failed to collect telemetry (non-critical):', telemetryError);
-        // Continue processing even if telemetry fails
+          if (DEBUG_MODE) console.log('[UnifiedProcessor] ✅ Enhanced telemetry collected');
+        } catch (telemetryError) {
+          console.warn('[UnifiedProcessor] ⚠️ Failed to collect telemetry (non-critical):', telemetryError);
+          // Continue processing even if telemetry fails
+        }
+
+        // Log execution start with total image count (not chunk size)
+        // Use this.totalImages for chunked processing to get the full batch size
+        const totalImageCount = isChunkProcessing ? this.totalImages : imageFiles.length;
+        this.analysisLogger.logExecutionStart(
+          totalImageCount,
+          undefined, // participantPresetId not needed anymore with direct data passing
+          this.systemEnvironment // Optional enhanced telemetry
+        );
+
+        if (DEBUG_MODE) console.log(`[UnifiedProcessor] Analysis logging enabled for execution ${this.config.executionId} (total: ${totalImageCount} images)`);
       }
-
-      // Log execution start with optional telemetry
-      this.analysisLogger.logExecutionStart(
-        imageFiles.length,
-        undefined, // participantPresetId not needed anymore with direct data passing
-        this.systemEnvironment // Optional enhanced telemetry
-      );
-
-      if (DEBUG_MODE) console.log(`[UnifiedProcessor] Analysis logging enabled for execution ${this.config.executionId}`);
 
       // CREATE EXECUTION RECORD IN DATABASE
       // This ensures the execution is tracked in Supabase for later correlation with analysis logs
@@ -6799,7 +6839,12 @@ export class UnifiedImageProcessor extends EventEmitter {
     }
 
     // Finalize analysis logging
-    if (this.analysisLogger) {
+    // For chunked processing, only log EXECUTION_COMPLETE and finalize on the LAST chunk
+    // (intermediate chunks just log their IMAGE_ANALYSIS entries)
+    const isLastChunkOrNonChunked = !isChunkProcessing ||
+      (this.processedImages + results.length >= this.totalImages);
+
+    if (this.analysisLogger && isLastChunkOrNonChunked) {
       const successful = results.filter(r => r.success).length;
 
       // TIER 1 TELEMETRY: Collect final telemetry stats (optional)
@@ -6840,10 +6885,12 @@ export class UnifiedImageProcessor extends EventEmitter {
         console.warn('[UnifiedProcessor] ⚠️ Failed to collect final telemetry:', telemetryError);
       }
 
-      // Log execution complete with enhanced telemetry
+      // Log execution complete with total counts across all chunks
+      const totalProcessed = isChunkProcessing ? this.totalImages : results.length;
+      const totalSuccessful = isChunkProcessing ? (this.totalImages - (this.batchUsage?.errors || 0)) : successful;
       this.analysisLogger.logExecutionComplete(
-        results.length,
-        successful,
+        totalProcessed,
+        totalSuccessful,
         {
           performanceBreakdown,
           memoryStats,
