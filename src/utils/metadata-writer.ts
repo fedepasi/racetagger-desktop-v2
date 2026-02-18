@@ -848,6 +848,10 @@ export interface RaceTaggerStructuredData {
   teams: string[];
   /** Sport category slug */
   category: string;
+  /** Participant preset ID used for matching (if any) */
+  presetId?: string;
+  /** Participant preset name for display (if any) */
+  presetName?: string;
   /** Custom metatag from participant preset (if any) */
   metatag?: string;
   /** Custom folder assignments from participant preset */
@@ -871,7 +875,8 @@ export function buildStructuredData(
   analysis: any[],
   csvMatches: any[] | null,
   category: string,
-  getDriverNames: (participant: any) => string[]
+  getDriverNames: (participant: any) => string[],
+  presetInfo?: { id?: string; name?: string }
 ): RaceTaggerStructuredData {
   const numbers: string[] = [];
   const drivers: string[][] = [];
@@ -923,6 +928,8 @@ export function buildStructuredData(
     drivers,
     teams,
     category,
+    presetId: presetInfo?.id || undefined,
+    presetName: presetInfo?.name || undefined,
     metatag,
     folders,
     ts: new Date().toISOString(),

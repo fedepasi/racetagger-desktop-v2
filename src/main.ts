@@ -101,7 +101,7 @@ import { authService } from './auth-service';
 import * as piexif from 'piexifjs';
 import { createImageProcessor, initializeImageProcessor } from './utils/native-modules';
 import { createXmpSidecar, xmpSidecarExists } from './utils/xmp-manager';
-import { writeKeywordsToImage } from './utils/metadata-writer';
+import { writeKeywordsToImage, readStructuredData, RaceTaggerStructuredData } from './utils/metadata-writer';
 import { rawConverter } from './utils/raw-converter'; // Import for temp cleanup only
 import { rawPreviewExtractor } from './utils/raw-preview-native'; // Native RAW preview extraction
 import { unifiedImageProcessor, UnifiedImageFile, UnifiedProcessingResult, UnifiedProcessorConfig } from './unified-image-processor';
@@ -3080,9 +3080,11 @@ app.whenReady().then(async () => { // Added async here
           conflictStrategy: folderOrganizationConfig.conflictStrategy || 'rename'
         });
 
-        // Process each image
+        // Process each image — try structured metadata first, JSONL as fallback
         const results = [];
         const errors = [];
+        let metadataHits = 0;
+        let jsonlFallbacks = 0;
 
         for (const event of imageAnalysisEvents) {
           try {
@@ -3122,57 +3124,97 @@ app.whenReady().then(async () => { // Added async here
               continue;
             }
 
-            // Get final race numbers (apply corrections if any)
+            // === PRIMARY: Try structured metadata from XMP:Instructions ===
             let raceNumbers: string[] = [];
-            if (event.aiResponse?.vehicles) {
-              event.aiResponse.vehicles.forEach((vehicle: any, index: number) => {
-                const key = `${fileName}_${index}`;
-                const correction = correctionMap.get(key);
+            let csvDataList: any[] = [];
+            let usedMetadata = false;
 
-                if (correction && correction.number) {
-                  raceNumbers.push(correction.number);
-                } else if (vehicle.finalResult?.raceNumber) {
-                  raceNumbers.push(vehicle.finalResult.raceNumber);
-                } else if (vehicle.raceNumber) {
-                  raceNumbers.push(vehicle.raceNumber);
+            try {
+              const structuredData = await readStructuredData(originalPath);
+              if (structuredData && structuredData.numbers.length > 0) {
+                // Use metadata as primary source
+                raceNumbers = [...structuredData.numbers];
+
+                // Build csvDataList from structured metadata
+                for (let i = 0; i < structuredData.numbers.length; i++) {
+                  const csvEntry: any = {
+                    numero: structuredData.numbers[i],
+                    nome: structuredData.drivers[i]?.[0] || '',
+                    squadra: structuredData.teams[i] || '',
+                    metatag: structuredData.metatag,
+                  };
+                  // Add folder assignments from structured data
+                  if (structuredData.folders) {
+                    csvEntry.folder_1 = structuredData.folders.folder_1;
+                    csvEntry.folder_2 = structuredData.folders.folder_2;
+                    csvEntry.folder_3 = structuredData.folders.folder_3;
+                    csvEntry.folder_1_path = structuredData.folders.folder_1_path;
+                    csvEntry.folder_2_path = structuredData.folders.folder_2_path;
+                    csvEntry.folder_3_path = structuredData.folders.folder_3_path;
+                  }
+                  csvDataList.push(csvEntry);
                 }
-              });
+
+                usedMetadata = true;
+                metadataHits++;
+              }
+            } catch (metaErr) {
+              // Metadata read failed — fall through to JSONL
+            }
+
+            // === FALLBACK: Use JSONL data if metadata unavailable ===
+            if (!usedMetadata) {
+              jsonlFallbacks++;
+
+              // Get final race numbers (apply corrections if any)
+              if (event.aiResponse?.vehicles) {
+                event.aiResponse.vehicles.forEach((vehicle: any, index: number) => {
+                  const key = `${fileName}_${index}`;
+                  const correction = correctionMap.get(key);
+
+                  if (correction && correction.number) {
+                    raceNumbers.push(correction.number);
+                  } else if (vehicle.finalResult?.raceNumber) {
+                    raceNumbers.push(vehicle.finalResult.raceNumber);
+                  } else if (vehicle.raceNumber) {
+                    raceNumbers.push(vehicle.raceNumber);
+                  }
+                });
+              }
+
+              // Collect CSV data for ALL vehicles (not just the first)
+              if (event.aiResponse?.vehicles) {
+                event.aiResponse.vehicles.forEach((vehicle: any) => {
+                  if (vehicle.participantMatch) {
+                    const match = vehicle.participantMatch;
+                    const entry = match.entry || match;
+                    let driverName = '';
+                    if (entry.preset_participant_drivers?.length > 0) {
+                      const sorted = [...entry.preset_participant_drivers].sort((a: any, b: any) => a.driver_order - b.driver_order);
+                      driverName = sorted[0]?.driver_name || '';
+                    } else if (entry.nome) {
+                      driverName = entry.nome;
+                    }
+                    csvDataList.push({
+                      numero: entry.numero,
+                      nome: driverName,
+                      categoria: entry.categoria,
+                      squadra: entry.squadra,
+                      metatag: entry.metatag,
+                      folder_1: entry.folder_1,
+                      folder_2: entry.folder_2,
+                      folder_3: entry.folder_3,
+                      folder_1_path: entry.folder_1_path,
+                      folder_2_path: entry.folder_2_path,
+                      folder_3_path: entry.folder_3_path
+                    });
+                  }
+                });
+              }
             }
 
             if (raceNumbers.length === 0) {
               raceNumbers = ['unknown'];
-            }
-
-            // Collect CSV data for ALL vehicles (not just the first)
-            const csvDataList: any[] = [];
-            if (event.aiResponse?.vehicles) {
-              event.aiResponse.vehicles.forEach((vehicle: any) => {
-                if (vehicle.participantMatch) {
-                  const match = vehicle.participantMatch;
-                  const entry = match.entry || match; // entry contains full participant data
-                  // Get primary driver name from preset_participant_drivers array
-                  let driverName = '';
-                  if (entry.preset_participant_drivers?.length > 0) {
-                    const sorted = [...entry.preset_participant_drivers].sort((a: any, b: any) => a.driver_order - b.driver_order);
-                    driverName = sorted[0]?.driver_name || '';
-                  } else if (entry.nome) {
-                    driverName = entry.nome; // Legacy CSV fallback
-                  }
-                  csvDataList.push({
-                    numero: entry.numero,
-                    nome: driverName,
-                    categoria: entry.categoria,
-                    squadra: entry.squadra,
-                    metatag: entry.metatag,
-                    folder_1: entry.folder_1,
-                    folder_2: entry.folder_2,
-                    folder_3: entry.folder_3,
-                    folder_1_path: entry.folder_1_path,
-                    folder_2_path: entry.folder_2_path,
-                    folder_3_path: entry.folder_3_path
-                  });
-                }
-              });
             }
 
             // Organize the image
@@ -3190,6 +3232,8 @@ app.whenReady().then(async () => { // Added async here
             errors.push(`${event.fileName}: ${errorMsg}`);
           }
         }
+
+        console.log(`[Main Process] Folder organization sources: ${metadataHits} from metadata, ${jsonlFallbacks} from JSONL fallback`);
 
         // Get summary
         const summary = organizer.getSummary();

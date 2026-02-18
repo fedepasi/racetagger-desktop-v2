@@ -291,14 +291,14 @@ class LogVisualizer {
           ` : `
           <div class="lv-folder-org-header">
             <h4>📁 Organize Photos into Folders</h4>
-            <p>Review your results, make any corrections, then organize photos into folders</p>
+            <p>Automatically sort your analyzed photos into numbered folders — by car number, driver name, or custom structure</p>
           </div>
           <div class="lv-folder-org-content" id="lv-folder-org-content" style="display: none;">
             <!-- Folder organization configuration will be injected here -->
           </div>
           <div class="lv-folder-org-actions">
-            <button id="lv-toggle-folder-org" class="lv-action-btn lv-btn-secondary">
-              ⚙️ Configure Organization
+            <button id="lv-toggle-folder-org" class="lv-action-btn lv-btn-folder-org">
+              ⚙️ Configure & Organize
             </button>
             <button id="lv-start-organization" class="lv-action-btn lv-btn-primary" style="display: none;">
               🚀 Start Organization
@@ -540,7 +540,7 @@ class LogVisualizer {
           // Hide configuration
           folderOrgContent.style.display = 'none';
           startOrganizationBtn.style.display = 'none';
-          toggleFolderOrgBtn.textContent = '⚙️ Configure Organization';
+          toggleFolderOrgBtn.textContent = '⚙️ Configure & Organize';
         } else {
           // Show configuration - inject folder organization UI
           this.injectFolderOrganizationUI();

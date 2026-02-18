@@ -4391,7 +4391,8 @@ class UnifiedImageWorker extends EventEmitter {
         analysis,
         csvMatch ? (Array.isArray(csvMatch) ? csvMatch : [csvMatch]) : null,
         this.category,
-        getParticipantDriverNames
+        getParticipantDriverNames,
+        this.config.presetId ? { id: this.config.presetId } : undefined
       );
       await writeStructuredData(imageFile.originalPath, structuredData);
     }
