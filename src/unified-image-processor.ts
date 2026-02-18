@@ -55,6 +55,32 @@ import {
 const log = createComponentLogger('Processor');
 const workerLog = createComponentLogger('Worker');
 
+/**
+ * Extract detailed error message from Supabase Edge Function error responses.
+ * When an Edge Function returns HTTP 500, the Supabase SDK wraps it in a FunctionsHttpError
+ * with `error.context` being the Response object. The actual error details are in the
+ * response body JSON ({error, details}), but bodyUsed is false — we need to read it.
+ */
+async function extractEdgeFunctionErrorDetails(error: any): Promise<string> {
+  try {
+    // FunctionsHttpError has a `context` property which is the Response object
+    if (error?.context && typeof error.context.json === 'function' && !error.context.bodyUsed) {
+      const errorBody = await error.context.json();
+      const status = error.context.status || 'unknown';
+      const details = errorBody?.error || errorBody?.message || 'No error message in response';
+      const stack = errorBody?.details ? ` | Stack: ${String(errorBody.details).substring(0, 200)}` : '';
+      return `HTTP ${status}: ${details}${stack}`;
+    }
+    // Fallback: try to get basic info
+    if (error?.message) return error.message;
+    if (error?.statusText) return error.statusText;
+    return String(error);
+  } catch {
+    // If reading the body fails, return what we have
+    return error?.message || error?.statusText || 'Unknown Edge Function error';
+  }
+}
+
 const sharp = getSharp();
 
 /**
@@ -1758,7 +1784,8 @@ class UnifiedImageWorker extends EventEmitter {
           ]) as any;
 
           if (response.error) {
-            log.warn(`[CropContext] Sequential call ${i + 1} failed:`, response.error);
+            const errorDetails = await extractEdgeFunctionErrorDetails(response.error);
+            log.warn(`[CropContext] Sequential call ${i + 1} failed: ${errorDetails}`);
             continue; // Continue with next crop
           }
 
@@ -1843,8 +1870,9 @@ class UnifiedImageWorker extends EventEmitter {
         aiTiming['edgeFunctionV6'] = Date.now() - phaseStart;
 
         if (response.error) {
-          log.error(`[CropContext] V6 edge function error:`, response.error);
-          throw new Error(`V6 function error: ${response.error.message || 'Unknown error'}`);
+          const errorDetails = await extractEdgeFunctionErrorDetails(response.error);
+          log.error(`[CropContext] V6 edge function error: ${errorDetails}`);
+          throw new Error(`V6 function error: ${errorDetails}`);
         }
 
         if (!response.data.success) {
@@ -2134,8 +2162,9 @@ class UnifiedImageWorker extends EventEmitter {
       ]) as any;
 
       if (response.error) {
-        log.error(`[CropContext] V6 fullImage error:`, response.error);
-        throw new Error(`V6 fullImage error: ${response.error.message || 'Unknown error'}`);
+        const errorDetails = await extractEdgeFunctionErrorDetails(response.error);
+        log.error(`[CropContext] V6 fullImage error: ${errorDetails}`);
+        throw new Error(`V6 fullImage error: ${errorDetails}`);
       }
 
       if (!response.data.success) {
@@ -3997,8 +4026,9 @@ class UnifiedImageWorker extends EventEmitter {
       ]) as any;
 
       if (response.error) {
-        console.error(`[UnifiedProcessor] Edge Function error for ${fileName}:`, response.error.message || response.error.statusText);
-        throw new Error(`Function error: ${response.error.message || response.error.statusText || 'Unknown error'}`);
+        const errorDetails = await extractEdgeFunctionErrorDetails(response.error);
+        console.error(`[UnifiedProcessor] Edge Function error for ${fileName}: ${errorDetails}`);
+        throw new Error(`Function error: ${errorDetails}`);
       }
     } catch (edgeFunctionError: any) {
       console.error(`[UnifiedProcessor] Edge Function call failed for ${fileName}:`, edgeFunctionError.message);
