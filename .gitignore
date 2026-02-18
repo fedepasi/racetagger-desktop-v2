@@ -90,3 +90,5 @@ gen-lang-client-0306323675-4a0dc3eb7723.json
 racetagggen-lang-client-0306323675-4a0dc3eb7723.json
 venv-ml/bin/activate
 ml-training/rf-detr-onnx-converter
+src/assets/models/
+.claude/settings.local.json
