@@ -9,7 +9,7 @@ import { authService } from './auth-service';
 import { getSharp, createImageProcessor } from './utils/native-modules';
 import { rawPreviewExtractor } from './utils/raw-preview-native';
 import { createXmpSidecar } from './utils/xmp-manager';
-import { writeDescriptionToImage, writeKeywordsToImage, writeSpecialInstructions, writeExtendedDescription, writePersonInImage, buildPersonShownString } from './utils/metadata-writer';
+import { writeDescriptionToImage, writeKeywordsToImage, writeSpecialInstructions, writeExtendedDescription, writePersonInImage, buildPersonShownString, buildStructuredData, writeStructuredData } from './utils/metadata-writer';
 import { CleanupManager, getCleanupManager } from './utils/cleanup-manager';
 import { SmartMatcher, MatchResult, AnalysisResult as SmartMatcherAnalysisResult, getParticipantDriverNames, getPrimaryDriverName } from './matching/smart-matcher';
 import { CacheManager } from './matching/cache-manager';
@@ -4382,6 +4382,18 @@ class UnifiedImageWorker extends EventEmitter {
       if (personShownStrings.length > 0) {
         await writePersonInImage(imageFile.originalPath, personShownStrings);
       }
+    }
+
+    // Write structured RaceTagger data to XMP:Instructions (works for both RAW and JPEG)
+    // This enables metadata-based folder re-organization without depending on JSONL
+    if (analysis && analysis.length > 0) {
+      const structuredData = buildStructuredData(
+        analysis,
+        csvMatch ? (Array.isArray(csvMatch) ? csvMatch : [csvMatch]) : null,
+        this.category,
+        getParticipantDriverNames
+      );
+      await writeStructuredData(imageFile.originalPath, structuredData);
     }
   }
 

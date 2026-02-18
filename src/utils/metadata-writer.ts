@@ -826,3 +826,276 @@ export function buildMetadataFromDestination(
     personShown: personShown
   };
 }
+
+// ============================================================================
+// STRUCTURED RACETAGGER DATA (machine-readable metadata for re-organization)
+// ============================================================================
+
+const RACETAGGER_DATA_PREFIX = 'RACETAGGER_V1:';
+
+/**
+ * Structured data written to XMP:Instructions for machine-readable re-organization.
+ * This enables folder organization from metadata without depending on JSONL files.
+ */
+export interface RaceTaggerStructuredData {
+  /** Version identifier for forward compatibility */
+  v: 1;
+  /** Detected/corrected race numbers */
+  numbers: string[];
+  /** Driver names per vehicle: drivers[vehicleIndex] = ["Driver1", "Driver2"] */
+  drivers: string[][];
+  /** Team names per vehicle */
+  teams: string[];
+  /** Sport category slug */
+  category: string;
+  /** Custom metatag from participant preset (if any) */
+  metatag?: string;
+  /** Custom folder assignments from participant preset */
+  folders?: {
+    folder_1?: string;
+    folder_2?: string;
+    folder_3?: string;
+    folder_1_path?: string;
+    folder_2_path?: string;
+    folder_3_path?: string;
+  };
+  /** Timestamp of analysis */
+  ts: string;
+}
+
+/**
+ * Builds structured RaceTagger data from analysis results and CSV matches.
+ * This data is written to XMP:Instructions for later re-organization.
+ */
+export function buildStructuredData(
+  analysis: any[],
+  csvMatches: any[] | null,
+  category: string,
+  getDriverNames: (participant: any) => string[]
+): RaceTaggerStructuredData {
+  const numbers: string[] = [];
+  const drivers: string[][] = [];
+  const teams: string[] = [];
+  let metatag: string | undefined;
+  let folders: RaceTaggerStructuredData['folders'] | undefined;
+
+  const matches = Array.isArray(csvMatches) ? csvMatches : (csvMatches ? [csvMatches] : []);
+
+  for (let i = 0; i < analysis.length; i++) {
+    const vehicle = analysis[i];
+    const match = matches[i];
+
+    // Race number: prefer corrected from preset, fallback to AI
+    const number = match?.entry?.numero || vehicle?.raceNumber?.toString();
+    if (number) numbers.push(number);
+
+    // Drivers: prefer preset, fallback to AI
+    if (match?.entry) {
+      const driverNames = getDriverNames(match.entry);
+      drivers.push(driverNames.length > 0 ? driverNames : (vehicle?.drivers || []));
+    } else {
+      drivers.push(vehicle?.drivers || []);
+    }
+
+    // Team: prefer preset, fallback to AI
+    const team = match?.entry?.squadra || vehicle?.teamName;
+    if (team) teams.push(team);
+
+    // Metatag and folders from first matched participant (all vehicles share same preset typically)
+    if (match?.entry && !metatag) {
+      if (match.entry.metatag) metatag = match.entry.metatag;
+      if (match.entry.folder_1 || match.entry.folder_2 || match.entry.folder_3) {
+        folders = {
+          folder_1: match.entry.folder_1 || undefined,
+          folder_2: match.entry.folder_2 || undefined,
+          folder_3: match.entry.folder_3 || undefined,
+          folder_1_path: match.entry.folder_1_path || undefined,
+          folder_2_path: match.entry.folder_2_path || undefined,
+          folder_3_path: match.entry.folder_3_path || undefined,
+        };
+      }
+    }
+  }
+
+  return {
+    v: 1,
+    numbers,
+    drivers,
+    teams,
+    category,
+    metatag,
+    folders,
+    ts: new Date().toISOString(),
+  };
+}
+
+/**
+ * Writes structured RaceTagger data to XMP:Instructions field.
+ * Works for both JPEG (embedded XMP) and RAW (via ExifTool on sidecar).
+ * Format: "RACETAGGER_V1:{json}"
+ *
+ * For RAW files, the data is written to the XMP sidecar's xmp:Instructions element.
+ * For JPEG files, ExifTool writes it as embedded XMP.
+ */
+export async function writeStructuredData(
+  imagePath: string,
+  data: RaceTaggerStructuredData
+): Promise<void> {
+  try {
+    const jsonStr = JSON.stringify(data);
+    const payload = `${RACETAGGER_DATA_PREFIX}${jsonStr}`;
+
+    if (isRawFile(imagePath)) {
+      // For RAW files, update the XMP sidecar to include xmp:Instructions
+      await writeStructuredDataToXmpSidecar(imagePath, payload);
+    } else {
+      // For JPEG, write via ExifTool
+      const args = [
+        '-overwrite_original',
+        '-P',
+        '-codedcharacterset=utf8',
+        `-XMP:Instructions=${payload}`,
+        imagePath,
+      ];
+      await nativeToolManager.executeTool('exiftool', args);
+    }
+  } catch (error) {
+    // Non-critical: don't fail the entire processing pipeline
+    console.error(`[MetadataWriter] Failed to write structured data to ${path.basename(imagePath)}:`, error);
+  }
+}
+
+/**
+ * Reads structured RaceTagger data from a file's XMP:Instructions field.
+ * Returns null if no structured data found or if parsing fails.
+ *
+ * For RAW files, reads from the XMP sidecar file directly (no ExifTool needed).
+ * For JPEG files, reads via ExifTool.
+ */
+export async function readStructuredData(
+  imagePath: string
+): Promise<RaceTaggerStructuredData | null> {
+  try {
+    let instructions: string | null = null;
+
+    if (isRawFile(imagePath)) {
+      // Read directly from XMP sidecar (faster than ExifTool)
+      instructions = readStructuredDataFromXmpSidecar(imagePath);
+    } else {
+      // Read via ExifTool for JPEG
+      const args = ['-s', '-s', '-s', '-XMP:Instructions', imagePath];
+      const result = await nativeToolManager.executeTool('exiftool', args);
+      instructions = result.stdout.trim() || null;
+    }
+
+    if (!instructions || !instructions.startsWith(RACETAGGER_DATA_PREFIX)) {
+      return null;
+    }
+
+    const jsonStr = instructions.substring(RACETAGGER_DATA_PREFIX.length);
+    const data = JSON.parse(jsonStr) as RaceTaggerStructuredData;
+
+    // Basic validation
+    if (data.v !== 1 || !Array.isArray(data.numbers)) {
+      return null;
+    }
+
+    return data;
+  } catch (error) {
+    // Silently return null on read errors — caller will fall back to other methods
+    return null;
+  }
+}
+
+/**
+ * Writes structured data payload to an existing or new XMP sidecar for RAW files.
+ * Adds/updates the xmp:Instructions element while preserving all other content.
+ */
+async function writeStructuredDataToXmpSidecar(
+  rawFilePath: string,
+  payload: string
+): Promise<void> {
+  const fs = await import('fs');
+  const fsPromises = await import('fs/promises');
+  const fileDir = path.dirname(rawFilePath);
+  const fileNameWithoutExt = path.parse(rawFilePath).name;
+  const xmpFilePath = path.join(fileDir, `${fileNameWithoutExt}.xmp`);
+
+  // Escape XML special characters in the payload
+  const escapedPayload = payload
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
+  const instructionsElement = `      <xmp:Instructions>${escapedPayload}</xmp:Instructions>`;
+
+  if (fs.existsSync(xmpFilePath)) {
+    let content = await fsPromises.readFile(xmpFilePath, 'utf8');
+
+    // Replace existing xmp:Instructions or add new one
+    const instructionsRegex = /<xmp:Instructions>[^<]*<\/xmp:Instructions>/;
+    if (instructionsRegex.test(content)) {
+      content = content.replace(instructionsRegex, instructionsElement);
+    } else {
+      // Add before </rdf:Description>
+      const rdfCloseRegex = /(\s*)<\/rdf:Description>/;
+      if (rdfCloseRegex.test(content)) {
+        // Ensure xmp namespace is declared
+        if (!content.includes('xmlns:xmp="http://ns.adobe.com/xap/1.0/"')) {
+          content = content.replace(
+            /<rdf:Description([^>]*)>/,
+            `<rdf:Description$1\n      xmlns:xmp="http://ns.adobe.com/xap/1.0/"`
+          );
+        }
+        content = content.replace(rdfCloseRegex, `\n${instructionsElement}\n$1</rdf:Description>`);
+      }
+    }
+
+    await fsPromises.writeFile(xmpFilePath, content, 'utf8');
+  } else {
+    // No sidecar exists — will be created by createXmpSidecar first in the pipeline.
+    // This function is called AFTER createXmpSidecar, so the file should exist.
+    // If somehow it doesn't, use ExifTool as fallback.
+    const args = [
+      '-overwrite_original',
+      '-P',
+      `-XMP:Instructions=${payload}`,
+      rawFilePath,
+    ];
+    await nativeToolManager.executeTool('exiftool', args);
+  }
+}
+
+/**
+ * Reads structured data from an XMP sidecar file directly (no ExifTool needed).
+ * Returns the raw xmp:Instructions content or null.
+ */
+function readStructuredDataFromXmpSidecar(rawFilePath: string): string | null {
+  const fs = require('fs');
+  const fileDir = path.dirname(rawFilePath);
+  const fileNameWithoutExt = path.parse(rawFilePath).name;
+
+  // Check both lowercase and uppercase extensions
+  const xmpPathLower = path.join(fileDir, `${fileNameWithoutExt}.xmp`);
+  const xmpPathUpper = path.join(fileDir, `${fileNameWithoutExt}.XMP`);
+  const xmpFilePath = fs.existsSync(xmpPathLower) ? xmpPathLower :
+                      fs.existsSync(xmpPathUpper) ? xmpPathUpper : null;
+
+  if (!xmpFilePath) return null;
+
+  try {
+    const content = fs.readFileSync(xmpFilePath, 'utf8');
+    const match = content.match(/<xmp:Instructions>([^<]*)<\/xmp:Instructions>/);
+    if (!match) return null;
+
+    // Unescape XML entities
+    return match[1]
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"');
+  } catch {
+    return null;
+  }
+}
