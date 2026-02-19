@@ -3046,8 +3046,46 @@ class LogVisualizer {
         }
       }
 
-      // Show progress indicator
-      this.showNotification('🔄 Organizing photos into folders...', 'info');
+      // Show inline progress bar in the organization section
+      const actionsDiv = document.querySelector('.lv-folder-org-actions');
+      const startBtn = document.getElementById('lv-start-organization');
+      const toggleBtn = document.getElementById('lv-toggle-folder-org');
+
+      if (startBtn) startBtn.style.display = 'none';
+      if (toggleBtn) toggleBtn.style.display = 'none';
+
+      // Create progress bar container
+      const progressContainer = document.createElement('div');
+      progressContainer.id = 'lv-folder-org-progress';
+      progressContainer.className = 'lv-folder-org-progress';
+      progressContainer.innerHTML = `
+        <div class="lv-folder-org-progress-header">
+          <span class="lv-folder-org-progress-label">🔄 Organizing photos into folders...</span>
+          <span class="lv-folder-org-progress-count" id="lv-org-progress-count">0%</span>
+        </div>
+        <div class="lv-folder-org-progress-bar-container">
+          <div class="lv-folder-org-progress-bar" id="lv-org-progress-bar" style="width: 0%"></div>
+        </div>
+        <div class="lv-folder-org-progress-detail" id="lv-org-progress-detail">Preparing...</div>
+      `;
+
+      // Insert progress bar before actions or at end of section
+      const section = document.getElementById('lv-folder-org-section');
+      if (actionsDiv) {
+        actionsDiv.parentNode.insertBefore(progressContainer, actionsDiv);
+      } else if (section) {
+        section.appendChild(progressContainer);
+      }
+
+      // Listen for progress events
+      const cleanupProgress = window.api.receive('folder-organization-progress', (data) => {
+        const bar = document.getElementById('lv-org-progress-bar');
+        const count = document.getElementById('lv-org-progress-count');
+        const detail = document.getElementById('lv-org-progress-detail');
+        if (bar) bar.style.width = `${data.percent}%`;
+        if (count) count.textContent = `${data.percent}%`;
+        if (detail) detail.textContent = `${data.current} of ${data.total} photos processed`;
+      });
 
       // Call IPC handler
       const response = await window.api.invoke('organize-results-post-analysis', {
@@ -3055,29 +3093,33 @@ class LogVisualizer {
         folderOrganizationConfig: folderOrgConfig
       });
 
+      // Clean up progress listener
+      if (cleanupProgress) cleanupProgress();
+
+      // Remove progress bar
+      const progressEl = document.getElementById('lv-folder-org-progress');
+      if (progressEl) progressEl.remove();
+
       if (response.success) {
         const summary = response.summary;
-        const successMsg = `✅ Organization complete!
-${summary.organizedFiles} photos organized into ${summary.foldersCreated} folders
-${summary.skippedFiles} skipped, ${summary.unknownFiles} unknown`;
+        const modeLabel = folderOrgConfig.mode === 'move' ? 'moved' : 'copied';
 
-        this.showNotification(successMsg, 'success');
+        // Replace the entire section with completion state
+        if (section) {
+          section.innerHTML = `
+            <div class="lv-folder-org-completed">
+              <div class="lv-folder-org-completed-icon">✅</div>
+              <div class="lv-folder-org-completed-text">
+                <h4>Folder Organization Completed</h4>
+                <p><strong>${summary.organizedFiles}</strong> photos ${modeLabel} into <strong>${summary.foldersCreated}</strong> folders${summary.skippedFiles > 0 ? `, ${summary.skippedFiles} skipped` : ''}${summary.unknownFiles > 0 ? `, ${summary.unknownFiles} unknown` : ''}</p>
+                ${folderOrgConfig.mode === 'move' ? '<p style="margin-top: 6px; opacity: 0.7; font-size: 13px;">Files were moved (not copied) — this operation cannot be repeated.</p>' : `<p style="margin-top: 6px; opacity: 0.7; font-size: 13px;">Files were copied — originals remain in place.</p>`}
+              </div>
+            </div>
+          `;
+        }
 
-        // If this was a move operation, disable the entire organization section
         if (folderOrgConfig.mode === 'move' && summary.organizedFiles > 0) {
           this.moveOrganizationCompleted = true;
-          const section = document.getElementById('lv-folder-org-section');
-          if (section) {
-            section.innerHTML = `
-              <div class="lv-folder-org-completed">
-                <div class="lv-folder-org-completed-icon">✅</div>
-                <div class="lv-folder-org-completed-text">
-                  <h4>Folder Organization Completed</h4>
-                  <p>Photos have been moved to their organized folders. Since the files were moved (not copied), they are no longer at their original location and this operation cannot be repeated.</p>
-                </div>
-              </div>
-            `;
-          }
         }
 
         if (response.errors && response.errors.length > 0) {
@@ -3085,12 +3127,20 @@ ${summary.skippedFiles} skipped, ${summary.unknownFiles} unknown`;
           this.showNotification(`⚠️ ${response.errors.length} files had errors (check console)`, 'warning');
         }
       } else {
+        // Restore buttons on error
+        if (startBtn) startBtn.style.display = 'inline-flex';
+        if (toggleBtn) toggleBtn.style.display = 'inline-flex';
         throw new Error(response.error || 'Organization failed');
       }
 
     } catch (error) {
       console.error('[LogVisualizer] Error in post-analysis organization:', error);
       this.showNotification(`❌ Organization failed: ${error.message}`, 'error');
+      // Restore buttons on error
+      const startBtn = document.getElementById('lv-start-organization');
+      const toggleBtn = document.getElementById('lv-toggle-folder-org');
+      if (startBtn) startBtn.style.display = 'inline-flex';
+      if (toggleBtn) toggleBtn.style.display = 'inline-flex';
     }
   }
 

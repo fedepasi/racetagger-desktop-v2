@@ -57,6 +57,8 @@ const validSendReceiveChannels: string[] = [
   'model-download-error',
   // App update download progress channel
   'update-download-progress',
+  // Folder organization progress channel
+  'folder-organization-progress',
   // Startup health report (main → renderer DevTools console)
   'startup-health-report',
 ];

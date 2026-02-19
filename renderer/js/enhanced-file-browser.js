@@ -20,6 +20,8 @@ class EnhancedFileBrowser {
     // Initialize selected preset
     this.selectedPreset = null;
     this.availablePresets = [];
+    // Track ongoing preset loading to avoid race conditions
+    this.presetLoadingPromise = null;
 
     this.init();
   }
@@ -1163,11 +1165,23 @@ class EnhancedFileBrowser {
       // Clear preset selection
       console.log('[EnhancedFileBrowser] Clearing preset selection');
       this.selectedPreset = null;
+      this.presetLoadingPromise = null;
       // Note: localStorage persistence removed - presets are selected fresh each time
       this.updatePresetDetails();
       return;
     }
 
+    // Track this loading operation so other code can await it
+    const loadingPromise = this._loadPresetData(presetId);
+    this.presetLoadingPromise = loadingPromise;
+    return loadingPromise;
+  }
+
+  /**
+   * Internal: Load preset data from Supabase.
+   * Separated to allow tracking via presetLoadingPromise.
+   */
+  async _loadPresetData(presetId) {
     try {
       // Always load full preset data from server to ensure we have complete participants
       console.log('[EnhancedFileBrowser] Loading preset by ID:', presetId);

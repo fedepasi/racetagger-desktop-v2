@@ -72,7 +72,7 @@ class FolderOrganizationManager {
   showFolderOrgFeatures() {
     const folderOrgSection = document.getElementById('folder-organization-section');
     if (folderOrgSection) {
-      folderOrgSection.style.display = 'block';
+      folderOrgSection.style.display = 'flex';
     }
   }
 

@@ -133,6 +133,7 @@ export interface RequestBody {
   executionId?: string;
   imageId?: string;
   originalFileName?: string;
+  originalFilename?: string;  // V6 2026: Alternative casing sent by analyzeImage() desktop method
   storagePath?: string;
   participantPreset?: {
     name: string;

@@ -817,18 +817,42 @@
 .lv-folder-organization-section {
   margin: var(--spacing-xl) var(--spacing-lg);
   padding: var(--spacing-xl);
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.06) 0%, rgba(139, 92, 246, 0.06) 100%);
-  border: 2px solid var(--accent-primary);
+  background: linear-gradient(135deg, rgba(202, 138, 4, 0.07) 0%, rgba(234, 179, 8, 0.05) 100%);
+  border: 2px solid rgba(202, 138, 4, 0.45);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-md), 0 0 0 1px rgba(59, 130, 246, 0.1);
+  box-shadow: var(--shadow-md), 0 0 0 1px rgba(202, 138, 4, 0.1);
   position: relative;
-  animation: folderOrgPulse 3s ease-in-out 1;
+  /* Slide-up entrance + glow pulse + subtle nudge sequence */
+  animation: folderOrgSlideIn 0.6s cubic-bezier(0.22, 1, 0.36, 1) both,
+             folderOrgGlow 2s ease-in-out 0.8s 1,
+             folderOrgNudge 0.5s ease-in-out 3s 1;
 }
 
-@keyframes folderOrgPulse {
-  0% { box-shadow: var(--shadow-md), 0 0 0 1px rgba(59, 130, 246, 0.1); }
-  50% { box-shadow: var(--shadow-md), 0 0 20px 4px rgba(59, 130, 246, 0.25); }
-  100% { box-shadow: var(--shadow-md), 0 0 0 1px rgba(59, 130, 246, 0.1); }
+@keyframes folderOrgSlideIn {
+  0% {
+    opacity: 0;
+    transform: translateY(30px) scale(0.97);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes folderOrgGlow {
+  0% { box-shadow: var(--shadow-md), 0 0 0 1px rgba(202, 138, 4, 0.1); }
+  50% { box-shadow: var(--shadow-md), 0 0 20px 5px rgba(234, 179, 8, 0.25); }
+  100% { box-shadow: var(--shadow-md), 0 0 0 1px rgba(202, 138, 4, 0.1); }
+}
+
+@keyframes folderOrgNudge {
+  0%, 100% { transform: translateX(0); }
+  15% { transform: translateX(-3px) rotate(-0.5deg); }
+  30% { transform: translateX(3px) rotate(0.5deg); }
+  45% { transform: translateX(-2px) rotate(-0.3deg); }
+  60% { transform: translateX(2px) rotate(0.3deg); }
+  75% { transform: translateX(-1px); }
+  90% { transform: translateX(1px); }
 }
 
 .lv-folder-org-header {
@@ -837,7 +861,7 @@
 
 .lv-folder-org-header h4 {
   margin: 0 0 var(--spacing-sm) 0;
-  color: var(--text-primary);
+  color: #92400e;
   font-size: 22px;
   font-weight: 700;
   letter-spacing: -0.3px;
@@ -874,6 +898,56 @@
   color: var(--text-primary);
   font-size: 16px;
   font-weight: 600;
+}
+
+/* Folder organization progress bar */
+.lv-folder-org-progress {
+  margin-top: var(--spacing-lg);
+  padding: 16px 20px;
+  background: rgba(59, 130, 246, 0.06);
+  border: 1.5px solid rgba(59, 130, 246, 0.2);
+  border-radius: var(--radius-lg);
+}
+
+.lv-folder-org-progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.lv-folder-org-progress-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.lv-folder-org-progress-count {
+  font-size: 14px;
+  font-weight: 700;
+  color: rgba(59, 130, 246, 1);
+  font-variant-numeric: tabular-nums;
+}
+
+.lv-folder-org-progress-bar-container {
+  width: 100%;
+  height: 8px;
+  background: rgba(59, 130, 246, 0.12);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.lv-folder-org-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, rgba(59, 130, 246, 0.8), rgba(59, 130, 246, 1));
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.lv-folder-org-progress-detail {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 /* Folder organization completed state */
@@ -949,17 +1023,17 @@
 }
 
 .lv-btn-folder-org {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.12) 0%, rgba(139, 92, 246, 0.12) 100%);
-  color: var(--accent-primary);
-  border: 2px solid var(--accent-primary);
+  background: linear-gradient(135deg, rgba(202, 138, 4, 0.12) 0%, rgba(234, 179, 8, 0.10) 100%);
+  color: #92400e;
+  border: 2px solid rgba(202, 138, 4, 0.45);
   font-size: 16px;
   padding: 14px 28px;
 }
 
 .lv-btn-folder-org:hover {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.2) 0%, rgba(139, 92, 246, 0.2) 100%);
+  background: linear-gradient(135deg, rgba(202, 138, 4, 0.2) 0%, rgba(234, 179, 8, 0.18) 100%);
   transform: translateY(-2px);
-  box-shadow: 0 4px 16px rgba(59, 130, 246, 0.25);
+  box-shadow: 0 4px 16px rgba(234, 179, 8, 0.25);
 }
 
 /* Visual Tags Export button - matches visual-tagging-section theme */

@@ -55,6 +55,7 @@ serve(async (req: Request) => {
       executionId,
       imageId,
       originalFileName,
+      originalFilename,  // V6 2026: Alternative casing from desktop analyzeImage()
       storagePath,
       participantPreset,
       fullImage,      // V6 Baseline 2026
@@ -64,6 +65,12 @@ serve(async (req: Request) => {
       sizeBytes,      // V6 2026: for database
       analysisLog     // V6 2026: complete IMAGE_ANALYSIS event from desktop
     } = body;
+
+    // V6 2026: Normalize field names (desktop analyzeImage() sends different casing)
+    // - storagePath vs imagePath: analyzeImage() sends imagePath, crop-context sends storagePath
+    // - originalFileName vs originalFilename: analyzeImage() sends lowercase 'n'
+    const effectiveStoragePath = storagePath || imagePath;
+    const effectiveOriginalFileName = originalFileName || originalFilename;
 
     // V6 2026: Support multiple input modes (crops, fullImage, or imagePath)
     const hasCrops = crops && crops.length > 0;
@@ -178,6 +185,11 @@ serve(async (req: Request) => {
 
     // 6. Save to database and get the actual database imageId
     // FIX December 2024: Now generates UUID server-side like V3
+    // FIX February 2026: Use effectiveStoragePath/effectiveOriginalFileName to handle
+    // field name mismatches when called from desktop analyzeImage() V3-compatible mode
+    if (!userId) {
+      console.warn(`${LOG_PREFIX} WARNING: userId is missing from request body - DB save will be skipped`);
+    }
     const dbImageId = await saveAnalysisResults(supabase, {
       imageId: imageId || '',
       executionId,
@@ -193,8 +205,8 @@ serve(async (req: Request) => {
         estimatedCostUSD
       },
       categoryCode: categoryConfig.code,
-      originalFileName,
-      storagePath,
+      originalFileName: effectiveOriginalFileName,  // FIX: Use normalized name
+      storagePath: effectiveStoragePath,             // FIX: Use imagePath as fallback
       mimeType,
       sizeBytes,
       inferenceTimeMs,
@@ -219,7 +231,10 @@ serve(async (req: Request) => {
       imageId: dbImageId || undefined,  // FIX: Return actual database UUID for token tracking
     };
 
-    console.log(`${LOG_PREFIX} Success: ${cropAnalysis.length} results${usedFullImage ? ' (fullImage)' : ''}, ${inferenceTimeMs}ms`);
+    if (!dbImageId) {
+      console.warn(`${LOG_PREFIX} DB save returned null imageId (userId=${userId ? 'present' : 'MISSING'}, storagePath=${effectiveStoragePath ? 'present' : 'MISSING'})`);
+    }
+    console.log(`${LOG_PREFIX} Success: ${cropAnalysis.length} results${usedFullImage ? ' (fullImage)' : ''}, imageId=${dbImageId || 'NONE'}, ${inferenceTimeMs}ms`);
 
     return new Response(JSON.stringify(response), {
       headers: CORS_HEADERS,

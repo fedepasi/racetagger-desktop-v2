@@ -1425,6 +1425,37 @@ function openPresetGuide() {
 
 // Handle folder analysis
 async function handleFolderAnalysis() {
+  // Wait for any in-progress preset loading before checking (fixes race condition
+  // where dropdown shows a value but async IPC load hasn't completed yet)
+  const presetSelect = document.getElementById('preset-select');
+  const dropdownHasValue = presetSelect && presetSelect.value && presetSelect.value !== '';
+  const presetNotYetLoaded = !window.enhancedFileBrowser?.selectedPreset?.id;
+
+  if (dropdownHasValue && presetNotYetLoaded && window.enhancedFileBrowser?.presetLoadingPromise) {
+    console.log('[Analysis] Preset dropdown has value but data not loaded yet — waiting for async load...');
+    try {
+      await Promise.race([
+        window.enhancedFileBrowser.presetLoadingPromise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000))
+      ]);
+      console.log('[Analysis] Preset loading completed, selectedPreset:', window.enhancedFileBrowser?.selectedPreset?.id);
+    } catch (e) {
+      console.warn('[Analysis] Preset loading wait timed out or failed:', e.message);
+    }
+  }
+
+  // If dropdown has a value but selectedPreset is STILL null (promise wasn't tracked,
+  // or it resolved without setting data), force a reload as last resort
+  if (dropdownHasValue && !window.enhancedFileBrowser?.selectedPreset?.id && window.enhancedFileBrowser) {
+    console.log('[Analysis] Preset still not loaded after wait — forcing reload for preset:', presetSelect.value);
+    try {
+      await window.enhancedFileBrowser.handlePresetSelection(presetSelect.value);
+      console.log('[Analysis] Forced preset reload completed, selectedPreset:', window.enhancedFileBrowser?.selectedPreset?.id);
+    } catch (e) {
+      console.warn('[Analysis] Forced preset reload failed:', e.message);
+    }
+  }
+
   // Check if participant preset is selected - show warning if not
   const hasPreset = window.enhancedFileBrowser?.selectedPreset?.id;
   const dontShowWarning = localStorage.getItem('racetagger-no-preset-warning-dismissed') === 'true';
@@ -1586,8 +1617,17 @@ async function proceedWithFolderAnalysis() {
     }
 
     // Add participant preset configuration if available
-    const presetSelect = document.getElementById('preset-select');
-    if (presetSelect && presetSelect.value) {
+    const presetSelectEl = document.getElementById('preset-select');
+    if (presetSelectEl && presetSelectEl.value) {
+      // Safety: if dropdown has value but selectedPreset is still null, try one more await
+      if (window.enhancedFileBrowser && !window.enhancedFileBrowser.selectedPreset) {
+        console.log('[Analysis] Config build: dropdown has value but selectedPreset is null — attempting reload');
+        try {
+          await window.enhancedFileBrowser.handlePresetSelection(presetSelectEl.value);
+        } catch (e) {
+          console.warn('[Analysis] Config build: preset reload failed:', e.message);
+        }
+      }
       // Get preset data from the enhanced file browser instance if available
       if (window.enhancedFileBrowser && window.enhancedFileBrowser.selectedPreset) {
         config.participantPreset = {

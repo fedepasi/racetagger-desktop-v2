@@ -79,6 +79,24 @@ export function getPrimaryDriverName(participant: Participant): string | undefin
   return names.length > 0 ? names[0] : undefined;
 }
 
+/**
+ * Normalize a race number for consistent comparison.
+ * Handles common format differences between ONNX-extracted numbers and preset data:
+ * - Trims whitespace
+ * - Removes common prefixes ("#7" → "7", "No.7" → "7")
+ * - Handles integer-to-string conversion
+ * NOTE: Leading zeros are PRESERVED because "04" and "4" can be different cars.
+ * Returns empty string for null/undefined/empty inputs.
+ */
+export function normalizeRaceNumber(value: string | number | null | undefined): string {
+  if (value === null || value === undefined) return '';
+  let str = String(value).trim();
+  if (!str) return '';
+  // Remove common prefixes: #, No., N., n°
+  str = str.replace(/^(#|No\.\s*|N\.\s*|n°\s*)/i, '');
+  return str;
+}
+
 export interface MatchCandidate {
   participant: Participant;
   score: number;
@@ -670,10 +688,16 @@ export class SmartMatcher {
     // This enables alternative matching via sponsor/team/name for photos without visible numbers
     const noNumberDetected = !raceNumberEvidence;
 
+    // DIAGNOSTIC: Log matching context on first call per batch for debugging
+    if (raceNumberEvidence) {
+      const sampleNumbers = participants.slice(0, 5).map(p => `"${p.numero || p.number || ''}"`).join(', ');
+      console.log(`[SmartMatcher] Matching raceNumber="${raceNumberEvidence.value}" (normalized="${normalizeRaceNumber(raceNumberEvidence.value)}") against ${participants.length} participants. Sample números: [${sampleNumbers}]`);
+    }
+
     const recognizedNumberExists = raceNumberEvidence &&
       participants.some(p => {
-        const participantNumber = String(p.numero || p.number || '');
-        const recognizedNumber = String(raceNumberEvidence.value);
+        const participantNumber = normalizeRaceNumber(p.numero || p.number);
+        const recognizedNumber = normalizeRaceNumber(raceNumberEvidence.value);
         return participantNumber === recognizedNumber;
       });
 
@@ -911,14 +935,17 @@ export class SmartMatcher {
     evidence: Evidence,
     allowFuzzyMatching: boolean = true
   ): { score: number; reason: string } {
-    const participantNumber = String(participant.numero || participant.number || '');
-    const evidenceNumber = String(evidence.value);
+    const rawParticipantNumber = String(participant.numero || participant.number || '');
+    const rawEvidenceNumber = String(evidence.value);
+    // Use normalized comparison to handle format differences (leading zeros, prefixes, whitespace)
+    const participantNumber = normalizeRaceNumber(rawParticipantNumber);
+    const evidenceNumber = normalizeRaceNumber(rawEvidenceNumber);
 
     if (!participantNumber || !evidenceNumber) {
       return { score: 0, reason: 'Missing number data' };
     }
 
-    // Exact match - highest score
+    // Exact match (after normalization) - highest score
     if (participantNumber === evidenceNumber) {
       const baseScore = this.config.weights.raceNumber;
       const confidenceAdjustment = (evidence.confidence || 1) * baseScore;

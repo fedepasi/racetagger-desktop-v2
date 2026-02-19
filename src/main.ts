@@ -1633,6 +1633,7 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
         }
 
         // Always send batch-complete so any listener gets the partial/full results
+        console.log(`[Main Process] 📤 Sending batch-complete to renderer (${results.length} results, executionId: ${currentExecutionId})`);
         safeSend('batch-complete', {
           results,
           executionId: currentExecutionId,
@@ -1640,6 +1641,16 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
           wasCancelled,
           exportResult
         });
+
+        // Send processing-completed for enhanced-progress.js overlay completion
+        if (!wasCancelled) {
+          console.log(`[Main Process] 📤 Sending processing-completed to renderer`);
+          safeSend('processing-completed', {
+            total: results.length,
+            successful: results.filter((r: any) => r.success).length,
+            executionId: currentExecutionId
+          });
+        }
       })
       .catch(async (error) => {
         console.error('[Main Process] Unified processing error:', error);
@@ -1665,6 +1676,18 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
         safeSend('processing-error', {
           error: error instanceof Error ? error.message : 'Unknown error occurred',
           details: error
+        });
+
+        // CRITICAL FIX: Also send batch-complete so the renderer can redirect to results.html
+        // Previously, if processBatch() threw (e.g., during finalization logging),
+        // only processing-error was sent, and the renderer never got batch-complete,
+        // leaving the user stuck on the progress screen with no redirect.
+        safeSend('batch-complete', {
+          results: [],
+          executionId: currentExecutionId,
+          isProcessingComplete: true,
+          wasCancelled: false,
+          exportResult: null
         });
       });
 
@@ -3067,6 +3090,18 @@ app.whenReady().then(async () => { // Added async here
         // Import FolderOrganizer
         const { FolderOrganizer } = await import('./utils/folder-organizer');
 
+        // Determine destination path:
+        // If user selected "Source folder" (destinationPath is undefined), create "Organized_Photos"
+        // inside the source folder (derived from the first image's directory)
+        let resolvedDestinationPath = folderOrganizationConfig.destinationPath;
+        if (!resolvedDestinationPath && imageAnalysisEvents.length > 0) {
+          const firstImagePath = imageAnalysisEvents[0].originalPath;
+          if (firstImagePath) {
+            resolvedDestinationPath = path.join(path.dirname(firstImagePath), 'Organized_Photos');
+            console.log(`[Main Process] Folder org: Source folder mode → destination: ${resolvedDestinationPath}`);
+          }
+        }
+
         // Create organizer instance
         const organizer = new FolderOrganizer({
           enabled: true,
@@ -3076,7 +3111,7 @@ app.whenReady().then(async () => { // Added async here
           createUnknownFolder: folderOrganizationConfig.createUnknownFolder !== false,
           unknownFolderName: folderOrganizationConfig.unknownFolderName || 'Unknown_Numbers',
           includeXmpFiles: folderOrganizationConfig.includeXmpFiles !== false,
-          destinationPath: folderOrganizationConfig.destinationPath,
+          destinationPath: resolvedDestinationPath,
           conflictStrategy: folderOrganizationConfig.conflictStrategy || 'rename'
         });
 
@@ -3085,6 +3120,8 @@ app.whenReady().then(async () => { // Added async here
         const errors = [];
         let metadataHits = 0;
         let jsonlFallbacks = 0;
+        const totalImages = imageAnalysisEvents.length;
+        let processedCount = 0;
 
         for (const event of imageAnalysisEvents) {
           try {
@@ -3230,6 +3267,16 @@ app.whenReady().then(async () => { // Added async here
             const errorMsg = error instanceof Error ? error.message : String(error);
             console.error(`[Main Process] Error organizing image:`, errorMsg);
             errors.push(`${event.fileName}: ${errorMsg}`);
+          }
+
+          // Send progress update to renderer
+          processedCount++;
+          if (processedCount % 10 === 0 || processedCount === totalImages) {
+            safeSend('folder-organization-progress', {
+              current: processedCount,
+              total: totalImages,
+              percent: Math.round((processedCount / totalImages) * 100)
+            });
           }
         }
 

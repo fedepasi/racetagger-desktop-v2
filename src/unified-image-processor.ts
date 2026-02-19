@@ -11,7 +11,7 @@ import { rawPreviewExtractor } from './utils/raw-preview-native';
 import { createXmpSidecar } from './utils/xmp-manager';
 import { writeDescriptionToImage, writeKeywordsToImage, writeSpecialInstructions, writeExtendedDescription, writePersonInImage, buildPersonShownString, buildStructuredData, writeStructuredData } from './utils/metadata-writer';
 import { CleanupManager, getCleanupManager } from './utils/cleanup-manager';
-import { SmartMatcher, MatchResult, AnalysisResult as SmartMatcherAnalysisResult, getParticipantDriverNames, getPrimaryDriverName } from './matching/smart-matcher';
+import { SmartMatcher, MatchResult, AnalysisResult as SmartMatcherAnalysisResult, getParticipantDriverNames, getPrimaryDriverName, normalizeRaceNumber } from './matching/smart-matcher';
 import { CacheManager } from './matching/cache-manager';
 import { AnalysisLogger, CorrectionData } from './utils/analysis-logger';
 import { TemporalClusterManager, ImageTimestamp } from './matching/temporal-clustering';
@@ -138,6 +138,8 @@ export interface UnifiedProcessingResult {
     data: any;
     timestamp: number;
   };
+  // Pending JSONL log entry (worker builds it, main process logs it via analysisLogger)
+  pendingLogEntry?: any;
 }
 
 /**
@@ -3017,183 +3019,178 @@ class UnifiedImageWorker extends EventEmitter {
       );
       timing['6_smartMatcher'] = Date.now() - phaseStart;
 
-      // Log detailed analysis with corrections if logger is available (now supports multi-vehicle)
+      // Build vehicle data with match results (ALWAYS, not just when logger is available)
+      // This is needed for DB updates, JSONL logging, and result display
       phaseStart = Date.now();
       let imageAnalysisEvent: any = null;
-      if (this.analysisLogger && this.smartMatcher) {
-        const corrections = this.smartMatcher.getCorrections();
-        // For local ONNX, use local path; for cloud API, use Supabase URL
-        const supabaseUrl = storagePath
-          ? `${SUPABASE_CONFIG.url}/storage/v1/object/public/uploaded-images/${storagePath}`
-          : `local://${imageFile.originalPath}`;
 
-        // Use FILTERED analysis data instead of original AI response
-        const filteredAnalysis = processedAnalysis.analysis || [];
-        const csvMatches = Array.isArray(processedAnalysis.csvMatch) ? processedAnalysis.csvMatch : (processedAnalysis.csvMatch ? [processedAnalysis.csvMatch] : []);
+      const corrections = this.smartMatcher ? this.smartMatcher.getCorrections() : [];
+      const supabaseUrl = storagePath
+        ? `${SUPABASE_CONFIG.url}/storage/v1/object/public/uploaded-images/${storagePath}`
+        : `local://${imageFile.originalPath}`;
 
-        // Build vehicle data from filtered analysis (only vehicles that passed preset filtering)
-        const vehicles = filteredAnalysis.map((vehicle: any, index: number) => {
-          const csvMatch = csvMatches[index];
+      // Use FILTERED analysis data instead of original AI response
+      const filteredAnalysis = processedAnalysis.analysis || [];
+      const csvMatches = Array.isArray(processedAnalysis.csvMatch) ? processedAnalysis.csvMatch : (processedAnalysis.csvMatch ? [processedAnalysis.csvMatch] : []);
 
-          // TEMPORAL FIX: Extract temporal fields directly from csvMatch.matchResult.bestMatch
-          let temporalBonus = 0;
-          let temporalClusterSize = 0;
-          let isBurstModeCandidate = false;
+      // Build vehicle data from filtered analysis (only vehicles that passed preset filtering)
+      const vehicles = filteredAnalysis.map((vehicle: any, index: number) => {
+        const csvMatch = csvMatches[index];
 
-          if (csvMatch?.matchResult?.bestMatch) {
-            temporalBonus = csvMatch.matchResult.bestMatch.temporalBonus || 0;
-            temporalClusterSize = csvMatch.matchResult.bestMatch.temporalClusterSize || 0;
-            isBurstModeCandidate = csvMatch.matchResult.bestMatch.isBurstModeCandidate || false;
-          }
+        // TEMPORAL FIX: Extract temporal fields directly from csvMatch.matchResult.bestMatch
+        let temporalBonus = 0;
+        let temporalClusterSize = 0;
+        let isBurstModeCandidate = false;
 
-          // Preserve original box_2d from Gemini if present (standard 2025: keep raw data)
-          // box_2d format: [y1, x1, y2, x2] normalized 0-1000
-          const box_2d = vehicle.box_2d;
+        if (csvMatch?.matchResult?.bestMatch) {
+          temporalBonus = csvMatch.matchResult.bestMatch.temporalBonus || 0;
+          temporalClusterSize = csvMatch.matchResult.bestMatch.temporalClusterSize || 0;
+          isBurstModeCandidate = csvMatch.matchResult.bestMatch.isBurstModeCandidate || false;
+        }
 
-          // Convert boundingBox to standard percentage format (0-100) for compatibility
-          let boundingBox: { x: number; y: number; width: number; height: number } | undefined;
-          if (vehicle.boundingBox) {
-            const bbox = vehicle.boundingBox;
-            if (vehicle.modelSource === 'local-onnx') {
-              // ONNX: 0-1 normalized -> convert to 0-100 percentage
-              boundingBox = {
-                x: bbox.x * 100,
-                y: bbox.y * 100,
-                width: bbox.width * 100,
-                height: bbox.height * 100
-              };
-            } else {
-              // RF-DETR or other: pass through (viewer handles conversion)
-              boundingBox = {
-                x: bbox.x,
-                y: bbox.y,
-                width: bbox.width,
-                height: bbox.height
-              };
-            }
-          }
+        // Preserve original box_2d from Gemini if present (standard 2025: keep raw data)
+        // box_2d format: [y1, x1, y2, x2] normalized 0-1000
+        const box_2d = vehicle.box_2d;
 
-          return {
-            vehicleIndex: index,
-            raceNumber: vehicle.raceNumber,
-            drivers: vehicle.drivers || [],
-            team: vehicle.teamName || vehicle.team,
-            sponsors: vehicle.otherText || [],
-            confidence: vehicle.confidence || 0,
-            plateNumber: vehicle.plateNumber,
-            plateConfidence: vehicle.plateConfidence,
-            // V6 Vehicle DNA fields
-            make: vehicle.make || null,           // Manufacturer (Ferrari, Porsche, etc.)
-            model: vehicle.model || null,         // Model (296 GT3, 911 RSR, etc.)
-            category: vehicle.category || null,   // Race category (GT3, LMP2, Hypercar, etc.)
-            livery: vehicle.livery || null,       // { primary: string, secondary: string[] }
-            context: vehicle.context || null,     // Scene context (race, pit, podium, portrait)
-            // Include both formats for maximum compatibility
-            box_2d,  // Original Gemini format [y1, x1, y2, x2] (0-1000)
-            boundingBox,  // Converted format {x, y, width, height}
-            modelSource: vehicle.modelSource, // Recognition method used (gemini/rf-detr)
-            corrections: corrections.filter((c: any) => c.vehicleIndex === index),
-            participantMatch: csvMatch,
-            // Temporal information from SmartMatcher (FIXED)
-            temporalBonus: temporalBonus,
-            temporalClusterSize: temporalClusterSize,
-            isBurstMode: isBurstModeCandidate,
-            finalResult: {
-              raceNumber: csvMatch?.entry?.numero || vehicle.raceNumber,
-              team: csvMatch?.entry?.squadra || vehicle.teamName,
-              drivers: this.extractDriversFromMatch(csvMatch) || vehicle.drivers,
-              matchedBy: csvMatch?.matchType || 'none'
-            }
-          };
-        });
-
-        // Get temporal context for logging
-        const temporalContextData = temporalContext;
-        let temporalContextLog = undefined;
-
-        if (temporalContextData && vehicles.length > 0) {
-          // Find the best match among all vehicles to get temporal info
-          const bestVehicleMatch = vehicles.find(v => v.temporalBonus && v.temporalBonus > 0);
-
-          if (bestVehicleMatch) {
-            const neighbors = temporalContextData.temporalNeighbors.map(neighbor => ({
-              fileName: neighbor.fileName,
-              timeDiff: Math.abs((neighbor.timestamp?.getTime() || 0) - (temporalContextData.imageTimestamp.timestamp?.getTime() || 0))
-            }));
-
-            temporalContextLog = {
-              burstMode: bestVehicleMatch.isBurstMode || false,
-              bonusApplied: bestVehicleMatch.temporalBonus || 0,
-              clusterSize: bestVehicleMatch.temporalClusterSize || neighbors.length,
-              neighbors: neighbors.slice(0, 5) // Limit to first 5 neighbors for log size
+        // Convert boundingBox to standard percentage format (0-100) for compatibility
+        let boundingBox: { x: number; y: number; width: number; height: number } | undefined;
+        if (vehicle.boundingBox) {
+          const bbox = vehicle.boundingBox;
+          if (vehicle.modelSource === 'local-onnx') {
+            // ONNX: 0-1 normalized -> convert to 0-100 percentage
+            boundingBox = {
+              x: bbox.x * 100,
+              y: bbox.y * 100,
+              width: bbox.width * 100,
+              height: bbox.height * 100
+            };
+          } else {
+            // RF-DETR or other: pass through (viewer handles conversion)
+            boundingBox = {
+              x: bbox.x,
+              y: bbox.y,
+              width: bbox.width,
+              height: bbox.height
             };
           }
         }
 
-        // Build the complete analysis event (same structure for JSONL and database)
-        imageAnalysisEvent = {
-          imageId: imageFile.id,
-          fileName: imageFile.fileName,
-          originalFileName: path.basename(imageFile.originalPath),
-          originalPath: imageFile.originalPath,
-          supabaseUrl,
-          aiResponse: {
-            // Keep raw AI response for debugging - UI will use vehicles array which contains filtered data
-            rawText: `FILTERED (${filteredAnalysis.length} from ${(analysisResult.analysis || []).length}): ${JSON.stringify(filteredAnalysis)}`,
-            totalVehicles: filteredAnalysis.length, // This is what the UI will use
-            vehicles // This contains only filtered vehicles
-          },
-          temporalContext: temporalContextLog,
-          // Save local thumbnail paths for image display
-          thumbnailPath,
-          microThumbPath,
-          compressedPath,
-          // Recognition method tracking
-          recognitionMethod: analysisResult.recognitionMethod || undefined,
-          // Original image dimensions for bbox mapping (especially useful for local-onnx)
-          imageSize: analysisResult.imageSize || undefined,
-          // Segmentation preprocessing info (YOLOv8-seg used before recognition)
-          segmentationPreprocessing: analysisResult.segmentationPreprocessing || undefined,
-          // Visual tags extracted by AI (if enabled)
-          visualTags: visualTagsResult?.tags || undefined,
-          // Backward compatibility - use first vehicle as primary
-          primaryVehicle: vehicles.length > 0 ? vehicles[0] : undefined
+        return {
+          vehicleIndex: index,
+          raceNumber: vehicle.raceNumber,
+          drivers: vehicle.drivers || [],
+          team: vehicle.teamName || vehicle.team,
+          sponsors: vehicle.otherText || [],
+          confidence: vehicle.confidence || 0,
+          plateNumber: vehicle.plateNumber,
+          plateConfidence: vehicle.plateConfidence,
+          // V6 Vehicle DNA fields
+          make: vehicle.make || null,           // Manufacturer (Ferrari, Porsche, etc.)
+          model: vehicle.model || null,         // Model (296 GT3, 911 RSR, etc.)
+          category: vehicle.category || null,   // Race category (GT3, LMP2, Hypercar, etc.)
+          livery: vehicle.livery || null,       // { primary: string, secondary: string[] }
+          context: vehicle.context || null,     // Scene context (race, pit, podium, portrait)
+          // Include both formats for maximum compatibility
+          box_2d,  // Original Gemini format [y1, x1, y2, x2] (0-1000)
+          boundingBox,  // Converted format {x, y, width, height}
+          modelSource: vehicle.modelSource, // Recognition method used (gemini/rf-detr)
+          corrections: corrections.filter((c: any) => c.vehicleIndex === index),
+          participantMatch: csvMatch,
+          // Temporal information from SmartMatcher (FIXED)
+          temporalBonus: temporalBonus,
+          temporalClusterSize: temporalClusterSize,
+          isBurstMode: isBurstModeCandidate,
+          finalResult: {
+            raceNumber: csvMatch?.entry?.numero || vehicle.raceNumber,
+            team: csvMatch?.entry?.squadra || vehicle.teamName,
+            drivers: this.extractDriversFromMatch(csvMatch) || vehicle.drivers,
+            matchedBy: csvMatch?.matchType || 'none'
+          }
         };
+      });
 
-        // PREPARE database update for batch flushing (performance optimization)
-        // Worker returns update data to processor, which accumulates and flushes in batches
-        // This prevents Supabase timeout by sending updates in controlled batches
-        // Full event is already logged to JSONL file for debugging
-        const dbImageId = analysisResult.imageId;
-        console.log(`[DBUpdate] Check: dbImageId=${dbImageId}, vehicles.length=${vehicles.length}`);
+      // Get temporal context for logging
+      const temporalContextData = temporalContext;
+      let temporalContextLog = undefined;
 
-        if (dbImageId && vehicles.length > 0) {
-          // PERFORMANCE: Prepare update data to be accumulated by processor
-          // Processor will flush updates every BATCH_UPDATE_THRESHOLD images or at end of batch
-          pendingUpdateData = {
-            imageId: dbImageId,
-            updateData: {
-              raw_response: {
-                vehicles,
-                totalVehicles: filteredAnalysis.length,
-                recognitionMethod: analysisResult.recognitionMethod || undefined,
-                modelSource: analysisResult.recognitionMethod || 'gemini',
-                segmentationPreprocessing: analysisResult.segmentationPreprocessing || undefined,
-                imageSize: analysisResult.imageSize || undefined,
-                visualTags: visualTagsResult?.tags || undefined,
-                temporalContext: temporalContextLog,
-                enrichedByDesktop: true,
-                enrichedAt: new Date().toISOString()
-              }
-              // ❌ Removed analysis_log - reduces payload size by ~70%
-              // Full data already in JSONL for debugging
-            },
-            timestamp: Date.now()
+      if (temporalContextData && vehicles.length > 0) {
+        // Find the best match among all vehicles to get temporal info
+        const bestVehicleMatch = vehicles.find(v => v.temporalBonus && v.temporalBonus > 0);
+
+        if (bestVehicleMatch) {
+          const neighbors = temporalContextData.temporalNeighbors.map(neighbor => ({
+            fileName: neighbor.fileName,
+            timeDiff: Math.abs((neighbor.timestamp?.getTime() || 0) - (temporalContextData.imageTimestamp.timestamp?.getTime() || 0))
+          }));
+
+          temporalContextLog = {
+            burstMode: bestVehicleMatch.isBurstMode || false,
+            bonusApplied: bestVehicleMatch.temporalBonus || 0,
+            clusterSize: bestVehicleMatch.temporalClusterSize || neighbors.length,
+            neighbors: neighbors.slice(0, 5) // Limit to first 5 neighbors for log size
           };
-
-          console.log(`[DBUpdate] Prepared update for ${dbImageId} (will be queued by processor)`);
         }
       }
+
+      // PREPARE database update for batch flushing (ALWAYS, not just when logger is available)
+      // This ensures participantMatch data is saved to DB for results page display
+      const dbImageId = analysisResult.imageId;
+      console.log(`[DBUpdate] Check: dbImageId=${dbImageId}, vehicles.length=${vehicles.length}`);
+
+      if (dbImageId && vehicles.length > 0) {
+        pendingUpdateData = {
+          imageId: dbImageId,
+          updateData: {
+            raw_response: {
+              vehicles,
+              totalVehicles: filteredAnalysis.length,
+              recognitionMethod: analysisResult.recognitionMethod || undefined,
+              modelSource: analysisResult.recognitionMethod || 'gemini',
+              segmentationPreprocessing: analysisResult.segmentationPreprocessing || undefined,
+              imageSize: analysisResult.imageSize || undefined,
+              visualTags: visualTagsResult?.tags || undefined,
+              temporalContext: temporalContextLog,
+              enrichedByDesktop: true,
+              enrichedAt: new Date().toISOString()
+            }
+          },
+          timestamp: Date.now()
+        };
+
+        console.log(`[DBUpdate] Prepared update for ${dbImageId} (will be queued by processor)`);
+      }
+
+      // Build JSONL analysis event ALWAYS (not just when logger is available)
+      // Workers from the pool don't have analysisLogger, so we return this event
+      // in the result for the main process to log via its own analysisLogger
+      imageAnalysisEvent = {
+        imageId: imageFile.id,
+        fileName: imageFile.fileName,
+        originalFileName: path.basename(imageFile.originalPath),
+        originalPath: imageFile.originalPath,
+        supabaseUrl,
+        aiResponse: {
+          // Keep raw AI response for debugging - UI will use vehicles array which contains filtered data
+          rawText: `FILTERED (${filteredAnalysis.length} from ${(analysisResult.analysis || []).length}): ${JSON.stringify(filteredAnalysis)}`,
+          totalVehicles: filteredAnalysis.length, // This is what the UI will use
+          vehicles // This contains only filtered vehicles
+        },
+        temporalContext: temporalContextLog,
+        // Save local thumbnail paths for image display
+        thumbnailPath,
+        microThumbPath,
+        compressedPath,
+        // Recognition method tracking
+        recognitionMethod: analysisResult.recognitionMethod || undefined,
+        // Original image dimensions for bbox mapping (especially useful for local-onnx)
+        imageSize: analysisResult.imageSize || undefined,
+        // Segmentation preprocessing info (YOLOv8-seg used before recognition)
+        segmentationPreprocessing: analysisResult.segmentationPreprocessing || undefined,
+        // Visual tags extracted by AI (if enabled)
+        visualTags: visualTagsResult?.tags || undefined,
+        // Backward compatibility - use first vehicle as primary
+        primaryVehicle: vehicles.length > 0 ? vehicles[0] : undefined
+      };
       timing['7_jsonlAndDbUpdate'] = Date.now() - phaseStart;
 
       // Fase 5: Scrittura dei metadata (XMP per RAW, IPTC per JPEG) con dual-mode system
@@ -3261,7 +3258,10 @@ class UnifiedImageWorker extends EventEmitter {
         pendingAnalysisInsert: this.pendingAnalysisInsertData ? {
           data: this.pendingAnalysisInsertData,
           timestamp: Date.now()
-        } : undefined
+        } : undefined,
+        // Pending JSONL log entry (worker builds it, main process logs via its analysisLogger)
+        // Workers from pool don't have analysisLogger, so the main process handles JSONL writing
+        pendingLogEntry: imageAnalysisEvent
       };
 
       // Clear the pending insert data after returning it
@@ -3271,14 +3271,23 @@ class UnifiedImageWorker extends EventEmitter {
 
     } catch (error: any) {
       console.error(`[UnifiedWorker] Failed to process ${imageFile.fileName}:`, error);
-      
+
       return {
         fileId: imageFile.id,
         fileName: imageFile.fileName,
         originalPath: imageFile.originalPath,
         success: false,
         error: error.message || 'Unknown error',
-        processingTimeMs: Date.now() - startTime
+        processingTimeMs: Date.now() - startTime,
+        // Include a pendingLogEntry for failed images so they appear in the results page
+        pendingLogEntry: {
+          fileName: imageFile.fileName,
+          originalFileName: imageFile.fileName,
+          originalPath: imageFile.originalPath,
+          aiResponse: { totalVehicles: 0, vehicles: [], rawText: `ERROR: ${error.message || 'Unknown error'}` },
+          processingTimeMs: Date.now() - startTime,
+          error: error.message || 'Unknown error'
+        }
       };
     } finally {
       // CRITICAL FIX: Always cleanup temporary files, even on errors
@@ -4235,6 +4244,11 @@ class UnifiedImageWorker extends EventEmitter {
     let description: string | null = null;
 
     if (analysisResult.analysis && analysisResult.analysis.length > 0) {
+      // DIAGNOSTIC: Log pre-filter analysis state
+      const preFilterNumbers = analysisResult.analysis.map((v: any) => `"${v.raceNumber}"@${(v.confidence || 0).toFixed(2)}`).join(', ');
+      console.log(`[MatchDiag] Pre-filter: ${analysisResult.analysis.length} vehicles: [${preFilterNumbers}]`);
+      console.log(`[MatchDiag] participantsData.length=${this.participantsData.length}, category="${this.category}", sportCategory=${this.currentSportCategory?.code || 'NULL'}`);
+
       // Apply competition type filter based on sport category configuration
       // Use smart default based on category instead of hardcoded true
       const smartDefault = ['running', 'cycling', 'triathlon'].includes(this.category.toLowerCase()) ? true : false;
@@ -4245,6 +4259,15 @@ class UnifiedImageWorker extends EventEmitter {
         analysisResult.analysis,
         isIndividual
       );
+
+      // DIAGNOSTIC: Log post-filter state
+      if (analysisResult.analysis.length < originalCount) {
+        const postFilterNumbers = analysisResult.analysis.map((v: any) => `"${v.raceNumber}"@${(v.confidence || 0).toFixed(2)}`).join(', ');
+        console.log(`[MatchDiag] Post-filter: ${originalCount} → ${analysisResult.analysis.length} vehicles (isIndividual=${isIndividual}): [${postFilterNumbers}]`);
+      }
+      if (analysisResult.analysis.length === 0) {
+        console.warn(`[MatchDiag] ⚠️ ALL vehicles filtered out! minConfidence=${this.currentSportCategory?.recognition_config?.minConfidence || 'default(0.35)'}`);
+      }
 
       // Enhanced intelligent matching using SmartMatcher with temporal context for ALL vehicles
       const csvMatches = await this.findIntelligentMatches(analysisResult.analysis, imageFile, processor, temporalContext);
@@ -4564,14 +4587,21 @@ class UnifiedImageWorker extends EventEmitter {
    */
   private async findIntelligentMatches(analysis: any[], imageFile?: UnifiedImageFile, processor?: UnifiedImageProcessor, temporalContext?: { imageTimestamp: ImageTimestamp; temporalNeighbors: ImageTimestamp[] } | null): Promise<any[]> {
     if (!analysis || analysis.length === 0) {
+      console.log(`[MatchDiag] findIntelligentMatches: analysis is empty, returning []`);
       return [];
     }
 
     // Use preset data if available, otherwise fall back to CSV
     const participantData = this.participantsData.length > 0 ? this.participantsData : this.csvData;
     if (!participantData || participantData.length === 0) {
+      console.warn(`[MatchDiag] ⚠️ findIntelligentMatches: NO participant data! participantsData=${this.participantsData.length}, csvData=${this.csvData.length}`);
       return [];
     }
+
+    // DIAGNOSTIC: Log first time per batch for debugging
+    const vehicleNumbers = analysis.map((v: any) => `"${v.raceNumber}"`).join(', ');
+    const presetNumbers = participantData.slice(0, 10).map((p: any) => `"${p.numero || p.number || 'NONE'}"`).join(', ');
+    console.log(`[MatchDiag] findIntelligentMatches: ${analysis.length} vehicles [${vehicleNumbers}] vs ${participantData.length} participants. First 10 preset nums: [${presetNumbers}]`);
 
     const matches: any[] = [];
 
@@ -4581,13 +4611,23 @@ class UnifiedImageWorker extends EventEmitter {
         const vehicle = analysis[vehicleIndex];
 
         // Convert analysis to SmartMatcher format
+        // For ONNX local detections, the race number comes from the CLASS NAME (training label),
+        // NOT from OCR. The detection confidence measures how sure the model is that it detected
+        // an object, but the number itself is certain once detection is accepted.
+        // Boost confidence for ONNX sources so SmartMatcher doesn't reject valid matches
+        // due to low detection confidence (e.g., 0.4 ONNX conf → score 40 < minimumScore 50).
+        const isOnnxSource = vehicle.modelSource && String(vehicle.modelSource).startsWith('local-onnx');
+        const matchConfidence = isOnnxSource
+          ? Math.max(vehicle.confidence || 0, 0.85)  // ONNX class-name numbers are highly reliable
+          : (vehicle.confidence || undefined);
+
         const smartMatcherAnalysis: SmartMatcherAnalysisResult = {
           raceNumber: vehicle.raceNumber,
           drivers: vehicle.drivers || [],
           category: vehicle.category,
           teamName: vehicle.teamName || vehicle.team,
           otherText: vehicle.otherText || [],
-          confidence: vehicle.confidence,
+          confidence: matchConfidence,
           plateNumber: vehicle.plateNumber,
           plateConfidence: vehicle.plateConfidence
         };
@@ -4613,6 +4653,14 @@ class UnifiedImageWorker extends EventEmitter {
         // Perform intelligent matching for this vehicle
         const isUsingParticipantPreset = this.participantsData.length > 0;
         const matchResult = await this.smartMatcher.findMatches(smartMatcherAnalysis, participantData, isUsingParticipantPreset, vehicleIndex);
+
+        // DIAGNOSTIC: Log match result for each vehicle
+        if (matchResult.bestMatch) {
+          console.log(`[MatchDiag] Vehicle ${vehicleIndex} raceNumber="${vehicle.raceNumber}" → MATCHED to #${matchResult.bestMatch.participant.numero || matchResult.bestMatch.participant.number} (score=${matchResult.bestMatch.score?.toFixed(1)}, confidence=${matchResult.bestMatch.confidence?.toFixed(2)})`);
+        } else {
+          const debugInfo = matchResult.debugInfo;
+          console.warn(`[MatchDiag] Vehicle ${vehicleIndex} raceNumber="${vehicle.raceNumber}" → NO MATCH. Evidence types: [${debugInfo?.evidenceTypes?.join(', ') || 'none'}], candidates evaluated: ${matchResult.allCandidates?.length || 0}, processingMs: ${debugInfo?.processingTimeMs || 0}`);
+        }
 
         // Cache the result for future use
         await this.cacheManager.setMatch(cacheKey, participantHash, this.category, matchResult);
@@ -4806,9 +4854,10 @@ class UnifiedImageWorker extends EventEmitter {
   private fallbackSimpleMatch(analysis: any, participants: any[]): any | null {
     if (!analysis.raceNumber) return null;
 
+    const normalizedTarget = normalizeRaceNumber(analysis.raceNumber);
     const match = participants.find(p =>
-      (p.numero && String(p.numero) === String(analysis.raceNumber)) ||
-      (p.number && String(p.number) === String(analysis.raceNumber))
+      (p.numero && normalizeRaceNumber(p.numero) === normalizedTarget) ||
+      (p.number && normalizeRaceNumber(p.number) === normalizedTarget)
     );
 
     if (match) {
@@ -5448,7 +5497,7 @@ export class UnifiedImageProcessor extends EventEmitter {
   // ============================================================================
   // WORKER POOL (v1.1.0+) - Reusable workers to avoid redundant ONNX initialization
   // ============================================================================
-  private USE_WORKER_POOL = false; // Set to false to disable worker pool (emergency fallback) - TEMPORARILY DISABLED FOR DEBUG
+  private USE_WORKER_POOL = true; // Worker pool enabled: reuses workers with pre-loaded ONNX models
   private workerPool: UnifiedImageWorker[] = [];
   private availableWorkers: UnifiedImageWorker[] = [];
   private busyWorkers: Set<UnifiedImageWorker> = new Set();
@@ -5489,7 +5538,9 @@ export class UnifiedImageProcessor extends EventEmitter {
     timestamp: number;
   }> = [];
   private readonly BATCH_INSERT_THRESHOLD = 10; // Flush every 10 analysis inserts
-  private readonly INSERT_TIMEOUT_MS = 8000; // Timeout for batch insert (higher than update since it's a bulk operation)
+  private readonly INSERT_TIMEOUT_MS = 15000; // Timeout for batch insert (increased from 8s to handle high-throughput ONNX batches)
+  private readonly INSERT_MAX_RETRIES = 2; // Retry failed batch inserts before falling back to individual
+  private insertFlushInProgress = false; // Prevent concurrent flushes from racing
 
   // ============================================================================
   // RAW PREVIEW CALIBRATION (dynamic extraction strategy per extension)
@@ -5604,7 +5655,18 @@ export class UnifiedImageProcessor extends EventEmitter {
       return;
     }
 
-    const insertCount = this.pendingAnalysisInserts.length;
+    // Prevent concurrent flushes from racing (high-throughput ONNX can trigger multiple)
+    if (this.insertFlushInProgress) {
+      if (DEBUG_MODE) console.log('[DBInsert] Flush already in progress, skipping (will retry at next threshold)');
+      return;
+    }
+    this.insertFlushInProgress = true;
+
+    // Take a snapshot of current pending inserts and clear immediately
+    // so new results don't get lost if flush takes time
+    const insertBatch = [...this.pendingAnalysisInserts];
+    this.pendingAnalysisInserts = [];
+    const insertCount = insertBatch.length;
     log.info(`[DBInsert] Flushing ${insertCount} pending analysis_results inserts...`);
 
     try {
@@ -5612,51 +5674,69 @@ export class UnifiedImageProcessor extends EventEmitter {
       const supabase = getSupabaseClient();
 
       // Extract just the data objects for batch insert
-      const insertData = this.pendingAnalysisInserts.map(item => item.data);
+      const insertData = insertBatch.map(item => item.data);
 
-      // Single batch insert with timeout protection
-      const insertPromise = supabase
-        .from('analysis_results')
-        .insert(insertData);
-
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Batch insert timeout')), this.INSERT_TIMEOUT_MS)
-      );
-
-      const { error } = await Promise.race([insertPromise, timeoutPromise]) as any;
-
-      if (error) {
-        log.error(`[DBInsert] Batch insert failed: ${error.message}`);
-
-        // Fallback: try inserting one by one for partial success
-        let successCount = 0;
-        let errorCount = 0;
-        for (const item of insertData) {
-          try {
-            const { error: singleError } = await supabase
-              .from('analysis_results')
-              .insert(item);
-            if (singleError) {
-              errorCount++;
-              if (DEBUG_MODE) console.warn(`[DBInsert] Single insert failed for image ${item.image_id}:`, singleError.message);
-            } else {
-              successCount++;
-            }
-          } catch {
-            errorCount++;
-          }
+      // Retry loop with backoff
+      let lastError: any = null;
+      for (let attempt = 0; attempt <= this.INSERT_MAX_RETRIES; attempt++) {
+        if (attempt > 0) {
+          const backoffMs = 1000 * attempt; // 1s, 2s
+          log.info(`[DBInsert] Retry ${attempt}/${this.INSERT_MAX_RETRIES} after ${backoffMs}ms backoff...`);
+          await new Promise(resolve => setTimeout(resolve, backoffMs));
         }
-        log.info(`[DBInsert] Fallback complete: ${successCount} success, ${errorCount} errors`);
-      } else {
-        log.info(`[DBInsert] Batch insert complete: ${insertCount} analysis results saved`);
+
+        try {
+          // Single batch insert with timeout protection
+          const insertPromise = supabase
+            .from('analysis_results')
+            .insert(insertData);
+
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Batch insert timeout')), this.INSERT_TIMEOUT_MS)
+          );
+
+          const { error } = await Promise.race([insertPromise, timeoutPromise]) as any;
+
+          if (!error) {
+            log.info(`[DBInsert] Batch insert complete: ${insertCount} analysis results saved${attempt > 0 ? ` (retry ${attempt})` : ''}`);
+            return; // Success!
+          }
+
+          lastError = error;
+          log.warn(`[DBInsert] Batch insert attempt ${attempt + 1} failed: ${error.message}`);
+        } catch (err: any) {
+          lastError = err;
+          log.warn(`[DBInsert] Batch insert attempt ${attempt + 1} threw: ${err.message}`);
+        }
       }
 
-      // Clear pending inserts after flush
-      this.pendingAnalysisInserts = [];
+      // All retries failed - fallback to individual inserts
+      log.error(`[DBInsert] All ${this.INSERT_MAX_RETRIES + 1} batch attempts failed, falling back to individual inserts`);
+      let successCount = 0;
+      let errorCount = 0;
+      for (const item of insertData) {
+        try {
+          const { error: singleError } = await supabase
+            .from('analysis_results')
+            .insert(item);
+          if (singleError) {
+            errorCount++;
+            if (DEBUG_MODE) console.warn(`[DBInsert] Single insert failed for image ${item.image_id}:`, singleError.message);
+          } else {
+            successCount++;
+          }
+        } catch {
+          errorCount++;
+        }
+      }
+      log.info(`[DBInsert] Fallback complete: ${successCount} success, ${errorCount} errors`);
 
     } catch (error: any) {
       log.error(`[DBInsert] Failed to flush inserts: ${error.message}`);
-      // Don't clear pending inserts on critical error - they'll be retried
+      // Re-add failed inserts to the queue so they can be retried at next threshold
+      this.pendingAnalysisInserts.unshift(...insertBatch);
+    } finally {
+      this.insertFlushInProgress = false;
     }
   }
 
@@ -6489,9 +6569,9 @@ export class UnifiedImageProcessor extends EventEmitter {
         if (DEBUG_MODE) console.log(`[UnifiedProcessor] Analysis logging enabled for execution ${this.config.executionId} (total: ${totalImageCount} images)`);
       }
 
-      // CREATE EXECUTION RECORD IN DATABASE
-      // This ensures the execution is tracked in Supabase for later correlation with analysis logs
-      try {
+      // CREATE EXECUTION RECORD IN DATABASE (only on first chunk or non-chunked processing)
+      // Skip for subsequent chunks to avoid overwriting total_images with chunk size
+      if (!isChunkProcessing || this.processedImages === 0) try {
         const { getSupabaseClient } = await import('./database-service');
         const { authService: auth } = await import('./auth-service');
         const supabase = getSupabaseClient();
@@ -6507,7 +6587,7 @@ export class UnifiedImageProcessor extends EventEmitter {
             project_id: null, // Desktop executions have no project association
             name: `Desktop - ${(this.config.category || 'motorsport').charAt(0).toUpperCase() + (this.config.category || 'motorsport').slice(1)} - ${new Date().toLocaleString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}`,
             category: this.config.category || 'motorsport',
-            total_images: imageFiles.length,
+            total_images: this.totalImages,  // FIX: Use this.totalImages (set by processBatchInChunks) not chunk's imageFiles.length
             processed_images: 0, // Will be updated at the end
             status: 'processing',
             execution_settings: {
@@ -6679,7 +6759,39 @@ export class UnifiedImageProcessor extends EventEmitter {
     }
     
     // Processa immagini fino al completamento
-    while (activeWorkers.size > 0) {
+    // IMPORTANT: Loop must continue while there are active workers OR unprocessed images in queue
+    // Previously only checked activeWorkers.size > 0, causing early exit when memory backpressure
+    // prevented new worker spawning and all active workers completed
+    while (activeWorkers.size > 0 || this.processingQueue.length > 0) {
+      // If no active workers but queue has items, we need to restart workers
+      // This handles the case where memory backpressure paused all worker spawning
+      if (activeWorkers.size === 0 && this.processingQueue.length > 0) {
+        console.warn(`[UnifiedProcessor] ⚠️ All workers drained but ${this.processingQueue.length} images remain in queue. Forcing GC and restarting workers...`);
+
+        // Aggressive memory cleanup before restarting
+        if (global.gc) {
+          global.gc();
+          await new Promise(resolve => setTimeout(resolve, 500)); // Pausa più lunga per stabilizzare la memoria
+          global.gc(); // Secondo passaggio GC
+          await new Promise(resolve => setTimeout(resolve, 200));
+        }
+
+        // Restart with reduced concurrency (1 worker at a time) to minimize memory pressure
+        const nextImageFile = this.processingQueue.shift()!;
+        const newWorkerId = nextWorkerId++;
+        const newWorkerPromise = this.processWithWorker(nextImageFile);
+
+        activeWorkers.set(newWorkerId, {
+          id: newWorkerId,
+          promise: newWorkerPromise,
+          fileName: nextImageFile.fileName,
+          startTime: Date.now()
+        });
+
+        const currentMemMB = process.memoryUsage().heapUsed / 1024 / 1024;
+        console.log(`[UnifiedProcessor] Restarted worker ${newWorkerId} for ${nextImageFile.fileName} (memory-recovery mode, 1 worker, heap: ${currentMemMB.toFixed(0)}MB, queue: ${this.processingQueue.length} remaining)`);
+        continue; // Re-enter loop with the new worker
+      }
       // Check for cancellation before processing next batch
       if (this.config.isCancelled && this.config.isCancelled()) {
         console.log(`[UnifiedProcessor] Processing cancelled, awaiting ${activeWorkers.size} in-flight workers before stopping...`);
@@ -6720,7 +6832,11 @@ export class UnifiedImageProcessor extends EventEmitter {
         // Rimuovi worker completato
         activeWorkers.delete(workerId);
         results.push(result);
-        this.processedImages++;
+        // Cap processedImages to totalImages to prevent counter overflow
+        // (safety net recovery path can process extra queue items that push past total)
+        if (this.processedImages < this.totalImages) {
+          this.processedImages++;
+        }
 
         // Track token consumption for pre-auth system (P0 fix: these were never called!)
         if (result.success) {
@@ -6737,7 +6853,7 @@ export class UnifiedImageProcessor extends EventEmitter {
 
         if (DEBUG_MODE) console.log(`[UnifiedProcessor] Worker ${workerId} completed for ${fileName} (${activeWorkers.size} remaining, ${this.processedImages}/${this.totalImages} total)`);
 
-        // Emetti progress
+        // Emetti progress (includes previewDataUrl for real-time UI display)
         this.emit('imageProcessed', {
           ...result,
           processed: this.processedImages,
@@ -6748,6 +6864,13 @@ export class UnifiedImageProcessor extends EventEmitter {
           totalSteps: 2,
           progress: Math.round((this.processedImages / this.totalImages) * 100)
         });
+
+        // MEMORY OPTIMIZATION: Strip base64 preview from result AFTER emitting progress event.
+        // The previewDataUrl (~300-500KB per image as base64 string) accumulates in the results[]
+        // array for the entire batch. With 2000+ images this means 600MB-1GB of retained strings.
+        // The renderer has a fallback: if previewDataUrl is null, it loads from compressedPath via IPC.
+        // This is the root cause of memory pressure in large batches (2000+ images).
+        result.previewDataUrl = undefined;
         
         // Avvia nuovo worker SOLO se ci sono ancora immagini da processare E la memoria è sotto controllo
         if (this.processingQueue.length > 0) {
@@ -6768,8 +6891,11 @@ export class UnifiedImageProcessor extends EventEmitter {
             const afterGCPercent = (afterGCMemoryMB / (require('os').totalmem() / 1024 / 1024)) * 100;
 
             if (afterGCPercent > 70) {
-              if (DEBUG_MODE) console.warn(`[UnifiedProcessor] Memory still high after GC (${afterGCPercent.toFixed(1)}%), reducing active workers`);
-              // Non avviare nuovi worker se la memoria è ancora alta
+              // Memory still high: don't spawn new worker, let active ones finish first
+              // The outer while loop condition (processingQueue.length > 0) ensures we'll retry
+              console.warn(`[UnifiedProcessor] Memory still high after GC (${afterGCPercent.toFixed(1)}%), deferring worker spawn (${activeWorkers.size} active, ${this.processingQueue.length} queued)`);
+              // Don't spawn new worker - when current workers complete and free memory,
+              // the loop will either spawn normally or hit the recovery path above
             } else {
               // Avvia nuovo worker solo se la memoria è ora sotto controllo
               const nextImageFile = this.processingQueue.shift()!;
@@ -6815,23 +6941,63 @@ export class UnifiedImageProcessor extends EventEmitter {
       } catch (error) {
         console.error(`[UnifiedProcessor] Unexpected error in worker management:`, error);
         // Emergency cleanup: rimuovi tutti i worker per prevenire deadlock
+        // BUT log how many images remain unprocessed so we have visibility
+        if (this.processingQueue.length > 0) {
+          console.error(`[UnifiedProcessor] ⚠️ EMERGENCY EXIT with ${this.processingQueue.length} images still in queue! Total processed: ${this.processedImages}/${this.totalImages}`);
+        }
         activeWorkers.clear();
         break;
       }
     }
     
-    if (DEBUG_MODE) console.log(`[UnifiedProcessor] Batch completed: ${results.length} images processed successfully`);
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`[FINALIZE] 🏁 Batch processing complete: ${results.length} images. Starting finalization...`);
+    console.log(`${'='.repeat(60)}`);
 
-    // FINAL FLUSH: Send any remaining pending database inserts (ONNX analysis_results)
-    if (this.pendingAnalysisInserts.length > 0) {
-      console.log(`[Finalize] Flushing ${this.pendingAnalysisInserts.length} remaining analysis_results inserts...`);
-      await this.flushPendingInserts();
-    }
+    // FINAL FLUSH with global timeout: Don't let DB operations block the redirect to results.html
+    const FINAL_FLUSH_TIMEOUT_MS = 30000; // 30s max for all flush operations
+    try {
+      const flushWork = async () => {
+        // FINAL FLUSH: Send any remaining pending database inserts (ONNX analysis_results)
+        if (this.pendingAnalysisInserts.length > 0) {
+          console.log(`[Finalize] Flushing ${this.pendingAnalysisInserts.length} remaining analysis_results inserts...`);
+          // CRITICAL: Force-reset the flush lock before final flush.
+          // A previous mid-batch flush may have left insertFlushInProgress=true
+          // (e.g., if it timed out or errored without hitting the finally block),
+          // which causes flushPendingInserts() to silently return without flushing.
+          this.insertFlushInProgress = false;
+          try {
+            await this.flushPendingInserts();
+            console.log(`[Finalize] ✅ analysis_results flush complete`);
+          } catch (flushError) {
+            console.error(`[Finalize] ❌ analysis_results flush failed (non-fatal):`, flushError);
+          }
+        }
 
-    // FINAL FLUSH: Send any remaining pending database updates
-    if (this.pendingUpdates.length > 0) {
-      console.log(`[Finalize] Flushing ${this.pendingUpdates.length} remaining database updates...`);
-      await this.flushPendingUpdates();
+        // FINAL FLUSH: Send any remaining pending database updates
+        if (this.pendingUpdates.length > 0) {
+          console.log(`[Finalize] Flushing ${this.pendingUpdates.length} remaining database updates...`);
+          try {
+            await this.flushPendingUpdates();
+            console.log(`[Finalize] ✅ database updates flush complete`);
+          } catch (flushError) {
+            console.error(`[Finalize] ❌ database updates flush failed (non-fatal):`, flushError);
+          }
+        }
+      };
+
+      const flushTimeout = new Promise<void>((_, reject) =>
+        setTimeout(() => reject(new Error('Final flush timeout after 30s')), FINAL_FLUSH_TIMEOUT_MS)
+      );
+
+      await Promise.race([flushWork(), flushTimeout]);
+      console.log(`[Finalize] ✅ All flush operations complete`);
+    } catch (flushTimeoutError: any) {
+      console.error(`[Finalize] ⚠️ Flush operations timed out or failed: ${flushTimeoutError.message}. Proceeding to finalization.`);
+      // Clear pending queues to prevent memory leaks
+      this.pendingAnalysisInserts = [];
+      this.pendingUpdates = [];
+      this.insertFlushInProgress = false;
     }
 
     // Aggregate RF-DETR metrics from all worker results
@@ -6899,33 +7065,45 @@ export class UnifiedImageProcessor extends EventEmitter {
       }
 
       // Log execution complete with total counts across all chunks
-      const totalProcessed = isChunkProcessing ? this.totalImages : results.length;
-      const totalSuccessful = isChunkProcessing ? (this.totalImages - (this.batchUsage?.errors || 0)) : successful;
-      this.analysisLogger.logExecutionComplete(
-        totalProcessed,
-        totalSuccessful,
-        {
-          performanceBreakdown,
-          memoryStats,
-          networkStats,
-          errorSummary,
-          // Recognition method statistics
-          recognitionStats: this.recognitionMethod ? {
-            method: this.recognitionMethod,
-            rfDetrDetections: this.totalRfDetrDetections > 0 ? this.totalRfDetrDetections : undefined,
-            rfDetrCost: this.totalRfDetrCost > 0 ? this.totalRfDetrCost : undefined
-          } : undefined
-        }
-      );
-
+      // IMPORTANT: Wrapped in try/catch to prevent finalization errors from
+      // killing the entire batch result and blocking redirect to results.html
       try {
-        const logUrl = await this.analysisLogger.finalize();
-        if (DEBUG_MODE) console.log(`[ADMIN] Analysis log available at: ${logUrl || 'upload failed - local only'}`);
+        const totalProcessed = isChunkProcessing ? this.totalImages : results.length;
+        const totalSuccessful = isChunkProcessing ? (this.totalImages - (this.batchUsage?.errors || 0)) : successful;
+        this.analysisLogger.logExecutionComplete(
+          totalProcessed,
+          totalSuccessful,
+          {
+            performanceBreakdown,
+            memoryStats,
+            networkStats,
+            errorSummary,
+            // Recognition method statistics
+            recognitionStats: this.recognitionMethod ? {
+              method: this.recognitionMethod,
+              rfDetrDetections: this.totalRfDetrDetections > 0 ? this.totalRfDetrDetections : undefined,
+              rfDetrCost: this.totalRfDetrCost > 0 ? this.totalRfDetrCost : undefined
+            } : undefined
+          }
+        );
+      } catch (logCompleteError) {
+        console.error('[UnifiedProcessor] ❌ Failed to log execution complete (non-fatal):', logCompleteError);
+      }
+
+      console.log(`[FINALIZE] 📋 Uploading analysis log...`);
+      try {
+        const logFinalizePromise = this.analysisLogger.finalize();
+        const logTimeout = new Promise<string | null>((resolve) =>
+          setTimeout(() => { console.warn('[FINALIZE] ⚠️ Analysis log upload timeout (15s)'); resolve(null); }, 15000)
+        );
+        const logUrl = await Promise.race([logFinalizePromise, logTimeout]);
+        console.log(`[FINALIZE] ✅ Analysis log ${logUrl ? 'uploaded' : 'skipped/local only'}`);
       } catch (error) {
-        console.error('[ADMIN] Failed to finalize analysis log:', error);
+        console.error('[FINALIZE] ❌ Analysis log upload failed (non-fatal):', error);
       }
 
       // UPDATE EXECUTION RECORD IN DATABASE WITH FINAL RESULTS
+      console.log(`[FINALIZE] 💾 Updating execution record in database...`);
       try {
         const { getSupabaseClient } = await import('./database-service');
         const { authService: auth } = await import('./auth-service');
@@ -6934,12 +7112,16 @@ export class UnifiedImageProcessor extends EventEmitter {
         const currentUserId = authState.isAuthenticated ? authState.user?.id : null;
 
         if (currentUserId && this.config.executionId) {
-          // Get current execution_settings from database
-          const { data: currentExecution } = await supabase
+          // Get current execution_settings from database (with timeout)
+          const execSelectPromise = supabase
             .from('executions')
             .select('execution_settings')
             .eq('id', this.config.executionId)
             .single();
+          const execSelectTimeout = new Promise<{ data: null }>((resolve) =>
+            setTimeout(() => { console.warn('[FINALIZE] ⚠️ Execution select timeout (10s)'); resolve({ data: null }); }, 10000)
+          );
+          const { data: currentExecution } = await Promise.race([execSelectPromise, execSelectTimeout]) as any;
 
           // Update execution_settings with RF-DETR metrics
           const updatedExecutionSettings = {
@@ -6964,21 +7146,26 @@ export class UnifiedImageProcessor extends EventEmitter {
             execution_settings: updatedExecutionSettings
           };
 
-          const { error } = await supabase
+          const execUpdatePromise = supabase
             .from('executions')
             .update(executionUpdate)
             .eq('id', this.config.executionId)
             .eq('user_id', currentUserId);
+          const execUpdateTimeout = new Promise<{ error: null }>((resolve) =>
+            setTimeout(() => { console.warn('[FINALIZE] ⚠️ Execution update timeout (10s)'); resolve({ error: null }); }, 10000)
+          );
+          const { error } = await Promise.race([execUpdatePromise, execUpdateTimeout]) as any;
 
           if (error) {
-            console.error(`[UnifiedProcessor] ❌ Failed to update execution record:`, error);
+            console.error(`[FINALIZE] ❌ Failed to update execution record:`, error);
           } else {
-            if (DEBUG_MODE) console.log(`[UnifiedProcessor] ✅ Execution record updated: ${successful}/${results.length} successful`);
+            console.log(`[FINALIZE] ✅ Execution record updated: ${successful}/${results.length} successful`);
           }
+        } else {
+          console.log(`[FINALIZE] ⏭️ Skipping execution update (no user/executionId)`);
         }
       } catch (updateError) {
-        console.error(`[UnifiedProcessor] ❌ Exception updating execution record:`, updateError);
-        // Don't fail - this is just metadata
+        console.error(`[FINALIZE] ❌ Exception updating execution record (non-fatal):`, updateError);
       }
     }
 
@@ -6987,7 +7174,7 @@ export class UnifiedImageProcessor extends EventEmitter {
     const totalImages = results.length;
     if (totalImages > 20 && successfulResults.length > 0) {
       const hasAnyNumbers = successfulResults.some(r =>
-        r.analysis && r.analysis.length > 0 && r.analysis.some((a: any) => a.number)
+        r.analysis && r.analysis.length > 0 && r.analysis.some((a: any) => a.raceNumber || a.number)
       );
       if (!hasAnyNumbers) {
         errorTelemetryService.reportCriticalError({
@@ -7007,6 +7194,10 @@ export class UnifiedImageProcessor extends EventEmitter {
       errors: results.filter(r => !r.success).length,
       total: totalImages
     });
+
+    console.log(`${'='.repeat(60)}`);
+    console.log(`[FINALIZE] 🎉 Finalization complete! Returning ${results.length} results to main.ts`);
+    console.log(`${'='.repeat(60)}\n`);
 
     return results;
   }
@@ -7146,6 +7337,22 @@ export class UnifiedImageProcessor extends EventEmitter {
           await this.flushPendingUpdates();
         }
       }
+
+      // JSONL LOG ACCUMULATION: Pool workers don't have analysisLogger,
+      // so they return the log entry for the main process to write.
+      // Only log here for pool workers to avoid double-logging (legacy workers log internally)
+      if (usePool && result.pendingLogEntry && this.analysisLogger) {
+        this.analysisLogger.logImageAnalysis(result.pendingLogEntry);
+        console.log(`[Processor] Logged JSONL entry for ${imageFile.fileName} via main process logger`);
+      }
+
+      // MEMORY OPTIMIZATION: Clear heavy data from result that has already been consumed.
+      // pendingLogEntry was already written to JSONL above; pendingAnalysisInsert and pendingUpdate
+      // were already accumulated by the processor. Keeping them in the result object wastes memory
+      // as the result will be stored in the results[] array for the entire batch duration.
+      result.pendingLogEntry = undefined;
+      result.pendingAnalysisInsert = undefined;
+      result.pendingUpdate = undefined;
 
       return result;
     } catch (error) {

@@ -7,6 +7,27 @@ var currentPreset = null;
 var participantsData = [];
 var isEditingPreset = false;
 var customFolders = []; // Array of {name, path?} objects for custom folders
+
+/**
+ * Safely extract folder name from any folder entry format.
+ * Handles: string, {name: string}, {name: {name: string}}, or any unexpected format.
+ * @param {*} folder - Folder entry (string or object)
+ * @returns {string} Folder name as a plain string
+ */
+function getFolderDisplayName(folder) {
+  if (typeof folder === 'string') return folder;
+  if (folder && typeof folder === 'object') {
+    let name = folder.name;
+    // Handle double-nested objects (e.g., {name: {name: "actual"}})
+    while (name && typeof name === 'object' && name.name !== undefined) {
+      name = name.name;
+    }
+    if (typeof name === 'string' && name.length > 0) return name;
+    // Fallback: try folder_name or any string property
+    if (typeof folder.folder_name === 'string') return folder.folder_name;
+  }
+  return String(folder || 'Unknown Folder');
+}
 var editingRowIndex = -1; // -1 = new participant, >=0 = editing existing
 var currentSortColumn = 0; // Colonna corrente di ordinamento (0 = numero)
 var currentSortDirection = 'asc'; // Direzione: 'asc' o 'desc'
@@ -675,7 +696,7 @@ function confirmAddFolder() {
   }
 
   // Check for duplicates
-  if (customFolders.some(f => (typeof f === 'string' ? f : f.name) === folderName)) {
+  if (customFolders.some(f => getFolderDisplayName(f) === folderName)) {
     alert('A folder with this name already exists');
     folderNameInput.focus();
     return;
@@ -978,7 +999,7 @@ function populateFolderSelects() {
 
     select.innerHTML = `<option value="">Folder ${index + 1}: None</option>`;
     customFolders.forEach(folder => {
-      const folderName = typeof folder === 'string' ? folder : folder.name;
+      const folderName = getFolderDisplayName(folder);
       const folderPath = typeof folder === 'string' ? '' : (folder.path || '');
       const option = document.createElement('option');
       option.value = folderName;
@@ -1262,7 +1283,7 @@ function scrollToParticipant(numero) {
  * Remove a custom folder
  */
 function removeCustomFolder(folderName) {
-  const index = customFolders.findIndex(f => (typeof f === 'string' ? f : f.name) === folderName);
+  const index = customFolders.findIndex(f => (getFolderDisplayName(f)) === folderName);
   if (index > -1) {
     customFolders.splice(index, 1);
     renderCustomFolders();
@@ -1282,7 +1303,7 @@ function editCustomFolder(index) {
 
   editingFolderIndex = index;
   const folder = customFolders[index];
-  const oldFolderName = typeof folder === 'string' ? folder : folder.name;
+  const oldFolderName = getFolderDisplayName(folder);
   const oldFolderPath = typeof folder === 'string' ? '' : (folder.path || '');
 
   // Open modal and populate with current name and path
@@ -1366,7 +1387,7 @@ function clearEditFolderPath() {
  */
 function getFolderPath(folderName) {
   if (!folderName) return '';
-  const folder = customFolders.find(f => (typeof f === 'string' ? f : f.name) === folderName);
+  const folder = customFolders.find(f => (getFolderDisplayName(f)) === folderName);
   if (!folder || typeof folder === 'string') return '';
   return folder.path || '';
 }
@@ -1385,10 +1406,10 @@ function saveEditedFolderName() {
   }
 
   const oldFolder = customFolders[editingFolderIndex];
-  const oldFolderName = typeof oldFolder === 'string' ? oldFolder : oldFolder.name;
+  const oldFolderName = getFolderDisplayName(oldFolder);
 
   // Check if the new name already exists (and it's not the same folder)
-  if (customFolders.some(f => (typeof f === 'string' ? f : f.name) === newFolderName) && newFolderName !== oldFolderName) {
+  if (customFolders.some(f => (getFolderDisplayName(f)) === newFolderName) && newFolderName !== oldFolderName) {
     alert('A folder with this name already exists!');
     document.getElementById('edit-folder-name-input').focus();
     return;
@@ -1452,7 +1473,7 @@ function renderCustomFolders() {
 
   // Add folder chips
   customFolders.forEach((folder, index) => {
-    const folderName = typeof folder === 'string' ? folder : folder.name;
+    const folderName = getFolderDisplayName(folder);
     const folderPath = typeof folder === 'string' ? '' : (folder.path || '');
     const chip = document.createElement('div');
     chip.className = 'folder-chip';
@@ -1500,7 +1521,7 @@ function updateFolderSelects() {
       // Rebuild options
       select.innerHTML = '<option value="">-- None --</option>';
       customFolders.forEach(folder => {
-        const folderName = typeof folder === 'string' ? folder : folder.name;
+        const folderName = getFolderDisplayName(folder);
         const folderPath = typeof folder === 'string' ? '' : (folder.path || '');
         const option = document.createElement('option');
         option.value = folderName;
@@ -1529,10 +1550,14 @@ async function editPreset(presetId) {
     isEditingPreset = true;
     participantsData = currentPreset.participants || [];
 
-    // Load custom folders from preset (normalize old string entries to objects)
-    customFolders = (currentPreset.custom_folders || []).map(f =>
-      typeof f === 'string' ? { name: f } : f
-    );
+    // Load custom folders from preset (normalize all entries to {name, path?} objects)
+    customFolders = (currentPreset.custom_folders || []).map(f => {
+      const name = getFolderDisplayName(f);
+      const path = (typeof f === 'object' && f !== null) ? (f.path || '') : '';
+      const obj = { name };
+      if (path) obj.path = path;
+      return obj;
+    });
     renderCustomFolders();
 
     // Fill form with preset data
@@ -2559,7 +2584,7 @@ async function previewJsonFile() {
     document.getElementById('json-preview-participants-count').textContent = presetData.participants.length;
 
     const folders = presetData.custom_folders && presetData.custom_folders.length > 0
-      ? presetData.custom_folders.join(', ')
+      ? presetData.custom_folders.map(f => getFolderDisplayName(f)).join(', ')
       : 'None';
     document.getElementById('json-preview-folders').textContent = folders;
 

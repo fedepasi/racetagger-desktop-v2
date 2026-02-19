@@ -92,3 +92,4 @@ venv-ml/bin/activate
 ml-training/rf-detr-onnx-converter
 src/assets/models/
 .claude/settings.local.json
+tests/

@@ -399,6 +399,70 @@ body:has(.feedback-modal-overlay[style*="display: flex"]) .feedback-fab-wrapper 
   margin-top: 8px;
 }
 
+/* ---- Contextual Type Banner ---- */
+
+.feedback-type-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 13px;
+  border-radius: var(--radius-md, 8px);
+  margin-bottom: 16px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  border: 1px solid transparent;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+/* Bug: warm amber — conveys that diagnostic data is being collected */
+.feedback-type-banner--bug {
+  background: rgba(245, 158, 11, 0.08);
+  border-color: rgba(245, 158, 11, 0.25);
+  color: var(--text-secondary, #64748b);
+}
+
+.feedback-type-banner--bug .feedback-type-banner-icon {
+  color: #f59e0b;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+/* Feature: blue — constructive, forward-looking */
+.feedback-type-banner--feature {
+  background: rgba(59, 130, 246, 0.07);
+  border-color: rgba(59, 130, 246, 0.2);
+  color: var(--text-secondary, #64748b);
+}
+
+.feedback-type-banner--feature .feedback-type-banner-icon {
+  color: var(--accent-primary, #3b82f6);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+/* General: neutral */
+.feedback-type-banner--general {
+  background: rgba(100, 116, 139, 0.07);
+  border-color: rgba(100, 116, 139, 0.18);
+  color: var(--text-secondary, #64748b);
+}
+
+.feedback-type-banner--general .feedback-type-banner-icon {
+  color: var(--text-muted, #94a3b8);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.feedback-type-banner-icon {
+  display: flex;
+  align-items: center;
+  line-height: 1;
+}
+
+.feedback-type-banner-text {
+  flex: 1;
+}
+
 /* ---- Auth Warning ---- */
 
 .feedback-auth-warning {

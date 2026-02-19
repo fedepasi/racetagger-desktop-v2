@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="css/styles.css">
   <link rel="stylesheet" href="css/processing-status.css">
   <link rel="stylesheet" href="css/results-integrated.css">
+  <link rel="stylesheet" href="css/feedback-modal.css">
 </head>
 <body>
   <div class="results-page">
@@ -90,6 +91,7 @@
   <script src="js/gallery-zoom.js"></script>
   <script src="js/log-visualizer.js"></script>
   <script src="js/results-page.js"></script>
+  <script src="js/feedback-modal.js"></script>
 
   <script>
     // Wait for DOM to be ready before attaching event listeners
@@ -150,5 +152,21 @@
       console.log('[Results] Navigation buttons setup complete');
     });
   </script>
+
+  <!-- Support FAB — same system as index.html, no duplication -->
+  <div class="feedback-fab-wrapper" id="feedback-fab-wrapper">
+    <div class="feedback-fab-tooltip" id="feedback-fab-tooltip">
+      <span class="feedback-fab-tooltip-text">Report a bug, request a feature, or share your feedback — we're listening!</span>
+      <button class="feedback-fab-tooltip-close" id="feedback-fab-tooltip-close" aria-label="Close">&times;</button>
+    </div>
+    <button class="feedback-fab" id="feedback-fab" onclick="openFeedbackModal()" title="Support">
+      <svg class="feedback-fab-icon" viewBox="-1 -2 26 27" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 11h1a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H3a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1Z"/>
+        <path d="M21 11h-1a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h1a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1Z"/>
+        <path d="M2 11V9a10 10 0 0 1 20 0v2"/>
+        <path d="M18 18v1a2 2 0 0 1-2 2h-2"/>
+      </svg>
+    </button>
+  </div>
 </body>
 </html>
