@@ -30,6 +30,7 @@ export type ErrorType =
   | 'token_reservation'
   | 'segmentation'
   | 'zero_results'
+  | 'ghost_images'
   | 'memory'
   | 'uncaught';
 

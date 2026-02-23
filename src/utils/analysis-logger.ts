@@ -26,6 +26,11 @@ export interface ExecutionStartEvent extends LogEvent {
   totalImages: number;
   category: string;
   participantPresetId?: string;
+  participantPreset?: {
+    id: string;
+    name: string;
+    participantCount: number;
+  };
   userId: string;
   appVersion: string;
   // Optional enhanced telemetry (backward compatible)
@@ -145,6 +150,21 @@ export interface ImageAnalysisEvent extends LogEvent {
   // Scene classification for post-analysis folder organization
   sceneCategory?: string;
   sceneSkipped?: boolean;
+  // Per-image error/warning tracking for debugging processing issues
+  processingErrors?: Array<{
+    phase: string;         // e.g., 'upload', 'onnx-detection', 'gemini-v6', 'crop-context', 'standard-analysis'
+    message: string;       // Error message
+    recoverable: boolean;  // Whether processing continued after this error
+    timestamp: string;     // ISO timestamp of when the error occurred
+  }>;
+  processingWarnings?: Array<{
+    phase: string;         // e.g., 'yolo-seg', 'v6-fullimage', 'defensive-upload'
+    message: string;       // Warning message
+    timestamp: string;     // ISO timestamp
+  }>;
+  // Metadata writing status
+  metadataWritten?: boolean;
+  metadataSkipReason?: string;
 }
 
 export interface CorrectionData {
@@ -348,7 +368,8 @@ export class AnalysisLogger {
   logExecutionStart(
     totalImages: number,
     participantPresetId?: string,
-    systemEnvironment?: ExecutionStartEvent['systemEnvironment']
+    systemEnvironment?: ExecutionStartEvent['systemEnvironment'],
+    participantPreset?: ExecutionStartEvent['participantPreset']
   ): void {
     const event: ExecutionStartEvent = {
       type: 'EXECUTION_START',
@@ -357,6 +378,7 @@ export class AnalysisLogger {
       totalImages,
       category: this.category,
       participantPresetId,
+      participantPreset,
       userId: this.userId,
       appVersion: app.getVersion(),
       systemEnvironment // Optional enhanced telemetry

@@ -72,15 +72,24 @@ export class EvidenceCollector {
   extractEvidence(analysisResult: any): Evidence[] {
     const evidence: Evidence[] = [];
 
-    // Extract race number evidence
+    // Extract race number evidence (with sanitization of garbage AI responses)
     if (analysisResult.raceNumber) {
-      evidence.push({
-        type: EvidenceType.RACE_NUMBER,
-        value: String(analysisResult.raceNumber),
-        confidence: analysisResult.confidence || 1.0,
-        source: 'ocr_analysis',
-        quality: this.assessRaceNumberQuality(analysisResult.raceNumber, analysisResult.confidence)
-      });
+      const rawNumber = String(analysisResult.raceNumber).trim();
+      // Filter out garbage values that AI models sometimes return when they can't detect a number
+      const GARBAGE_RACE_NUMBERS = ['null', 'undefined', 'none', 'n/a', 'na', 'unknown', '0', '-', '--', '?', ''];
+      const isGarbageNumber = GARBAGE_RACE_NUMBERS.includes(rawNumber.toLowerCase());
+
+      if (isGarbageNumber) {
+        console.warn(`[EvidenceCollector] Filtered garbage raceNumber="${rawNumber}" from AI response`);
+      } else {
+        evidence.push({
+          type: EvidenceType.RACE_NUMBER,
+          value: rawNumber,
+          confidence: analysisResult.confidence || 1.0,
+          source: 'ocr_analysis',
+          quality: this.assessRaceNumberQuality(analysisResult.raceNumber, analysisResult.confidence)
+        });
+      }
     }
 
     // Extract person name evidence (from drivers/persons array)

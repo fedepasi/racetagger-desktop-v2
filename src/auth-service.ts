@@ -867,6 +867,28 @@ export class AuthService {
     }
   }
 
+  // Request a password reset email (for users who registered via download page without setting a password)
+  async requestPasswordReset(email: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const normalizedEmail = email.toLowerCase().trim();
+
+      const { error } = await this.supabase.auth.resetPasswordForEmail(normalizedEmail, {
+        redirectTo: 'https://www.racetagger.cloud/reset-password'
+      });
+
+      if (error) {
+        console.error('Password reset request error:', error);
+        return { success: false, error: error.message };
+      }
+
+      console.log(`Password reset email sent to ${normalizedEmail}`);
+      return { success: true };
+    } catch (error: any) {
+      console.error('Password reset request exception:', error);
+      return { success: false, error: error.message || 'An unexpected error occurred' };
+    }
+  }
+
   // Cleanup method to prevent memory leaks
   cleanup(): void {
     // Clear token refresh interval

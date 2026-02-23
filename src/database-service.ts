@@ -1638,10 +1638,10 @@ export async function updatePresetLastUsedSupabase(presetId: string): Promise<vo
  * Update participant preset details in Supabase
  */
 export async function updateParticipantPresetSupabase(presetId: string, updateData: Partial<Pick<ParticipantPresetSupabase, 'name' | 'description' | 'category_id' | 'custom_folders'>>): Promise<void> {
-  try {
-    const userId = getCurrentUserId();
-    if (!userId) throw new Error('User not authenticated');
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
 
+  await withRetry(async () => {
     const { error } = await supabase
       .from('participant_presets')
       .update({
@@ -1661,11 +1661,7 @@ export async function updateParticipantPresetSupabase(presetId: string, updateDa
     if (cacheIndex !== -1) {
       presetsCache[cacheIndex] = { ...presetsCache[cacheIndex], ...updateData, updated_at: new Date().toISOString() };
     }
-
-  } catch (error) {
-    console.error('[DB] Error updating participant preset in Supabase:', error);
-    throw error;
-  }
+  }, 'updateParticipantPreset', 3, 1000);
 }
 
 /**

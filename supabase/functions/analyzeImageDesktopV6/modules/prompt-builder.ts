@@ -83,12 +83,13 @@ function buildParticipantContext(participants: ParticipantInfo[]): string {
  * Build context image analysis instructions
  */
 function buildContextImageInstructions(cropCount: number): string {
-  return `\n\nIMAGINE ${cropCount + 1}: Contesto (soggetti mascherati in nero)
-Analizza questa immagine per identificare:
-- sponsorVisibili: Array di sponsor/loghi visibili nella scena
-- altriNumeri: Altri numeri di gara visibili (per cross-reference)
+  return `\n\nIMAGINE ${cropCount + 1}: Immagine completa di contesto
+Analizza questa immagine completa per identificare elementi di contesto:
+- sponsorVisibili: Array di sponsor/loghi visibili nella scena (muri, garage, banner, tute)
+- altriNumeri: Altri numeri di gara visibili (per cross-reference con i ritagli precedenti)
 - categoria: Categoria di gara se identificabile (F1, GT3, MotoGP, ecc.)
-- coloriTeam: Colori predominanti che potrebbero identificare il team`;
+- coloriTeam: Colori predominanti che potrebbero identificare il team
+Nota: questa è l'immagine completa da cui sono stati estratti i ritagli precedenti.`;
 }
 
 /**

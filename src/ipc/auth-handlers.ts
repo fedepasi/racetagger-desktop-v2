@@ -95,6 +95,17 @@ export function registerAuthHandlers(): void {
     }
   });
 
+  // ==================== Password Reset ====================
+
+  ipcMain.on('request-password-reset', async (event: IpcMainEvent, data: { email: string }) => {
+    try {
+      const result = await authService.requestPasswordReset(data.email);
+      event.sender.send('password-reset-result', result);
+    } catch (error: any) {
+      event.sender.send('password-reset-result', { success: false, error: error.message || 'Password reset error' });
+    }
+  });
+
   // ==================== Logout ====================
 
   ipcMain.on('logout', async (event: IpcMainEvent) => {

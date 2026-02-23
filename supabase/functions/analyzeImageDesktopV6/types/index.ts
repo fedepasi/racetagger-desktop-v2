@@ -127,7 +127,8 @@ export interface ParticipantInfo {
 
 export interface RequestBody {
   crops: CropData[];
-  negative?: NegativeData;
+  negative?: NegativeData;                // Legacy: base64 negative image (deprecated)
+  contextStoragePath?: string;            // V6 2026: Storage path for full context image (replaces negative)
   category?: string;
   userId?: string;
   executionId?: string;
@@ -198,6 +199,20 @@ export interface GeminiAnalysisResult {
   rawResponse: string;
   inputTokens: number;
   outputTokens: number;
+  providerUsed?: ProviderUsedInfo;  // V6 2026: Track which provider answered
+}
+
+/**
+ * V6 2026: Multi-provider failover telemetry
+ * Tracks which provider in the chain actually served the request.
+ */
+export interface ProviderUsedInfo {
+  modelCode: string;       // 'gemini-3-flash-preview', 'gemini-2.5-flash', etc.
+  location: string;        // 'global', 'europe-west4', etc.
+  sdkType: string;         // 'vertex' or 'aistudio'
+  priority: number;        // 0 = primary, 1 = first fallback, etc.
+  wasFallback: boolean;    // true if not the primary provider
+  failedProviders?: string[];  // List of providers that failed before this one
 }
 
 export interface UsageStats {
@@ -219,6 +234,7 @@ export interface SuccessResponse {
   inferenceTimeMs: number;
   usedFullImage?: boolean;  // V6 Baseline 2026: True if fullImage fallback was used
   imageId?: string;         // FIX December 2024: Database UUID for token tracking (like V3)
+  providerUsed?: ProviderUsedInfo;  // V6 2026: Which AI provider served this request
 }
 
 export interface ErrorResponse {

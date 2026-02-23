@@ -97,6 +97,7 @@ function initializeAuth() {
     window.api.receive('token-used', handleTokenUsed);
     window.api.receive('auth-refresh-completed', handleAuthRefreshCompleted);
     window.api.receive('auth-session-expired', handleSessionExpired);
+    window.api.receive('password-reset-result', handlePasswordResetResult);
   }
 }
 
@@ -380,7 +381,75 @@ function handleLoginResult(result) {
       }
     }
   } else {
-    showAuthError('login', result.error || 'Errore durante il login');
+    // Check if this is an invalid credentials error — might be a user who registered
+    // from the download page and hasn't set their password yet
+    const errorMsg = result.error || 'Errore durante il login';
+    const isInvalidCredentials = errorMsg.toLowerCase().includes('invalid login credentials') ||
+                                  errorMsg.toLowerCase().includes('invalid password') ||
+                                  errorMsg.toLowerCase().includes('wrong password');
+
+    if (isInvalidCredentials) {
+      showLoginPasswordHelp();
+    } else {
+      showAuthError('login', errorMsg);
+    }
+  }
+}
+
+// Show password setup help for users who haven't activated their account yet
+function showLoginPasswordHelp() {
+  const errorElement = document.getElementById('login-error');
+  if (errorElement) {
+    const email = document.getElementById('login-email').value.toLowerCase().trim();
+    errorElement.innerHTML = `
+      <div style="text-align: left;">
+        <p style="margin: 0 0 6px 0;"><strong>Account not yet activated.</strong></p>
+        <p style="margin: 0 0 6px 0; font-size: 13px;">
+          Check your inbox (and spam folder) for the activation email from RaceTagger, then click the link to set your password.
+        </p>
+        <a href="#" id="resend-password-setup" style="font-size: 12px; color: #667eea; text-decoration: underline; cursor: pointer;">
+          Didn't receive it? Resend activation email
+        </a>
+      </div>
+    `;
+    errorElement.style.display = 'flex';
+    errorElement.className = 'error-message';
+
+    // Attach resend handler
+    const resendLink = document.getElementById('resend-password-setup');
+    if (resendLink) {
+      resendLink.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (!email) {
+          showAuthError('login', 'Enter your email address first');
+          return;
+        }
+        resendLink.textContent = 'Sending...';
+        resendLink.style.pointerEvents = 'none';
+        if (window.api) {
+          window.api.send('request-password-reset', { email });
+        }
+      });
+    }
+  }
+}
+
+// Handle password reset result
+function handlePasswordResetResult(result) {
+  const resendLink = document.getElementById('resend-password-setup');
+  if (result.success) {
+    if (resendLink) {
+      resendLink.textContent = '✓ Email sent! Check your inbox.';
+      resendLink.style.color = '#10b981';
+      resendLink.style.textDecoration = 'none';
+      resendLink.style.pointerEvents = 'none';
+    }
+  } else {
+    if (resendLink) {
+      resendLink.textContent = 'Didn\'t receive it? Resend activation email';
+      resendLink.style.pointerEvents = 'auto';
+    }
+    showAuthError('login', result.error || 'Failed to send email. Please try again.');
   }
 }
 

@@ -20,7 +20,7 @@ export const VERTEX_AI = {
   LOCATION_ENV: 'VERTEX_LOCATION',
   SERVICE_ACCOUNT_KEY_ENV: 'VERTEX_SERVICE_ACCOUNT_KEY',
 
-  // Defaults
+  // Defaults (used when ai_provider_configs not available)
   DEFAULT_LOCATION: 'global',  // Gemini 3 Flash only available on global endpoints
   DEFAULT_MODEL: 'gemini-3-flash-preview',
 
@@ -34,6 +34,54 @@ export const VERTEX_AI = {
   TIMEOUT_MS: 60000,
   RETRY_ATTEMPTS: 1
 };
+
+// ==================== PROVIDER CHAIN (DEFAULT FALLBACK) ====================
+// Used when ai_provider_configs table is not available or empty.
+// Mirrors the seed data in migration 20260222100000.
+// Order: best quality → GA EU-compliant → cheapest EU-compliant
+
+export interface ProviderEntry {
+  modelCode: string;
+  location: string;
+  sdkType: 'vertex' | 'aistudio';
+  // Model-specific overrides (merged with VERTEX_AI defaults)
+  config?: {
+    thinkingLevel?: string;
+    mediaResolution?: string;
+    temperature?: number;
+    maxOutputTokens?: number;
+  };
+}
+
+export const DEFAULT_PROVIDER_CHAIN: ProviderEntry[] = [
+  {
+    modelCode: 'gemini-3-flash-preview',
+    location: 'global',
+    sdkType: 'vertex',
+    config: { thinkingLevel: 'MINIMAL', mediaResolution: 'MEDIA_RESOLUTION_HIGH', temperature: 0.2, maxOutputTokens: 4096 }
+  },
+  {
+    modelCode: 'gemini-2.5-flash',
+    location: 'europe-west4',
+    sdkType: 'vertex',
+    config: { thinkingLevel: 'MINIMAL', mediaResolution: 'MEDIA_RESOLUTION_HIGH', temperature: 0.2, maxOutputTokens: 4096 }
+  },
+  {
+    modelCode: 'gemini-2.5-flash-lite',
+    location: 'europe-west4',
+    sdkType: 'vertex',
+    config: { mediaResolution: 'MEDIA_RESOLUTION_HIGH', temperature: 0.1, maxOutputTokens: 4096 }
+  }
+];
+
+// Errors that should trigger failover to next provider
+export const RETRYABLE_ERROR_PATTERNS = [
+  '429', 'resource exhausted', 'resource_exhausted',
+  '503', 'service unavailable', 'overloaded',
+  'quota', 'rate limit', 'rate_limit', 'too many requests',
+  'timeout', 'timed out', 'deadline exceeded',
+  'internal error', '500',
+];
 
 // ==================== COST TRACKING ====================
 

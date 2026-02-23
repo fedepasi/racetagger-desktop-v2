@@ -32,7 +32,7 @@ import { consentService } from './consent-service';
 import {
   extractCropContext,
   cropsToBase64,
-  negativeToBase64,
+  // negativeToBase64,  // Removed: V6 now uses contextStoragePath instead of negative base64
   CropContextResult,
   BoundingBox as CropBoundingBox,
   CropConfig,
@@ -50,6 +50,7 @@ import {
   MaskedCropBase64Result,
   ExtractMaskOptions
 } from './utils/crop-context-extractor';
+import { AdaptiveUploadSemaphore, AdaptiveUploadConfig } from './utils/adaptive-upload-semaphore';
 
 // Create component loggers for macro-flow visibility
 const log = createComponentLogger('Processor');
@@ -79,6 +80,35 @@ async function extractEdgeFunctionErrorDetails(error: any): Promise<string> {
     // If reading the body fails, return what we have
     return error?.message || error?.statusText || 'Unknown Edge Function error';
   }
+}
+
+/**
+ * Determine if an Edge Function error is retryable.
+ * Covers both network failures and capacity/rate-limit errors (429, 503).
+ * Issues: #55 (timeout), #57 (429 Resource Exhausted), #58 (Failed to send)
+ */
+function isEdgeFunctionRetryable(errorMessage: string): boolean {
+  const msg = errorMessage.toLowerCase();
+  // Network errors
+  if (msg.includes('fetch failed') || msg.includes('econnrefused') ||
+      msg.includes('etimedout') || msg.includes('failed to send') ||
+      msg.includes('econnreset') || msg.includes('socket hang up')) {
+    return true;
+  }
+  // HTTP capacity/rate-limit errors
+  if (msg.includes('429') || msg.includes('503') ||
+      msg.includes('resource exhausted') || msg.includes('resource_exhausted') ||
+      msg.includes('overloaded') || msg.includes('quota') ||
+      msg.includes('rate limit') || msg.includes('rate_limit') ||
+      msg.includes('too many requests') || msg.includes('service unavailable')) {
+    return true;
+  }
+  // Supabase Edge Function boot timeout (issue #55)
+  if (msg.includes('function invocation timeout') || msg.includes('boot error') ||
+      msg.includes('worker limit')) {
+    return true;
+  }
+  return false;
 }
 
 const sharp = getSharp();
@@ -167,6 +197,7 @@ export interface UnifiedProcessorConfig {
   category?: string;
   executionId?: string; // Add execution_id for linking images to desktop executions
   presetId?: string; // Preset ID for loading face descriptors specific to this preset
+  presetName?: string; // Preset name for JSONL EXECUTION_START logging
   keywordsMode?: 'append' | 'overwrite'; // How to handle existing keywords
   descriptionMode?: 'append' | 'overwrite'; // How to handle existing description
   enableAdvancedAnnotations?: boolean; // V3 bounding box annotations
@@ -253,6 +284,17 @@ class UnifiedImageWorker extends EventEmitter {
   // Pending analysis_results insert data (for batch insert optimization with ONNX)
   // Set by analyzeImageLocal(), read by Processor via getPendingAnalysisInsert()
   private pendingAnalysisInsertData: any = null;
+
+  // Shared adaptive upload semaphore (set by processor, shared across all workers)
+  private uploadSemaphore?: AdaptiveUploadSemaphore;
+
+  /**
+   * Set a shared upload semaphore for concurrency control.
+   * Called by UnifiedImageProcessor after pool creation.
+   */
+  setUploadSemaphore(semaphore: AdaptiveUploadSemaphore): void {
+    this.uploadSemaphore = semaphore;
+  }
 
   private constructor(config: UnifiedProcessorConfig, analysisLogger?: AnalysisLogger, networkMonitor?: NetworkMonitor) {
     super();
@@ -1397,7 +1439,8 @@ class UnifiedImageWorker extends EventEmitter {
               tokensConsumed: 0,  // Local ONNX doesn't consume tokens
               inferenceTimeMs: inferenceMs,
               bboxSource: 'full-image',
-              modelSource: 'local-onnx-full'
+              modelSource: 'local-onnx-full',
+              recognitionMethod: 'local-onnx'  // FIX: Was missing, caused undefined in JSONL
             };
           } else {
             log.warn(`[CropContext] ✗ ONNX full-image FAILED: ${detections.length} detections, ${validDetections.length} above threshold ${CONFIDENCE_THRESHOLD} - falling back to Gemini with crops`);
@@ -1420,7 +1463,6 @@ class UnifiedImageWorker extends EventEmitter {
 
       // ==================== CROP EXTRACTION (for Gemini fallback) ====================
       let cropsPayload: any[] = [];
-      let negativePayload: any | undefined;
       let extractedCrops: any[] = [];
       // V6 Baseline 2026: Track detection source for bboxSource field
       let detectionSource: 'yolo-seg' | 'onnx-detr' | 'full-image' | 'gemini' = 'gemini';
@@ -1477,8 +1519,7 @@ class UnifiedImageWorker extends EventEmitter {
             // V6 Baseline 2026: Mark as yolo-seg detection source
             detectionSource = 'yolo-seg';
 
-            // Note: Negative is not typically needed with segmentation since masks already isolate subjects
-            negativePayload = undefined;
+            // Note: Negative eliminated — V6 uses contextStoragePath for full image context
           } else {
             log.warn(`[CropContext] Mask crop extraction failed, falling back to bbox mode`);
           }
@@ -1489,7 +1530,14 @@ class UnifiedImageWorker extends EventEmitter {
           // V6 Baseline 2026: Send fullImage to V6 instead of returning null
           if (this.currentSportCategory?.edge_function_version === 6) {
             log.info(`[CropContext] V6: Sending full image (no subjects detected by ${segModelId})`);
-            return await this.sendFullImageToV6(imageFile, compressedBuffer, effectivePath, storagePath, mimeType);
+            const v6FullResult = await this.sendFullImageToV6(imageFile, compressedBuffer, effectivePath, storagePath, mimeType);
+            // FIX: If V6 returned 0 vehicles, return null to trigger standard analyzeImage fallback
+            // Previously this returned the empty result directly, skipping the fallback chain
+            if (v6FullResult && v6FullResult.analysis && v6FullResult.analysis.length > 0) {
+              return v6FullResult;
+            }
+            log.warn(`[CropContext] V6 fullImage returned 0 vehicles, falling back to standard analysis`);
+            return null;
           }
 
           // Legacy behavior: Return null to trigger standard analysis flow
@@ -1516,7 +1564,13 @@ class UnifiedImageWorker extends EventEmitter {
           // V6 Baseline 2026: Send fullImage to V6 instead of returning null
           if (this.currentSportCategory?.edge_function_version === 6) {
             log.info(`[CropContext] V6: Sending full image (no subjects detected by ONNX)`);
-            return await this.sendFullImageToV6(imageFile, compressedBuffer, effectivePath, storagePath, mimeType);
+            const v6FullResult = await this.sendFullImageToV6(imageFile, compressedBuffer, effectivePath, storagePath, mimeType);
+            // FIX: If V6 returned 0 vehicles, return null to trigger standard analyzeImage fallback
+            if (v6FullResult && v6FullResult.analysis && v6FullResult.analysis.length > 0) {
+              return v6FullResult;
+            }
+            log.warn(`[CropContext] V6 fullImage returned 0 vehicles (BBOX path), falling back to standard analysis`);
+            return null;
           }
           log.warn(`[CropContext] No detections found, falling back to standard upload+analyze`);
           return null; // Signal to caller to use standard flow
@@ -1549,9 +1603,7 @@ class UnifiedImageWorker extends EventEmitter {
 
         // Prepare payload for V6 edge function (bbox mode)
         cropsPayload = cropsToBase64(cropContextResult.crops);
-        negativePayload = cropContextResult.negative
-          ? negativeToBase64(cropContextResult.negative)
-          : undefined;
+        // NOTE: negativePayload eliminated — V6 now fetches the full image from Storage via contextStoragePath
         extractedCrops = cropContextResult.crops;
         // V6 Baseline 2026: Mark as onnx-detr detection source
         detectionSource = 'onnx-detr';
@@ -1756,7 +1808,7 @@ class UnifiedImageWorker extends EventEmitter {
         for (let i = 0; i < cropsPayload.length; i++) {
           const singleCropPayload = {
             crops: [cropsPayload[i]],
-            negative: negativePayload, // Include context with each call
+            contextStoragePath: storagePath || undefined, // V6 fetches full image from Storage for context (replaces negative base64)
             category: this.category,
             userId,
             executionId: this.config.executionId,
@@ -1843,7 +1895,7 @@ class UnifiedImageWorker extends EventEmitter {
         phaseStart = Date.now();
         const v6Payload = {
           crops: cropsPayload,
-          negative: negativePayload,
+          contextStoragePath: storagePath || undefined, // V6 fetches full image from Storage for context (replaces negative base64)
           category: this.category,
           userId,
           executionId: this.config.executionId,
@@ -1863,18 +1915,34 @@ class UnifiedImageWorker extends EventEmitter {
           bboxSources: cropsPayload.map(() => detectionSource)
         };
 
-        const response = await Promise.race([
-          this.supabase.functions.invoke('analyzeImageDesktopV6', { body: v6Payload }),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('V6 function invocation timeout')), 60000)
-          )
-        ]) as any;
+        // Retry logic for transient errors: network failures + capacity errors (429/503)
+        const MAX_RETRIES = 2;
+        let response: any = null;
+        let lastError: string = '';
+        for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+          if (attempt > 0) {
+            const backoffMs = Math.min(1000 * Math.pow(2, attempt - 1), 4000);
+            log.warn(`[CropContext] V6 edge function retry ${attempt}/${MAX_RETRIES} after ${backoffMs}ms`);
+            await new Promise(resolve => setTimeout(resolve, backoffMs));
+          }
+          response = await Promise.race([
+            this.supabase.functions.invoke('analyzeImageDesktopV6', { body: v6Payload }),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('V6 function invocation timeout')), 60000)
+            )
+          ]) as any;
+
+          if (!response.error) break; // Success
+
+          lastError = await extractEdgeFunctionErrorDetails(response.error);
+          const isRetryableError = isEdgeFunctionRetryable(lastError);
+          if (!isRetryableError || attempt === MAX_RETRIES) break; // Non-retriable or last attempt
+        }
         aiTiming['edgeFunctionV6'] = Date.now() - phaseStart;
 
         if (response.error) {
-          const errorDetails = await extractEdgeFunctionErrorDetails(response.error);
-          log.error(`[CropContext] V6 edge function error: ${errorDetails}`);
-          throw new Error(`V6 function error: ${errorDetails}`);
+          log.error(`[CropContext] V6 edge function error (after retries): ${lastError}`);
+          throw new Error(`V6 function error: ${lastError}`);
         }
 
         if (!response.data.success) {
@@ -2112,7 +2180,7 @@ class UnifiedImageWorker extends EventEmitter {
       };
 
     } catch (error: any) {
-      log.error(`[CropContext] Analysis failed:`, error);
+      log.error(`[CropContext] Analysis failed: ${error?.message || error?.toString?.() || JSON.stringify(error) || 'Unknown error'}`);
       // Return null to signal fallback to standard flow
       return null;
     }
@@ -2355,6 +2423,10 @@ class UnifiedImageWorker extends EventEmitter {
 
     // BATCH UPDATE: Pending database update data (to be accumulated by processor)
     let pendingUpdateData: {imageId: string; updateData: any; timestamp: number} | undefined = undefined;
+
+    // Per-image error/warning tracking for JSONL diagnostics
+    const processingErrors: Array<{ phase: string; message: string; recoverable: boolean; timestamp: string }> = [];
+    const processingWarnings: Array<{ phase: string; message: string; timestamp: string }> = [];
 
     // Reset segmentation cache for this image
     this.cachedSegmentationResults = null;
@@ -2882,9 +2954,30 @@ class UnifiedImageWorker extends EventEmitter {
         // If crop-context returns null, it signals fallback to standard flow
         if (analysisResult === null) {
           log.warn(`[CropContext] Falling back to standard cloud analysis for ${imageFile.fileName}`);
+          processingWarnings.push({ phase: 'crop-context', message: 'CropContext returned null (0 vehicles from ONNX+V6), falling back to standard analysis', timestamp: new Date().toISOString() });
 
-          // storagePath already available from upload above
-          analysisResult = await this.analyzeImage(imageFile.fileName, storagePath, buffer.length, mimeType);
+          // CRITICAL FIX: Ensure storagePath is valid before calling analyzeImage
+          // analyzeImage sends imagePath to the Edge Function, which reads the image from Supabase Storage.
+          // If storagePath is null, the Edge Function can't read the image and returns empty results.
+          if (!storagePath) {
+            log.warn(`[CropContext] storagePath is null before standard fallback — uploading now`);
+            try {
+              storagePath = await this.uploadToStorage(imageFile.fileName, buffer, mimeType);
+              log.info(`[CropContext] Emergency upload succeeded: ${storagePath}`);
+            } catch (uploadError: any) {
+              log.error(`[CropContext] Emergency upload failed: ${uploadError.message} — standard analysis will fail`);
+              processingErrors.push({ phase: 'emergency-upload', message: uploadError.message, recoverable: false, timestamp: new Date().toISOString() });
+            }
+          }
+
+          // storagePath available from upload above (or emergency upload)
+          if (storagePath) {
+            analysisResult = await this.analyzeImage(imageFile.fileName, storagePath, buffer.length, mimeType);
+          } else {
+            log.error(`[CropContext] Cannot fall back to standard analysis — no storagePath available`);
+            processingErrors.push({ phase: 'standard-fallback', message: 'No storagePath available for standard analysis fallback', recoverable: false, timestamp: new Date().toISOString() });
+            analysisResult = { success: false, analysis: [], error: 'No storagePath for standard fallback' };
+          }
         }
 
         // Store parallel visual tags result for later use (avoid duplicate call)
@@ -2942,6 +3035,14 @@ class UnifiedImageWorker extends EventEmitter {
 
         analysisResult = stdAnalysisResult;
 
+        // V6 COMPATIBILITY: Normalize V6 response for standard path
+        // V6 returns { cropAnalysis: [...] } while downstream code expects { analysis: [...] }
+        // This mapping allows V6 to work for ALL sport categories, not just CropContext ones
+        if (!analysisResult.analysis && analysisResult.cropAnalysis) {
+          analysisResult.analysis = analysisResult.cropAnalysis;
+          log.info(`[V6-Compat] Mapped cropAnalysis (${analysisResult.cropAnalysis.length} items) → analysis for standard path`);
+        }
+
         // Store parallel visual tags result for later use
         if (stdParallelVisualTags) {
           (analysisResult as any)._parallelVisualTags = stdParallelVisualTags;
@@ -2962,6 +3063,13 @@ class UnifiedImageWorker extends EventEmitter {
         }
       }
       timing['3_4_aiAnalysis'] = Date.now() - phaseStart;
+
+      // Track analysis failures/empty results as warnings
+      if (analysisResult && !analysisResult.success) {
+        processingErrors.push({ phase: 'ai-analysis', message: analysisResult.error || 'Analysis returned success=false', recoverable: true, timestamp: new Date().toISOString() });
+      } else if (analysisResult && (!analysisResult.analysis || analysisResult.analysis.length === 0)) {
+        processingWarnings.push({ phase: 'ai-analysis', message: 'Analysis returned 0 vehicles/results', timestamp: new Date().toISOString() });
+      }
 
       // Check for cancellation after AI analysis
       if (this.checkCancellation()) {
@@ -3025,6 +3133,22 @@ class UnifiedImageWorker extends EventEmitter {
       let imageAnalysisEvent: any = null;
 
       const corrections = this.smartMatcher ? this.smartMatcher.getCorrections() : [];
+
+      // DEFENSIVE FIX: Ensure storagePath is set before JSONL logging
+      // In rare cases (e.g., transient Supabase issues under concurrent uploads),
+      // storagePath may be null despite the upload attempt. Try once more.
+      if (!storagePath) {
+        log.warn(`[DefensiveUpload] storagePath is null for ${imageFile.fileName} — attempting late upload`);
+        processingWarnings.push({ phase: 'defensive-upload', message: 'storagePath was null before JSONL logging — attempting late upload', timestamp: new Date().toISOString() });
+        try {
+          storagePath = await this.uploadToStorage(imageFile.fileName, buffer, mimeType);
+          log.info(`[DefensiveUpload] Late upload succeeded: ${storagePath}`);
+        } catch (lateUploadError: any) {
+          log.error(`[DefensiveUpload] Late upload also failed: ${lateUploadError.message}`);
+          processingErrors.push({ phase: 'defensive-upload', message: lateUploadError.message, recoverable: true, timestamp: new Date().toISOString() });
+        }
+      }
+
       const supabaseUrl = storagePath
         ? `${SUPABASE_CONFIG.url}/storage/v1/object/public/uploaded-images/${storagePath}`
         : `local://${imageFile.originalPath}`;
@@ -3180,8 +3304,8 @@ class UnifiedImageWorker extends EventEmitter {
         thumbnailPath,
         microThumbPath,
         compressedPath,
-        // Recognition method tracking
-        recognitionMethod: analysisResult.recognitionMethod || undefined,
+        // Recognition method tracking (prefer analysisResult, fallback to worker instance)
+        recognitionMethod: analysisResult.recognitionMethod || this.recognitionMethod || undefined,
         // Original image dimensions for bbox mapping (especially useful for local-onnx)
         imageSize: analysisResult.imageSize || undefined,
         // Segmentation preprocessing info (YOLOv8-seg used before recognition)
@@ -3189,7 +3313,10 @@ class UnifiedImageWorker extends EventEmitter {
         // Visual tags extracted by AI (if enabled)
         visualTags: visualTagsResult?.tags || undefined,
         // Backward compatibility - use first vehicle as primary
-        primaryVehicle: vehicles.length > 0 ? vehicles[0] : undefined
+        primaryVehicle: vehicles.length > 0 ? vehicles[0] : undefined,
+        // Per-image error/warning tracking for diagnostics
+        processingErrors: processingErrors.length > 0 ? processingErrors : undefined,
+        processingWarnings: processingWarnings.length > 0 ? processingWarnings : undefined
       };
       timing['7_jsonlAndDbUpdate'] = Date.now() - phaseStart;
 
@@ -3286,7 +3413,12 @@ class UnifiedImageWorker extends EventEmitter {
           originalPath: imageFile.originalPath,
           aiResponse: { totalVehicles: 0, vehicles: [], rawText: `ERROR: ${error.message || 'Unknown error'}` },
           processingTimeMs: Date.now() - startTime,
-          error: error.message || 'Unknown error'
+          error: error.message || 'Unknown error',
+          processingErrors: [
+            ...processingErrors,
+            { phase: 'fatal', message: error.message || 'Unknown error', recoverable: false, timestamp: new Date().toISOString() }
+          ],
+          processingWarnings: processingWarnings.length > 0 ? processingWarnings : undefined
         }
       };
     } finally {
@@ -3917,27 +4049,44 @@ class UnifiedImageWorker extends EventEmitter {
 
     const storageFileName = `${Date.now()}_${Math.random().toString(36).substring(2, 15)}.${fileExt}`;
 
+    // ADAPTIVE CONCURRENCY: Acquire upload slot from shared semaphore
+    // This prevents flooding Supabase when multiple workers upload simultaneously
+    if (this.uploadSemaphore) {
+      await this.uploadSemaphore.acquire();
+    }
+
     // Track upload time and size for network monitoring
     const uploadStartTime = Date.now();
+    let uploadError: any = null;
 
-    const { error: uploadError } = await this.supabase.storage
-      .from('uploaded-images')
-      .upload(storageFileName, buffer, {
-        cacheControl: '3600',
-        upsert: false,
-        contentType: mimeType
-      });
+    try {
+      const result = await this.supabase.storage
+        .from('uploaded-images')
+        .upload(storageFileName, buffer, {
+          cacheControl: '3600',
+          upsert: false,
+          contentType: mimeType
+        });
 
-    const uploadEndTime = Date.now();
-    const uploadDurationMs = uploadEndTime - uploadStartTime;
+      uploadError = result.error;
+    } catch (err) {
+      uploadError = err;
+    } finally {
+      const uploadDurationMs = Date.now() - uploadStartTime;
 
-    // Record upload metrics for network monitoring (if available)
-    if (this.networkMonitor) {
-      this.networkMonitor.recordUploadAttempt(!uploadError, uploadDurationMs, buffer.length);
+      // Release semaphore slot with metrics for AIMD evaluation
+      if (this.uploadSemaphore) {
+        this.uploadSemaphore.release(uploadDurationMs, buffer.length, !uploadError);
+      }
+
+      // Record upload metrics for network monitoring (if available)
+      if (this.networkMonitor) {
+        this.networkMonitor.recordUploadAttempt(!uploadError, uploadDurationMs, buffer.length);
+      }
     }
 
     if (uploadError) {
-      throw new Error(`Upload failed for ${fileName}: ${uploadError.message}`);
+      throw new Error(`Upload failed for ${fileName}: ${uploadError.message || uploadError}`);
     }
     
     // Costruisci l'URL pubblico Supabase per questa immagine
@@ -4013,10 +4162,10 @@ class UnifiedImageWorker extends EventEmitter {
       }
       functionSource = `sport_category.edge_function_version=${version}`;
     } else {
-      // Default to V3 for standard single-image analysis
-      // V6 is only for Crop-Context flow (performCropContextAnalysis)
+      // Default to V3 for standard single-image analysis when no version specified
+      // Note: V6 now works for all categories via cropAnalysis→analysis mapping
       functionName = 'analyzeImageDesktopV3';
-      functionSource = 'default (V3 for single-image, V6 only via Crop-Context)';
+      functionSource = 'default (V3 - no edge_function_version set in sport_category)';
     }
 
     // Log edge function selection (first image only to avoid spam)
@@ -4027,17 +4176,38 @@ class UnifiedImageWorker extends EventEmitter {
 
     let response: any;
     try {
-      response = await Promise.race([
-        this.supabase.functions.invoke(functionName, { body: invokeBody }),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Function invocation timeout')), 60000)
-        )
-      ]) as any;
+      // Retry logic for transient errors: network failures + capacity errors (429/503)
+      const MAX_RETRIES = 2;
+      let lastEdgeFnError = '';
+      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        if (attempt > 0) {
+          const backoffMs = Math.min(1000 * Math.pow(2, attempt - 1), 4000);
+          console.warn(`[UnifiedProcessor] Edge Function retry ${attempt}/${MAX_RETRIES} for ${fileName} after ${backoffMs}ms`);
+          await new Promise(resolve => setTimeout(resolve, backoffMs));
+        }
+        try {
+          response = await Promise.race([
+            this.supabase.functions.invoke(functionName, { body: invokeBody }),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('Function invocation timeout')), 60000)
+            )
+          ]) as any;
+
+          if (!response.error) break; // Success
+
+          lastEdgeFnError = await extractEdgeFunctionErrorDetails(response.error);
+          const isRetryable = isEdgeFunctionRetryable(lastEdgeFnError);
+          if (!isRetryable || attempt === MAX_RETRIES) break;
+        } catch (invokeError: any) {
+          lastEdgeFnError = invokeError.message || String(invokeError);
+          const isRetryable = isEdgeFunctionRetryable(lastEdgeFnError);
+          if (!isRetryable || attempt === MAX_RETRIES) throw invokeError;
+        }
+      }
 
       if (response.error) {
-        const errorDetails = await extractEdgeFunctionErrorDetails(response.error);
-        console.error(`[UnifiedProcessor] Edge Function error for ${fileName}: ${errorDetails}`);
-        throw new Error(`Function error: ${errorDetails}`);
+        console.error(`[UnifiedProcessor] Edge Function error for ${fileName}: ${lastEdgeFnError}`);
+        throw new Error(`Function error: ${lastEdgeFnError}`);
       }
     } catch (edgeFunctionError: any) {
       console.error(`[UnifiedProcessor] Edge Function call failed for ${fileName}:`, edgeFunctionError.message);
@@ -4244,6 +4414,22 @@ class UnifiedImageWorker extends EventEmitter {
     let description: string | null = null;
 
     if (analysisResult.analysis && analysisResult.analysis.length > 0) {
+      // Sanitize garbage race numbers from AI responses before any matching
+      const GARBAGE_RACE_NUMBERS = ['null', 'undefined', 'none', 'n/a', 'na', 'unknown', '0', '-', '--', '?'];
+      const preSanitizeCount = analysisResult.analysis.length;
+      analysisResult.analysis = analysisResult.analysis.filter((v: any) => {
+        if (!v.raceNumber) return true; // Keep vehicles with null/undefined raceNumber (they may have other evidence)
+        const normalized = String(v.raceNumber).trim().toLowerCase();
+        if (GARBAGE_RACE_NUMBERS.includes(normalized)) {
+          console.warn(`[MatchDiag] Filtered garbage raceNumber="${v.raceNumber}" from AI response`);
+          return false;
+        }
+        return true;
+      });
+      if (analysisResult.analysis.length < preSanitizeCount) {
+        console.warn(`[MatchDiag] Sanitized ${preSanitizeCount - analysisResult.analysis.length} vehicles with garbage race numbers`);
+      }
+
       // DIAGNOSTIC: Log pre-filter analysis state
       const preFilterNumbers = analysisResult.analysis.map((v: any) => `"${v.raceNumber}"@${(v.confidence || 0).toFixed(2)}`).join(', ');
       console.log(`[MatchDiag] Pre-filter: ${analysisResult.analysis.length} vehicles: [${preFilterNumbers}]`);
@@ -5503,6 +5689,12 @@ export class UnifiedImageProcessor extends EventEmitter {
   private busyWorkers: Set<UnifiedImageWorker> = new Set();
 
   // ============================================================================
+  // ADAPTIVE UPLOAD CONCURRENCY (v1.2.0+) - AIMD congestion control
+  // Prevents flooding Supabase on slow connections while maximizing throughput on fast ones
+  // ============================================================================
+  private uploadSemaphore: AdaptiveUploadSemaphore;
+
+  // ============================================================================
   // BATCH TOKEN PRE-AUTHORIZATION (v1.1.0+)
   // ============================================================================
   private currentReservationId: string | null = null;
@@ -5572,7 +5764,21 @@ export class UnifiedImageProcessor extends EventEmitter {
     // Initialize filesystem timestamp extractor for cross-platform temporal sorting
     this.filesystemTimestampExtractor = new FilesystemTimestampExtractor();
 
-    if (DEBUG_MODE) if (DEBUG_MODE) console.log(`[UnifiedProcessor] Initialized with ${this.config.maxConcurrentWorkers} workers`);
+    // Initialize adaptive upload semaphore (AIMD congestion control)
+    // Starts moderate, ramps up on fast connections, backs off on slow ones
+    this.uploadSemaphore = new AdaptiveUploadSemaphore({
+      initialConcurrency: 4,
+      minConcurrency: 1,
+      maxConcurrency: this.config.maxConcurrentWorkers || 12,
+      evaluationWindow: 5,
+      increaseThreshold: 0.05,
+      decreaseThreshold: -0.15,
+      failureRateThreshold: 0.10,
+      maxAcceptableLatencyMs: 15000,
+      metricsWindowSize: 20,
+    });
+
+    if (DEBUG_MODE) console.log(`[UnifiedProcessor] Initialized with ${this.config.maxConcurrentWorkers} workers, upload semaphore: 4/${this.config.maxConcurrentWorkers} slots`);
   }
 
   /**
@@ -6562,8 +6768,13 @@ export class UnifiedImageProcessor extends EventEmitter {
         const totalImageCount = isChunkProcessing ? this.totalImages : imageFiles.length;
         this.analysisLogger.logExecutionStart(
           totalImageCount,
-          undefined, // participantPresetId not needed anymore with direct data passing
-          this.systemEnvironment // Optional enhanced telemetry
+          this.config.presetId,
+          this.systemEnvironment, // Optional enhanced telemetry
+          this.config.presetId ? {
+            id: this.config.presetId,
+            name: this.config.presetName || 'Unknown',
+            participantCount: this.config.participantPresetData?.length || 0
+          } : undefined
         );
 
         if (DEBUG_MODE) console.log(`[UnifiedProcessor] Analysis logging enabled for execution ${this.config.executionId} (total: ${totalImageCount} images)`);
@@ -7189,6 +7400,27 @@ export class UnifiedImageProcessor extends EventEmitter {
       }
     }
 
+    // Ghost image anomaly detection: images with local:// URLs (missing Supabase upload)
+    // Ghost images appear as records without photos in admin panel
+    if (totalImages > 5) {
+      const ghostCount = successfulResults.filter(r =>
+        r.pendingLogEntry?.supabaseUrl?.startsWith('local://') ||
+        (!r.pendingLogEntry?.supabaseUrl && r.success)
+      ).length;
+      const ghostPercentage = Math.round((ghostCount / totalImages) * 100);
+      if (ghostCount > 3 && ghostPercentage > 5) {
+        errorTelemetryService.reportCriticalError({
+          errorType: 'ghost_images',
+          severity: ghostPercentage > 20 ? 'recoverable' : 'warning',
+          error: `${ghostCount}/${totalImages} images (${ghostPercentage}%) have missing Supabase URLs (ghost images)`,
+          executionId: this.config.executionId,
+          batchPhase: 'batch_complete',
+          totalImages,
+          categoryName: this.config.category
+        });
+      }
+    }
+
     this.emit('batchComplete', {
       successful: successfulResults.length,
       errors: results.filter(r => !r.success).length,
@@ -7226,7 +7458,12 @@ export class UnifiedImageProcessor extends EventEmitter {
     this.availableWorkers = [...this.workerPool];
     this.busyWorkers.clear();
 
-    console.log(`[WorkerPool] ✅ Pool initialized with ${this.workerPool.length} workers (ONNX loaded once per worker)`);
+    // Share the adaptive upload semaphore with all workers
+    for (const worker of this.workerPool) {
+      worker.setUploadSemaphore(this.uploadSemaphore);
+    }
+
+    console.log(`[WorkerPool] ✅ Pool initialized with ${this.workerPool.length} workers (ONNX loaded once per worker, upload semaphore shared)`);
     console.log(`[WorkerPool] Available workers: ${this.availableWorkers.length}, Busy workers: ${this.busyWorkers.size}`);
   }
 
@@ -7286,6 +7523,11 @@ export class UnifiedImageProcessor extends EventEmitter {
     this.availableWorkers = [];
     this.busyWorkers.clear();
 
+    // Reset upload semaphore for next batch (fresh AIMD state)
+    const semaphoreState = this.uploadSemaphore.getState();
+    console.log(`[WorkerPool] Upload semaphore final state: ${semaphoreState.totalUploads} uploads, avg ${semaphoreState.avgThroughputMBps.toFixed(2)} MB/s, concurrency reached ${semaphoreState.currentConcurrency}`);
+    this.uploadSemaphore.reset();
+
     console.log('[WorkerPool] ✅ Worker pool disposed');
   }
 
@@ -7305,6 +7547,7 @@ export class UnifiedImageProcessor extends EventEmitter {
       // LEGACY: Create new worker per image (old behavior before worker pool)
       const workerConfig = { ...this.config, sportCategories: this.batchSportCategories };
       worker = await UnifiedImageWorker.create(workerConfig, this.analysisLogger, this.networkMonitor);
+      worker.setUploadSemaphore(this.uploadSemaphore);
     }
 
     this.activeWorkers++;

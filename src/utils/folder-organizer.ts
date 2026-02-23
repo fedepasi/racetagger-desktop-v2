@@ -10,6 +10,25 @@ import * as fs from 'fs';
 import * as fsPromises from 'fs/promises';
 import * as path from 'path';
 
+// Helper to extract the primary driver name from participant data.
+// Handles both modern preset_participant_drivers array and legacy nome field.
+function getDriverNameFromParticipant(csvData: CsvParticipantData): string {
+  // Modern system: preset_participant_drivers array (loaded from Supabase presets)
+  const drivers = (csvData as any)?.preset_participant_drivers;
+  if (Array.isArray(drivers) && drivers.length > 0) {
+    // Sort by driver_order and join all driver names
+    const sortedDrivers = [...drivers].sort((a: any, b: any) => (a.driver_order || 0) - (b.driver_order || 0));
+    const names = sortedDrivers
+      .map((d: any) => d.driver_name?.trim())
+      .filter(Boolean);
+    if (names.length > 0) {
+      return names.join(' ');
+    }
+  }
+  // Legacy CSV fallback: nome field
+  return csvData?.nome?.trim() || '';
+}
+
 // Configuration interface for folder organization
 export interface FolderOrganizerConfig {
   enabled: boolean;
@@ -537,7 +556,7 @@ export class FolderOrganizer {
 
     // Replace placeholders with actual values
     parsedName = parsedName.replace(/\{number\}/g, csvData.numero || '');
-    parsedName = parsedName.replace(/\{name\}/g, csvData.nome || '');
+    parsedName = parsedName.replace(/\{name\}/g, getDriverNameFromParticipant(csvData));
 
     // Team: Support both new English and legacy Italian keywords
     parsedName = parsedName.replace(/\{team\}/g, csvData.squadra || '');
@@ -567,7 +586,7 @@ export class FolderOrganizer {
 
     switch (this.config.pattern) {
       case 'number_name': {
-        const name = csvData?.nome?.trim();
+        const name = csvData ? getDriverNameFromParticipant(csvData) : '';
         if (name) {
           return this.sanitizeFileName(`${raceNumber} ${name}`);
         }

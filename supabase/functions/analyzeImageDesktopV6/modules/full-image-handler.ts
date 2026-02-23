@@ -10,7 +10,7 @@
 
 import { analyzeWithGemini } from './gemini-analyzer.ts';
 import { CropData, GeminiAnalysisResult } from '../types/index.ts';
-import { LOG_PREFIX } from '../config/constants.ts';
+import { LOG_PREFIX, type ProviderEntry } from '../config/constants.ts';
 
 /**
  * Analyze a full image when no crops are detected
@@ -21,12 +21,14 @@ import { LOG_PREFIX } from '../config/constants.ts';
  * @param fullImageBase64 - Base64 encoded full image
  * @param prompt - Analysis prompt
  * @param fallbackPrompt - Optional fallback prompt
+ * @param providerChain - Optional provider chain for multi-provider failover
  * @returns Analysis result from Gemini
  */
 export async function analyzeFullImage(
   fullImageBase64: string,
   prompt: string,
-  fallbackPrompt?: string | null
+  fallbackPrompt?: string | null,
+  providerChain?: ProviderEntry[]
 ): Promise<GeminiAnalysisResult> {
   console.log(`${LOG_PREFIX} Analyzing full image (no crops detected)`);
 
@@ -38,12 +40,14 @@ export async function analyzeFullImage(
     // No originalBbox since it's the full image
   };
 
-  // Call Gemini with the synthetic crop
+  // Call Gemini with the synthetic crop (with multi-provider failover)
   const result = await analyzeWithGemini(
     [syntheticCrop],
     undefined,  // No negative for full image analysis
     prompt,
-    fallbackPrompt
+    fallbackPrompt,
+    undefined,  // No contextImageBase64
+    providerChain
   );
 
   console.log(`${LOG_PREFIX} Full image analysis completed`);

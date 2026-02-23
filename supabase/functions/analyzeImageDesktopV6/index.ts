@@ -26,7 +26,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 // Modules
 import { loadSportCategory, validateV6Config } from './modules/sport-category-loader.ts';
 import { buildAnalysisPrompt } from './modules/prompt-builder.ts';
-import { analyzeWithGemini, isVertexConfigured } from './modules/gemini-analyzer.ts';
+import { analyzeWithGemini, isVertexConfigured, loadProviderChain } from './modules/gemini-analyzer.ts';
 import { parseGeminiResponse, correlateResults, getPrimaryResult } from './modules/response-parser.ts';
 import { saveAnalysisResults, calculateCost } from './modules/database-writer.ts';
 import { analyzeFullImage, buildFullImagePrompt } from './modules/full-image-handler.ts';
@@ -50,6 +50,7 @@ serve(async (req: Request) => {
     const {
       crops,
       negative,
+      contextStoragePath,  // V6 2026: Storage path for full context image (replaces negative base64)
       category,
       userId,
       executionId,
@@ -94,7 +95,8 @@ serve(async (req: Request) => {
     }
 
     const inputMode = hasCrops ? `${crops.length} crops` : (hasImagePath ? 'imagePath' : 'fullImage');
-    console.log(`${LOG_PREFIX} Request: ${inputMode}, negative: ${!!negative}, category: ${category || 'default'}`);
+    const hasContext = !!contextStoragePath || !!negative;
+    console.log(`${LOG_PREFIX} Request: ${inputMode}, context: ${contextStoragePath ? 'storagePath' : (negative ? 'negative-base64' : 'none')}, category: ${category || 'default'}`);
 
     // Check Vertex AI configuration
     if (!isVertexConfigured()) {
@@ -113,10 +115,31 @@ serve(async (req: Request) => {
     const categoryConfig = await loadSportCategory(supabase, category || 'motorsport');
     validateV6Config(categoryConfig);
 
+    // V6 2026: Load multi-provider failover chain from ai_provider_configs
+    const providerChain = await loadProviderChain(supabase, categoryConfig.id, 'analysis');
+
     // V6 Baseline 2026: Track if we used fullImage fallback
     let usedFullImage = false;
     let geminiResult;
     let effectiveBboxSources = bboxSources;
+
+    // V6 2026: Load context image from Storage (replaces negative base64, saves client bandwidth)
+    // The desktop client already uploaded the full image to Storage — we reuse it as context
+    let contextImageBase64: string | undefined;
+    if (contextStoragePath && !negative) {
+      try {
+        console.log(`${LOG_PREFIX} Loading context image from Storage: ${contextStoragePath}`);
+        const contextLoadStart = Date.now();
+        contextImageBase64 = await loadImageFromStorage(contextStoragePath);
+        console.log(`${LOG_PREFIX} Context image loaded from Storage in ${Date.now() - contextLoadStart}ms`);
+      } catch (ctxError: any) {
+        console.warn(`${LOG_PREFIX} Failed to load context image from Storage (continuing without): ${ctxError.message}`);
+        // Non-blocking — analysis continues without context
+      }
+    }
+
+    // Determine if we have any context image (from Storage or legacy negative)
+    const hasContextImage = !!contextImageBase64 || !!negative;
 
     if (hasCrops) {
       // 2a. Normal path: Build prompt for crops
@@ -124,17 +147,20 @@ serve(async (req: Request) => {
       const prompt = buildAnalysisPrompt(
         categoryConfig,
         crops.length,
-        !!negative,
+        hasContextImage,
         participantPreset?.participants,
         partialFlags
       );
 
-      // 3a. Call Gemini with crops
+      // 3a. Call Gemini with crops + context (from Storage or legacy negative)
+      // V6 2026: Pass provider chain for multi-provider failover
       geminiResult = await analyzeWithGemini(
         crops,
         negative,
         prompt,
-        categoryConfig.fallbackPrompt
+        categoryConfig.fallbackPrompt,
+        contextImageBase64,
+        providerChain
       );
     } else {
       // 2b. V6 2026: fullImage mode (from base64 or loaded from imagePath)
@@ -153,10 +179,12 @@ serve(async (req: Request) => {
       const fullImagePrompt = buildFullImagePrompt(basePrompt);
 
       // 3b. Call Gemini with full image (use loadedFullImage which may come from imagePath)
+      // V6 2026: Pass provider chain for multi-provider failover
       geminiResult = await analyzeFullImage(
         loadedFullImage!,
         fullImagePrompt,
-        categoryConfig.fallbackPrompt
+        categoryConfig.fallbackPrompt,
+        providerChain
       );
 
       // Mark all results as full-image source
@@ -167,7 +195,7 @@ serve(async (req: Request) => {
     const { cropAnalysis, contextAnalysis } = parseGeminiResponse(
       geminiResult.rawResponse,
       hasCrops ? crops : [{ imageData: '', detectionId: 'full_image_0', isPartial: false }],
-      !usedFullImage && !!negative,
+      !usedFullImage && hasContextImage,
       categoryConfig.recognitionConfig,
       effectiveBboxSources  // V6 Baseline 2026: Pass bbox sources
     );
@@ -199,7 +227,7 @@ serve(async (req: Request) => {
       correlation,
       usage: {
         cropsCount: hasCrops ? crops.length : 1,  // V6 Baseline 2026: Count fullImage as 1
-        hasNegative: !usedFullImage && !!negative,
+        hasNegative: !usedFullImage && hasContextImage,
         inputTokens: geminiResult.inputTokens,
         outputTokens: geminiResult.outputTokens,
         estimatedCostUSD
@@ -221,7 +249,7 @@ serve(async (req: Request) => {
       correlation,
       usage: {
         cropsCount: hasCrops ? crops.length : 1,  // V6 Baseline 2026
-        hasNegative: !usedFullImage && !!negative,
+        hasNegative: !usedFullImage && hasContextImage,
         inputTokens: geminiResult.inputTokens,
         outputTokens: geminiResult.outputTokens,
         estimatedCostUSD,
@@ -229,12 +257,16 @@ serve(async (req: Request) => {
       inferenceTimeMs,
       usedFullImage,  // V6 Baseline 2026: Indicate if fullImage fallback was used
       imageId: dbImageId || undefined,  // FIX: Return actual database UUID for token tracking
+      providerUsed: geminiResult.providerUsed,  // V6 2026: Multi-provider failover telemetry
     };
 
     if (!dbImageId) {
       console.warn(`${LOG_PREFIX} DB save returned null imageId (userId=${userId ? 'present' : 'MISSING'}, storagePath=${effectiveStoragePath ? 'present' : 'MISSING'})`);
     }
-    console.log(`${LOG_PREFIX} Success: ${cropAnalysis.length} results${usedFullImage ? ' (fullImage)' : ''}, imageId=${dbImageId || 'NONE'}, ${inferenceTimeMs}ms`);
+    const providerLabel = geminiResult.providerUsed
+      ? `${geminiResult.providerUsed.modelCode}@${geminiResult.providerUsed.location}${geminiResult.providerUsed.wasFallback ? ' (fallback)' : ''}`
+      : 'unknown';
+    console.log(`${LOG_PREFIX} Success: ${cropAnalysis.length} results${usedFullImage ? ' (fullImage)' : ''}, provider=${providerLabel}, imageId=${dbImageId || 'NONE'}, ${inferenceTimeMs}ms`);
 
     return new Response(JSON.stringify(response), {
       headers: CORS_HEADERS,

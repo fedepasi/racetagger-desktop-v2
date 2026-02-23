@@ -9,6 +9,19 @@ var isEditingPreset = false;
 var customFolders = []; // Array of {name, path?} objects for custom folders
 
 /**
+ * Detect if an error is a network connectivity issue and return a user-friendly message.
+ * @param {Error|string} error - The error to check
+ * @returns {string} User-friendly error message
+ */
+function getErrorMessage(error) {
+  const msg = error?.message || String(error) || '';
+  if (msg.includes('fetch failed') || msg.includes('ECONNREFUSED') || msg.includes('ETIMEDOUT') || msg.includes('NetworkError') || msg.includes('network')) {
+    return 'Network connection error. Please check your internet connection and try again.';
+  }
+  return msg;
+}
+
+/**
  * Safely extract folder name from any folder entry format.
  * Handles: string, {name: string}, {name: {name: string}}, or any unexpected format.
  * @param {*} folder - Folder entry (string or object)
@@ -1123,9 +1136,9 @@ async function saveParticipantAndStay() {
       folder_1: p.folder_1 || '',
       folder_2: p.folder_2 || '',
       folder_3: p.folder_3 || '',
-      folder_1_path: p.folder_1_path || getFolderPath(p.folder_1),
-      folder_2_path: p.folder_2_path || getFolderPath(p.folder_2),
-      folder_3_path: p.folder_3_path || getFolderPath(p.folder_3),
+      folder_1_path: getFolderPath(p.folder_1) || p.folder_1_path || '',
+      folder_2_path: getFolderPath(p.folder_2) || p.folder_2_path || '',
+      folder_3_path: getFolderPath(p.folder_3) || p.folder_3_path || '',
       sort_order: index
     }));
 
@@ -1180,7 +1193,7 @@ async function saveParticipantAndStay() {
 
   } catch (error) {
     console.error('[Participants] Error saving participant for face photos:', error);
-    showNotification('Error saving: ' + error.message, 'error');
+    showNotification('Error saving: ' + getErrorMessage(error), 'error');
   }
 }
 
@@ -1424,16 +1437,19 @@ function saveEditedFolderName() {
   if (newFolderPath) updatedFolder.path = newFolderPath;
   customFolders[editingFolderIndex] = updatedFolder;
 
-  // Update all participants that have this folder assigned
+  // Update all participants that have this folder assigned (name AND path)
   participantsData.forEach(participant => {
     if (participant.folder_1 === oldFolderName) {
       participant.folder_1 = newFolderName;
+      participant.folder_1_path = newFolderPath;
     }
     if (participant.folder_2 === oldFolderName) {
       participant.folder_2 = newFolderName;
+      participant.folder_2_path = newFolderPath;
     }
     if (participant.folder_3 === oldFolderName) {
       participant.folder_3 = newFolderName;
+      participant.folder_3_path = newFolderPath;
     }
   });
 
@@ -2108,9 +2124,9 @@ async function savePreset() {
       folder_1: p.folder_1 || '',
       folder_2: p.folder_2 || '',
       folder_3: p.folder_3 || '',
-      folder_1_path: p.folder_1_path || getFolderPath(p.folder_1),
-      folder_2_path: p.folder_2_path || getFolderPath(p.folder_2),
-      folder_3_path: p.folder_3_path || getFolderPath(p.folder_3)
+      folder_1_path: getFolderPath(p.folder_1) || p.folder_1_path || '',
+      folder_2_path: getFolderPath(p.folder_2) || p.folder_2_path || '',
+      folder_3_path: getFolderPath(p.folder_3) || p.folder_3_path || ''
     }));
 
     // Disable save button during operation
@@ -2178,7 +2194,7 @@ async function savePreset() {
 
   } catch (error) {
     console.error('[Participants] Error saving preset:', error);
-    showNotification('Error saving preset: ' + error.message, 'error');
+    showNotification('Error saving preset: ' + getErrorMessage(error), 'error');
   } finally {
     // Re-enable save button
     const saveBtn = document.getElementById('save-preset-btn');
