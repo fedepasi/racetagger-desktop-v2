@@ -28,6 +28,7 @@ import { GenericSegmenter, getGenericSegmenter, SegmentationResult, GenericSegme
 import { parseSegmentationConfig, getDefaultModelId } from './yolo-model-registry';
 import { createComponentLogger } from './utils/logger';
 import { getFaceDetectionBridge, FaceRecognitionResult } from './face-detection-bridge';
+import { SyntheticPresetBuilder } from './matching/synthetic-preset-builder';
 import { consentService } from './consent-service';
 import {
   extractCropContext,
@@ -7160,10 +7161,48 @@ export class UnifiedImageProcessor extends EventEmitter {
         break;
       }
     }
-    
+
     console.log(`\n${'='.repeat(60)}`);
     console.log(`[FINALIZE] 🏁 Batch processing complete: ${results.length} images. Starting finalization...`);
     console.log(`${'='.repeat(60)}`);
+
+    // ==================== SYNTHETIC PRESET SELF-HEALING ====================
+    // When no participant preset was loaded, build one from the execution's own data
+    // and use it to fill missing raceNumbers/names across images
+    const presetData = this.config.participantPresetData || this.config.csvData || [];
+    const hasParticipantPreset = presetData.length > 0;
+    const resultsWithAnalysis = results.filter(r => r.success && r.analysis && r.analysis.length > 0);
+
+    if (!hasParticipantPreset && resultsWithAnalysis.length >= 3) {
+      try {
+        log.info(`[SyntheticPreset] No participant preset loaded — running self-healing on ${resultsWithAnalysis.length} images...`);
+        const syntheticPreset = SyntheticPresetBuilder.build(results);
+
+        if (syntheticPreset.participants.length > 0 && syntheticPreset.stats.imagesWithBoth > 0) {
+          const healingResults = SyntheticPresetBuilder.applyHealing(results, syntheticPreset);
+
+          log.info(`[SyntheticPreset] Self-healing summary: ` +
+            `${syntheticPreset.participants.length} synthetic participants, ` +
+            `${syntheticPreset.stats.imagesWithBoth} Rosetta Stones, ` +
+            `${healingResults.length} vehicles healed in ${syntheticPreset.stats.buildTimeMs}ms`);
+
+          // Emit event for UI / telemetry
+          this.emit('syntheticPresetApplied', {
+            participantsBuilt: syntheticPreset.participants.length,
+            rosettaStones: syntheticPreset.stats.imagesWithBoth,
+            vehiclesHealed: healingResults.length,
+            buildTimeMs: syntheticPreset.stats.buildTimeMs,
+          });
+        } else {
+          log.info(`[SyntheticPreset] Skipped healing: ${syntheticPreset.participants.length} participants, ` +
+            `${syntheticPreset.stats.imagesWithBoth} Rosetta Stones (need at least 1 image with both number+name)`);
+        }
+      } catch (healError: any) {
+        log.error(`[SyntheticPreset] Self-healing failed (non-fatal): ${healError.message}`);
+      }
+    } else if (hasParticipantPreset) {
+      log.info(`[SyntheticPreset] Skipped: participant preset already loaded (${presetData.length} participants)`);
+    }
 
     // FINAL FLUSH with global timeout: Don't let DB operations block the redirect to results.html
     const FINAL_FLUSH_TIMEOUT_MS = 30000; // 30s max for all flush operations
