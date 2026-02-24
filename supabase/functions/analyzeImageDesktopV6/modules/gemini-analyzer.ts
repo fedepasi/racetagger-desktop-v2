@@ -145,7 +145,8 @@ export async function loadProviderChain(
             location: row.location,
             sdkType: row.sdk_type,
             config: {
-              thinkingLevel: recommendedConfig.thinkingLevel || VERTEX_AI.THINKING_LEVEL,
+              // Only include thinkingLevel if model explicitly supports it (present in recommended_config)
+              ...(recommendedConfig.thinkingLevel ? { thinkingLevel: recommendedConfig.thinkingLevel } : {}),
               mediaResolution: recommendedConfig.mediaResolution || VERTEX_AI.MEDIA_RESOLUTION,
               temperature: recommendedConfig.temperature ?? VERTEX_AI.TEMPERATURE,
               maxOutputTokens: recommendedConfig.maxOutputTokens || VERTEX_AI.MAX_OUTPUT_TOKENS,
@@ -329,13 +330,14 @@ async function callGeminiWithProvider(
 
   // Merge provider-specific config with defaults
   const providerConfig = provider.config || {};
-  const thinkingLevel = providerConfig.thinkingLevel || VERTEX_AI.THINKING_LEVEL;
+  // Use provider's explicit thinkingLevel; only fall back to default if provider config has it
+  const thinkingLevel = providerConfig.thinkingLevel ?? null;
   const mediaResolution = providerConfig.mediaResolution || VERTEX_AI.MEDIA_RESOLUTION;
   const temperature = providerConfig.temperature ?? VERTEX_AI.TEMPERATURE;
   const maxOutputTokens = providerConfig.maxOutputTokens || VERTEX_AI.MAX_OUTPUT_TOKENS;
 
   console.log(`${LOG_PREFIX} Calling ${provider.modelCode}@${provider.location} with ${crops.length} crops${negative ? ' + 1 context' : ''}`);
-  console.log(`${LOG_PREFIX} Config: thinkingLevel=${thinkingLevel}, mediaResolution=${mediaResolution}, temp=${temperature}`);
+  console.log(`${LOG_PREFIX} Config: thinkingLevel=${thinkingLevel || 'NONE'}, mediaResolution=${mediaResolution}, temp=${temperature}`);
 
   // Build generation config
   const config: any = {
@@ -345,7 +347,8 @@ async function callGeminiWithProvider(
     maxOutputTokens: maxOutputTokens,
   };
 
-  // Only add thinkingConfig if model supports it (check for thinkingLevel presence)
+  // Only add thinkingConfig if model explicitly supports it (provider config has thinkingLevel)
+  // Models like gemini-2.5-flash-lite do NOT support thinking and will error if included
   if (thinkingLevel) {
     config.thinkingConfig = { thinkingLevel: thinkingLevel };
   }
