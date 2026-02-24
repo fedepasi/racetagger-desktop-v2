@@ -251,15 +251,57 @@ class EnhancedFileBrowser {
     }, false);
     
     // Handle dropped files
-    browser.addEventListener('drop', (e) => {
+    browser.addEventListener('drop', async (e) => {
       dragCounter = 0;
       browser.classList.remove('drag-over');
-      
+
       const dt = e.dataTransfer;
-      const files = dt.files;
-      
-      this.handleFilesDrop(files);
+
+      // Detect folder drops using webkitGetAsEntry (works in Electron)
+      const items = Array.from(dt.items || []);
+      const files = Array.from(dt.files || []);
+
+      let folderPath = null;
+      for (let i = 0; i < items.length; i++) {
+        const entry = items[i].webkitGetAsEntry?.();
+        if (entry && entry.isDirectory) {
+          // In Electron, File objects from drag & drop expose the real filesystem path
+          folderPath = files[i]?.path || null;
+          break;
+        }
+      }
+
+      if (folderPath) {
+        await this.handleFolderDrop(folderPath);
+      } else {
+        this.handleFilesDrop(dt.files);
+      }
     }, false);
+  }
+
+  async handleFolderDrop(folderPath) {
+    if (!folderPath) return;
+    this.showLoading();
+    try {
+      const files = await window.api.invoke('get-folder-files', {
+        folderPath,
+        extensions: this.supportedFormats
+      });
+
+      this.hideLoading();
+
+      if (files && files.length > 0) {
+        this.setSelectedFiles(files, folderPath);
+        this.showNotification(`Loaded ${files.length} image${files.length !== 1 ? 's' : ''} from folder`, 'success');
+      } else {
+        this.showNotification('No supported image files found in the dropped folder', 'warning');
+      }
+    } catch (error) {
+      this.hideLoading();
+      // Fallback: notify folder selection without file details
+      this.notifyFolderSelection(folderPath);
+      this.showNotification(`Folder selected: ${folderPath.split('/').pop() || folderPath.split('\\\\').pop()}`, 'info');
+    }
   }
   
   setupSingleFileBrowser() {
