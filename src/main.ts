@@ -529,7 +529,7 @@ async function handleFolderSelection(event: IpcMainEvent) {
     console.log('[FolderSelection] Opening dialog...');
     const result = await dialog.showOpenDialog(mainWindow, {
       properties: ['openDirectory'],
-      title: 'Seleziona una cartella di immagini'
+      title: 'Select an image folder'
     });
 
     console.log('[FolderSelection] Dialog result:', { canceled: result.canceled, filePaths: result.filePaths });
@@ -576,7 +576,7 @@ async function handleFolderSelection(event: IpcMainEvent) {
     }
   } catch (error) {
     console.error('Error during folder selection:', error);
-    event.sender.send('folder-selected', { success: false, message: 'Errore durante la selezione della cartella' });
+    event.sender.send('folder-selected', { success: false, message: 'Error during folder selection' });
   }
 }
 
@@ -898,11 +898,11 @@ async function handleCsvLoading(event: IpcMainEvent, fileData: { buffer: Uint8Ar
         mainWindow.webContents.send('csv-loaded', {
           filename: fileName,
           entries: csvEntries.length,
-          message: `CSV caricato con ${csvEntries.length} voci valide`
+          message: `CSV loaded with ${csvEntries.length} valid entries`
         });
       } catch (parseError) {
         console.error('Error parsing CSV:', parseError);
-        mainWindow.webContents.send('csv-error', 'Errore nel parsing del CSV. Verifica il formato.');
+        mainWindow.webContents.send('csv-error', 'Error parsing CSV. Please check the file format.');
       }
     } else {
       mainWindow.webContents.send('csv-loaded', {
@@ -1760,7 +1760,7 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
     // Ottieni la lista delle immagini nella cartella
     const imageFiles = await getImagesFromFolder(folderPath);
     if (imageFiles.length === 0) {
-      throw new Error('Nessuna immagine trovata nella cartella selezionata');
+      throw new Error('No images found in the selected folder');
     }
 
     // Aggiorna le statistiche
@@ -2200,7 +2200,7 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
     // Individual image errors already handle DNG cleanup in their catch blocks
     
     if (mainWindow) {
-      mainWindow.webContents.send('upload-error', error.message || 'Si è verificato un errore durante l\'analisi della cartella');
+      mainWindow.webContents.send('upload-error', error.message || 'An error occurred while analyzing the folder');
     }
   }
 }
@@ -2397,9 +2397,9 @@ async function handleRawPreviewExtraction(event: IpcMainEvent) {
     // Chiedi all'utente di selezionare un file RAW
     const result = await dialog.showOpenDialog(mainWindow, {
       properties: ['openFile'],
-      title: 'Seleziona un file RAW',
-      filters: [{ 
-        name: 'File RAW', 
+      title: 'Select a RAW file',
+      filters: [{
+        name: 'RAW Files', 
         extensions: RAW_EXTENSIONS.map(ext => ext.substring(1)) // Use global RAW_EXTENSIONS
       }]
     });
@@ -2509,7 +2509,7 @@ async function handleRawPreviewExtraction(event: IpcMainEvent) {
     console.error('Error during RAW preview extraction:', error);
     if (mainWindow) {
       mainWindow.webContents.send('raw-preview-error', {
-        message: error.message || 'Si è verificato un errore durante l\'estrazione dell\'anteprima RAW'
+        message: error.message || 'An error occurred during RAW preview extraction'
       });
     }
   }
@@ -2538,21 +2538,21 @@ async function handleFeedbackSubmission(event: IpcMainEvent, feedbackData: any) 
       });
     
     if (error) {
-      console.error('Errore nel salvare il feedback:', error);
-      mainWindow.webContents.send('feedback-error', 'Errore nel salvare il feedback');
+      console.error('Error saving feedback:', error);
+      mainWindow.webContents.send('feedback-error', 'Error saving feedback');
       return;
     }
-    
-    // Conferma il salvataggio del feedback
+
+    // Confirm feedback saved
     mainWindow.webContents.send('feedback-saved', {
       success: true,
-      message: 'Feedback salvato con successo'
+      message: 'Feedback saved successfully'
     });
 
   } catch (error: any) {
-    console.error('Errore durante l\'invio del feedback:', error);
+    console.error('Error submitting feedback:', error);
     if (mainWindow) {
-      mainWindow.webContents.send('feedback-error', error.message || 'Si è verificato un errore durante l\'invio del feedback');
+      mainWindow.webContents.send('feedback-error', error.message || 'An error occurred while submitting feedback');
     }
   }
 }
@@ -3011,7 +3011,7 @@ app.whenReady().then(async () => { // Added async here
       }
     } catch (error) {
       console.error('Error during folder selection by path:', error);
-      event.sender.send('folder-selected', { success: false, message: 'Errore durante la selezione della cartella' });
+      event.sender.send('folder-selected', { success: false, message: 'Error during folder selection' });
     }
   });
   

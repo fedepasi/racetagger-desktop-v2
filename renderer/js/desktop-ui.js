@@ -97,10 +97,10 @@ document.addEventListener('DOMContentLoaded', () => {
             statusText = 'Select a RAW file...';
             break;
           case 'extracting':
-            statusText = `Estrazione anteprima da ${status.file}...`;
+            statusText = `Extracting preview from ${status.file}...`;
             break;
           case 'canceled':
-            statusText = 'Operazione annullata.';
+            statusText = 'Operation cancelled.';
             break;
           default:
             statusText = status.message || 'Processing...';
@@ -181,7 +181,7 @@ async function loadRecentPresets() {
 
       // Controllo di sicurezza per gestire risposte null o undefined
       if (!result) {
-        recentProjectsList.innerHTML = '<li>Errore nel caricamento dei preset partecipanti: risposta non valida.</li>';
+        recentProjectsList.innerHTML = '<li>Error loading participant presets: invalid response.</li>';
         return;
       }
 
@@ -189,17 +189,17 @@ async function loadRecentPresets() {
         // Take the most recent 5 presets
         const recentPresets = result.data.slice(0, 5);
         recentProjectsList.innerHTML = recentPresets.map(preset =>
-          `<li><a href="#" data-preset-id="${preset.id}" class="recent-preset-link">${preset.name}</a> (${preset.preset_participants?.length || 0} partecipanti, ${new Date(preset.updated_at || preset.created_at).toLocaleString()})</li>`
+          `<li><a href="#" data-preset-id="${preset.id}" class="recent-preset-link">${preset.name}</a> (${preset.preset_participants?.length || 0} participants, ${new Date(preset.updated_at || preset.created_at).toLocaleString()})</li>`
         ).join('');
         // TODO: Add event listeners for recent-preset-link to open preset details
       } else {
-        recentProjectsList.innerHTML = '<li>Nessun preset di partecipanti trovato.</li>';
+        recentProjectsList.innerHTML = '<li>No participant presets found.</li>';
       }
     } catch (error) {
-      recentProjectsList.innerHTML = '<li>Errore nel caricamento dei preset.</li>';
+      recentProjectsList.innerHTML = '<li>Error loading presets.</li>';
     }
   } else {
-    recentProjectsList.innerHTML = '<li>API non disponibile. Esegui l\'applicazione in Electron per accedere ai preset.</li>';
+    recentProjectsList.innerHTML = '<li>API not available. Run the application in Electron to access presets.</li>';
   }
 }
 

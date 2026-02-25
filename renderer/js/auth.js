@@ -114,7 +114,7 @@ function handleSessionExpired() {
   handleAuthStatus(authState);
 
   // Show a user-friendly message
-  showAuthError('login', 'Sessione scaduta. Effettua nuovamente il login.');
+  showAuthError('login', 'Session expired. Please log in again.');
 }
 
 // Handle login form submission
@@ -383,7 +383,7 @@ function handleLoginResult(result) {
   } else {
     // Check if this is an invalid credentials error — might be a user who registered
     // from the download page and hasn't set their password yet
-    const errorMsg = result.error || 'Errore durante il login';
+    const errorMsg = result.error || 'Error during login';
     const isInvalidCredentials = errorMsg.toLowerCase().includes('invalid login credentials') ||
                                   errorMsg.toLowerCase().includes('invalid password') ||
                                   errorMsg.toLowerCase().includes('wrong password');
@@ -486,7 +486,7 @@ function handleRegisterResult(result) {
       switchAuthTab('login');
     }, 5000);
   } else {
-    showAuthError('register', result.error || 'Si è verificato un errore durante la registrazione');
+    showAuthError('register', result.error || 'An error occurred during registration');
   }
 }
 
@@ -558,7 +558,7 @@ function updateTokenBalance(tokenInfo) {
     existingRefreshBtn.classList.remove('spinning');
 
     // Show success feedback
-    showNotification('Saldo Token Aggiornato', 'Il tuo saldo token è stato aggiornato con successo.');
+    showNotification('Token Balance Updated', 'Your token balance has been updated successfully.');
   }
 }
 
@@ -666,7 +666,7 @@ function handleTokenRefresh() {
   if (window.api && authState.isAuthenticated) {
     window.api.send('force-token-refresh');
   } else if (!authState.isAuthenticated) {
-    showNotification('Aggiornamento Fallito', 'Effettua il login per aggiornare il saldo token.');
+    showNotification('Update Failed', 'Please log in to update your token balance.');
     // Reset button immediately if not authenticated
     if (refreshBtn) {
       refreshBtn.innerHTML = originalText;
@@ -679,7 +679,7 @@ function handleTokenRefresh() {
 // Handle auth error
 function handleAuthError(error) {
   console.error('Auth error:', error);
-  showNotification('Errore di autenticazione', error.message || 'Si è verificato un errore di autenticazione');
+  showNotification('Authentication Error', error.message || 'An authentication error occurred');
 }
 
 // Show auth error
@@ -1100,19 +1100,19 @@ async function handleTrainingConsentChange(event) {
 
     if (result) {
       const message = newConsent
-        ? 'Grazie! Le tue immagini aiuteranno a migliorare il riconoscimento.'
-        : 'Consenso rimosso. Le tue future immagini non saranno usate per il training.';
-      showNotification('Preferenze aggiornate', message);
+        ? 'Thank you! Your images will help improve recognition accuracy.'
+        : 'Consent removed. Your future images will not be used for training.';
+      showNotification('Preferences Updated', message);
     } else {
       // Revert toggle if save failed
       event.target.checked = !newConsent;
-      showNotification('Errore', 'Impossibile salvare le preferenze. Riprova.');
+      showNotification('Error', 'Unable to save preferences. Please try again.');
     }
   } catch (error) {
     console.error('[Auth] Error saving training consent:', error);
     // Revert toggle on error
     event.target.checked = !newConsent;
-    showNotification('Errore', 'Impossibile salvare le preferenze. Riprova.');
+    showNotification('Error', 'Unable to save preferences. Please try again.');
   }
 }
 

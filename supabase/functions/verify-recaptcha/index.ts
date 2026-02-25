@@ -77,7 +77,7 @@ serve(async (req) => {
     console.error('Error verifying reCAPTCHA:', error);
     
     return new Response(
-      JSON.stringify({ success: false, error: 'Errore durante la verifica del reCAPTCHA' }),
+      JSON.stringify({ success: false, error: 'Error during reCAPTCHA verification' }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
     );
   }

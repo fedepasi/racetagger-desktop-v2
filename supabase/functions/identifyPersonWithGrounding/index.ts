@@ -291,7 +291,7 @@ function parseIdentifyResponse(responseText: string): {
     console.error(`${LOG_PREFIX} Failed to parse response:`, error);
     return {
       identified: false,
-      reason: 'Errore parsing risposta'
+      reason: 'Error parsing response'
     };
   }
 }

@@ -217,11 +217,11 @@ async function handleCsvLoading(event: IpcMainEvent, fileData: { buffer: Uint8Ar
         mainWindow.webContents.send('csv-loaded', {
           filename: fileName,
           entries: csvEntries.length,
-          message: `CSV caricato con ${csvEntries.length} voci valide`
+          message: `CSV loaded with ${csvEntries.length} valid entries`
         });
       } catch (parseError) {
         console.error('[CSV] Parsing error:', parseError);
-        mainWindow.webContents.send('csv-error', 'Errore nel parsing del CSV. Verifica il formato.');
+        mainWindow.webContents.send('csv-error', 'Error parsing CSV. Please check the file format.');
       }
     } else {
       mainWindow.webContents.send('csv-loaded', {

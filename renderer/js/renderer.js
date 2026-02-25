@@ -1228,7 +1228,7 @@ async function displayImageCard(imageResult) {
   // Set up feedback confirmation listeners
   window.api.receive('feedback-saved', (result) => {
     if (result.success) {
-      feedbackStatus.textContent = 'Salvato!';
+      feedbackStatus.textContent = 'Saved!';
       feedbackStatus.className = 'feedback-status success';
     }
   });

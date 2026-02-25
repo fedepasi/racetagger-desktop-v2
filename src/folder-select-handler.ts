@@ -63,7 +63,7 @@ export function setupFolderSelectHandlers(mainWindow: BrowserWindow | null) {
       };
     } catch (error) {
       console.error('Error during folder selection:', error);
-      return { success: false, message: 'Errore durante la selezione della cartella' };
+      return { success: false, message: 'Error during folder selection' };
     }
   });
 }

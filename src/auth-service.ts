@@ -745,7 +745,7 @@ export class AuthService {
         return {
           success: false,
           forceUpdate: true,
-          error: 'Aggiornamento richiesto. Aggiorna l\'app per continuare.'
+          error: 'Update required. Please update the app to continue.'
         };
       }
 
