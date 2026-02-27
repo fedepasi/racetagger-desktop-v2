@@ -493,21 +493,49 @@ export class ModelManager {
     const remoteModel = await this.getModelFromRegistry(categoryCode);
     if (!remoteModel) return false;
 
-    // Only update if version matches but classes differ
     if (localModel.version === remoteModel.version) {
-      const localClasses = JSON.stringify(localModel.classes);
-      const remoteClasses = JSON.stringify(remoteModel.classes);
-
-      if (localClasses !== remoteClasses) {
-        localModel.classes = remoteModel.classes;
-        localModel.confidenceThreshold = remoteModel.confidence_threshold;
-        localModel.iouThreshold = remoteModel.iou_threshold;
-        localModel.preprocessingMethod = remoteModel.preprocessing_method || 'stretch';
-        this.saveManifest();
-        return true;
-      }
+      return this.syncModelMetadata(localModel, remoteModel);
     }
     return false;
+  }
+
+  /**
+   * Sync all metadata fields (classes, thresholds, preprocessingMethod) from remote to local.
+   * Only saves manifest if something actually changed. No re-download needed.
+   */
+  private syncModelMetadata(localModel: LocalModelEntry, remoteModel: ModelRegistryEntry): boolean {
+    let changed = false;
+
+    // Sync classes
+    const localClasses = JSON.stringify(localModel.classes);
+    const remoteClasses = JSON.stringify(remoteModel.classes);
+    if (localClasses !== remoteClasses) {
+      localModel.classes = remoteModel.classes;
+      changed = true;
+    }
+
+    // Sync thresholds
+    if (localModel.confidenceThreshold !== remoteModel.confidence_threshold) {
+      localModel.confidenceThreshold = remoteModel.confidence_threshold;
+      changed = true;
+    }
+    if (localModel.iouThreshold !== remoteModel.iou_threshold) {
+      localModel.iouThreshold = remoteModel.iou_threshold;
+      changed = true;
+    }
+
+    // Sync preprocessing method
+    const remotePreprocessing = remoteModel.preprocessing_method || 'stretch';
+    if (localModel.preprocessingMethod !== remotePreprocessing) {
+      console.log(`[ModelManager] Syncing preprocessingMethod: ${localModel.preprocessingMethod} → ${remotePreprocessing}`);
+      localModel.preprocessingMethod = remotePreprocessing;
+      changed = true;
+    }
+
+    if (changed) {
+      this.saveManifest();
+    }
+    return changed;
   }
 
   /**
@@ -537,11 +565,8 @@ export class ModelManager {
       return this.downloadModel(categoryCode, onProgress);
     }
 
-    // Case 3: Only classes changed - update manifest only (no download!)
-    const classesChanged = JSON.stringify(localModel.classes) !== JSON.stringify(remoteModel.classes);
-    if (classesChanged) {
-      await this.updateClassesFromRemote(categoryCode);
-    }
+    // Case 3: Sync metadata from remote (classes, thresholds, preprocessing) without re-downloading
+    this.syncModelMetadata(localModel, remoteModel);
 
     // Verify local file exists
     if (!fs.existsSync(localModel.localPath)) {

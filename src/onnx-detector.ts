@@ -185,13 +185,8 @@ export class OnnxDetector {
         safeSend('model-download-complete', { categoryCode });
       }
 
-      // Skip if same model already loaded
-      if (this.session && this.currentModelPath === modelPath) {
-        this.isLoading = false;
-        return true;
-      }
-
-      // Load model configuration
+      // Load model configuration (always refresh config even if session is cached,
+      // so that metadata changes like preprocessingMethod are picked up)
       const config = this.modelManager.getLocalModelConfig(categoryCode);
       if (!config) {
         throw new Error(`Model config not found for ${categoryCode}`);
@@ -205,6 +200,12 @@ export class OnnxDetector {
         preprocessingMethod: config.preprocessingMethod || 'stretch',
       };
       console.log(`[OnnxDetector] Preprocessing method: ${this.modelConfig.preprocessingMethod}`);
+
+      // Skip ONNX session creation if same model file already loaded
+      if (this.session && this.currentModelPath === modelPath) {
+        this.isLoading = false;
+        return true;
+      }
 
       // Create inference session
       const sessionOptions: import('onnxruntime-node').InferenceSession.SessionOptions = {
