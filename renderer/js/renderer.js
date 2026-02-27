@@ -643,60 +643,87 @@ function handleFolderSelection() {
 }
 
 // Setup drag & drop on the folder selector area
+// Pattern mirrors the working PDF drop zone in participants-manager.js
 function setupFolderDragAndDrop() {
   const folderSelector = document.querySelector('.folder-selector-enhanced');
   if (!folderSelector) return;
-  // Avoid re-binding
+  // Avoid re-binding on the same DOM element
   if (folderSelector._dragDropInitialized) return;
   folderSelector._dragDropInitialized = true;
 
-  let dragCounter = 0;
-
-  const preventDefaults = (e) => {
+  folderSelector.addEventListener('dragenter', (e) => {
     e.preventDefault();
     e.stopPropagation();
-  };
-
-  ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(evt => {
-    folderSelector.addEventListener(evt, preventDefaults, false);
+    folderSelector.classList.add('drag-over');
   });
 
-  folderSelector.addEventListener('dragenter', () => {
-    dragCounter++;
+  folderSelector.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
     folderSelector.classList.add('drag-over');
-  }, false);
+  });
 
-  folderSelector.addEventListener('dragover', () => {
-    folderSelector.classList.add('drag-over');
-  }, false);
-
-  folderSelector.addEventListener('dragleave', () => {
-    dragCounter--;
-    if (dragCounter <= 0) {
+  folderSelector.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Only remove the highlight when the cursor truly leaves the drop zone
+    if (!folderSelector.contains(e.relatedTarget)) {
       folderSelector.classList.remove('drag-over');
-      dragCounter = 0;
     }
-  }, false);
+  });
 
-  folderSelector.addEventListener('drop', (e) => {
-    dragCounter = 0;
+  folderSelector.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
     folderSelector.classList.remove('drag-over');
 
-    const items = e.dataTransfer.items;
-    if (!items || items.length === 0) return;
+    console.log('[DragDrop] drop event fired');
 
-    // Try to get the folder path from dropped items
     const files = e.dataTransfer.files;
-    if (files.length > 0) {
-      const firstFile = files[0];
-      // In Electron, dropped files/folders have a .path property
-      const droppedPath = firstFile.path;
-      if (droppedPath && window.api) {
-        console.log('[Renderer] Folder dropped:', droppedPath);
-        window.api.send('select-folder-by-path', droppedPath);
+    if (!files || files.length === 0) {
+      console.warn('[DragDrop] No files in dataTransfer');
+      return;
+    }
+
+    console.log('[DragDrop] files[0].name:', files[0].name);
+
+    let droppedPath = null;
+
+    // Primary method: webUtils.getPathForFile() via preload contextBridge.
+    // This is the official Electron API for getting file paths when
+    // contextIsolation is enabled (File.path is undefined in main world).
+    if (window.api?.getPathForFile) {
+      try {
+        droppedPath = window.api.getPathForFile(files[0]);
+        console.log('[DragDrop] path via getPathForFile:', droppedPath);
+      } catch (err) {
+        console.warn('[DragDrop] getPathForFile failed:', err);
       }
     }
-  }, false);
+
+    // Fallback: File.path (works if contextIsolation is ever disabled)
+    if (!droppedPath && files[0].path) {
+      droppedPath = files[0].path;
+      console.log('[DragDrop] path via File.path fallback:', droppedPath);
+    }
+
+    console.log('[DragDrop] resolved droppedPath:', droppedPath);
+
+    if (!droppedPath || !window.api) {
+      console.warn('[DragDrop] Could not resolve OS path for dropped item');
+      return;
+    }
+
+    try {
+      const result = await window.api.invoke('select-folder-by-path', droppedPath);
+      console.log('[DragDrop] invoke result:', result);
+      if (typeof window.handleFolderSelected === 'function') {
+        window.handleFolderSelected(result);
+      }
+    } catch (err) {
+      console.error('[DragDrop] Error handling folder drop:', err);
+    }
+  });
 
   console.log('[Renderer] Folder drag & drop initialized');
 }
@@ -890,28 +917,44 @@ function handleModelSelection(event) {
   }
 }
 
-// Handle category selection
+// Handle category selection (called via change event on hidden select, fired by custom dropdown or programmatic)
 function handleCategorySelection(event) {
   selectedCategory = event.target.value;
   window.selectedCategory = selectedCategory; // Expose globally for other modules
 
-  // Update the current category display (get element dynamically for SPA compatibility)
-  const categoryNames = {
-    'motorsport': 'Motorsport',
-    'running': 'Running & Cycling',
-    'other': 'Other'
-  };
-
-  const display = document.getElementById('current-category-display');
-  if (display) {
-    display.textContent = categoryNames[selectedCategory] || selectedCategory;
-  }
-
   console.log('[Renderer] Category changed to:', selectedCategory);
+
+  // Sync custom dropdown trigger display (for programmatic changes from last-analysis-settings, etc.)
+  syncCustomDropdownTrigger(selectedCategory);
 
   // Re-filter presets based on the new category
   if (cachedAllPresets.length > 0) {
     filterAndDisplayPresets();
+  }
+}
+
+// Sync the custom dropdown trigger display with the given category code
+function syncCustomDropdownTrigger(code) {
+  const trigger = document.getElementById('custom-dropdown-trigger');
+  const menu = document.getElementById('custom-dropdown-menu');
+  if (!trigger) return;
+
+  const categorySelect = document.getElementById('category-select');
+  const name = categorySelect?.options[categorySelect.selectedIndex]?.textContent || code;
+  const emoji = getCategoryEmoji(code);
+
+  let triggerHtml = `<span class="cdd-emoji">${emoji}</span><span class="cdd-name">${name}</span>`;
+  if (proCategoryMap[code]) {
+    triggerHtml += `<span class="cdd-pro-pill">PRO</span>`;
+  }
+  triggerHtml += `<span class="cdd-chevron">&#9662;</span>`;
+  trigger.innerHTML = triggerHtml;
+
+  // Update selected state in menu
+  if (menu) {
+    menu.querySelectorAll('.cdd-option').forEach(opt => {
+      opt.classList.toggle('selected', opt.dataset.value === code);
+    });
   }
 }
 
@@ -2087,18 +2130,20 @@ document.addEventListener('DOMContentLoaded', () => {
 async function loadDynamicCategories(forceRefresh = false) {
   const CACHE_DURATION = 30 * 60 * 1000; // 30 minutes
 
-  // Get max supported version to include in cache key (ensures cache invalidation on app update)
-  let maxSupportedVersion = 5; // fallback default
+  // Get version info for cache key and filtering
+  let maxSupportedVersion = 5; // fallback default for edge_function_version
+  let appVersionNumber = 10000; // fallback default (v1.0.0)
   try {
     if (window.api) {
       maxSupportedVersion = await window.api.invoke('get-max-supported-edge-function-version');
+      appVersionNumber = await window.api.invoke('get-app-version-number');
     }
   } catch (e) {
-    // Could not get max supported version for cache key
+    // Could not get version info for cache key
   }
 
-  // Include version in cache key to auto-invalidate when app is updated
-  const CACHE_KEY = `racetagger_sport_categories_v${maxSupportedVersion}`;
+  // Include both versions in cache key to auto-invalidate when app is updated
+  const CACHE_KEY = `racetagger_sport_categories_v${maxSupportedVersion}_app${appVersionNumber}`;
 
   // Check sessionStorage cache first (unless forced refresh)
   if (!forceRefresh) {
@@ -2135,18 +2180,23 @@ async function loadDynamicCategories(forceRefresh = false) {
 
     if (result.success && result.data && result.data.length > 0) {
 
-      // Filter categories based on edge_function_version compatibility
+      // Filter categories based on version compatibility
       let filteredCategories = result.data;
       try {
-        const maxSupportedVersion = await window.api.invoke('get-max-supported-edge-function-version');
+        const maxSupportedEdgeFunctionVersion = await window.api.invoke('get-max-supported-edge-function-version');
+        const currentAppVersionNumber = await window.api.invoke('get-app-version-number');
 
-        const originalCount = result.data.length;
         filteredCategories = result.data.filter(category => {
-          // Categories without edge_function_version are assumed compatible (legacy V2)
-          const categoryVersion = category.edge_function_version || 2;
-          const isCompatible = categoryVersion <= maxSupportedVersion;
+          // Check 1: Edge function version support (processing pipeline compatibility)
+          const edgeFunctionVersion = category.edge_function_version || 2;
+          const isEdgeFunctionOk = edgeFunctionVersion <= maxSupportedEdgeFunctionVersion;
 
-          return isCompatible;
+          // Check 2: Minimum app version requirement (visibility control)
+          const minAppVersion = category.min_app_version || 0;
+          const isAppVersionOk = minAppVersion <= currentAppVersionNumber;
+
+          // Both checks must pass
+          return isEdgeFunctionOk && isAppVersionOk;
         });
       } catch (versionError) {
         // Could not check version compatibility, showing all categories
@@ -2169,49 +2219,71 @@ async function loadDynamicCategories(forceRefresh = false) {
   }
 }
 
-// Populate category select with dynamic data
+// Track which categories have PRO (local ONNX model) recognition
+let proCategoryMap = {};
+// Track category icons from database (code → emoji)
+let categoryIconMap = {};
+
+// Get emoji for a category code (uses DB icon, fallback to ⚡)
+function getCategoryEmoji(code) {
+  return categoryIconMap[code] || '⚡';
+}
+
+// Populate category select with dynamic data (custom dropdown + hidden native select)
 function populateCategorySelect(categories) {
   const categorySelect = document.getElementById('category-select');
-  if (!categorySelect) {
-    // Element not found - analysis page may not be loaded yet (normal with dynamic routing)
+  const dropdownMenu = document.getElementById('custom-dropdown-menu');
+  if (!categorySelect || !dropdownMenu) {
+    // Elements not found - analysis page may not be loaded yet (normal with dynamic routing)
     return;
   }
 
   // Build category code-to-id mapping for preset filtering
   categoryCodeToIdMap = {};
+  proCategoryMap = {};
+  categoryIconMap = {};
   categories.forEach(category => {
     categoryCodeToIdMap[category.code] = category.id;
+    // Track PRO categories (those with local ONNX model or active model)
+    if (category.use_local_onnx || category.active_model_id) {
+      proCategoryMap[category.code] = true;
+    }
+    // Store icon from database
+    if (category.icon) {
+      categoryIconMap[category.code] = category.icon;
+    }
   });
-  console.log('[Renderer] Built category mapping:', Object.keys(categoryCodeToIdMap).length, 'categories');
+  console.log('[Renderer] Built category mapping:', Object.keys(categoryCodeToIdMap).length, 'categories,', Object.keys(proCategoryMap).length, 'PRO');
 
-  // Clear existing options (keep current selection if possible)
+  // Keep current selection if possible
   const currentValue = categorySelect.value;
-  categorySelect.innerHTML = '';
 
-  // Add categories from database
-  let hasCurrentValue = false;
+  // Populate hidden native select (for .value compatibility)
+  categorySelect.innerHTML = '';
   categories.forEach(category => {
     const option = document.createElement('option');
     option.value = category.code;
-
-    // Create display text with emoji if available
-    let displayText = category.name;
-    switch(category.code) {
-      case 'motorsport':
-        displayText = `🏎️ ${category.name}`;
-        break;
-      case 'running':
-        displayText = `🏃 ${category.name}`;
-        break;
-      case 'cycling':
-        displayText = `🚴 ${category.name}`;
-        break;
-      default:
-        displayText = `⚡ ${category.name}`;
-    }
-
-    option.textContent = displayText;
+    option.textContent = category.name;
     categorySelect.appendChild(option);
+  });
+
+  // Populate custom dropdown menu
+  dropdownMenu.innerHTML = '';
+  let hasCurrentValue = false;
+  categories.forEach(category => {
+    const div = document.createElement('div');
+    div.className = 'cdd-option';
+    div.dataset.value = category.code;
+
+    const emoji = getCategoryEmoji(category.code);
+    let html = `<span class="cdd-opt-emoji">${emoji}</span><span class="cdd-opt-name">${category.name}</span>`;
+    if (proCategoryMap[category.code]) {
+      html += `<span class="cdd-opt-pro">PRO</span>`;
+    }
+    div.innerHTML = html;
+
+    div.addEventListener('click', () => selectCustomCategory(category.code));
+    dropdownMenu.appendChild(div);
 
     if (category.code === currentValue) {
       hasCurrentValue = true;
@@ -2219,20 +2291,89 @@ function populateCategorySelect(categories) {
   });
 
   // Restore previous selection or set to first category
-  if (hasCurrentValue) {
-    categorySelect.value = currentValue;
-  } else if (categories.length > 0) {
-    categorySelect.value = categories[0].code;
-    selectedCategory = categories[0].code;
+  const valueToSelect = hasCurrentValue ? currentValue : (categories.length > 0 ? categories[0].code : null);
+  if (valueToSelect) {
+    selectCustomCategory(valueToSelect, true); // silent = true, don't trigger change handler on populate
   }
 
-  // Update category display
-  if (categorySelect.value) {
-    const selectedOption = categorySelect.options[categorySelect.selectedIndex];
-    if (selectedOption && currentCategoryDisplay) {
-      currentCategoryDisplay.textContent = selectedOption.textContent.replace(/^[^\s]+\s/, ''); // Remove emoji
-    }
+  // Initialize custom dropdown click-outside listener (once)
+  initCustomDropdownListeners();
+}
+
+// Select a category in the custom dropdown and sync with hidden native select
+function selectCustomCategory(code, silent) {
+  const categorySelect = document.getElementById('category-select');
+  const trigger = document.getElementById('custom-dropdown-trigger');
+  const dropdown = document.getElementById('custom-category-dropdown');
+  const menu = document.getElementById('custom-dropdown-menu');
+  if (!categorySelect || !trigger || !menu) return;
+
+  // Update hidden select
+  categorySelect.value = code;
+
+  // Update trigger display
+  const emoji = getCategoryEmoji(code);
+  const name = categorySelect.options[categorySelect.selectedIndex]?.textContent || code;
+  let triggerHtml = `<span class="cdd-emoji">${emoji}</span><span class="cdd-name">${name}</span>`;
+  if (proCategoryMap[code]) {
+    triggerHtml += `<span class="cdd-pro-pill">PRO</span>`;
   }
+  triggerHtml += `<span class="cdd-chevron">&#9662;</span>`;
+  trigger.innerHTML = triggerHtml;
+
+  // Update selected state in menu
+  menu.querySelectorAll('.cdd-option').forEach(opt => {
+    opt.classList.toggle('selected', opt.dataset.value === code);
+  });
+
+  // Close dropdown
+  if (dropdown) dropdown.classList.remove('open');
+
+  // Sync global state and trigger change handler (unless silent)
+  if (!silent) {
+    selectedCategory = code;
+    window.selectedCategory = selectedCategory;
+
+    // Fire synthetic change event on hidden select so all existing listeners work
+    const event = new Event('change', { bubbles: true });
+    categorySelect.dispatchEvent(event);
+  } else {
+    // Silent mode: still update global state
+    selectedCategory = code;
+    window.selectedCategory = selectedCategory;
+  }
+}
+
+// Initialize custom dropdown open/close listeners
+let customDropdownInitialized = false;
+function initCustomDropdownListeners() {
+  if (customDropdownInitialized) return;
+  customDropdownInitialized = true;
+
+  // Toggle dropdown on trigger click
+  document.addEventListener('click', (e) => {
+    const trigger = document.getElementById('custom-dropdown-trigger');
+    const dropdown = document.getElementById('custom-category-dropdown');
+    const menu = document.getElementById('custom-dropdown-menu');
+    if (!trigger || !dropdown || !menu) return;
+
+    if (trigger.contains(e.target)) {
+      dropdown.classList.toggle('open');
+    } else if (!menu.contains(e.target)) {
+      dropdown.classList.remove('open');
+    }
+  });
+
+  // Keyboard navigation
+  document.addEventListener('keydown', (e) => {
+    const dropdown = document.getElementById('custom-category-dropdown');
+    if (!dropdown || !dropdown.classList.contains('open')) return;
+
+    if (e.key === 'Escape') {
+      dropdown.classList.remove('open');
+      document.getElementById('custom-dropdown-trigger')?.focus();
+    }
+  });
 }
 
 // Manual refresh function for categories (useful for admin/debug)

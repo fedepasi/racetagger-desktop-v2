@@ -37,16 +37,25 @@
               <span class="category-icon">🏎️</span>
               Sport Category
             </label>
-            <select class="form-control category-control" id="category-select">
-              <option value="motorsport">🏎️ Motorsport</option>
-              <option value="running">🏃 Running & Cycling</option>
-              <option value="other">⚡ Other Sports</option>
+            <!-- Hidden native select for value storage & compatibility -->
+            <select class="form-control category-control" id="category-select" style="display:none;">
+              <option value="motorsport">Motorsport</option>
+              <option value="running">Running & Cycling</option>
+              <option value="other">Other Sports</option>
             </select>
+            <!-- Custom visual dropdown with rich HTML support -->
+            <div class="custom-category-dropdown" id="custom-category-dropdown">
+              <button type="button" class="custom-dropdown-trigger" id="custom-dropdown-trigger">
+                <span class="cdd-emoji">🏎️</span>
+                <span class="cdd-name">Motorsport</span>
+                <span class="cdd-chevron">&#9662;</span>
+              </button>
+              <div class="custom-dropdown-menu" id="custom-dropdown-menu">
+                <!-- Options populated dynamically by JS -->
+              </div>
+            </div>
             <div class="form-text category-hint">
               Choose sport type for better AI recognition
-            </div>
-            <div class="form-text category-current">
-              <strong>Current:</strong> <span id="current-category-display">Motorsport</span>
             </div>
           </div>
         </div>

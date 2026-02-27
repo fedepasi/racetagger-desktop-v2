@@ -674,6 +674,12 @@
   box-shadow: 0 4px 24px rgba(59, 130, 246, 0.25);
 }
 
+/* During drag-over, make children transparent to pointer events so the drop
+   always fires directly on the folder-selector-enhanced element, not a child */
+.folder-selector-enhanced.drag-over * {
+  pointer-events: none;
+}
+
 .folder-label {
   display: flex;
   align-items: center;

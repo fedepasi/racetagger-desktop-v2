@@ -30,6 +30,11 @@ export function registerAppHandlers(): void {
     return MAX_SUPPORTED_EDGE_FUNCTION_VERSION;
   });
 
+  ipcMain.handle('get-app-version-number', () => {
+    const { APP_VERSION_NUMBER } = require('../config');
+    return APP_VERSION_NUMBER;
+  });
+
   // ==================== EXTERNAL URLS ====================
 
   ipcMain.handle('open-download-url', async (_, url: string) => {

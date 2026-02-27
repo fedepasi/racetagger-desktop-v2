@@ -2975,20 +2975,18 @@ app.whenReady().then(async () => { // Added async here
 
   ipcMain.on('select-folder', handleFolderSelection);
 
-  // Handle folder selection by path (drag & drop)
-  ipcMain.on('select-folder-by-path', async (event, folderPath: string) => {
+  // Handle folder selection by path (drag & drop) — uses handle/invoke pattern for reliability
+  ipcMain.handle('select-folder-by-path', async (_event, folderPath: string) => {
     try {
       console.log('[FolderSelection] select-folder-by-path called with:', folderPath);
 
       if (!folderPath || !fs.existsSync(folderPath)) {
-        event.sender.send('folder-selected', { success: false, message: 'La cartella selezionata non esiste' });
-        return;
+        return { success: false, message: 'La cartella selezionata non esiste' };
       }
 
       const stat = fs.statSync(folderPath);
       if (!stat.isDirectory()) {
-        event.sender.send('folder-selected', { success: false, message: 'Il percorso selezionato non è una cartella' });
-        return;
+        return { success: false, message: 'Il percorso selezionato non è una cartella' };
       }
 
       const imageFiles = await getImagesFromFolder(folderPath);
@@ -3001,17 +2999,18 @@ app.whenReady().then(async () => { // Added async here
         imageCount,
         rawCount
       };
-      console.log('[FolderSelection] Sending folder-selected event with payload:', payload);
-      event.sender.send('folder-selected', payload);
+      console.log('[FolderSelection] Returning folder payload:', payload);
 
       if (batchConfig) {
         batchConfig.folderPath = folderPath;
       } else {
         batchConfig = { folderPath, updateExif: false };
       }
+
+      return payload;
     } catch (error) {
       console.error('Error during folder selection by path:', error);
-      event.sender.send('folder-selected', { success: false, message: 'Error during folder selection' });
+      return { success: false, message: 'Error during folder selection' };
     }
   });
   

@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
+import { contextBridge, ipcRenderer, IpcRendererEvent, webUtils } from 'electron';
 
 // Whitelist of channels to expose to the renderer process
 // We separate send/receive and invoke channels for clarity, though some might overlap
@@ -88,6 +88,7 @@ const validInvokeChannels: string[] = [
   'is-force-update-required',
   'get-app-version',
   'get-max-supported-edge-function-version',
+  'get-app-version-number',
   'open-download-url',
   'quit-app-for-update',
   'download-update',
@@ -162,6 +163,7 @@ const validInvokeChannels: string[] = [
   'supabase-update-participant-preset',
   'supabase-update-preset-last-used',
   'supabase-delete-participant-preset',
+  'supabase-duplicate-official-preset',
   'supabase-import-participants-from-csv',
   'supabase-get-cached-participant-presets',
   'supabase-get-all-participant-presets-admin',
@@ -288,6 +290,12 @@ contextBridge.exposeInMainWorld('api', {
     } else {
       console.warn(`Attempted to remove all listeners from an invalid channel: ${channel}`);
     }
+  },
+  // Resolves the OS file-system path for a File object from drag & drop.
+  // Uses Electron's webUtils API — the official way to get file paths
+  // when contextIsolation is enabled (File.path is undefined in main world).
+  getPathForFile: (file: File): string => {
+    return webUtils.getPathForFile(file);
   }
 });
 

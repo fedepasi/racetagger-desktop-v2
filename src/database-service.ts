@@ -882,6 +882,7 @@ export interface SportCategory {
   is_active?: boolean;
   display_order?: number;
   edge_function_version?: number;
+  min_app_version?: number;        // Minimum app version number to display this category (0 = all)
   created_at?: string;
   updated_at?: string;
   temporal_config?: {
@@ -907,6 +908,9 @@ export interface SportCategory {
   };
   scene_classifier_enabled?: boolean;     // Enable ONNX scene classifier to skip crowd/irrelevant scenes
   save_segmentation_masks?: boolean;      // Save full RLE mask data in JSONL logs for debugging/training
+  use_local_onnx?: boolean;              // Use local ONNX model for detection (PRO recognition)
+  active_model_id?: string;              // UUID FK to model_registry - active ONNX model for this category
+  recognition_method?: string;           // Detection method type (e.g., 'onnx', 'cloud')
 }
 
 // A custom folder can be a simple name string or an object with name + optional absolute path
