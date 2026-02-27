@@ -686,7 +686,7 @@ class UnifiedImageWorker extends EventEmitter {
 
     try {
       // 1. Perform local ONNX inference
-      const { results: detections, imageSize } = await this.onnxDetector.detect(imageBuffer);
+      const { results: detections, imageSize, preprocessingMethod } = await this.onnxDetector.detect(imageBuffer);
       const inferenceMs = Date.now() - startTime;
 
       // Convert OnnxAnalysisResult[] to edge function format
@@ -826,6 +826,7 @@ class UnifiedImageWorker extends EventEmitter {
                 inferenceMs,
                 modelSource: 'local-onnx',
                 modelCategory: this.category,
+                preprocessingMethod,
                 timestamp: new Date().toISOString()
               },
               input_tokens: 0,  // No API tokens for local inference
@@ -866,6 +867,7 @@ class UnifiedImageWorker extends EventEmitter {
         tokensUsed: tokenDeducted ? 1 : 0,
         storagePath,  // For debugging
         imageSize,  // Original image dimensions for bbox mapping
+        preprocessingMethod,  // ONNX preprocessing method (stretch/letterbox) for JSONL annotation
         localOnnxUsage: {
           detectionsCount: analysis.length,
           inferenceMs,
@@ -3309,6 +3311,8 @@ class UnifiedImageWorker extends EventEmitter {
         recognitionMethod: analysisResult.recognitionMethod || this.recognitionMethod || undefined,
         // Original image dimensions for bbox mapping (especially useful for local-onnx)
         imageSize: analysisResult.imageSize || undefined,
+        // ONNX preprocessing method for bbox coordinate space annotation
+        preprocessingMethod: analysisResult.preprocessingMethod || undefined,
         // Segmentation preprocessing info (YOLOv8-seg used before recognition)
         segmentationPreprocessing: analysisResult.segmentationPreprocessing || undefined,
         // Visual tags extracted by AI (if enabled)

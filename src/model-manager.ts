@@ -37,6 +37,7 @@ export interface ModelRegistryEntry {
   confidence_threshold: number;
   iou_threshold: number;
   classes: string[];
+  preprocessing_method: 'stretch' | 'letterbox';
   min_app_version: string | null;
   is_active: boolean;
   release_notes: string | null;
@@ -56,6 +57,7 @@ interface LocalModelEntry {
   confidenceThreshold: number;
   iouThreshold: number;
   inputSize: number[];
+  preprocessingMethod: 'stretch' | 'letterbox';
 }
 
 /**
@@ -372,6 +374,7 @@ export class ModelManager {
       confidenceThreshold: modelInfo.confidence_threshold,
       iouThreshold: modelInfo.iou_threshold,
       inputSize: modelInfo.input_size,
+      preprocessingMethod: modelInfo.preprocessing_method || 'stretch',
     };
     this.saveManifest();
 
@@ -499,6 +502,7 @@ export class ModelManager {
         localModel.classes = remoteModel.classes;
         localModel.confidenceThreshold = remoteModel.confidence_threshold;
         localModel.iouThreshold = remoteModel.iou_threshold;
+        localModel.preprocessingMethod = remoteModel.preprocessing_method || 'stretch';
         this.saveManifest();
         return true;
       }

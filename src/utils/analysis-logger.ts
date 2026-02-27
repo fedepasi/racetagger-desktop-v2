@@ -126,6 +126,9 @@ export interface ImageAnalysisEvent extends LogEvent {
   recognitionMethod?: 'gemini' | 'rf-detr' | 'local-onnx' | 'gemini-v6-seg' | 'face_recognition';
   // Original image dimensions for bbox mapping (especially useful for local-onnx)
   imageSize?: { width: number; height: number };
+  // ONNX preprocessing method used (determines bbox coordinate space)
+  // 'stretch': bbox in stretched input space, 'letterbox': bbox in original image space (unletterboxed)
+  preprocessingMethod?: 'stretch' | 'letterbox';
   // Segmentation preprocessing info (YOLO model used before recognition)
   segmentationPreprocessing?: {
     used: boolean;           // Was YOLO segmentation used

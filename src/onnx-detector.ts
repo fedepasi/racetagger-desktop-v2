@@ -58,6 +58,17 @@ interface ModelConfig {
   confidenceThreshold: number;
   iouThreshold: number;
   classes: string[];
+  preprocessingMethod: 'stretch' | 'letterbox';
+}
+
+/**
+ * Letterbox padding info for coordinate transform
+ * Stored after preprocessing to allow bbox "unletterboxing"
+ */
+interface LetterboxInfo {
+  scale: number;   // Scale factor applied to the image
+  padX: number;    // Horizontal padding in pixels (each side)
+  padY: number;    // Vertical padding in pixels (each side)
 }
 
 /**
@@ -74,6 +85,7 @@ export class OnnxDetector {
   private modelManager: ModelManager;
   private loadingPromise: Promise<boolean> | null = null;  // Track ongoing load operation
   private lastImageDimensions: { width: number; height: number } | null = null;  // Original image dimensions for bbox mapping
+  private lastLetterboxInfo: LetterboxInfo | null = null;  // Letterbox padding info for bbox unletterboxing
 
   private constructor() {
     this.modelManager = getModelManager();
@@ -190,7 +202,9 @@ export class OnnxDetector {
         confidenceThreshold: config.confidenceThreshold,
         iouThreshold: config.iouThreshold,
         classes: config.classes,
+        preprocessingMethod: config.preprocessingMethod || 'stretch',
       };
+      console.log(`[OnnxDetector] Preprocessing method: ${this.modelConfig.preprocessingMethod}`);
 
       // Create inference session
       const sessionOptions: import('onnxruntime-node').InferenceSession.SessionOptions = {
@@ -237,10 +251,19 @@ export class OnnxDetector {
 
   /**
    * Preprocess image for inference
-   * Matches Roboflow training pipeline:
-   * 1. Auto-orient based on EXIF (Roboflow "Auto-Orient: Applied")
-   * 2. Resize to 640x640 STRETCH (Roboflow "Stretch to 640x640")
-   * 3. Simple /255 normalization (Roboflow default, NOT ImageNet!)
+   * Supports two modes based on model training configuration:
+   *
+   * STRETCH (Roboflow default):
+   * 1. Auto-orient based on EXIF
+   * 2. Resize to 640x640 with fit:'fill' (distorts aspect ratio)
+   * 3. Simple /255 normalization
+   *
+   * LETTERBOX (aspect ratio preserved):
+   * 1. Auto-orient based on EXIF
+   * 2. Resize to fit within 640x640 preserving aspect ratio (fit:'contain')
+   * 3. Pad remaining space with gray (114,114,114) — YOLO standard
+   * 4. Simple /255 normalization
+   * 5. Store padding info for bbox coordinate compensation
    */
   private async preprocessImage(imageBuffer: Buffer): Promise<Float32Array> {
     if (!this.modelConfig) {
@@ -248,34 +271,72 @@ export class OnnxDetector {
     }
 
     const [targetWidth, targetHeight] = this.modelConfig.inputSize;
+    const useLetterbox = this.modelConfig.preprocessingMethod === 'letterbox';
 
-    // Save original image dimensions for bbox mapping
-    const metadata = await sharp(imageBuffer).metadata();
+    // Get original image dimensions (after EXIF rotation)
+    const rotatedBuffer = await sharp(imageBuffer).rotate().toBuffer();
+    const metadata = await sharp(rotatedBuffer).metadata();
     this.lastImageDimensions = {
       width: metadata.width!,
       height: metadata.height!
     };
 
-    // Resize and convert to RGB
-    const { data, info } = await sharp(imageBuffer)
-      .rotate()  // Auto-rotate based on EXIF orientation data (matches Roboflow "Auto-Orient: Applied")
-      .resize(targetWidth, targetHeight, {
-        fit: 'fill',
-        kernel: 'lanczos3',
-      })
-      .removeAlpha()
-      .raw()
-      .toBuffer({ resolveWithObject: true });
+    let data: Buffer;
 
-    // NORMALIZATION SELECTION based on model type
-    // Roboflow YOLO training uses SIMPLE /255 normalization (NOT ImageNet!)
-    // Verified via notebook testing - ImageNet normalization causes 0.0 confidence
-    const useImageNetNorm = false; // YOLOv11 trained with SIMPLE /255 normalization (Roboflow default)
+    if (useLetterbox) {
+      // LETTERBOX: preserve aspect ratio, pad with gray
+      const origW = metadata.width!;
+      const origH = metadata.height!;
+      const scale = Math.min(targetWidth / origW, targetHeight / origH);
+      const scaledW = Math.round(origW * scale);
+      const scaledH = Math.round(origH * scale);
+      const padX = Math.round((targetWidth - scaledW) / 2);
+      const padY = Math.round((targetHeight - scaledH) / 2);
 
-    const mean = [0.485, 0.456, 0.406];  // RGB (ImageNet)
-    const std = [0.229, 0.224, 0.225];   // RGB (ImageNet)
+      // Store letterbox info for bbox unletterboxing
+      this.lastLetterboxInfo = { scale, padX, padY };
 
-    // Convert to Float32 (CHW format: channels, height, width)
+      const resized = await sharp(rotatedBuffer)
+        .resize(scaledW, scaledH, { fit: 'fill', kernel: 'lanczos3' })
+        .removeAlpha()
+        .raw()
+        .toBuffer();
+
+      // Create target buffer filled with gray (114,114,114) — YOLO standard padding color
+      const targetPixels = targetWidth * targetHeight * 3;
+      const padded = Buffer.alloc(targetPixels);
+      for (let i = 0; i < targetPixels; i += 3) {
+        padded[i] = 114;     // R
+        padded[i + 1] = 114; // G
+        padded[i + 2] = 114; // B
+      }
+
+      // Copy resized image into padded buffer at offset
+      for (let row = 0; row < scaledH; row++) {
+        const srcOffset = row * scaledW * 3;
+        const dstOffset = ((row + padY) * targetWidth + padX) * 3;
+        resized.copy(padded, dstOffset, srcOffset, srcOffset + scaledW * 3);
+      }
+
+      data = padded;
+      console.log(`[ONNX-Preprocess] Letterbox: ${origW}x${origH} → ${scaledW}x${scaledH} + pad(${padX},${padY}) → ${targetWidth}x${targetHeight}`);
+    } else {
+      // STRETCH: distort to fill (Roboflow default)
+      this.lastLetterboxInfo = null;
+
+      const result = await sharp(rotatedBuffer)
+        .resize(targetWidth, targetHeight, {
+          fit: 'fill',
+          kernel: 'lanczos3',
+        })
+        .removeAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+      data = result.data;
+      console.log(`[ONNX-Preprocess] Stretch: ${metadata.width}x${metadata.height} → ${targetWidth}x${targetHeight}`);
+    }
+
+    // NORMALIZATION: Simple /255 (Roboflow YOLO default, NOT ImageNet)
     const floatData = new Float32Array(3 * targetHeight * targetWidth);
 
     for (let c = 0; c < 3; c++) {
@@ -283,18 +344,10 @@ export class OnnxDetector {
         for (let w = 0; w < targetWidth; w++) {
           const srcIdx = (h * targetWidth + w) * 3 + c;
           const dstIdx = c * targetHeight * targetWidth + h * targetWidth + w;
-
-          if (useImageNetNorm) {
-            // ImageNet normalization: (pixel / 255.0 - mean) / std
-            floatData[dstIdx] = (data[srcIdx] / 255.0 - mean[c]) / std[c];
-          } else {
-            // Simple normalization: pixel / 255.0 (YOLOv11 standard)
-            floatData[dstIdx] = data[srcIdx] / 255.0;
-          }
+          floatData[dstIdx] = data[srcIdx] / 255.0;
         }
       }
     }
-    console.log(`[ONNX-Preprocess] Using ${useImageNetNorm ? 'ImageNet' : 'Simple'} normalization`);
 
     return floatData;
   }
@@ -306,6 +359,7 @@ export class OnnxDetector {
   public async detect(imageBuffer: Buffer): Promise<{
     results: OnnxAnalysisResult[];
     imageSize: { width: number; height: number };
+    preprocessingMethod: 'stretch' | 'letterbox';
   }> {
     if (!this.session || !this.modelConfig || !ort) {
       throw new Error('Model not loaded. Call loadModel() first.');
@@ -345,20 +399,41 @@ export class OnnxDetector {
       // Apply NMS
       const filteredDetections = this.applyNMS(detections, this.modelConfig.iouThreshold);
 
-      // Convert to analysis results
+      // Convert to analysis results, applying letterbox compensation if needed
       const analysisResults = filteredDetections
         .filter(d => d.confidence >= this.modelConfig!.confidenceThreshold)
-        .map(d => ({
-          raceNumber: d.raceNumber || 'unknown',
-          confidence: d.confidence,
-          className: d.className,
-          boundingBox: {
-            x: d.x,
-            y: d.y,
-            width: d.width,
-            height: d.height,
-          },
-        }))
+        .map(d => {
+          let bx = d.x, by = d.y, bw = d.width, bh = d.height;
+
+          // Unletterbox: convert bbox from padded input space to original image space (normalized 0-1)
+          if (this.lastLetterboxInfo) {
+            const [inputW, inputH] = this.modelConfig!.inputSize;
+            const { padX, padY } = this.lastLetterboxInfo;
+            const padXNorm = padX / inputW;
+            const padYNorm = padY / inputH;
+            const scaleXNorm = (inputW - 2 * padX) / inputW;
+            const scaleYNorm = (inputH - 2 * padY) / inputH;
+
+            // Remove padding offset and rescale to original image proportions
+            bx = (bx - padXNorm) / scaleXNorm;
+            by = (by - padYNorm) / scaleYNorm;
+            bw = bw / scaleXNorm;
+            bh = bh / scaleYNorm;
+
+            // Clamp to [0, 1] range (detections near padding edge)
+            bx = Math.max(0, Math.min(1, bx));
+            by = Math.max(0, Math.min(1, by));
+            bw = Math.min(bw, 1 - bx);
+            bh = Math.min(bh, 1 - by);
+          }
+
+          return {
+            raceNumber: d.raceNumber || 'unknown',
+            confidence: d.confidence,
+            className: d.className,
+            boundingBox: { x: bx, y: by, width: bw, height: bh },
+          };
+        })
         .filter(r => r.raceNumber !== 'unknown');
 
       // DEBUG: Detection summary with class distribution
@@ -382,7 +457,8 @@ export class OnnxDetector {
 
       return {
         results: analysisResults,
-        imageSize: this.lastImageDimensions!
+        imageSize: this.lastImageDimensions!,
+        preprocessingMethod: this.modelConfig.preprocessingMethod,
       };
     } catch (error) {
       console.error('[OnnxDetector] Detection failed:', error);
