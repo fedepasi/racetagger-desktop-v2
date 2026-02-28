@@ -38,6 +38,7 @@ export interface ModelRegistryEntry {
   iou_threshold: number;
   classes: string[];
   preprocessing_method: 'stretch' | 'letterbox';
+  output_format: 'yolo-nms' | 'yolo-end2end' | 'rf-detr';
   min_app_version: string | null;
   is_active: boolean;
   release_notes: string | null;
@@ -58,6 +59,7 @@ interface LocalModelEntry {
   iouThreshold: number;
   inputSize: number[];
   preprocessingMethod: 'stretch' | 'letterbox';
+  outputFormat: 'yolo-nms' | 'yolo-end2end' | 'rf-detr';
 }
 
 /**
@@ -375,6 +377,7 @@ export class ModelManager {
       iouThreshold: modelInfo.iou_threshold,
       inputSize: modelInfo.input_size,
       preprocessingMethod: modelInfo.preprocessing_method || 'stretch',
+      outputFormat: modelInfo.output_format || 'yolo-nms',
     };
     this.saveManifest();
 

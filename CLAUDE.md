@@ -746,6 +746,72 @@ npm run benchmark
 npm run regression-test
 ```
 
+## Buyer Personas & Feature Priorities
+
+Development decisions should always be guided by these three target user profiles:
+
+### Persona 1: Multi-Client Photographer
+**Who:** Event/sports photographer covering races for multiple clients, teams, or sponsors.
+**Core Need:** Speed of photo delivery. Needs to quickly sort and distribute photos to the right recipients.
+**Key Workflow:** Process event → divide photos by number/team/pilot → deliver to each client.
+**Critical Features:**
+- Fast folder organization by race number, team, or category
+- File renaming with participant data (`{number}_{name}_{team}-{seq:02}`)
+- Subfolder patterns for multi-client delivery (`{team}/{number}/`)
+- Batch export to multiple destinations (one per client)
+**IPTC Importance:** Low — clients care about getting the right photos fast, not metadata standards.
+
+### Persona 2: Editorial Photographer
+**Who:** Professional photographer working with news agencies (Getty, DPPI, Motorsport Images, Shutterstock Editorial, etc.).
+**Core Need:** Getty-ready IPTC metadata on every image. Without correct metadata, agencies reject or delay publication.
+**Key Workflow:** Process event → review matches → write professional IPTC (credit, copyright, caption with names, Person Shown, keywords) → export to agency with specific metadata requirements.
+**Critical Features:**
+- IPTC Pro: full metadata writing (caption with {name}, Person Shown, copyright, credit, keywords)
+- Multi-agency export with different IPTC profiles per agency (different credit line, different copyright holder)
+- XMP sidecar for RAW files
+- Template system for captions and headlines
+- Multi-match support (photos with multiple participants)
+**IPTC Importance:** Mission-critical — this is the primary value proposition.
+
+### Persona 3: Event Organizer
+**Who:** Marketing/communications team of race organizers, circuits, or event companies. Not photographers themselves.
+**Core Need:** Tag photos for easy searchability by the media team. "Find all photos of pilot X" or "all podium shots." The search/browsing happens on external systems (logo/DAM platforms) — RaceTagger's job is to write the right tags into the images so those systems can index them.
+**Key Workflow:** Receive event photos → process for tagging (numbers, visual tagging, keywords) → export tagged images → upload to logo/DAM system where the marketing team searches and selects.
+**Critical Features:**
+- AI tagging (race numbers, scene type, keywords written into IPTC)
+- Visual tagging (sponsor logos, helmet designs, livery details → keywords)
+- Bulk keyword assignment
+- File renaming for organized upload
+**IPTC Importance:** Medium — keywords, tags, and basic captions matter for searchability in downstream systems. Full editorial IPTC compliance (Person Shown, copyright chain) does not.
+
+### Feature Priority Matrix
+
+| Feature | Multi-Client | Editorial | Organizer | Priority |
+|---------|:---:|:---:|:---:|:---:|
+| AI number recognition | ★★★ | ★★★ | ★★★ | P0 — Core |
+| Participant matching (CSV) | ★★★ | ★★★ | ★★ | P0 — Core |
+| Folder organization | ★★★ | ★ | ★ | P1 |
+| File renaming on export | ★★★ | ★★ | ☆ | P1 |
+| IPTC Pro metadata writing | ★ | ★★★ | ★ | P1 |
+| Multi-destination export | ★★★ | ★★★ | ☆ | P2 |
+| XMP sidecar for RAW | ★ | ★★★ | ☆ | P1 |
+| AI keywords | ★ | ★★ | ★★★ | P1 |
+| Web gallery/sharing | ☆ | ☆ | ★★★ | P3 — Future |
+
+### Current Implementation Status
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| AI number recognition | ✅ Live | Edge Function V6, Gemini + RF-DETR |
+| Participant matching | ✅ Live | SmartMatcher with fuzzy matching |
+| IPTC Pro metadata | ✅ Built | Preset IPTC profile → batch write (JPEG + RAW sidecar) |
+| Folder organization | ✅ Live | Admin-only, by number/team |
+| File renaming engine | ✅ Built | `filename-renamer.ts` ready, not wired to results UI |
+| Export Destinations | ⚠️ Partial | Backend + config UI exist, no trigger from results page |
+| Multi-destination export | ⚠️ Partial | Processor ready, needs results page integration |
+| AI keywords | ✅ Live | Via Edge Function analysis |
+| Web gallery | ❌ Not started | Future feature |
+
 ## General Instructions
 
 - **Do what has been asked; nothing more, nothing less**

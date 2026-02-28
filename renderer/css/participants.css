@@ -3420,3 +3420,377 @@
     animation: none;
   }
 }
+
+/* ============================================================
+   IPTC METADATA SECTION — Preset Editor
+   ============================================================ */
+
+.iptc-metadata-section {
+  margin-bottom: 1.5rem;
+  border: 2px solid var(--border-color);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--surface-color-light);
+  transition: border-color 0.2s ease;
+}
+
+.iptc-metadata-section:hover {
+  border-color: rgba(168, 85, 247, 0.3);
+}
+
+/* Toggle Header */
+.iptc-section-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.875rem 1.25rem;
+  cursor: pointer;
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.08) 0%, rgba(168, 85, 247, 0.02) 100%);
+  border-bottom: 1px solid transparent;
+  transition: background 0.2s ease;
+  user-select: none;
+}
+
+.iptc-section-toggle:hover {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.14) 0%, rgba(168, 85, 247, 0.05) 100%);
+}
+
+.iptc-toggle-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.iptc-toggle-icon {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  transition: transform 0.2s ease;
+  width: 1rem;
+  text-align: center;
+}
+
+.iptc-toggle-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.625rem;
+  border-radius: 16px;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: rgba(168, 85, 247, 0.2);
+  color: #a855f7;
+  border: 1px solid rgba(168, 85, 247, 0.4);
+}
+
+.iptc-toggle-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.iptc-toggle-status {
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 0.125rem 0.5rem;
+  border-radius: 10px;
+}
+
+.iptc-status-inactive {
+  color: var(--text-secondary);
+  background: rgba(148, 163, 184, 0.15);
+}
+
+.iptc-status-active {
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.15);
+}
+
+.iptc-toggle-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.iptc-import-btn {
+  font-size: 0.8125rem !important;
+}
+
+/* Body */
+.iptc-section-body {
+  padding: 1.25rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.iptc-info-banner {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: rgba(168, 85, 247, 0.08);
+  border: 1px solid rgba(168, 85, 247, 0.2);
+  border-radius: 8px;
+  margin-bottom: 1.25rem;
+  font-size: 0.8125rem;
+  color: #cbd5e1;
+  line-height: 1.5;
+}
+
+.iptc-info-banner code {
+  background: rgba(168, 85, 247, 0.15);
+  padding: 0.125rem 0.375rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+  color: #a855f7;
+}
+
+/* Grid Layout */
+.iptc-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.iptc-editor-grid-bottom {
+  grid-template-columns: 2fr 1fr 1fr;
+}
+
+.iptc-editor-column {
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.iptc-column-wide {
+  /* Already handled by grid-template-columns 2fr */
+}
+
+/* Column Header */
+.iptc-column-header {
+  padding: 0.75rem 1rem;
+  background: rgba(168, 85, 247, 0.06);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.iptc-column-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.iptc-column-checkbox input[type="checkbox"] {
+  accent-color: #a855f7;
+  width: 1rem;
+  height: 1rem;
+}
+
+/* Column Body */
+.iptc-column-body {
+  padding: 0.875rem 1rem;
+}
+
+.iptc-column-body .form-group {
+  margin-bottom: 0.75rem;
+}
+
+.iptc-column-body .form-group:last-child {
+  margin-bottom: 0;
+}
+
+.iptc-column-body .form-group label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.25rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+}
+
+/* IPTC inputs */
+.form-input-iptc {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1.5px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 0.8125rem;
+  background: var(--surface-color);
+  color: var(--text-primary);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.form-input-iptc:focus {
+  border-color: #a855f7;
+  box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.15);
+  outline: none;
+}
+
+.form-input-iptc::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.6;
+}
+
+.iptc-textarea {
+  resize: vertical;
+  min-height: 60px;
+  font-family: inherit;
+}
+
+/* Inline form groups */
+.form-group-inline {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.form-group-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.form-group-half {
+  flex: 1;
+  margin-bottom: 0 !important;
+}
+
+.form-group-third {
+  flex: 1;
+  margin-bottom: 0 !important;
+}
+
+.checkbox-label,
+.radio-label {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.checkbox-label input,
+.radio-label input {
+  accent-color: #a855f7;
+}
+
+/* Caption preview */
+.iptc-caption-preview,
+.iptc-person-preview {
+  display: none;
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  color: #a855f7;
+  font-style: italic;
+}
+
+/* Tag input for keywords */
+.iptc-tags-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  padding: 0.5rem;
+  border: 1.5px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--surface-color);
+  min-height: 2.5rem;
+  cursor: text;
+  transition: border-color 0.2s ease;
+}
+
+.iptc-tags-container:focus-within {
+  border-color: #a855f7;
+  box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.15);
+}
+
+.iptc-tags-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.iptc-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.125rem 0.5rem;
+  background: rgba(168, 85, 247, 0.15);
+  color: #a855f7;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.iptc-tag-remove {
+  background: none;
+  border: none;
+  color: #a855f7;
+  cursor: pointer;
+  font-size: 0.875rem;
+  padding: 0;
+  line-height: 1;
+  opacity: 0.7;
+}
+
+.iptc-tag-remove:hover {
+  opacity: 1;
+}
+
+.iptc-tag-input {
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+  flex: 1;
+  min-width: 120px;
+  padding: 0.125rem 0.25rem;
+}
+
+.iptc-tag-input::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.5;
+}
+
+/* Field destination labels in IPTC — reuse existing but purple theme */
+.iptc-column-body .field-destination {
+  font-size: 0.625rem;
+  font-weight: 500;
+  color: #a855f7;
+  background: rgba(168, 85, 247, 0.1);
+  padding: 0.0625rem 0.375rem;
+  border-radius: 8px;
+  font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+}
+
+/* Responsive */
+@media (max-width: 1400px) {
+  .iptc-editor-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .iptc-editor-grid-bottom {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .iptc-editor-grid,
+  .iptc-editor-grid-bottom {
+    grid-template-columns: 1fr;
+  }
+  .iptc-section-toggle {
+    flex-direction: column;
+    gap: 0.5rem;
+    align-items: flex-start;
+  }
+  .iptc-toggle-right {
+    align-self: flex-end;
+  }
+}

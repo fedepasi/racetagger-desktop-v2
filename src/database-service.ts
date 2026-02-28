@@ -59,6 +59,7 @@ export interface PresetParticipantDriver {
   participant_id?: string;
   driver_name: string;
   driver_metatag?: string | null;
+  driver_nationality?: string | null;
   driver_order: number;
   created_at?: string;
 }
@@ -70,6 +71,7 @@ export interface PresetParticipant {
   preset_participant_drivers?: PresetParticipantDriver[];
   nome?: string; // Legacy CSV fallback (single name from CSV import)
   squadra?: string;
+  car_model?: string;        // Vehicle model (RB20, Ferrari 296 GT3, etc.) — {car_model} in IPTC templates
   sponsors?: string[]; // Array di sponsor
   metatag?: string;
   categoria?: string;        // Category (GT3, F1, MotoGP, etc.)
@@ -934,6 +936,8 @@ export interface ParticipantPresetSupabase {
   usage_count?: number;
   participants?: PresetParticipantSupabase[];
   sport_categories?: SportCategory;
+  is_official?: boolean;
+  iptc_metadata?: any;  // PresetIptcMetadata stored as JSONB
 }
 
 export interface PresetParticipantSupabase {
@@ -1279,6 +1283,7 @@ export async function getUserParticipantPresetsSupabase(includeAllForAdmin: bool
             id,
             driver_name,
             driver_metatag,
+            driver_nationality,
             driver_order,
             created_at
           )
@@ -1391,6 +1396,7 @@ export async function getParticipantPresetByIdSupabase(presetId: string): Promis
             id,
             driver_name,
             driver_metatag,
+            driver_nationality,
             driver_order,
             created_at
           )
@@ -1641,7 +1647,7 @@ export async function updatePresetLastUsedSupabase(presetId: string): Promise<vo
 /**
  * Update participant preset details in Supabase
  */
-export async function updateParticipantPresetSupabase(presetId: string, updateData: Partial<Pick<ParticipantPresetSupabase, 'name' | 'description' | 'category_id' | 'custom_folders'>>): Promise<void> {
+export async function updateParticipantPresetSupabase(presetId: string, updateData: Partial<Pick<ParticipantPresetSupabase, 'name' | 'description' | 'category_id' | 'custom_folders' | 'iptc_metadata'>>): Promise<void> {
   const userId = getCurrentUserId();
   if (!userId) throw new Error('User not authenticated');
 
@@ -1696,6 +1702,73 @@ export async function deleteParticipantPresetSupabase(presetId: string): Promise
     console.error('[DB] Error deleting participant preset from Supabase:', error);
     throw error;
   }
+}
+
+// ============================================================================
+// IPTC METADATA PROFILE MANAGEMENT
+// ============================================================================
+
+/**
+ * Get the IPTC metadata profile for a preset
+ */
+export async function getPresetIptcMetadata(presetId: string): Promise<any | null> {
+  try {
+    const userId = getCurrentUserId();
+    if (!userId) throw new Error('User not authenticated');
+
+    const authenticatedClient = authService.getSupabaseClient();
+
+    const { data, error } = await authenticatedClient
+      .from('participant_presets')
+      .select('iptc_metadata')
+      .eq('id', presetId)
+      .or(`user_id.eq.${userId},is_public.eq.true,is_official.eq.true`)
+      .single();
+
+    if (error) {
+      console.error('[DB] Error getting IPTC metadata:', error);
+      return null;
+    }
+
+    return data?.iptc_metadata || null;
+  } catch (error) {
+    console.error('[DB] Error getting IPTC metadata:', error);
+    throw error;
+  }
+}
+
+/**
+ * Save/update the IPTC metadata profile for a preset
+ */
+export async function savePresetIptcMetadata(presetId: string, iptcMetadata: any): Promise<void> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+
+  await withRetry(async () => {
+    const { error } = await supabase
+      .from('participant_presets')
+      .update({
+        iptc_metadata: iptcMetadata,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', presetId)
+      .eq('user_id', userId);
+
+    if (error) {
+      console.error('[DB] Error saving IPTC metadata:', error);
+      throw error;
+    }
+
+    // Update cache if available
+    const cacheIndex = presetsCache.findIndex(p => p.id === presetId);
+    if (cacheIndex !== -1) {
+      presetsCache[cacheIndex] = {
+        ...presetsCache[cacheIndex],
+        iptc_metadata: iptcMetadata,
+        updated_at: new Date().toISOString()
+      };
+    }
+  }, 'savePresetIptcMetadata', 3, 1000);
 }
 
 /**
@@ -1808,6 +1881,7 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
       sponsor: row.sponsor || row.Sponsors || '',
       metatag: row.metatag || row.Metatag || '',
       plate_number: row.plate_number || row.Plate_Number || '',
+      car_model: row.car_model || row.Car_Model || '',
       folder_1: row.folder_1 || row.Folder_1 || '',
       folder_2: row.folder_2 || row.Folder_2 || '',
       folder_3: row.folder_3 || row.Folder_3 || '',
@@ -1818,7 +1892,7 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
       custom_fields: {
         // Store any additional CSV fields
         ...Object.keys(row).reduce((acc, key) => {
-          const knownFields = ['numero', 'Number', 'nome', 'Driver', 'categoria', 'Category', 'squadra', 'team', 'Team', 'sponsor', 'Sponsors', 'metatag', 'Metatag', 'plate_number', 'Plate_Number', 'folder_1', 'Folder_1', 'folder_2', 'Folder_2', 'folder_3', 'Folder_3', 'folder_1_path', 'Folder_1_Path', 'folder_2_path', 'Folder_2_Path', 'folder_3_path', 'Folder_3_Path', '_Driver_IDs', '_driver_ids', '_Driver_Metatags', '_driver_metatags'];
+          const knownFields = ['numero', 'Number', 'nome', 'Driver', 'categoria', 'Category', 'squadra', 'team', 'Team', 'sponsor', 'Sponsors', 'metatag', 'Metatag', 'plate_number', 'Plate_Number', 'folder_1', 'Folder_1', 'folder_2', 'Folder_2', 'folder_3', 'Folder_3', 'folder_1_path', 'Folder_1_Path', 'folder_2_path', 'Folder_2_Path', 'folder_3_path', 'Folder_3_Path', '_Driver_IDs', '_driver_ids', '_Driver_Metatags', '_driver_metatags', '_Driver_Nationalities', '_driver_nationalities', 'car_model', 'Car_Model'];
           if (!knownFields.includes(key)) {
             acc[key] = row[key];
           }
@@ -1840,6 +1914,7 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
     // Check for driver ID preservation columns (case-insensitive)
     const driverIdsRaw = row._Driver_IDs || row._driver_ids || '';
     const driverMetatagsRaw = row._Driver_Metatags || row._driver_metatags || '';
+    const driverNationalitiesRaw = row._Driver_Nationalities || row._driver_nationalities || '';
     const driverNamesRaw = row.nome || row.Driver || '';
 
     // Parse driver names (comma-separated)
@@ -1849,12 +1924,14 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
       // PRESERVE MODE: CSV has driver IDs - reuse them
       const ids = driverIdsRaw.split('|').map((s: string) => s.trim()).filter(Boolean);
       const metatags = driverMetatagsRaw ? driverMetatagsRaw.split('|').map((s: string) => s.trim()) : [];
+      const nationalities = driverNationalitiesRaw ? driverNationalitiesRaw.split('|').map((s: string) => s.trim()) : [];
 
       const driversToCreate = driverNames.map((name: string, idx: number) => ({
         id: ids[idx] || crypto.randomUUID(), // Reuse ID or generate new
         participant_id: savedParticipant.id,
         driver_name: name,
         driver_metatag: metatags[idx] || null,
+        driver_nationality: nationalities[idx] || null,
         driver_order: idx,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
@@ -2683,6 +2760,7 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
           id,
           driver_name,
           driver_metatag,
+          driver_nationality,
           participant_id
         `)
         .in('participant_id', participantIds);

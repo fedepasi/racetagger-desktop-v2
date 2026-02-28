@@ -40,7 +40,7 @@
       <div class="info-box mb-md">
         <span class="info-icon">ℹ️</span>
         <div class="info-text">
-          <strong>What are Participant Presets?</strong> Presets help improve AI recognition accuracy by providing expected race numbers, driver names, and sponsor information.
+          <strong>What are Participant Presets?</strong> Presets help improve AI recognition accuracy by providing expected race numbers, people names, and sponsor information.
           <a href="https://www.racetagger.cloud/blog/3-CSV-Starting-Lists-for-Race-Photography" target="_blank" style="color: var(--primary-color); text-decoration: underline;">Learn more →</a>
         </div>
       </div>
@@ -122,6 +122,306 @@
           </div>
         </div>
 
+        <!-- IPTC Metadata Section (collapsible) -->
+        <div class="iptc-metadata-section" id="iptc-metadata-section">
+          <div class="iptc-section-toggle" id="iptc-section-toggle" onclick="toggleIptcSection()">
+            <div class="iptc-toggle-left">
+              <span class="iptc-toggle-icon" id="iptc-toggle-icon">▶</span>
+              <div class="iptc-toggle-badge">
+                <span class="badge-icon">📋</span>
+                <span class="badge-text">IPTC PRO</span>
+              </div>
+              <span class="iptc-toggle-title">Professional IPTC Metadata</span>
+              <span class="iptc-toggle-status" id="iptc-toggle-status">Not configured</span>
+            </div>
+            <div class="iptc-toggle-right">
+              <button class="btn btn-secondary btn-sm iptc-import-btn" id="iptc-import-xmp-btn" onclick="event.stopPropagation(); importIptcFromXmp()">
+                <span class="btn-icon">📥</span>
+                Import .XMP
+              </button>
+            </div>
+          </div>
+
+          <div class="iptc-section-body" id="iptc-section-body" style="display: none;">
+            <div class="iptc-info-banner">
+              <span class="info-icon">💡</span>
+              <div class="info-text">
+                Configure professional IPTC/XMP metadata that will be written to all photos during finalization. Use <code>{name}</code>, <code>{number}</code>, <code>{team}</code> as placeholders in templates.
+              </div>
+            </div>
+
+            <!-- IPTC 4-column grid layout -->
+            <div class="iptc-editor-grid">
+              <!-- Column 1: Credits & Copyright -->
+              <div class="iptc-editor-column">
+                <div class="iptc-column-header">
+                  <label class="iptc-column-checkbox">
+                    <input type="checkbox" id="iptc-section-credits" checked>
+                    <span>Credits & Copyright</span>
+                  </label>
+                </div>
+                <div class="iptc-column-body">
+                  <div class="form-group">
+                    <label>Credit <span class="field-destination">→ IPTC:Credit</span></label>
+                    <input type="text" id="iptc-credit" class="form-input form-input-iptc" placeholder="Photographer or agency name">
+                  </div>
+                  <div class="form-group">
+                    <label>Source <span class="field-destination">→ IPTC:Source</span></label>
+                    <input type="text" id="iptc-source" class="form-input form-input-iptc" placeholder="Agency or source">
+                  </div>
+                  <div class="form-group">
+                    <label>Copyright <span class="field-destination">→ IPTC:Copyright</span></label>
+                    <input type="text" id="iptc-copyright" class="form-input form-input-iptc" placeholder="© 2025 Your Name">
+                  </div>
+                  <div class="form-group">
+                    <label>Copyright Owner <span class="field-destination">→ XMP-plus</span></label>
+                    <input type="text" id="iptc-copyright-owner" class="form-input form-input-iptc" placeholder="Copyright owner name">
+                  </div>
+                  <div class="form-group form-group-inline">
+                    <label class="checkbox-label">
+                      <input type="checkbox" id="iptc-copyright-marked">
+                      <span>Copyright Marked</span>
+                    </label>
+                  </div>
+                  <div class="form-group">
+                    <label>Copyright URL <span class="field-destination">→ xmpRights</span></label>
+                    <input type="text" id="iptc-copyright-url" class="form-input form-input-iptc" placeholder="https://...">
+                  </div>
+                </div>
+              </div>
+
+              <!-- Column 2: Creator & Contact -->
+              <div class="iptc-editor-column">
+                <div class="iptc-column-header">
+                  <label class="iptc-column-checkbox">
+                    <input type="checkbox" id="iptc-section-creator" checked>
+                    <span>Creator & Contact</span>
+                  </label>
+                </div>
+                <div class="iptc-column-body">
+                  <div class="form-group">
+                    <label>Creator <span class="field-destination">→ IPTC:By-line</span></label>
+                    <input type="text" id="iptc-creator" class="form-input form-input-iptc" placeholder="Photographer name">
+                  </div>
+                  <div class="form-group">
+                    <label>Position <span class="field-destination">→ By-lineTitle</span></label>
+                    <input type="text" id="iptc-authors-position" class="form-input form-input-iptc" placeholder="Photographer">
+                  </div>
+                  <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" id="iptc-contact-email" class="form-input form-input-iptc" placeholder="email@example.com">
+                  </div>
+                  <div class="form-group">
+                    <label>Phone</label>
+                    <input type="tel" id="iptc-contact-phone" class="form-input form-input-iptc" placeholder="+39 ...">
+                  </div>
+                  <div class="form-group">
+                    <label>Website</label>
+                    <input type="url" id="iptc-contact-website" class="form-input form-input-iptc" placeholder="https://...">
+                  </div>
+                  <div class="form-group">
+                    <label>Address</label>
+                    <input type="text" id="iptc-contact-address" class="form-input form-input-iptc" placeholder="Street address">
+                  </div>
+                  <div class="form-group form-group-row">
+                    <div class="form-group form-group-half">
+                      <label>City</label>
+                      <input type="text" id="iptc-contact-city" class="form-input form-input-iptc" placeholder="City">
+                    </div>
+                    <div class="form-group form-group-half">
+                      <label>Postal Code</label>
+                      <input type="text" id="iptc-contact-postal-code" class="form-input form-input-iptc" placeholder="ZIP">
+                    </div>
+                  </div>
+                  <div class="form-group form-group-row">
+                    <div class="form-group form-group-half">
+                      <label>Region</label>
+                      <input type="text" id="iptc-contact-region" class="form-input form-input-iptc" placeholder="State/Region">
+                    </div>
+                    <div class="form-group form-group-half">
+                      <label>Country</label>
+                      <input type="text" id="iptc-contact-country" class="form-input form-input-iptc" placeholder="Country">
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Column 3: Event & Caption -->
+              <div class="iptc-editor-column">
+                <div class="iptc-column-header">
+                  <label class="iptc-column-checkbox">
+                    <input type="checkbox" id="iptc-section-event" checked>
+                    <span>Event & Caption</span>
+                  </label>
+                </div>
+                <div class="iptc-column-body">
+                  <div class="form-group">
+                    <label>Headline <span class="field-destination">→ IPTC:Headline</span></label>
+                    <input type="text" id="iptc-headline" class="form-input form-input-iptc" placeholder="F1 GP Sao Paulo 2025">
+                  </div>
+                  <div class="form-group">
+                    <label>Caption Template <span class="field-destination">→ IPTC:Caption</span></label>
+                    <textarea id="iptc-description" class="form-input form-input-iptc iptc-textarea" rows="3" placeholder="{name} during the Formula 1 Grande Premio..."></textarea>
+                    <small class="form-hint iptc-caption-preview" id="iptc-caption-preview"></small>
+                  </div>
+                  <div class="form-group">
+                    <label>Event <span class="field-destination">→ XMP-iptcExt:Event</span></label>
+                    <input type="text" id="iptc-event" class="form-input form-input-iptc" placeholder="F1 GP Brasil 2025">
+                  </div>
+                  <div class="form-group">
+                    <label>Caption Writer <span class="field-destination">→ Writer-Editor</span></label>
+                    <input type="text" id="iptc-caption-writer" class="form-input form-input-iptc" placeholder="Caption writer name">
+                  </div>
+                  <div class="form-group form-group-row">
+                    <div class="form-group form-group-third">
+                      <label>Category</label>
+                      <input type="text" id="iptc-category" class="form-input form-input-iptc" placeholder="SPO">
+                    </div>
+                    <div class="form-group form-group-third">
+                      <label>Urgency</label>
+                      <select id="iptc-urgency" class="form-input form-input-iptc">
+                        <option value="">-</option>
+                        <option value="1">1 (Highest)</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                        <option value="4">4</option>
+                        <option value="5">5 (Normal)</option>
+                        <option value="6">6</option>
+                        <option value="7">7</option>
+                        <option value="8">8 (Lowest)</option>
+                      </select>
+                    </div>
+                    <div class="form-group form-group-third">
+                      <label>Genre</label>
+                      <input type="text" id="iptc-genre" class="form-input form-input-iptc" placeholder="SPO">
+                    </div>
+                  </div>
+                  <div class="form-group">
+                    <label>Date Created</label>
+                    <input type="date" id="iptc-date-created" class="form-input form-input-iptc">
+                  </div>
+                </div>
+              </div>
+
+              <!-- Column 4: Location -->
+              <div class="iptc-editor-column">
+                <div class="iptc-column-header">
+                  <label class="iptc-column-checkbox">
+                    <input type="checkbox" id="iptc-section-location" checked>
+                    <span>Location</span>
+                  </label>
+                </div>
+                <div class="iptc-column-body">
+                  <div class="form-group">
+                    <label>City <span class="field-destination">→ IPTC:City</span></label>
+                    <input type="text" id="iptc-city" class="form-input form-input-iptc" placeholder="Sao Paulo">
+                  </div>
+                  <div class="form-group">
+                    <label>Country <span class="field-destination">→ IPTC:Country</span></label>
+                    <input type="text" id="iptc-country" class="form-input form-input-iptc" placeholder="Brasil">
+                  </div>
+                  <div class="form-group">
+                    <label>Country Code <span class="field-destination">→ CountryCode</span></label>
+                    <input type="text" id="iptc-country-code" class="form-input form-input-iptc" placeholder="BRA" maxlength="3">
+                  </div>
+                  <div class="form-group">
+                    <label>Sub-location <span class="field-destination">→ Sub-location</span></label>
+                    <input type="text" id="iptc-location" class="form-input form-input-iptc" placeholder="Autodromo Jose Carlos Pace">
+                  </div>
+                  <div class="form-group">
+                    <label>State/Province</label>
+                    <input type="text" id="iptc-province-state" class="form-input form-input-iptc" placeholder="Sao Paulo">
+                  </div>
+                  <div class="form-group">
+                    <label>World Region</label>
+                    <input type="text" id="iptc-world-region" class="form-input form-input-iptc" placeholder="America">
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Second row: Keywords, Person Shown, Rights -->
+            <div class="iptc-editor-grid iptc-editor-grid-bottom">
+              <!-- Keywords -->
+              <div class="iptc-editor-column iptc-column-wide">
+                <div class="iptc-column-header">
+                  <label class="iptc-column-checkbox">
+                    <input type="checkbox" id="iptc-section-keywords" checked>
+                    <span>Base Keywords</span>
+                  </label>
+                </div>
+                <div class="iptc-column-body">
+                  <div class="form-group">
+                    <div class="iptc-tags-container" id="iptc-keywords-container">
+                      <div class="iptc-tags-list" id="iptc-keywords-tags"></div>
+                      <input type="text" id="iptc-keywords-input" class="iptc-tag-input" placeholder="Type keyword and press Enter">
+                    </div>
+                    <small class="form-hint">Press Enter or comma to add. These keywords are added to every photo.</small>
+                  </div>
+                  <div class="form-group form-group-inline">
+                    <label class="radio-label">
+                      <input type="radio" name="iptc-keywords-mode" value="append" checked>
+                      <span>Append to AI keywords</span>
+                    </label>
+                    <label class="radio-label">
+                      <input type="radio" name="iptc-keywords-mode" value="overwrite">
+                      <span>Overwrite AI keywords</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Person Shown -->
+              <div class="iptc-editor-column">
+                <div class="iptc-column-header">
+                  <label class="iptc-column-checkbox">
+                    <input type="checkbox" id="iptc-section-person" checked>
+                    <span>Person Shown</span>
+                  </label>
+                </div>
+                <div class="iptc-column-body">
+                  <div class="form-group">
+                    <label>Template <span class="field-destination">→ PersonInImage</span></label>
+                    <input type="text" id="iptc-person-shown" class="form-input form-input-iptc" placeholder="{name}">
+                    <small class="form-hint iptc-person-preview" id="iptc-person-preview"></small>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Rights & Licensing -->
+              <div class="iptc-editor-column">
+                <div class="iptc-column-header">
+                  <label class="iptc-column-checkbox">
+                    <input type="checkbox" id="iptc-section-rights" checked>
+                    <span>Rights & Licensing</span>
+                  </label>
+                </div>
+                <div class="iptc-column-body">
+                  <div class="form-group">
+                    <label>Digital Source Type</label>
+                    <select id="iptc-digital-source" class="form-input form-input-iptc">
+                      <option value="">-</option>
+                      <option value="digitalCapture">Digital Capture</option>
+                      <option value="negativeFilm">Negative Film</option>
+                      <option value="positiveFilm">Positive Film</option>
+                    </select>
+                  </div>
+                  <div class="form-group">
+                    <label>Model Release</label>
+                    <select id="iptc-model-release" class="form-input form-input-iptc">
+                      <option value="">-</option>
+                      <option value="MR-NON">Not Applicable (MR-NON)</option>
+                      <option value="MR-NAP">Not Available (MR-NAP)</option>
+                      <option value="MR-UPR">Unlimited Property Release</option>
+                      <option value="MR-LPR">Limited Property Release</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Participants Table -->
         <div class="participants-table-section">
           <div class="table-header">
@@ -143,7 +443,7 @@
               <thead>
                 <tr>
                   <th>Num</th>
-                  <th>Driver</th>
+                  <th>Person</th>
                   <th>Category</th>
                   <th>Team</th>
                   <th>Plate</th>
@@ -181,7 +481,7 @@
             <input type="text" id="folder-name-input" class="form-input" placeholder="e.g., Ferrari  or  {number}-{name}" autofocus autocomplete="off">
             <datalist id="keyword-suggestions">
               <option value="{number}">Race number</option>
-              <option value="{name}">Driver name</option>
+              <option value="{name}">Person name</option>
               <option value="{team}">Team name</option>
               <option value="{category}">Category</option>
               <option value="{tag}">Custom tag</option>
@@ -206,7 +506,7 @@
             <strong>Pro Tip: Use Dynamic Keywords!</strong><br>
             Type <strong>{</strong> to see available keywords that will be replaced automatically:<br>
             • <code>{number}</code> = Race number (e.g., "51")<br>
-            • <code>{name}</code> = Driver name<br>
+            • <code>{name}</code> = Person name<br>
             • <code>{team}</code> = Team name<br>
             • <code>{category}</code> = Category<br>
             • <code>{tag}</code> = Custom tag<br>
@@ -256,20 +556,20 @@
                   <span class="field-destination">→ IPTC:Keywords</span>
                 </label>
                 <input type="text" id="edit-numero" class="form-input form-input-metadata" placeholder="51">
-                <small class="form-hint">Optional for Team Principal, VIP, mechanics. Required for drivers.</small>
+                <small class="form-hint">Optional for Team Principal, VIP, mechanics. Required for people.</small>
               </div>
 
-              <!-- Drivers (Tag Input) -->
+              <!-- People (Tag Input) -->
               <div class="form-group">
                 <label>
-                  Drivers *
+                  People *
                   <span class="field-destination">→ IPTC:Keywords</span>
                 </label>
                 <div class="tag-input-container" id="edit-drivers-container">
                   <div class="tag-input-tags" id="edit-drivers-tags"></div>
-                  <input type="text" id="edit-drivers-input" class="tag-input-field" placeholder="Type driver name and press Enter">
+                  <input type="text" id="edit-drivers-input" class="tag-input-field" placeholder="Type person name and press Enter">
                 </div>
-                <small class="form-hint">Press Enter or comma to add each driver. Click × to remove.</small>
+                <small class="form-hint">Add the people linked to this number — drivers, riders, players, or any notable person. Each name is used as <code>{name}</code> in templates and written as IPTC keyword. Press Enter or comma to add, × to remove.</small>
                 <!-- Hidden field to store comma-separated value -->
                 <input type="hidden" id="edit-nome" value="">
               </div>
@@ -290,6 +590,16 @@
                   <span class="field-destination">→ IPTC:Keywords</span>
                 </label>
                 <input type="text" id="edit-squadra" class="form-input form-input-metadata" placeholder="Ferrari">
+              </div>
+
+              <!-- Car Model -->
+              <div class="form-group">
+                <label>
+                  Car / Vehicle Model
+                  <span class="field-destination">→ IPTC:Caption</span>
+                </label>
+                <input type="text" id="edit-car-model" class="form-input form-input-metadata" placeholder="RB20, Ferrari 296 GT3, Ducati V4R...">
+                <small class="form-hint">Used as <code>{car_model}</code> in caption and filename templates</small>
               </div>
 
               <!-- Meta Tag -->
@@ -398,7 +708,7 @@
                 <div class="info-icon">📋</div>
                 <div class="info-content">
                   <strong>Multi-folder Export</strong>
-                  <p>Photos will be <strong>copied to ALL</strong> selected folders during export. Perfect for delivering to multiple clients or organizing by team AND driver.</p>
+                  <p>Photos will be <strong>copied to ALL</strong> selected folders during export. Perfect for delivering to multiple clients or organizing by team AND person.</p>
                 </div>
               </div>
             </div>
@@ -406,66 +716,19 @@
 
         </div>
 
-        <!-- FACE RECOGNITION & DRIVER METADATA SECTION (Coming Soon) -->
-        <div class="form-section driver-face-section driver-face-section--disabled" id="driver-face-section">
+        <!-- PER-PERSON METADATA SECTION -->
+        <div class="form-section driver-face-section" id="driver-face-section">
           <div class="column-header face-column">
             <div class="column-badge badge-face">
               <span class="badge-icon">👤</span>
-              <span class="badge-text">COMING SOON</span>
+              <span class="badge-text">PER-PERSON DATA</span>
             </div>
-            <h3 class="column-title">Face Recognition & Driver Metadata</h3>
-            <p class="column-description">Per-driver face recognition and metadata for multi-driver vehicles</p>
+            <h3 class="column-title">Per-Person Metadata</h3>
+            <p class="column-description">Nationality and custom metadata for each person in this entry (used in IPTC caption, Person Shown, keywords)</p>
           </div>
 
-          <!-- Coming Soon overlay (absolute, blocks all interaction) -->
-          <div class="coming-soon-wrapper">
-            <div class="coming-soon-overlay-abs">
-              <div class="coming-soon-card">
-                <div class="coming-soon-icon-ring">
-                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-                    <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-                  </svg>
-                </div>
-                <h4 class="coming-soon-title">Coming Soon</h4>
-                <p class="coming-soon-text">Per-driver face recognition and metadata will be available in a future update.</p>
-              </div>
-            </div>
-
-            <!-- Blurred preview content underneath -->
-            <div class="coming-soon-preview">
-              <div class="preview-driver-panel">
-                <div class="preview-header">
-                  <span class="preview-badge">D1</span>
-                  <span class="preview-name">Driver Name</span>
-                </div>
-                <div class="preview-photos-grid">
-                  <div class="preview-photo-slot"></div>
-                  <div class="preview-photo-slot"></div>
-                  <div class="preview-photo-slot"></div>
-                  <div class="preview-photo-slot"></div>
-                  <div class="preview-photo-slot"></div>
-                </div>
-              </div>
-              <div class="preview-driver-panel">
-                <div class="preview-header">
-                  <span class="preview-badge">D2</span>
-                  <span class="preview-name">Driver Name</span>
-                </div>
-                <div class="preview-photos-grid">
-                  <div class="preview-photo-slot"></div>
-                  <div class="preview-photo-slot"></div>
-                  <div class="preview-photo-slot"></div>
-                  <div class="preview-photo-slot"></div>
-                  <div class="preview-photo-slot"></div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Hidden: real panels (kept for future re-enable) -->
-          <div class="driver-panels-empty-state" id="driver-panels-empty-state" style="display: none;"></div>
-          <div class="driver-panels-container" id="driver-panels-container" style="display: none;"></div>
+          <div class="driver-panels-empty-state" id="driver-panels-empty-state"></div>
+          <div class="driver-panels-container" id="driver-panels-container"></div>
         </div>
       </div>
 
@@ -742,7 +1005,7 @@
                 <thead>
                   <tr>
                     <th>Num</th>
-                    <th>Driver</th>
+                    <th>Person</th>
                     <th>Team</th>
                     <th>Category</th>
                   </tr>

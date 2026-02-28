@@ -196,8 +196,10 @@ function setupEventListeners() {
  */
 const KEYWORDS = [
   { keyword: '{number}', description: 'Race number' },
-  { keyword: '{name}', description: 'Driver name' },
+  { keyword: '{name}', description: 'Person name' },
   { keyword: '{team}', description: 'Team name' },
+  { keyword: '{car_model}', description: 'Car/vehicle model' },
+  { keyword: '{nationality}', description: 'Nationality' },
   { keyword: '{category}', description: 'Category' },
   { keyword: '{tag}', description: 'Custom tag' }
 ];
@@ -654,6 +656,11 @@ function createNewPreset() {
   clearParticipantsTable();
   addParticipantRow(); // Add one empty row
 
+  // Clear IPTC metadata form (if preset-iptc-editor.js is loaded)
+  if (typeof clearIptcForm === 'function') {
+    clearIptcForm();
+  }
+
   // Show modal
   const modal = document.getElementById('preset-editor-modal');
   modal.classList.add('show');
@@ -897,6 +904,7 @@ async function openParticipantEditModal(rowIndex = -1) {
     document.getElementById('edit-numero').value = participant.numero || '';
     document.getElementById('edit-categoria').value = participant.categoria || '';
     document.getElementById('edit-squadra').value = participant.squadra || '';
+    document.getElementById('edit-car-model').value = participant.car_model || '';
     document.getElementById('edit-plate-number').value = participant.plate_number || '';
     document.getElementById('edit-sponsor').value = participant.sponsor || '';
     document.getElementById('edit-metatag').value = participant.metatag || '';
@@ -955,6 +963,7 @@ async function openParticipantEditModal(rowIndex = -1) {
     document.getElementById('edit-numero').value = '';
     document.getElementById('edit-categoria').value = '';
     document.getElementById('edit-squadra').value = '';
+    document.getElementById('edit-car-model').value = '';
     document.getElementById('edit-plate-number').value = '';
     document.getElementById('edit-sponsor').value = '';
     document.getElementById('edit-metatag').value = '';
@@ -1035,7 +1044,7 @@ async function saveParticipantEdit(closeAfterSave = true) {
   // Validation: at least number OR driver name must be present
   // This allows Team Principal, VIP, mechanics without race numbers
   if (!numero && driversArray.length === 0) {
-    alert('Please enter a race number or at least one driver name.\n\nTeam Principal, VIP and mechanics can be added without a number if a name is provided.');
+    alert('Please enter a race number or at least one person name.\n\nTeam Principal, VIP and mechanics can be added without a number if a name is provided.');
     document.getElementById('edit-numero').focus();
     return;
   }
@@ -1049,6 +1058,7 @@ async function saveParticipantEdit(closeAfterSave = true) {
     drivers: driversArray, // Array of driver names for preset_participant_drivers
     categoria: document.getElementById('edit-categoria').value.trim(),
     squadra: document.getElementById('edit-squadra').value.trim(),
+    car_model: document.getElementById('edit-car-model').value.trim(),
     plate_number: document.getElementById('edit-plate-number').value.trim().toUpperCase(),
     sponsor: document.getElementById('edit-sponsor').value.trim(),
     metatag: document.getElementById('edit-metatag').value.trim(),
@@ -1586,6 +1596,11 @@ async function editPreset(presetId) {
 
     // Load participants into table
     loadParticipantsIntoTable(participantsData);
+
+    // Load IPTC metadata into form (if preset-iptc-editor.js is loaded)
+    if (typeof loadIptcDataIntoForm === 'function') {
+      loadIptcDataIntoForm(currentPreset.iptc_metadata || null);
+    }
 
     // Show modal
     const modal = document.getElementById('preset-editor-modal');
@@ -2182,6 +2197,11 @@ async function savePreset() {
       if (!saveResponse.success) {
         throw new Error(saveResponse.error || 'Failed to save participants');
       }
+    }
+
+    // Save IPTC metadata (if preset-iptc-editor.js is loaded)
+    if (typeof saveIptcMetadata === 'function') {
+      await saveIptcMetadata(presetId);
     }
 
     showNotification(
@@ -2821,7 +2841,7 @@ function parseCSV(csvText) {
   // Field mapping from English to database field names
   const fieldMapping = {
     'Number': 'numero',
-    'Driver': 'nome',
+    'Person': 'nome',
     'Team': 'squadra',
     'Category': 'categoria',
     'Plate_Number': 'plate_number',
@@ -3162,7 +3182,7 @@ const PDF_PROCESSING_MESSAGES = [
   "🔍 Scanning for race numbers...",
   "📊 Analyzing entry list structure...",
   "🏁 Checking starting grid positions...",
-  "👀 Looking for driver names...",
+  "👀 Looking for names...",
   "🏆 Identifying competitors...",
   "📋 Reading team information...",
   "⚡ Processing at full throttle...",

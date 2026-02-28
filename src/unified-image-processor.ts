@@ -9,7 +9,7 @@ import { authService } from './auth-service';
 import { getSharp, createImageProcessor } from './utils/native-modules';
 import { rawPreviewExtractor } from './utils/raw-preview-native';
 import { createXmpSidecar } from './utils/xmp-manager';
-import { writeDescriptionToImage, writeKeywordsToImage, writeSpecialInstructions, writeExtendedDescription, writePersonInImage, buildPersonShownString, buildStructuredData, writeStructuredData } from './utils/metadata-writer';
+import { writeDescriptionToImage, writeKeywordsToImage, writeSpecialInstructions, writeExtendedDescription, writePersonInImage, buildPersonShownString, buildStructuredData, writeStructuredData, writeFullMetadata, ExportDestinationMetadata } from './utils/metadata-writer';
 import { CleanupManager, getCleanupManager } from './utils/cleanup-manager';
 import { SmartMatcher, MatchResult, AnalysisResult as SmartMatcherAnalysisResult, getParticipantDriverNames, getPrimaryDriverName, normalizeRaceNumber } from './matching/smart-matcher';
 import { CacheManager } from './matching/cache-manager';
@@ -228,6 +228,9 @@ export interface UnifiedProcessorConfig {
   usePreAuthSystem?: boolean;
   // PERFORMANCE: Pre-fetched sport categories (batch optimization - avoids repeated Supabase calls)
   sportCategories?: any[];
+  // IPTC Pro: PresetIptcMetadata profile for safe global metadata writing during processing
+  // When present, global fields (credit, copyright, location, etc.) are written as safety net
+  iptcMetadata?: any;
 }
 
 /**
@@ -4609,6 +4612,65 @@ class UnifiedImageWorker extends EventEmitter {
         this.config.presetId ? { id: this.config.presetId } : undefined
       );
       await writeStructuredData(imageFile.originalPath, structuredData);
+    }
+
+    // IPTC Pro Safety Net: write global "safe" metadata fields during processing
+    // These fields don't depend on participant match and are correct regardless
+    // If the system crashes, at least copyright/credit/location are in the file
+    if (this.config.iptcMetadata) {
+      try {
+        const iptc = this.config.iptcMetadata;
+        const safeGlobalMetadata: Partial<ExportDestinationMetadata> = {};
+
+        // Only include fields that DON'T depend on participant match
+        if (iptc.credit) safeGlobalMetadata.credit = iptc.credit;
+        if (iptc.source) safeGlobalMetadata.source = iptc.source;
+        if (iptc.copyright) safeGlobalMetadata.copyright = iptc.copyright;
+        if (iptc.copyrightOwner) safeGlobalMetadata.copyrightOwner = iptc.copyrightOwner;
+        if (iptc.creator) safeGlobalMetadata.creator = iptc.creator;
+        if (iptc.authorsPosition) safeGlobalMetadata.authorsPosition = iptc.authorsPosition;
+        if (iptc.captionWriter) safeGlobalMetadata.captionWriter = iptc.captionWriter;
+        if (iptc.city) safeGlobalMetadata.city = iptc.city;
+        if (iptc.country) safeGlobalMetadata.country = iptc.country;
+        if (iptc.countryCode) safeGlobalMetadata.countryCode = iptc.countryCode;
+        if (iptc.location) safeGlobalMetadata.location = iptc.location;
+        if (iptc.worldRegion) safeGlobalMetadata.worldRegion = iptc.worldRegion;
+        if (iptc.provinceState) safeGlobalMetadata.provinceState = iptc.provinceState;
+        if (iptc.category) safeGlobalMetadata.category = iptc.category;
+        if (iptc.urgency) safeGlobalMetadata.urgency = iptc.urgency;
+        if (iptc.dateCreated) safeGlobalMetadata.dateCreated = iptc.dateCreated;
+        // Headline and event typically don't have {name} placeholders
+        if (iptc.headlineTemplate && !iptc.headlineTemplate.includes('{name}')) {
+          safeGlobalMetadata.headline = iptc.headlineTemplate;
+        }
+        if (iptc.eventTemplate && !iptc.eventTemplate.includes('{name}')) {
+          safeGlobalMetadata.event = iptc.eventTemplate;
+        }
+        // Contact info
+        if (iptc.contactAddress) safeGlobalMetadata.contactAddress = iptc.contactAddress;
+        if (iptc.contactCity) safeGlobalMetadata.contactCity = iptc.contactCity;
+        if (iptc.contactRegion) safeGlobalMetadata.contactRegion = iptc.contactRegion;
+        if (iptc.contactPostalCode) safeGlobalMetadata.contactPostalCode = iptc.contactPostalCode;
+        if (iptc.contactCountry) safeGlobalMetadata.contactCountry = iptc.contactCountry;
+        if (iptc.contactPhone) safeGlobalMetadata.contactPhone = iptc.contactPhone;
+        if (iptc.contactEmail) safeGlobalMetadata.contactEmail = iptc.contactEmail;
+        if (iptc.contactWebsite) safeGlobalMetadata.contactWebsite = iptc.contactWebsite;
+        // Extended fields
+        if (iptc.copyrightMarked !== undefined) safeGlobalMetadata.copyrightMarked = iptc.copyrightMarked;
+        if (iptc.copyrightUrl) safeGlobalMetadata.copyrightUrl = iptc.copyrightUrl;
+        if (iptc.intellectualGenre) safeGlobalMetadata.intellectualGenre = iptc.intellectualGenre;
+        if (iptc.digitalSourceType) safeGlobalMetadata.digitalSourceType = iptc.digitalSourceType;
+        if (iptc.modelReleaseStatus) safeGlobalMetadata.modelReleaseStatus = iptc.modelReleaseStatus;
+        if (iptc.scene) safeGlobalMetadata.scene = iptc.scene;
+
+        // Only write if we have something
+        if (Object.keys(safeGlobalMetadata).length > 0) {
+          await writeFullMetadata(imageFile.originalPath, safeGlobalMetadata as ExportDestinationMetadata);
+        }
+      } catch (iptcError) {
+        // Non-fatal: safety net write failure shouldn't block processing
+        console.warn(`[IPTC Safety] Failed to write global IPTC for ${imageFile.fileName}:`, iptcError);
+      }
     }
   }
 

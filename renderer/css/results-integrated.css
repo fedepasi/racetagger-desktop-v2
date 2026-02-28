@@ -1184,3 +1184,406 @@
     padding: 3px 8px;
   }
 }
+
+/* ============================================================
+   IPTC PRO BUTTON & MODAL
+   ============================================================ */
+
+/* Button in results header */
+.btn-iptc-pro {
+  padding: var(--spacing-md) var(--spacing-xl);
+  border: none;
+  border-radius: var(--radius-md);
+  font-weight: 600;
+  font-size: 0.9375rem;
+  cursor: pointer;
+  background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+  color: white;
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.btn-iptc-pro:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(139, 92, 246, 0.4);
+}
+
+/* Modal overlay */
+.iptc-pro-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  padding: 1rem;
+}
+
+.iptc-pro-modal {
+  background: var(--bg-primary, #1e1e2e);
+  border: 1px solid var(--border-color, #333);
+  border-radius: var(--radius-lg, 12px);
+  width: 100%;
+  max-width: 1200px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  position: relative;
+}
+
+/* Header */
+.iptc-pro-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 1rem 1.5rem;
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.12) 0%, rgba(139, 92, 246, 0.04) 100%);
+  border-bottom: 1px solid var(--border-color, #333);
+}
+
+.iptc-pro-header-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.iptc-pro-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.625rem;
+  border-radius: 16px;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: rgba(139, 92, 246, 0.2);
+  color: #a78bfa;
+  border: 1px solid rgba(139, 92, 246, 0.4);
+}
+
+.iptc-pro-header h2 {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--text-primary, #fff);
+  margin: 0;
+}
+
+.iptc-pro-preset-name,
+.iptc-pro-stats {
+  font-size: 0.75rem;
+  color: var(--text-secondary, #999);
+}
+
+.iptc-pro-close {
+  background: none;
+  border: none;
+  color: var(--text-secondary, #999);
+  font-size: 1.5rem;
+  cursor: pointer;
+  padding: 0.25rem;
+  line-height: 1;
+}
+
+.iptc-pro-close:hover {
+  color: var(--text-primary, #fff);
+}
+
+/* Body */
+.iptc-pro-body {
+  padding: 1rem 1.5rem;
+  overflow-y: auto;
+  flex: 1;
+}
+
+/* Grid */
+.iptc-pro-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.iptc-pro-grid-bottom {
+  grid-template-columns: 2fr 1fr 1fr;
+}
+
+.iptc-pro-col {
+  background: var(--bg-card, #252535);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.iptc-pro-col-wide {
+  /* handled by grid 2fr */
+}
+
+.iptc-pro-col-head {
+  padding: 0.5rem 0.75rem;
+  background: rgba(139, 92, 246, 0.06);
+  border-bottom: 1px solid var(--border-color, #333);
+}
+
+.iptc-pro-col-head label {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-primary, #fff);
+  cursor: pointer;
+}
+
+.iptc-pro-col-head input[type="checkbox"] {
+  accent-color: #8b5cf6;
+}
+
+.iptc-pro-col-body {
+  padding: 0.625rem 0.75rem;
+}
+
+/* Form fields */
+.ipf {
+  margin-bottom: 0.5rem;
+}
+
+.ipf:last-child {
+  margin-bottom: 0;
+}
+
+.ipf label {
+  display: block;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--text-secondary, #999);
+  margin-bottom: 0.125rem;
+}
+
+.ipf input,
+.ipf textarea,
+.ipf select {
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--border-color, #444);
+  border-radius: 4px;
+  font-size: 0.8125rem;
+  background: var(--bg-primary, #1e1e2e);
+  color: var(--text-primary, #fff);
+}
+
+.ipf input:focus,
+.ipf textarea:focus,
+.ipf select:focus {
+  border-color: #8b5cf6;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.2);
+}
+
+.ipf textarea {
+  resize: vertical;
+  min-height: 40px;
+  font-family: inherit;
+}
+
+.ipf-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.ipf-row .ipf {
+  flex: 1;
+}
+
+.ipf-radio-row {
+  display: flex;
+  gap: 1rem;
+  margin-top: 0.375rem;
+}
+
+.ipf-radio-row label {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--text-primary, #fff);
+  cursor: pointer;
+}
+
+.ipf-radio-row input[type="radio"] {
+  accent-color: #8b5cf6;
+  width: auto;
+}
+
+/* Keywords tags */
+.iptc-pro-tags-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding: 0.375rem;
+  border: 1px solid var(--border-color, #444);
+  border-radius: 4px;
+  background: var(--bg-primary, #1e1e2e);
+  min-height: 2rem;
+}
+
+.iptc-pro-tags-wrap:focus-within {
+  border-color: #8b5cf6;
+  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.2);
+}
+
+.iptc-pro-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+  padding: 0.0625rem 0.375rem;
+  background: rgba(139, 92, 246, 0.15);
+  color: #a78bfa;
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  border-radius: 10px;
+  font-size: 0.6875rem;
+}
+
+.iptc-pro-tag button {
+  background: none;
+  border: none;
+  color: #a78bfa;
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 0;
+  line-height: 1;
+}
+
+#iptc-pro-keywords-input {
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 0.75rem;
+  color: var(--text-primary, #fff);
+  flex: 1;
+  min-width: 80px;
+  padding: 0.125rem;
+}
+
+/* Footer */
+.iptc-pro-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1.5rem;
+  background: var(--bg-card, #252535);
+  border-top: 1px solid var(--border-color, #333);
+}
+
+.iptc-pro-footer-left {
+  display: flex;
+  gap: 1rem;
+}
+
+.iptc-pro-footer-right {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.btn-iptc-cancel {
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--border-color, #444);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary, #999);
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.btn-iptc-cancel:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.btn-iptc-write {
+  padding: 0.5rem 1.5rem;
+  border: none;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+  color: white;
+  font-weight: 600;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-iptc-write:hover {
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+}
+
+.btn-iptc-write:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Progress */
+.iptc-pro-progress {
+  position: absolute;
+  inset: 0;
+  background: rgba(30, 30, 46, 0.95);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  z-index: 10;
+}
+
+.iptc-pro-progress h3 {
+  font-size: 1.125rem;
+  color: var(--text-primary, #fff);
+  margin: 0;
+}
+
+.iptc-pro-progress p {
+  font-size: 0.875rem;
+  color: var(--text-secondary, #999);
+  margin: 0;
+}
+
+.iptc-pro-progress-bar {
+  width: 80%;
+  max-width: 400px;
+  height: 8px;
+  background: var(--border-color, #333);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.iptc-pro-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #8b5cf6, #a78bfa);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+/* Responsive */
+@media (max-width: 1024px) {
+  .iptc-pro-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .iptc-pro-grid-bottom {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .iptc-pro-grid,
+  .iptc-pro-grid-bottom {
+    grid-template-columns: 1fr;
+  }
+  .iptc-pro-footer {
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+}

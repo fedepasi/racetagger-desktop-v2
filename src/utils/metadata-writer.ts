@@ -1,6 +1,7 @@
 import * as path from 'path';
 import { nativeToolManager } from './native-tool-manager';
-import { createXmpSidecar } from './xmp-manager';
+import { createXmpSidecar, createFullXmpSidecar } from './xmp-manager';
+import { PresetIptcMetadata } from './iptc-types';
 
 /**
  * Known RAW file extensions. For these formats, metadata must be written
@@ -500,6 +501,17 @@ export interface ExportDestinationMetadata {
 
   // Person Shown
   personShown?: string | string[];  // XMP-iptcExt:PersonInImage
+
+  // === EXTENDED IPTC FIELDS (IPTC Pro) ===
+  copyrightMarked?: boolean;        // XMP-xmpRights:Marked (True/False)
+  copyrightUrl?: string;            // XMP-xmpRights:WebStatement
+  intellectualGenre?: string;       // XMP-iptcCore:IntellectualGenre
+  digitalSourceType?: string;       // XMP-iptcExt:DigitalSourceType (full URI)
+  modelReleaseStatus?: string;      // XMP-plus:ModelReleaseStatus (full URI)
+  scene?: string[];                 // XMP-iptcCore:Scene (e.g. ["SPO"])
+  urgency?: string;                 // IPTC:Urgency + XMP-photoshop:Urgency ("1"-"8")
+  dateCreated?: string;             // IPTC:DateCreated + XMP-photoshop:DateCreated
+  provinceState?: string;           // IPTC:Province-State + XMP-iptcCore:ProvinceState
 }
 
 /**
@@ -517,7 +529,18 @@ export async function writeFullMetadata(
   try {
     // RAW files: write to XMP sidecar instead of directly to the file
     if (isRawFile(imagePath)) {
-      // Collect keywords and description for XMP sidecar
+      // Check if we have full IPTC metadata (IPTC Pro mode) — use createFullXmpSidecar
+      const hasFullMetadata = metadata.credit || metadata.copyright || metadata.creator
+        || metadata.contactEmail || metadata.copyrightMarked !== undefined
+        || metadata.digitalSourceType || metadata.modelReleaseStatus;
+
+      if (hasFullMetadata) {
+        // Full IPTC Pro mode: write all metadata to XMP sidecar
+        await createFullXmpSidecar(imagePath, metadata);
+        return;
+      }
+
+      // Basic mode: collect keywords and description for simple XMP sidecar
       const sidecarKeywords: string[] = [];
       if (metadata.keywords && metadata.keywords.length > 0) {
         sidecarKeywords.push(...metadata.keywords.filter(k => k && k.trim()));
@@ -673,6 +696,42 @@ export async function writeFullMetadata(
       }
     }
 
+    // === EXTENDED IPTC PRO FIELDS ===
+    if (metadata.copyrightMarked !== undefined) {
+      args.push(`-XMP-xmpRights:Marked=${metadata.copyrightMarked ? 'True' : 'False'}`);
+    }
+    if (metadata.copyrightUrl) {
+      args.push(`-XMP-xmpRights:WebStatement=${metadata.copyrightUrl}`);
+    }
+    if (metadata.intellectualGenre) {
+      args.push(`-XMP-iptcCore:IntellectualGenre=${metadata.intellectualGenre}`);
+    }
+    if (metadata.digitalSourceType) {
+      args.push(`-XMP-iptcExt:DigitalSourceType=${metadata.digitalSourceType}`);
+    }
+    if (metadata.modelReleaseStatus) {
+      args.push(`-XMP-plus:ModelReleaseStatus=${metadata.modelReleaseStatus}`);
+    }
+    if (metadata.scene && metadata.scene.length > 0) {
+      for (const sceneCode of metadata.scene) {
+        if (sceneCode && sceneCode.trim()) {
+          args.push(`-XMP-iptcCore:Scene=${sceneCode.trim()}`);
+        }
+      }
+    }
+    if (metadata.urgency) {
+      args.push(`-IPTC:Urgency=${metadata.urgency}`);
+      args.push(`-XMP-photoshop:Urgency=${metadata.urgency}`);
+    }
+    if (metadata.dateCreated) {
+      args.push(`-IPTC:DateCreated=${metadata.dateCreated}`);
+      args.push(`-XMP-photoshop:DateCreated=${metadata.dateCreated}`);
+    }
+    if (metadata.provinceState) {
+      args.push(`-IPTC:Province-State=${metadata.provinceState}`);
+      args.push(`-XMP-iptcCore:ProvinceState=${metadata.provinceState}`);
+    }
+
     // Only proceed if we have metadata to write
     if (args.length <= 3) {
       return;
@@ -824,6 +883,150 @@ export function buildMetadataFromDestination(
 
     // Person Shown
     personShown: personShown
+  };
+}
+
+// ============================================================================
+// IPTC PRO — Build metadata from preset IPTC profile + participant data
+// ============================================================================
+
+/**
+ * Builds ExportDestinationMetadata from a PresetIptcMetadata profile and participant data.
+ * Resolves template placeholders ({name}, {number}, {team}, etc.) in description, headline, etc.
+ * Used by the IPTC finalizer to produce per-image metadata ready for writeFullMetadata().
+ *
+ * @param iptcProfile The IPTC profile from the preset (PresetIptcMetadata)
+ * @param participant Optional matched participant data (corrected by user review)
+ * @param aiKeywords Optional AI-generated keywords from processing phase
+ * @param keywordsMode 'append' to merge AI + base keywords, 'overwrite' for base only
+ */
+export function buildMetadataFromPresetIptc(
+  iptcProfile: PresetIptcMetadata,
+  participant?: {
+    name?: string;
+    surname?: string;
+    number?: string | number;
+    team?: string;
+    car_model?: string;
+    nationality?: string;
+    sponsors?: string[];
+    metatag?: string;
+  },
+  aiKeywords?: string[],
+  keywordsMode: 'append' | 'overwrite' = 'append'
+): ExportDestinationMetadata {
+  // Helper to resolve template placeholders
+  const resolveTemplate = (template?: string): string | undefined => {
+    if (!template) return undefined;
+
+    let result = template;
+
+    if (participant) {
+      const surname = participant.surname ||
+        (participant.name ? participant.name.split(' ').pop() : '');
+
+      result = result
+        .replace(/\{name\}/g, participant.name || '')
+        .replace(/\{surname\}/g, surname || '')
+        .replace(/\{number\}/g, String(participant.number || ''))
+        .replace(/\{team\}/g, participant.team || '')
+        .replace(/\{car_model\}/g, participant.car_model || '')
+        .replace(/\{nationality\}/g, participant.nationality || '');
+    }
+
+    // Clean up empty placeholders, double spaces, empty parens
+    result = result
+      .replace(/\{[^}]+\}/g, '')  // Remove any unresolved placeholders
+      .replace(/\(\s*\)/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    return result || undefined;
+  };
+
+  // Build person shown string
+  let personShown: string | undefined;
+  if (iptcProfile.personShownTemplate && participant?.name) {
+    personShown = buildPersonShownString(iptcProfile.personShownTemplate, participant);
+  }
+
+  // Build keywords: merge base + AI keywords based on mode
+  let keywords: string[] = [];
+  if (iptcProfile.baseKeywords && iptcProfile.baseKeywords.length > 0) {
+    keywords.push(...iptcProfile.baseKeywords);
+  }
+  if (keywordsMode === 'append' && aiKeywords && aiKeywords.length > 0) {
+    // Merge AI keywords, avoiding duplicates (case-insensitive)
+    const existingLower = new Set(keywords.map(k => k.toLowerCase()));
+    for (const kw of aiKeywords) {
+      if (kw && kw.trim() && !existingLower.has(kw.trim().toLowerCase())) {
+        keywords.push(kw.trim());
+        existingLower.add(kw.trim().toLowerCase());
+      }
+    }
+  }
+
+  // Add participant-specific keywords (name, team) if available
+  if (participant?.name && !keywords.some(k => k.toLowerCase() === participant.name!.toLowerCase())) {
+    keywords.push(participant.name);
+  }
+  if (participant?.team && !keywords.some(k => k.toLowerCase() === participant.team!.toLowerCase())) {
+    keywords.push(participant.team);
+  }
+
+  return {
+    // Credits
+    credit: iptcProfile.credit,
+    source: iptcProfile.source,
+    copyright: iptcProfile.copyright,
+    copyrightOwner: iptcProfile.copyrightOwner,
+
+    // Creator
+    creator: iptcProfile.creator,
+    authorsPosition: iptcProfile.authorsPosition,
+    captionWriter: iptcProfile.captionWriter,
+
+    // Event Info (resolved from templates)
+    headline: resolveTemplate(iptcProfile.headlineTemplate),
+    title: resolveTemplate(iptcProfile.titleTemplate),
+    description: resolveTemplate(iptcProfile.descriptionTemplate),
+    event: resolveTemplate(iptcProfile.eventTemplate),
+    category: iptcProfile.category,
+
+    // Location
+    city: iptcProfile.city,
+    country: iptcProfile.country,
+    countryCode: iptcProfile.countryCode,
+    location: iptcProfile.location,
+    worldRegion: iptcProfile.worldRegion,
+    provinceState: iptcProfile.provinceState,
+
+    // Contact
+    contactAddress: iptcProfile.contactAddress,
+    contactCity: iptcProfile.contactCity,
+    contactRegion: iptcProfile.contactRegion,
+    contactPostalCode: iptcProfile.contactPostalCode,
+    contactCountry: iptcProfile.contactCountry,
+    contactPhone: iptcProfile.contactPhone,
+    contactEmail: iptcProfile.contactEmail,
+    contactWebsite: iptcProfile.contactWebsite,
+
+    // Keywords
+    keywords: keywords.length > 0 ? keywords : undefined,
+    appendKeywords: false, // IPTC Pro always does overwrite (clean write of final keywords)
+
+    // Person Shown
+    personShown: personShown,
+
+    // Extended IPTC Pro fields
+    copyrightMarked: iptcProfile.copyrightMarked,
+    copyrightUrl: iptcProfile.copyrightUrl,
+    intellectualGenre: iptcProfile.intellectualGenre,
+    digitalSourceType: iptcProfile.digitalSourceType,
+    modelReleaseStatus: iptcProfile.modelReleaseStatus,
+    scene: iptcProfile.scene,
+    urgency: iptcProfile.urgency,
+    dateCreated: iptcProfile.dateCreated,
   };
 }
 

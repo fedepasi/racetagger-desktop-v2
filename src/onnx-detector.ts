@@ -59,6 +59,7 @@ interface ModelConfig {
   iouThreshold: number;
   classes: string[];
   preprocessingMethod: 'stretch' | 'letterbox';
+  outputFormat: 'yolo-nms' | 'yolo-end2end' | 'rf-detr';
 }
 
 /**
@@ -198,8 +199,9 @@ export class OnnxDetector {
         iouThreshold: config.iouThreshold,
         classes: config.classes,
         preprocessingMethod: config.preprocessingMethod || 'stretch',
+        outputFormat: config.outputFormat || 'yolo-nms',
       };
-      console.log(`[OnnxDetector] Preprocessing method: ${this.modelConfig.preprocessingMethod}`);
+      console.log(`[OnnxDetector] Preprocessing method: ${this.modelConfig.preprocessingMethod}, Output format: ${this.modelConfig.outputFormat}`);
 
       // Skip ONNX session creation if same model file already loaded
       if (this.session && this.currentModelPath === modelPath) {
@@ -397,8 +399,10 @@ export class OnnxDetector {
       // Parse detections based on output format
       const detections = this.parseDetections(results);
 
-      // Apply NMS
-      const filteredDetections = this.applyNMS(detections, this.modelConfig.iouThreshold);
+      // Apply NMS (skip for end2end and rf-detr models that handle suppression internally)
+      const filteredDetections = this.modelConfig.outputFormat === 'yolo-end2end' || this.modelConfig.outputFormat === 'rf-detr'
+        ? detections
+        : this.applyNMS(detections, this.modelConfig.iouThreshold);
 
       // Convert to analysis results, applying letterbox compensation if needed
       const analysisResults = filteredDetections
@@ -611,7 +615,7 @@ export class OnnxDetector {
       }
     }
 
-    // Format 2: Combined output tensor (YOLOv11/YOLOv8 format)
+    // Format 2: Combined output tensor (YOLOv11/YOLOv8/YOLO26 format)
     else if (results['output'] || results['detections'] || results['output0']) {
       console.log('[ONNX-Parse] Using YOLO combined format');
       const outputTensor = results['output'] || results['detections'] || results['output0'];
@@ -626,6 +630,60 @@ export class OnnxDetector {
 
         console.log(`[ONNX-Parse] 3D tensor format: [${batchSize}, ${dim1}, ${dim2}]`);
         console.log(`[ONNX-Parse] Model has ${this.modelConfig.classes.length} classes`);
+
+        // Format 3: YOLO end2end format [1, max_det, 6] with [x1, y1, x2, y2, conf, class_id]
+        // Produced by YOLO26 (and others) exported with end2end=True. No NMS needed.
+        if (this.modelConfig.outputFormat === 'yolo-end2end' && dim2 === 6) {
+          console.log(`[ONNX-Parse] Detected YOLO end2end format [1, ${dim1}, 6] — no NMS needed`);
+          const numDetections = dim1;
+          const [inputW, inputH] = this.modelConfig.inputSize;
+
+          for (let i = 0; i < numDetections; i++) {
+            const offset = i * 6;
+            const x1 = output[offset];
+            const y1 = output[offset + 1];
+            const x2 = output[offset + 2];
+            const y2 = output[offset + 3];
+            const confidence = output[offset + 4];
+            const classId = Math.round(output[offset + 5]);
+
+            // Skip padding/empty detections (confidence 0 or very low)
+            if (confidence < 0.1) continue;
+
+            // Convert [x1,y1,x2,y2] pixel coords to normalized center-based [cx,cy,w,h]
+            const boxWidth = x2 - x1;
+            const boxHeight = y2 - y1;
+
+            // Normalize to 0-1 range (end2end coords are in pixel space relative to input size)
+            const normWidth = boxWidth / inputW;
+            const normHeight = boxHeight / inputH;
+            const normCx = (x1 + boxWidth / 2) / inputW;
+            const normCy = (y1 + boxHeight / 2) / inputH;
+
+            // Convert from center-based to corner-based (top-left) for frontend display
+            const cornerX = normCx - normWidth / 2;
+            const cornerY = normCy - normHeight / 2;
+
+            const classIndex = Math.max(0, Math.min(classId, this.modelConfig.classes.length - 1));
+            const className = this.modelConfig.classes[classIndex] || `class_${classIndex}`;
+
+            detections.push({
+              x: cornerX,
+              y: cornerY,
+              width: normWidth,
+              height: normHeight,
+              confidence,
+              classIndex,
+              className,
+              raceNumber: this.extractRaceNumber(className),
+            });
+          }
+
+          console.log(`[ONNX-Parse] End2end detections found: ${detections.length}`);
+        }
+
+        // Format 2a: YOLOv11 transposed format [1, 4+num_classes, num_anchors]
+        else {
         console.log(`[ONNX-Parse] Expected transposed dim1: ${4 + this.modelConfig.classes.length}`);
 
         // YOLOv11 transposed format: [1, 4+num_classes, num_anchors]
@@ -787,6 +845,7 @@ export class OnnxDetector {
             });
           }
         }
+      } // end else (Format 2a transposed/standard)
       }
     } else {
       console.warn('[ONNX-Parse] ⚠️ Unrecognized output format. Available tensors:', outputNames);

@@ -1,18 +1,22 @@
 /**
  * Driver Face Manager - Multi-Driver Support
  *
- * Manages per-driver face recognition and metatags.
+ * Manages per-driver metadata (nationality, metatag) and face recognition.
  * Creates individual panels for each driver in a participant entry.
  *
  * Architecture:
- * - One panel per driver
- * - Each panel has: driver name, metatag field, 5 photo slots
+ * - One panel per driver/person
+ * - Each panel has: driver name, nationality, metatag field
+ * - When FACE_RECOGNITION_ENABLED: also has 5 photo slots
  * - Syncs with drivers tag input in participant edit modal
- * - Each driver gets their own PresetFaceManager instance
+ * - Each driver gets their own PresetFaceManager instance (when face rec enabled)
  */
 
 // Feature flag: set to true to re-enable face recognition
 const FACE_RECOGNITION_ENABLED = false;
+
+// Per-person metadata is always enabled (nationality, metatag)
+const PERSON_METADATA_ENABLED = true;
 
 class DriverFaceManagerMulti {
   constructor() {
@@ -20,7 +24,7 @@ class DriverFaceManagerMulti {
     this.currentPresetId = null;
     this.currentUserId = null;
     this.isOfficial = false;
-    this.drivers = []; // Array of { id, name, metatag, order, faceManager }
+    this.drivers = []; // Array of { id, name, metatag, nationality, order, faceManager }
     this.isSyncing = false; // Track sync state for awaiting completion
 
     // DOM references
@@ -48,8 +52,9 @@ class DriverFaceManagerMulti {
    * @param {Array|null} existingDrivers - Existing driver records from DB (optional)
    */
   async load(participantId, presetId, userId, isOfficial, driverNames = [], existingDrivers = null) {
-    if (!FACE_RECOGNITION_ENABLED) {
-      console.log('[DriverFaceManagerMulti] Face recognition disabled (coming soon) - skipping load');
+    // Person metadata panels are always available; face recognition requires flag
+    if (!PERSON_METADATA_ENABLED && !FACE_RECOGNITION_ENABLED) {
+      console.log('[DriverFaceManagerMulti] Both features disabled - skipping load');
       return;
     }
 
@@ -72,21 +77,23 @@ class DriverFaceManagerMulti {
         id: dbDriver.id,              // Use existing ID!
         name: dbDriver.driver_name,
         metatag: dbDriver.driver_metatag || '',
+        nationality: dbDriver.driver_nationality || '',
         order: dbDriver.driver_order,
         faceManager: null
       }));
 
       console.log(`[DriverFaceManagerMulti] Loaded ${this.drivers.length} existing drivers from DB`);
-    } else if (participantId && driverNames.length > 0) {
-      // No existing records - sync with backend (create/update/delete as needed)
+    } else if (participantId && driverNames.length > 0 && FACE_RECOGNITION_ENABLED) {
+      // Sync with backend only when face recognition needs it
       console.log('[DriverFaceManagerMulti] No existing records, syncing drivers with backend');
       await this.syncDrivers(driverNames);
     } else {
-      // New participant - just create UI skeleton
+      // Create UI skeleton from names (for metadata-only mode or new participant)
       this.drivers = driverNames.map((name, index) => ({
         id: null, // Will be created on save
         name: name,
         metatag: '',
+        nationality: '',
         order: index,
         faceManager: null
       }));
@@ -129,6 +136,7 @@ class DriverFaceManagerMulti {
           if (existing) {
             existing.id = driver.id;
             existing.metatag = driver.driver_metatag || '';
+            existing.nationality = driver.driver_nationality || '';
             existing.order = driver.driver_order;
 
             // Update the face manager's driver ID if it exists
@@ -146,6 +154,7 @@ class DriverFaceManagerMulti {
             id: driver.id,
             name: driver.driver_name,
             metatag: driver.driver_metatag || '',
+            nationality: driver.driver_nationality || '',
             order: driver.driver_order,
             faceManager: null
           };
@@ -209,6 +218,28 @@ class DriverFaceManagerMulti {
   }
 
   /**
+   * Update driver nationality in database
+   */
+  async updateDriverNationality(driverId, nationality) {
+    if (!driverId) return; // New driver, not yet saved
+
+    try {
+      const result = await window.api.invoke('preset-driver-update', {
+        driverId: driverId,
+        driverNationality: nationality
+      });
+
+      if (result.success) {
+        console.log(`[DriverFaceManagerMulti] Updated nationality for driver ${driverId}`);
+      } else {
+        console.error('[DriverFaceManagerMulti] Update nationality failed:', result.error);
+      }
+    } catch (error) {
+      console.error('[DriverFaceManagerMulti] Update nationality error:', error);
+    }
+  }
+
+  /**
    * Show empty state (no drivers)
    */
   showEmptyState() {
@@ -217,6 +248,11 @@ class DriverFaceManagerMulti {
     }
     if (this.emptyStateElement) {
       this.emptyStateElement.style.display = 'block';
+      this.emptyStateElement.innerHTML = `
+        <div style="text-align: center; padding: 1.5rem; color: var(--text-dark); opacity: 0.6;">
+          <p>Add people names above to see per-person metadata fields here.</p>
+        </div>
+      `;
     }
   }
 
@@ -236,7 +272,6 @@ class DriverFaceManagerMulti {
    * Render all driver panels
    */
   async render() {
-    if (!FACE_RECOGNITION_ENABLED) return;
     if (!this.containerElement) return;
 
     this.containerElement.innerHTML = '';
@@ -247,38 +282,39 @@ class DriverFaceManagerMulti {
       this.containerElement.appendChild(panel);
     });
 
-    // Initialize face managers AFTER all panels are in DOM
-    // Only initialize if face manager doesn't exist yet
-    const initPromises = this.drivers.map(async (driver, index) => {
-      if (!driver.faceManager) {
-        await this.initializeDriverFaceManager(driver, index);
-      } else {
-        // Re-attach existing face manager to new DOM elements
-        driver.faceManager.gridElement = document.getElementById(`driver-photos-grid-${driver.id || index}`);
-        driver.faceManager.countLabel = document.getElementById(`driver-photo-count-${driver.id || index}`);
+    // Initialize face managers AFTER all panels are in DOM (only if face rec enabled)
+    if (FACE_RECOGNITION_ENABLED) {
+      const initPromises = this.drivers.map(async (driver, index) => {
+        if (!driver.faceManager) {
+          await this.initializeDriverFaceManager(driver, index);
+        } else {
+          // Re-attach existing face manager to new DOM elements
+          driver.faceManager.gridElement = document.getElementById(`driver-photos-grid-${driver.id || index}`);
+          driver.faceManager.countLabel = document.getElementById(`driver-photo-count-${driver.id || index}`);
 
-        // CRITICAL: Update driver ID if it was null before (newly created driver)
-        if (driver.id && driver.faceManager.currentDriverId !== driver.id) {
-          driver.faceManager.currentDriverId = driver.id;
-          driver.faceManager.currentParticipantId = this.currentParticipantId;
-          console.log(`[DriverFaceManagerMulti] ✓ Updated face manager driver ID: ${driver.id}`);
+          // CRITICAL: Update driver ID if it was null before (newly created driver)
+          if (driver.id && driver.faceManager.currentDriverId !== driver.id) {
+            driver.faceManager.currentDriverId = driver.id;
+            driver.faceManager.currentParticipantId = this.currentParticipantId;
+            console.log(`[DriverFaceManagerMulti] ✓ Updated face manager driver ID: ${driver.id}`);
+          }
+
+          // Re-attach button event listener
+          const addButton = document.querySelector(`[data-driver-index="${index}"]`);
+          if (addButton && driver.faceManager.addButton !== addButton) {
+            driver.faceManager.addButton = addButton;
+            addButton.addEventListener('click', () => driver.faceManager.triggerUpload());
+          }
+
+          // Re-render with updated IDs
+          driver.faceManager.render();
+
+          console.log(`[DriverFaceManagerMulti] Re-attached face manager for driver ${index} with ID ${driver.id}`);
         }
+      });
 
-        // Re-attach button event listener
-        const addButton = document.querySelector(`[data-driver-index="${index}"]`);
-        if (addButton && driver.faceManager.addButton !== addButton) {
-          driver.faceManager.addButton = addButton;
-          addButton.addEventListener('click', () => driver.faceManager.triggerUpload());
-        }
-
-        // Re-render with updated IDs
-        driver.faceManager.render();
-
-        console.log(`[DriverFaceManagerMulti] Re-attached face manager for driver ${index} with ID ${driver.id}`);
-      }
-    });
-
-    await Promise.all(initPromises);
+      await Promise.all(initPromises);
+    }
   }
 
   /**
@@ -294,28 +330,63 @@ class DriverFaceManagerMulti {
     header.className = 'driver-panel-header';
     header.innerHTML = `
       <h4 class="driver-panel-title">${this.escapeHtml(driver.name)}</h4>
-      <span class="driver-panel-order">Driver ${index + 1}</span>
+      <span class="driver-panel-order">Person ${index + 1}</span>
     `;
     panel.appendChild(header);
 
-    // Metatag input
+    // Nationality input (always visible)
+    const nationalityGroup = document.createElement('div');
+    nationalityGroup.className = 'form-group';
+    nationalityGroup.innerHTML = `
+      <label>
+        Nationality
+        <span class="field-destination">→ IPTC:Caption, PersonShown</span>
+      </label>
+      <input
+        type="text"
+        class="form-input form-input-metadata driver-nationality-input"
+        placeholder="e.g. NED, ITA, GBR, Dutch, Italian..."
+        value="${this.escapeHtml(driver.nationality)}"
+        ${this.isOfficial ? 'disabled' : ''}
+        data-driver-id="${driver.id || ''}"
+      >
+      <small class="form-hint">
+        Used as <code>{nationality}</code> in caption and Person Shown templates
+      </small>
+    `;
+    panel.appendChild(nationalityGroup);
+
+    // Setup nationality input event listener
+    if (!this.isOfficial) {
+      const nationalityInput = nationalityGroup.querySelector('.driver-nationality-input');
+      nationalityInput.addEventListener('change', async (e) => {
+        const newNationality = e.target.value.trim();
+        driver.nationality = newNationality;
+
+        if (driver.id) {
+          await this.updateDriverNationality(driver.id, newNationality);
+        }
+      });
+    }
+
+    // Metatag input (always visible)
     const metatagGroup = document.createElement('div');
     metatagGroup.className = 'form-group';
     metatagGroup.innerHTML = `
       <label>
-        Driver Meta Tag
-        <span class="field-destination">→ IPTC:Keywords (when face recognized)</span>
+        Person Meta Tag
+        <span class="field-destination">→ IPTC:Keywords</span>
       </label>
       <input
         type="text"
-        class="form-input driver-metatag-input"
+        class="form-input form-input-metadata driver-metatag-input"
         placeholder="Pro Driver, Champion 2024..."
         value="${this.escapeHtml(driver.metatag)}"
         ${this.isOfficial ? 'disabled' : ''}
         data-driver-id="${driver.id || ''}"
       >
       <small class="form-hint">
-        Written to IPTC keywords ONLY when THIS driver's face is recognized
+        Custom keywords added per-person (e.g. titles, championships)
       </small>
     `;
     panel.appendChild(metatagGroup);
@@ -333,26 +404,28 @@ class DriverFaceManagerMulti {
       });
     }
 
-    // Face photos section
-    const photosSection = document.createElement('div');
-    photosSection.className = 'driver-photos-section';
-    photosSection.innerHTML = `
-      <h5 class="driver-photos-title">Face Recognition Photos</h5>
-      <div class="driver-photos-grid" id="driver-photos-grid-${driver.id || index}"></div>
-      <div class="driver-photos-actions">
-        <button
-          type="button"
-          class="btn btn-secondary btn-sm driver-add-photo-btn"
-          data-driver-index="${index}"
-          ${this.isOfficial ? 'disabled' : ''}
-        >
-          <span class="btn-icon">📷</span>
-          Add Photo
-        </button>
-        <span class="driver-photo-count" id="driver-photo-count-${driver.id || index}">0/5 photos</span>
-      </div>
-    `;
-    panel.appendChild(photosSection);
+    // Face photos section (only when face recognition enabled)
+    if (FACE_RECOGNITION_ENABLED) {
+      const photosSection = document.createElement('div');
+      photosSection.className = 'driver-photos-section';
+      photosSection.innerHTML = `
+        <h5 class="driver-photos-title">Face Recognition Photos</h5>
+        <div class="driver-photos-grid" id="driver-photos-grid-${driver.id || index}"></div>
+        <div class="driver-photos-actions">
+          <button
+            type="button"
+            class="btn btn-secondary btn-sm driver-add-photo-btn"
+            data-driver-index="${index}"
+            ${this.isOfficial ? 'disabled' : ''}
+          >
+            <span class="btn-icon">📷</span>
+            Add Photo
+          </button>
+          <span class="driver-photo-count" id="driver-photo-count-${driver.id || index}">0/5 photos</span>
+        </div>
+      `;
+      panel.appendChild(photosSection);
+    }
 
     return panel;
   }
@@ -361,6 +434,8 @@ class DriverFaceManagerMulti {
    * Initialize PresetFaceManager for a driver
    */
   async initializeDriverFaceManager(driver, index) {
+    if (!FACE_RECOGNITION_ENABLED) return;
+
     // Create a new face manager instance for this driver
     const faceManager = new PresetFaceManager();
 
@@ -470,13 +545,14 @@ class DriverFaceManagerMulti {
 
   /**
    * Get current driver metatags (for saving)
-   * Returns: Array of { driverId, metatag }
+   * Returns: Array of { driverId, driverName, metatag, nationality }
    */
   getDriverMetatags() {
     return this.drivers.map(driver => ({
       driverId: driver.id,
       driverName: driver.name,
-      metatag: driver.metatag
+      metatag: driver.metatag,
+      nationality: driver.nationality
     }));
   }
 }

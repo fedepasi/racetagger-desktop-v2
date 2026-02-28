@@ -62,6 +62,9 @@ const validSendReceiveChannels: string[] = [
   'folder-organization-progress',
   // Startup health report (main → renderer DevTools console)
   'startup-health-report',
+  // IPTC finalization progress channels
+  'iptc-finalize-progress',
+  'iptc-finalize-error',
 ];
 
 const validInvokeChannels: string[] = [
@@ -242,6 +245,12 @@ const validInvokeChannels: string[] = [
   'get-telemetry-status',
   'set-telemetry-enabled',
   'flush-telemetry-queue',
+
+  // IPTC Metadata Operations
+  'preset-iptc-get',
+  'preset-iptc-save',
+  'preset-iptc-import-xmp',
+  'iptc-finalize-batch',
 ];
 
 

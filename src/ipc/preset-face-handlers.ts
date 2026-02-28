@@ -318,12 +318,13 @@ export function registerPresetFaceHandlers(): void {
 
   /**
    * Update a driver
-   * Expects: { driverId, driverName?, driverMetatag?, driverOrder? }
+   * Expects: { driverId, driverName?, driverMetatag?, driverNationality?, driverOrder? }
    */
   ipcMain.handle('preset-driver-update', async (_, params: {
     driverId: string;
     driverName?: string;
     driverMetatag?: string;
+    driverNationality?: string;
     driverOrder?: number;
   }) => {
     try {
@@ -335,6 +336,7 @@ export function registerPresetFaceHandlers(): void {
 
       if (params.driverName !== undefined) updates.driver_name = params.driverName;
       if (params.driverMetatag !== undefined) updates.driver_metatag = params.driverMetatag;
+      if (params.driverNationality !== undefined) updates.driver_nationality = params.driverNationality;
       if (params.driverOrder !== undefined) updates.driver_order = params.driverOrder;
 
       const { data: driver, error } = await supabase
