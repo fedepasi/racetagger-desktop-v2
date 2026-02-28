@@ -68,9 +68,20 @@
               <span class="preset-icon">🎯</span>
               Participant Preset
             </label>
-            <select class="form-control preset-control" id="preset-select">
-              <option value="">🎯 Enhance Recognition Accuracy</option>
+            <!-- Hidden native select for value storage & compatibility -->
+            <select class="form-control preset-control" id="preset-select" style="display:none;">
+              <option value="">Enhance Recognition Accuracy</option>
             </select>
+            <!-- Custom visual dropdown (cross-platform consistent rendering) -->
+            <div class="custom-preset-dropdown" id="custom-preset-dropdown">
+              <button type="button" class="custom-preset-trigger" id="custom-preset-trigger">
+                <span class="cpd-name">Enhance Recognition Accuracy</span>
+                <span class="cpd-chevron">&#9662;</span>
+              </button>
+              <div class="custom-preset-menu" id="custom-preset-menu">
+                <!-- Options populated dynamically by JS -->
+              </div>
+            </div>
             <div class="form-text preset-hint">
               Load participant data for precise race number matching and sponsor detection
             </div>

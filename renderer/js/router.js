@@ -261,6 +261,11 @@
           window.loadPresetsForSelector();
         }
 
+        // Setup custom preset dropdown watcher (syncs trigger on programmatic changes)
+        if (typeof window.watchHiddenPresetSelect === 'function') {
+          window.watchHiddenPresetSelect();
+        }
+
         // Initialize metadata overwrite options
         if (typeof window.initMetadataOverwriteOptions === 'function') {
           window.initMetadataOverwriteOptions();

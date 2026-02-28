@@ -2350,31 +2350,139 @@ function initCustomDropdownListeners() {
   if (customDropdownInitialized) return;
   customDropdownInitialized = true;
 
-  // Toggle dropdown on trigger click
+  // Toggle dropdown on trigger click (handles BOTH category and preset dropdowns)
   document.addEventListener('click', (e) => {
-    const trigger = document.getElementById('custom-dropdown-trigger');
-    const dropdown = document.getElementById('custom-category-dropdown');
-    const menu = document.getElementById('custom-dropdown-menu');
-    if (!trigger || !dropdown || !menu) return;
+    // --- Category dropdown ---
+    const catTrigger = document.getElementById('custom-dropdown-trigger');
+    const catDropdown = document.getElementById('custom-category-dropdown');
+    const catMenu = document.getElementById('custom-dropdown-menu');
 
-    if (trigger.contains(e.target)) {
-      dropdown.classList.toggle('open');
-    } else if (!menu.contains(e.target)) {
-      dropdown.classList.remove('open');
+    // --- Preset dropdown ---
+    const presetTrigger = document.getElementById('custom-preset-trigger');
+    const presetDropdown = document.getElementById('custom-preset-dropdown');
+    const presetMenu = document.getElementById('custom-preset-menu');
+
+    // Category dropdown toggle
+    if (catTrigger && catDropdown && catMenu) {
+      if (catTrigger.contains(e.target)) {
+        catDropdown.classList.toggle('open');
+        // Close preset if open
+        if (presetDropdown) presetDropdown.classList.remove('open');
+      } else if (!catMenu.contains(e.target)) {
+        catDropdown.classList.remove('open');
+      }
+    }
+
+    // Preset dropdown toggle
+    if (presetTrigger && presetDropdown && presetMenu) {
+      if (presetTrigger.contains(e.target)) {
+        presetDropdown.classList.toggle('open');
+        // Close category if open
+        if (catDropdown) catDropdown.classList.remove('open');
+      } else if (!presetMenu.contains(e.target)) {
+        presetDropdown.classList.remove('open');
+      }
     }
   });
 
-  // Keyboard navigation
+  // Keyboard navigation (Escape closes any open dropdown)
   document.addEventListener('keydown', (e) => {
-    const dropdown = document.getElementById('custom-category-dropdown');
-    if (!dropdown || !dropdown.classList.contains('open')) return;
-
     if (e.key === 'Escape') {
-      dropdown.classList.remove('open');
-      document.getElementById('custom-dropdown-trigger')?.focus();
+      const catDropdown = document.getElementById('custom-category-dropdown');
+      if (catDropdown && catDropdown.classList.contains('open')) {
+        catDropdown.classList.remove('open');
+        document.getElementById('custom-dropdown-trigger')?.focus();
+      }
+      const presetDropdown = document.getElementById('custom-preset-dropdown');
+      if (presetDropdown && presetDropdown.classList.contains('open')) {
+        presetDropdown.classList.remove('open');
+        document.getElementById('custom-preset-trigger')?.focus();
+      }
     }
   });
 }
+
+/**
+ * Sync the custom preset dropdown UI with the hidden <select> options.
+ * Called after filterAndDisplayPresets() or updatePresetSelector() populates options.
+ */
+function syncCustomPresetDropdown() {
+  const hiddenSelect = document.getElementById('preset-select');
+  const menu = document.getElementById('custom-preset-menu');
+  const triggerName = document.querySelector('#custom-preset-trigger .cpd-name');
+  if (!hiddenSelect || !menu) return;
+
+  // Clear existing custom options
+  menu.innerHTML = '';
+
+  // Build options from the hidden <select>
+  Array.from(hiddenSelect.options).forEach((opt) => {
+    const div = document.createElement('div');
+    div.className = 'cpd-option';
+    if (opt.value === hiddenSelect.value) div.classList.add('selected');
+    div.dataset.value = opt.value;
+
+    const name = document.createElement('span');
+    name.className = 'cpd-opt-name';
+    name.textContent = opt.textContent;
+    div.appendChild(name);
+
+    div.addEventListener('click', () => {
+      // Update hidden select
+      hiddenSelect.value = opt.value;
+      // Fire change event so existing handlers pick it up
+      hiddenSelect.dispatchEvent(new Event('change', { bubbles: true }));
+      // Update trigger display
+      if (triggerName) triggerName.textContent = name.textContent;
+      // Update selected state
+      menu.querySelectorAll('.cpd-option').forEach(o => o.classList.remove('selected'));
+      div.classList.add('selected');
+      // Close dropdown
+      document.getElementById('custom-preset-dropdown')?.classList.remove('open');
+    });
+
+    menu.appendChild(div);
+  });
+
+  // Update trigger to reflect current selection
+  const currentOpt = hiddenSelect.options[hiddenSelect.selectedIndex];
+  if (currentOpt && triggerName) {
+    triggerName.textContent = currentOpt.textContent;
+  }
+}
+
+let presetSelectWatcherInitialized = false;
+/**
+ * Watch the hidden <select> for programmatic value changes (e.g. from last-analysis-settings.js)
+ * and sync the custom dropdown trigger display.
+ */
+function watchHiddenPresetSelect() {
+  if (presetSelectWatcherInitialized) return;
+  const hiddenSelect = document.getElementById('preset-select');
+  if (!hiddenSelect) return;
+  presetSelectWatcherInitialized = true;
+
+  hiddenSelect.addEventListener('change', () => {
+    const triggerName = document.querySelector('#custom-preset-trigger .cpd-name');
+    const menu = document.getElementById('custom-preset-menu');
+    if (!triggerName) return;
+
+    const currentOpt = hiddenSelect.options[hiddenSelect.selectedIndex];
+    if (currentOpt) {
+      triggerName.textContent = currentOpt.textContent;
+    }
+    // Update selected highlight in menu
+    if (menu) {
+      menu.querySelectorAll('.cpd-option').forEach(o => {
+        o.classList.toggle('selected', o.dataset.value === hiddenSelect.value);
+      });
+    }
+  });
+}
+
+// Expose globally for other modules
+window.syncCustomPresetDropdown = syncCustomPresetDropdown;
+window.watchHiddenPresetSelect = watchHiddenPresetSelect;
 
 // Manual refresh function for categories (useful for admin/debug)
 async function refreshCategories() {
@@ -2471,11 +2579,13 @@ function filterAndDisplayPresets() {
   // Get the category ID for the selected category code
   const selectedCategoryId = categoryCodeToIdMap[selectedCategory];
 
-  // Filter presets by category_id
+  // Filter presets by category_id (also include presets with no category assigned)
   let filteredPresets = cachedAllPresets;
   if (selectedCategoryId) {
-    filteredPresets = cachedAllPresets.filter(preset => preset.category_id === selectedCategoryId);
-    console.log(`[Renderer] Filtered presets for category '${selectedCategory}' (${selectedCategoryId}): ${filteredPresets.length}/${cachedAllPresets.length}`);
+    filteredPresets = cachedAllPresets.filter(preset =>
+      preset.category_id === selectedCategoryId || !preset.category_id
+    );
+    console.log(`[Renderer] Filtered presets for category '${selectedCategory}' (${selectedCategoryId}): ${filteredPresets.length}/${cachedAllPresets.length} (includes uncategorized)`);
   } else {
     console.log(`[Renderer] No category mapping for '${selectedCategory}', showing all ${cachedAllPresets.length} presets`);
   }
@@ -2498,6 +2608,9 @@ function filterAndDisplayPresets() {
   });
 
   console.log(`[Renderer] Displayed ${filteredPresets.length} presets for category '${selectedCategory}'`);
+
+  // Sync custom dropdown UI with updated <select> options
+  syncCustomPresetDropdown();
 }
 
 window.loadPresetsForSelector = loadPresetsForSelector;

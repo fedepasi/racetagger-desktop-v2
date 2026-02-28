@@ -754,8 +754,8 @@
 .preset-selector-enhanced:hover {
   background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(59, 130, 246, 0.1));
   border-color: rgba(16, 185, 129, 0.4);
-  transform: translateY(-2px);
-  box-shadow: 0 4px 20px rgba(16, 185, 129, 0.15);
+  /* No transform — it creates a new stacking context that breaks dropdown z-index */
+  box-shadow: 0 4px 20px rgba(16, 185, 129, 0.25);
 }
 
 /* NEW Indicator for Step 3 */
@@ -851,12 +851,16 @@
   margin-top: 0.5rem;
   line-height: 1.4;
   font-weight: 500;
+  position: relative;
+  z-index: 1;
 }
 
 .preset-details {
   margin-top: 1rem;
   padding-top: 1rem;
   border-top: 1px solid rgba(139, 69, 19, 0.2);
+  position: relative;
+  z-index: 1;
 }
 
 .preset-info {

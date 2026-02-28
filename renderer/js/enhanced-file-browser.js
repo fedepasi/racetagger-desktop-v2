@@ -1270,7 +1270,7 @@ class EnhancedFileBrowser {
     if (!presetSelect) return;
 
     // Clear existing options except the first one
-    presetSelect.innerHTML = '<option value="">🎯 Enhance Recognition Accuracy</option>';
+    presetSelect.innerHTML = '<option value="">Enhance Recognition Accuracy</option>';
 
     // Add available presets
     this.availablePresets.forEach(preset => {
@@ -1289,6 +1289,11 @@ class EnhancedFileBrowser {
     if (!this.selectedPreset && presetSelect.value) {
       const presetId = presetSelect.value;
       this.handlePresetSelection(presetId);
+    }
+
+    // Sync the custom visual dropdown with updated options
+    if (typeof window.syncCustomPresetDropdown === 'function') {
+      window.syncCustomPresetDropdown();
     }
   }
 
