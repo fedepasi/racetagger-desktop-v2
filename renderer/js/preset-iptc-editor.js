@@ -345,10 +345,7 @@ async function saveIptcMetadata(presetId) {
   const iptcData = collectIptcDataFromForm();
 
   try {
-    const response = await window.api.invoke('preset-iptc-save', {
-      presetId: presetId,
-      iptcMetadata: iptcData  // null clears it, object saves it
-    });
+    const response = await window.api.invoke('preset-iptc-save', presetId, iptcData);
 
     if (!response.success) {
       console.error('[IPTC Editor] Error saving IPTC metadata:', response.error);

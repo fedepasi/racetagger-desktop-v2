@@ -65,6 +65,8 @@ const validSendReceiveChannels: string[] = [
   // IPTC finalization progress channels
   'iptc-finalize-progress',
   'iptc-finalize-error',
+  // Unified export progress channel
+  'unified-export-progress',
 ];
 
 const validInvokeChannels: string[] = [
@@ -240,6 +242,7 @@ const validInvokeChannels: string[] = [
   'export-destinations-get-matching',
   'export-to-destinations',  // Export images to configured destinations
   'export-tags-csv',         // Export visual tags as CSV
+  'unified-export',          // Unified export with rename, organize, IPTC
 
   // Error Telemetry
   'get-telemetry-status',

@@ -1417,6 +1417,9 @@ class UnifiedImageWorker extends EventEmitter {
                       }
                     };
 
+                    // Get photo geolocation & camera metadata from EXIF if available
+                    const photoMeta = processor?.getPhotoMetadataForDB(imageFile.originalPath) || {};
+
                     await this.supabase.from('analysis_results').insert({
                       image_id: imageId,
                       execution_id: this.config.executionId || null,
@@ -1425,7 +1428,8 @@ class UnifiedImageWorker extends EventEmitter {
                       confidence_level: confidenceLevel,
                       raw_response: { vehicle: vehicleData },
                       processing_time_ms: inferenceMs,
-                      model_used: 'local-onnx-full'
+                      model_used: 'local-onnx-full',
+                      ...photoMeta
                     });
                   }
 
@@ -1712,6 +1716,9 @@ class UnifiedImageWorker extends EventEmitter {
                     log.warn(`[CropContext-ONNX] No boundingBox for ${result.raceNumber} - will not be visualizable in portal!`);
                   }
 
+                  // Get photo geolocation & camera metadata from EXIF if available
+                  const cropPhotoMeta = processor?.getPhotoMetadataForDB(imageFile.originalPath) || {};
+
                   const { error: analysisError } = await this.supabase
                     .from('analysis_results')
                     .insert({
@@ -1737,7 +1744,8 @@ class UnifiedImageWorker extends EventEmitter {
                       estimated_cost_usd: 0,
                       execution_time_ms: result.inferenceTimeMs || 0,
                       training_eligible: this.userTrainingConsent,
-                      user_consent_at_analysis: this.userTrainingConsent
+                      user_consent_at_analysis: this.userTrainingConsent,
+                      ...cropPhotoMeta
                     });
 
                   if (analysisError) {
@@ -2076,6 +2084,9 @@ class UnifiedImageWorker extends EventEmitter {
                       }
                     };
 
+                    // Get photo geolocation & camera metadata from EXIF if available
+                    const fullImgPhotoMeta = processor?.getPhotoMetadataForDB(imageFile.originalPath) || {};
+
                     const { error: analysisError } = await this.supabase
                       .from('analysis_results')
                       .insert({
@@ -2100,7 +2111,8 @@ class UnifiedImageWorker extends EventEmitter {
                         estimated_cost_usd: 0,
                         execution_time_ms: aiTiming['onnxFullImage'] || undefined,
                         training_eligible: this.userTrainingConsent,
-                        user_consent_at_analysis: this.userTrainingConsent
+                        user_consent_at_analysis: this.userTrainingConsent,
+                        ...fullImgPhotoMeta
                       });
 
                     if (analysisError) {
@@ -2784,6 +2796,9 @@ class UnifiedImageWorker extends EventEmitter {
 
                 // 3. Save to 'analysis_results' table
                 const primaryMatch = matchedDrivers[0];
+                // Get photo geolocation & camera metadata from EXIF if available
+                const facePhotoMeta = processor?.getPhotoMetadataForDB(imageFile.originalPath) || {};
+
                 const { error: analysisError } = await this.supabase
                   .from('analysis_results')
                   .insert({
@@ -2801,7 +2816,8 @@ class UnifiedImageWorker extends EventEmitter {
                     input_tokens: 0,
                     output_tokens: 0,
                     estimated_cost_usd: 0,
-                    execution_time_ms: processingTimeMs
+                    execution_time_ms: processingTimeMs,
+                    ...facePhotoMeta
                   });
 
                 if (analysisError) {
@@ -3834,6 +3850,7 @@ class UnifiedImageWorker extends EventEmitter {
       const processor = await createImageProcessor(imageBuffer);
       compressedBuffer = await processor
         .rotate() // Auto-rotate basato su EXIF per correggere orientamento
+        .withMetadata() // Preserve EXIF metadata (GPS, camera info, timestamps)
         .resize(this.config.maxDimension, this.config.maxDimension, {
           fit: 'inside',
           withoutEnlargement: true
@@ -3906,6 +3923,7 @@ class UnifiedImageWorker extends EventEmitter {
       const processor = await createImageProcessor(imageBuffer);
       const buffer = await processor
         .rotate()
+        .withMetadata() // Preserve EXIF metadata (GPS, camera info, timestamps)
         .resize(this.config.maxDimension, this.config.maxDimension, {
           fit: 'inside',
           withoutEnlargement: true
@@ -3929,6 +3947,7 @@ class UnifiedImageWorker extends EventEmitter {
       const processor = await createImageProcessor(imageBuffer);
       bestBuffer = await processor
         .rotate()
+        .withMetadata() // Preserve EXIF metadata (GPS, camera info, timestamps)
         .resize(this.config.maxDimension, this.config.maxDimension, {
           fit: 'inside',
           withoutEnlargement: true
@@ -6127,6 +6146,41 @@ export class UnifiedImageProcessor extends EventEmitter {
   }
 
   /**
+   * Get photo geolocation and camera metadata fields for analysis_results DB insert.
+   * Returns an object with the geo/camera columns ready to be spread into an insert statement.
+   * If no metadata is available for the given file, returns an empty object (columns stay NULL).
+   */
+  getPhotoMetadataForDB(filePath: string): Record<string, any> {
+    const ts = this.imageTimestamps.get(filePath);
+    if (!ts) return {};
+
+    const fields: Record<string, any> = {};
+
+    // GPS geolocation
+    if (ts.geoData) {
+      if (ts.geoData.latitude !== null) fields.photo_latitude = ts.geoData.latitude;
+      if (ts.geoData.longitude !== null) fields.photo_longitude = ts.geoData.longitude;
+      if (ts.geoData.altitude !== null) fields.photo_altitude = ts.geoData.altitude;
+      if (ts.geoData.direction !== null) fields.photo_direction = ts.geoData.direction;
+    }
+
+    // Precise photo timestamp from EXIF
+    if (ts.timestamp) {
+      fields.photo_taken_at = ts.timestamp.toISOString();
+    }
+
+    // Camera info
+    if (ts.cameraData) {
+      if (ts.cameraData.make) fields.camera_make = ts.cameraData.make;
+      if (ts.cameraData.model) fields.camera_model = ts.cameraData.model;
+      if (ts.cameraData.lensModel) fields.lens_model = ts.cameraData.lensModel;
+      if (ts.cameraData.focalLength !== null) fields.focal_length = ts.cameraData.focalLength;
+    }
+
+    return fields;
+  }
+
+  /**
    * Calculate optimal worker count based on system resources
    */
   private calculateOptimalWorkerCount(): number {
@@ -7664,6 +7718,14 @@ export class UnifiedImageProcessor extends EventEmitter {
 
       // BATCH INSERT ACCUMULATION: Collect pending analysis_results inserts from worker (ONNX optimization)
       if (result.pendingAnalysisInsert) {
+        // Enrich with photo geolocation & camera metadata from EXIF (extracted during temporal analysis)
+        const photoMetadata = this.getPhotoMetadataForDB(imageFile.originalPath);
+        if (Object.keys(photoMetadata).length > 0) {
+          result.pendingAnalysisInsert.data = {
+            ...result.pendingAnalysisInsert.data,
+            ...photoMetadata
+          };
+        }
         this.pendingAnalysisInserts.push(result.pendingAnalysisInsert);
         console.log(`[Processor] Accumulated analysis insert from worker (${this.pendingAnalysisInserts.length} pending)`);
 

@@ -652,6 +652,40 @@ class LogVisualizer {
             </label>
           </div>
         </div>
+
+        <div class="config-section">
+          <h5>Rename Files:</h5>
+          <label class="radio-option" style="cursor: pointer;">
+            <input type="checkbox" id="post-rename-enabled">
+            <div class="radio-content">
+              <div class="radio-title">✏️ Rename files using a pattern</div>
+              <div class="form-text">Apply a custom filename pattern to organized files</div>
+            </div>
+          </label>
+          <div id="post-rename-options" style="display: none; margin-top: 10px;">
+            <div class="lv-rename-pattern-row">
+              <input type="text" id="post-rename-pattern" class="lv-rename-input"
+                     value="{number}_{name}_{team}-{seq:2}"
+                     placeholder="e.g. {number}_{name}_{team}-{seq:2}">
+            </div>
+            <div class="lv-rename-chips" id="post-rename-chips">
+              <span class="lv-rename-chip" data-placeholder="{number}">number</span>
+              <span class="lv-rename-chip" data-placeholder="{name}">name</span>
+              <span class="lv-rename-chip" data-placeholder="{surname}">surname</span>
+              <span class="lv-rename-chip" data-placeholder="{team}">team</span>
+              <span class="lv-rename-chip" data-placeholder="{car_model}">car_model</span>
+              <span class="lv-rename-chip" data-placeholder="{nationality}">nationality</span>
+              <span class="lv-rename-chip" data-placeholder="{event}">event</span>
+              <span class="lv-rename-chip" data-placeholder="{date}">date</span>
+              <span class="lv-rename-chip" data-placeholder="{seq:2}">seq</span>
+              <span class="lv-rename-chip" data-placeholder="{original}">original</span>
+            </div>
+            <div class="lv-rename-preview" id="post-rename-preview">
+              <span class="lv-rename-preview-label">Preview:</span>
+              <span class="lv-rename-preview-value" id="post-rename-preview-value">---</span>
+            </div>
+          </div>
+        </div>
       </div>
     `;
 
@@ -695,12 +729,110 @@ class LogVisualizer {
         }
       });
     }
+
+    // Rename toggle - show/hide rename options
+    const renameToggle = document.getElementById('post-rename-enabled');
+    const renameOptions = document.getElementById('post-rename-options');
+    if (renameToggle && renameOptions) {
+      renameToggle.addEventListener('change', (e) => {
+        renameOptions.style.display = e.target.checked ? 'block' : 'none';
+        if (e.target.checked) {
+          this.updateRenamePreview();
+        }
+      });
+    }
+
+    // Rename pattern input - live preview
+    const renamePatternInput = document.getElementById('post-rename-pattern');
+    if (renamePatternInput) {
+      renamePatternInput.addEventListener('input', () => {
+        this.updateRenamePreview();
+      });
+    }
+
+    // Rename placeholder chips - click to insert
+    const chips = document.querySelectorAll('#post-rename-chips .lv-rename-chip');
+    chips.forEach(chip => {
+      chip.addEventListener('click', () => {
+        const placeholder = chip.getAttribute('data-placeholder');
+        if (renamePatternInput && placeholder) {
+          const start = renamePatternInput.selectionStart;
+          const end = renamePatternInput.selectionEnd;
+          const val = renamePatternInput.value;
+          renamePatternInput.value = val.substring(0, start) + placeholder + val.substring(end);
+          renamePatternInput.focus();
+          const newPos = start + placeholder.length;
+          renamePatternInput.setSelectionRange(newPos, newPos);
+          this.updateRenamePreview();
+        }
+      });
+    });
+
+    // Initial preview update
+    if (renameToggle && renameToggle.checked) {
+      this.updateRenamePreview();
+    }
+  }
+
+  /**
+   * Get a sample participant for rename preview
+   */
+  getRenameSampleParticipant() {
+    if (this.presetParticipants && this.presetParticipants.length > 0) {
+      const p = this.presetParticipants[0];
+      return {
+        name: p.nome || p.name || 'Driver',
+        surname: p.cognome || p.surname || '',
+        number: p.numero || p.number || '1',
+        team: p.team || p.scuderia || 'Team',
+        car_model: p.car_model || p.modello || '',
+        nationality: p.nationality || p.nazionalita || ''
+      };
+    }
+    return {
+      name: 'Pierre Gasly', surname: 'Gasly', number: '10',
+      team: 'Alpine', car_model: 'A524', nationality: 'FRA'
+    };
+  }
+
+  /**
+   * Update the rename pattern preview with sample data
+   */
+  updateRenamePreview() {
+    const patternInput = document.getElementById('post-rename-pattern');
+    const previewEl = document.getElementById('post-rename-preview-value');
+    if (!patternInput || !previewEl) return;
+
+    const pattern = patternInput.value || '';
+    if (!pattern) {
+      previewEl.textContent = '---';
+      return;
+    }
+
+    const sample = this.getRenameSampleParticipant();
+    let preview = pattern;
+    preview = preview.replace(/\{number\}/g, sample.number);
+    preview = preview.replace(/\{name\}/g, sample.name);
+    preview = preview.replace(/\{surname\}/g, sample.surname);
+    preview = preview.replace(/\{team\}/g, sample.team);
+    preview = preview.replace(/\{car_model\}/g, sample.car_model);
+    preview = preview.replace(/\{nationality\}/g, sample.nationality);
+    preview = preview.replace(/\{event\}/g, 'Monaco_GP_2025');
+    preview = preview.replace(/\{date\}/g, new Date().toISOString().slice(0, 10).replace(/-/g, ''));
+    preview = preview.replace(/\{seq:\d+\}/g, '01');
+    preview = preview.replace(/\{seq\}/g, '001');
+    preview = preview.replace(/\{original\}/g, 'IMG_4523');
+
+    previewEl.textContent = preview + '.jpg';
   }
 
   /**
    * Get post-organization configuration
    */
   getPostOrganizationConfig() {
+    const renameEnabled = document.getElementById('post-rename-enabled')?.checked || false;
+    const renamePattern = document.getElementById('post-rename-pattern')?.value || '';
+
     return {
       enabled: true,
       mode: document.querySelector('input[name="post-org-mode"]:checked')?.value || 'copy',
@@ -710,7 +842,8 @@ class LogVisualizer {
       includeXmpFiles: true,
       destinationPath: document.querySelector('input[name="post-destination"]:checked')?.value === 'custom' ?
         document.getElementById('post-dest-path')?.value : undefined,
-      conflictStrategy: document.querySelector('input[name="post-conflict-strategy"]:checked')?.value || 'rename'
+      conflictStrategy: document.querySelector('input[name="post-conflict-strategy"]:checked')?.value || 'rename',
+      renamePattern: renameEnabled && renamePattern ? renamePattern : undefined
     };
   }
 

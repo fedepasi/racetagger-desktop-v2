@@ -60,6 +60,19 @@ export interface ImageTimestamp {
     subsecTimeOriginal?: string;
   };
   excludedReason?: string; // Why this image was excluded from clustering
+  // GPS & Camera metadata (for location tagging and photo context)
+  geoData?: {
+    latitude: number | null;   // WGS84 decimal degrees
+    longitude: number | null;  // WGS84 decimal degrees
+    altitude: number | null;   // meters above sea level
+    direction: number | null;  // compass heading of camera (0-360)
+  };
+  cameraData?: {
+    make: string | null;       // e.g. "Canon"
+    model: string | null;      // e.g. "Canon EOS R3"
+    lensModel: string | null;  // e.g. "EF 70-200mm f/2.8L IS III USM"
+    focalLength: number | null; // mm
+  };
 }
 
 export interface TemporalCluster {
@@ -308,7 +321,9 @@ export class TemporalClusterManager {
               fileName,
               timestamp: exifResult.timestamp,
               timestampSource: 'exif',
-              exifData: exifResult.exifData
+              exifData: exifResult.exifData,
+              geoData: exifResult.geoData,
+              cameraData: exifResult.cameraData
             });
           } else {
             // No valid DateTimeOriginal found - exclude from temporal clustering
@@ -399,8 +414,10 @@ export class TemporalClusterManager {
   private async extractExifTimestampsBatch(filePaths: string[]): Promise<Map<string, {
     timestamp: Date;
     exifData: any;
+    geoData?: { latitude: number | null; longitude: number | null; altitude: number | null; direction: number | null };
+    cameraData?: { make: string | null; model: string | null; lensModel: string | null; focalLength: number | null };
   } | null>> {
-    const results = new Map<string, { timestamp: Date; exifData: any; } | null>();
+    const results = new Map<string, { timestamp: Date; exifData: any; geoData?: any; cameraData?: any } | null>();
 
     // Acquisisci il semaforo per limitare processi concorrenti
     await this.exiftoolSemaphore.acquire();
@@ -414,7 +431,8 @@ export class TemporalClusterManager {
 
       // Usa il flag -@ di ExifTool per leggere i percorsi dal file
       // Non quotare exiftoolPath perché potrebbe già contenere spazi gestiti internamente
-      const command = `${this.exiftoolPath} -DateTimeOriginal -CreateDate -ModifyDate -SubSecTimeOriginal -json -@ "${tmpFile}"`;
+      // Extract timestamps + GPS coordinates + camera info in a single batch call
+      const command = `${this.exiftoolPath} -DateTimeOriginal -CreateDate -ModifyDate -SubSecTimeOriginal -GPSLatitude -GPSLongitude -GPSAltitude -GPSImgDirection -Make -Model -LensModel -FocalLength -n -json -@ "${tmpFile}"`;
 
       const { stdout, stderr } = await execAsync(command, {
         maxBuffer: 50 * 1024 * 1024, // 50MB buffer per batch grandi
@@ -469,6 +487,22 @@ export class TemporalClusterManager {
             }
 
             if (!isNaN(timestamp.getTime())) {
+              // Extract GPS data (with -n flag, values are already decimal numbers)
+              const geoData = {
+                latitude: typeof exifData.GPSLatitude === 'number' ? exifData.GPSLatitude : null,
+                longitude: typeof exifData.GPSLongitude === 'number' ? exifData.GPSLongitude : null,
+                altitude: typeof exifData.GPSAltitude === 'number' ? exifData.GPSAltitude : null,
+                direction: typeof exifData.GPSImgDirection === 'number' ? exifData.GPSImgDirection : null,
+              };
+
+              // Extract camera data
+              const cameraData = {
+                make: typeof exifData.Make === 'string' ? exifData.Make : null,
+                model: typeof exifData.Model === 'string' ? exifData.Model : null,
+                lensModel: typeof exifData.LensModel === 'string' ? exifData.LensModel : null,
+                focalLength: typeof exifData.FocalLength === 'number' ? exifData.FocalLength : null,
+              };
+
               results.set(filePath, {
                 timestamp,
                 exifData: {
@@ -476,7 +510,9 @@ export class TemporalClusterManager {
                   createDate: exifData.CreateDate,
                   modifyDate: exifData.ModifyDate,
                   subsecTimeOriginal: exifData.SubSecTimeOriginal
-                }
+                },
+                geoData,
+                cameraData
               });
             } else {
               results.set(filePath, null);

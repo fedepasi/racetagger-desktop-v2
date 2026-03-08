@@ -9,6 +9,7 @@
 import * as fs from 'fs';
 import * as fsPromises from 'fs/promises';
 import * as path from 'path';
+import { buildFilename, RenameContext } from './filename-renamer';
 
 // Helper to extract the primary driver name from participant data.
 // Handles both modern preset_participant_drivers array and legacy nome field.
@@ -29,6 +30,13 @@ function getDriverNameFromParticipant(csvData: CsvParticipantData): string {
   return csvData?.nome?.trim() || '';
 }
 
+// Extract surname from a full name (last word)
+function extractSurnameFromName(fullName: string): string {
+  if (!fullName) return '';
+  const parts = fullName.trim().split(/\s+/);
+  return parts.length > 1 ? parts[parts.length - 1] : parts[0];
+}
+
 // Configuration interface for folder organization
 export interface FolderOrganizerConfig {
   enabled: boolean;
@@ -40,6 +48,7 @@ export interface FolderOrganizerConfig {
   includeXmpFiles?: boolean; // Include XMP sidecar files for RAW images
   destinationPath?: string; // If not provided, uses source directory
   conflictStrategy?: 'rename' | 'skip' | 'overwrite'; // How to handle file conflicts
+  renamePattern?: string; // Optional filename pattern (e.g. "{number}_{name}_{team}-{seq:2}")
 }
 
 // Operation result for tracking
@@ -260,7 +269,30 @@ export class FolderOrganizer {
 
         await this.ensureFolderExists(targetFolder);
 
-        const targetPath = path.join(targetFolder, fileName);
+        // Compute target filename (apply rename pattern if configured)
+        let targetFileName = fileName;
+        if (this.config.renamePattern) {
+          const csvData = csvDataArray[i] || csvDataArray[0];
+          const driverName = csvData ? getDriverNameFromParticipant(csvData) : '';
+          const renameContext: RenameContext = {
+            original: path.parse(fileName).name,
+            extension: path.parse(fileName).ext,
+            participant: {
+              number: csvData?.numero || '',
+              name: driverName,
+              surname: extractSurnameFromName(driverName),
+              team: (csvData as any)?.squadra || (csvData as any)?.team || '',
+              car_model: (csvData as any)?.car_model || '',
+              nationality: (csvData as any)?.nationality || '',
+            },
+            sequenceNumber: i + 1,
+            outputFolder: targetFolder,
+          };
+          const renamedBase = buildFilename(this.config.renamePattern, renameContext);
+          targetFileName = renamedBase + path.parse(fileName).ext;
+        }
+
+        const targetPath = path.join(targetFolder, targetFileName);
         let finalTargetPath = targetPath;
         let operation: 'copy' | 'move' | 'skip' = this.config.mode;
 

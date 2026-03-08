@@ -3112,7 +3112,8 @@ app.whenReady().then(async () => { // Added async here
           unknownFolderName: folderOrganizationConfig.unknownFolderName || 'Unknown_Numbers',
           includeXmpFiles: folderOrganizationConfig.includeXmpFiles !== false,
           destinationPath: resolvedDestinationPath,
-          conflictStrategy: folderOrganizationConfig.conflictStrategy || 'rename'
+          conflictStrategy: folderOrganizationConfig.conflictStrategy || 'rename',
+          renamePattern: folderOrganizationConfig.renamePattern || undefined
         });
 
         // Process each image — try structured metadata first, JSONL as fallback

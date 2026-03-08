@@ -43,6 +43,7 @@ import { registerFeedbackHandlers } from './feedback-handlers';
 import { registerDiagnosticHandlers } from './diagnostic-handlers';
 import { registerErrorTelemetryHandlers } from './error-telemetry-handlers';
 import { registerPresetIptcHandlers } from './preset-iptc-handlers';
+import { registerUnifiedExportHandler } from './unified-export-handler';
 
 /**
  * Initialize IPC context with mainWindow reference
@@ -112,8 +113,11 @@ export function registerAllHandlers(): void {
   // IPTC metadata handlers (4)
   registerPresetIptcHandlers();
 
+  // Unified export handler (1)
+  registerUnifiedExportHandler();
+
   console.log('[IPC] ========================================');
-  console.log('[IPC] All handlers registered (140 modular handlers)');
+  console.log('[IPC] All handlers registered (141 modular handlers)');
   console.log('[IPC] ========================================');
 }
 

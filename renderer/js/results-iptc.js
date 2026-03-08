@@ -516,11 +516,7 @@ async function startIptcProWrite() {
   try {
     const kwMode = document.querySelector('input[name="ipf-kw-mode"]:checked')?.value || 'append';
 
-    const response = await window.api.invoke('iptc-finalize-batch', {
-      iptcMetadata: iptcMetadata,
-      results: results,
-      keywordsMode: kwMode
-    });
+    const response = await window.api.invoke('iptc-finalize-batch', iptcMetadata, results, kwMode);
 
     if (response.success) {
       const summary = response.data;
@@ -538,8 +534,8 @@ async function startIptcProWrite() {
 
       // Wait a moment then close
       setTimeout(() => {
-        closeIptcProModal();
         iptcProIsWriting = false;
+        closeIptcProModal();
       }, 2000);
     } else {
       throw new Error(response.error || 'Unknown error');
