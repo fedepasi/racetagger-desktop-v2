@@ -1,6 +1,6 @@
 import * as path from 'path';
 import { IptcFinalizationConfig, IptcFinalizationSummary, FinalizedResult, MatchedParticipantData } from './iptc-types';
-import { writeFullMetadata, buildMetadataFromPresetIptc, ExportDestinationMetadata } from './metadata-writer';
+import { writeFullMetadata, buildMetadataFromPresetIptc, ExportDestinationMetadata, buildExtendedName, resolvePersonShown } from './metadata-writer';
 
 /**
  * IPTC Pro Finalizer
@@ -182,13 +182,28 @@ function buildMetadataForResult(
     keywordsMode
   );
 
-  // Override Person Shown with comma-separated list (IPTC standard: one entry per person)
-  // buildMetadataFromPresetIptc resolves personShownTemplate with aggregated name,
-  // but for multi-match we want individual entries. Override if we have names.
-  if (names.length > 1 && iptcMetadata.personShownTemplate) {
-    // Build individual personShown entries, comma-separated
-    // IPTC PersonInImage expects individual names
-    metadata.personShown = names.join(', ');
+  // Override Person Shown with individual entries per participant (IPTC standard)
+  // For multi-match we resolve each participant individually using the chosen format
+  if (names.length > 1) {
+    const format = iptcMetadata.personShownFormat;
+    const template = iptcMetadata.personShownTemplate;
+
+    if (format === 'extended') {
+      // Each participant gets their own extended name entry
+      const extendedNames = allParticipants
+        .filter(p => p.name)
+        .map(p => buildExtendedName(p));
+      metadata.personShown = extendedNames;
+    } else if (format === 'custom' && template) {
+      // Each participant resolved individually with custom template
+      const customNames = allParticipants
+        .filter(p => p.name)
+        .map(p => resolvePersonShown('custom', template, p));
+      metadata.personShown = customNames;
+    } else {
+      // 'simple' or default — just names
+      metadata.personShown = names;
+    }
   }
 
   // Add ALL participants' names and teams as individual keywords

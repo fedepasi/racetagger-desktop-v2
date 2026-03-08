@@ -182,7 +182,7 @@ export function registerUnifiedExportHandler(): void {
       // Phase 2: Write IPTC metadata (on exported copies)
       if (writeIptc && iptcMetadata && copiedPaths.length > 0) {
         try {
-          const { writeFullMetadata, buildMetadataFromPresetIptc } =
+          const { writeFullMetadata, buildMetadataFromPresetIptc, buildExtendedName, resolvePersonShown } =
             await import('../utils/metadata-writer');
 
           for (let i = 0; i < copiedPaths.length; i++) {
@@ -222,11 +222,25 @@ export function registerUnifiedExportHandler(): void {
                 keywordsMode || 'append'
               );
 
-              // Handle multi-match person shown
-              if (allParticipants.length > 1 && iptcMetadata.personShownTemplate) {
-                const pNames = allParticipants.map(p => p.name).filter(Boolean);
+              // Handle multi-match person shown — format-aware
+              if (allParticipants.length > 1) {
+                const pNames = allParticipants.map(p => p.name).filter(Boolean) as string[];
                 if (pNames.length > 1) {
-                  metadata.personShown = pNames.join(', ');
+                  const format = iptcMetadata.personShownFormat;
+                  const template = iptcMetadata.personShownTemplate;
+
+                  if (format === 'extended') {
+                    metadata.personShown = allParticipants
+                      .filter(p => p.name)
+                      .map(p => buildExtendedName(p));
+                  } else if (format === 'custom' && template) {
+                    metadata.personShown = allParticipants
+                      .filter(p => p.name)
+                      .map(p => resolvePersonShown('custom', template, p));
+                  } else {
+                    // 'simple' or default — just names
+                    metadata.personShown = pNames;
+                  }
                 }
               }
 

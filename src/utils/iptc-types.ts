@@ -14,7 +14,12 @@
  * Stored as JSONB in participant_presets.iptc_metadata column.
  *
  * Template fields support placeholders: {name}, {surname}, {number}, {team},
- * {car_model}, {nationality}, {event}, {date}
+ * {car_model}, {nationality}, {event}, {date}, {persons}
+ *
+ * Person Shown formats:
+ * - 'simple':   "Lando Norris" (name only)
+ * - 'extended': "(1) Lando Norris (GBR) - McLaren Mastercard F1 Team - McLaren MCL40 - Mercedes"
+ * - 'custom':   uses personShownTemplate with placeholders
  */
 export interface PresetIptcMetadata {
   // === CREDITS ===
@@ -68,7 +73,8 @@ export interface PresetIptcMetadata {
   appendKeywords?: boolean;     // true = merge con AI keywords; false = overwrite
 
   // === PERSON SHOWN ===
-  personShownTemplate?: string; // "{name}" o "{name} ({nationality}) {team}"
+  personShownFormat?: 'simple' | 'extended' | 'custom';  // Format for PersonInImage field
+  personShownTemplate?: string; // Custom template: "{name}" o "({number}) {name} ({nationality}) - {team}"
 }
 
 /**

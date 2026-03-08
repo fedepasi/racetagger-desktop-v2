@@ -407,7 +407,20 @@ function createUnifiedModal() {
                 <label><input type="checkbox" id="unified-sec-person" checked> Person Shown</label>
               </div>
               <div class="iptc-pro-col-body">
-                <div class="ipf"><label>Template</label><input type="text" id="unified-person-shown" value="${escapeAttrUnified(m.personShownTemplate)}"></div>
+                <div class="ipf"><label>Format</label>
+                  <select id="unified-person-format" onchange="togglePersonShownCustom()">
+                    <option value="simple" ${(!m.personShownFormat || m.personShownFormat === 'simple') ? 'selected' : ''}>Name only</option>
+                    <option value="extended" ${m.personShownFormat === 'extended' ? 'selected' : ''}>Extended (number, name, nationality, team, car)</option>
+                    <option value="custom" ${m.personShownFormat === 'custom' ? 'selected' : ''}>Custom template</option>
+                  </select>
+                </div>
+                <div class="ipf" id="unified-person-custom-row" style="display:${m.personShownFormat === 'custom' ? 'flex' : 'none'}">
+                  <label>Template</label>
+                  <input type="text" id="unified-person-shown" value="${escapeAttrUnified(m.personShownTemplate)}" placeholder="({number}) {name} ({nationality}) - {team}">
+                </div>
+                <div class="ipf-hint" id="unified-person-preview" style="font-size:0.75rem; color:#94a3b8; padding:4px 0 0 0;">
+                  ${buildPersonPreviewHtml(m.personShownFormat)}
+                </div>
               </div>
             </div>
 
@@ -716,7 +729,14 @@ function collectUnifiedIptcFormData() {
   data.appendKeywords = kwMode !== 'overwrite';
 
   // Person Shown
-  if (getValue('unified-person-shown')) data.personShownTemplate = getValue('unified-person-shown');
+  const personFormat = getValue('unified-person-format') || 'simple';
+  data.personShownFormat = personFormat;
+  if (personFormat === 'custom' && getValue('unified-person-shown')) {
+    data.personShownTemplate = getValue('unified-person-shown');
+  } else if (personFormat !== 'custom') {
+    // Clear custom template when not in custom mode
+    data.personShownTemplate = undefined;
+  }
 
   // Rights
   if (getValue('unified-digital-source')) data.digitalSourceType = getValue('unified-digital-source');
@@ -1000,6 +1020,38 @@ function escapeHtmlUnified(str) {
 function escapeAttrUnified(str) {
   if (!str) return '';
   return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ============================================================
+// Person Shown format helpers
+// ============================================================
+
+/**
+ * Toggle visibility of custom template input based on format dropdown.
+ */
+function togglePersonShownCustom() {
+  const format = document.getElementById('unified-person-format')?.value;
+  const customRow = document.getElementById('unified-person-custom-row');
+  const preview = document.getElementById('unified-person-preview');
+
+  if (customRow) {
+    customRow.style.display = format === 'custom' ? 'flex' : 'none';
+  }
+  if (preview) {
+    preview.innerHTML = buildPersonPreviewHtml(format);
+  }
+}
+
+/**
+ * Build a preview example for the selected PersonShown format.
+ */
+function buildPersonPreviewHtml(format) {
+  const examples = {
+    simple: '<span style="color:#60a5fa;">Preview:</span> Lando Norris',
+    extended: '<span style="color:#60a5fa;">Preview:</span> (1) Lando Norris (GBR) - McLaren Mastercard F1 Team - McLaren MCL40 - Mercedes',
+    custom: '<span style="color:#60a5fa;">Placeholders:</span> {number}, {name}, {surname}, {nationality}, {team}, {car_model}',
+  };
+  return examples[format] || examples.simple;
 }
 
 // ============================================================

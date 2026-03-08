@@ -456,6 +456,100 @@ export function buildPersonShownString(
 }
 
 /**
+ * Build the extended name string for a participant.
+ * Format: "({number}) {name} ({nationality}) - {team} - {car_model}"
+ * Example: "(1) Lando Norris (GBR) - McLaren Mastercard F1 Team - McLaren MCL40 - Mercedes"
+ *
+ * Omits parts gracefully if data is missing:
+ *  - No number  → "Lando Norris (GBR) - McLaren..."
+ *  - No nationality → "(1) Lando Norris - McLaren..."
+ *  - Only name → "Lando Norris"
+ */
+export function buildExtendedName(participant: {
+  name?: string;
+  number?: string | number;
+  team?: string;
+  car_model?: string;
+  nationality?: string;
+}): string {
+  if (!participant.name) return '';
+
+  const parts: string[] = [];
+
+  // ({number}) {name} ({nationality})
+  let nameBlock = '';
+  if (participant.number) {
+    nameBlock += `(${participant.number}) `;
+  }
+  nameBlock += participant.name;
+  if (participant.nationality) {
+    nameBlock += ` (${participant.nationality})`;
+  }
+  parts.push(nameBlock);
+
+  // Team
+  if (participant.team) {
+    parts.push(participant.team);
+  }
+
+  // Car model (e.g. "McLaren MCL40 - Mercedes")
+  if (participant.car_model) {
+    parts.push(participant.car_model);
+  }
+
+  return parts.join(' - ');
+}
+
+/**
+ * Build simple name string for keywords. Just the participant name.
+ * For multi-match, returns individual names array (not joined).
+ */
+export function buildSimpleName(participant: {
+  name?: string;
+}): string {
+  return participant.name || '';
+}
+
+/**
+ * Resolve the personShown value based on personShownFormat setting.
+ *
+ * @param format 'simple' | 'extended' | 'custom' (defaults to 'simple' for backward compat)
+ * @param template Custom template string (used only when format='custom')
+ * @param participant Participant data
+ * @returns The resolved person shown string
+ */
+export function resolvePersonShown(
+  format: 'simple' | 'extended' | 'custom' | undefined,
+  template: string | undefined,
+  participant: {
+    name?: string;
+    surname?: string;
+    number?: string | number;
+    team?: string;
+    car_model?: string;
+    nationality?: string;
+  }
+): string {
+  if (!participant.name) return '';
+
+  switch (format) {
+    case 'extended':
+      return buildExtendedName(participant);
+
+    case 'custom':
+      return buildPersonShownString(template || '{name}', participant);
+
+    case 'simple':
+    default:
+      // Backward compatible — if there's a template, use it; otherwise just name
+      if (template && template !== '{name}') {
+        return buildPersonShownString(template, participant);
+      }
+      return participant.name;
+  }
+}
+
+/**
  * Interface for full metadata from Export Destination
  * Covers all IPTC/XMP fields supported by Photo Mechanic and news agencies
  */
@@ -934,6 +1028,10 @@ export function buildMetadataFromPresetIptc(
         .replace(/\{nationality\}/g, participant.nationality || '');
     }
 
+    // {persons} → extended name format (Photo Mechanic convention)
+    // e.g. "(1) Lando Norris (GBR) - McLaren Mastercard F1 Team - McLaren MCL40"
+    result = result.replace(/\{persons\}/g, personsExtended);
+
     // Clean up empty placeholders, double spaces, empty parens
     result = result
       .replace(/\{[^}]+\}/g, '')  // Remove any unresolved placeholders
@@ -944,11 +1042,20 @@ export function buildMetadataFromPresetIptc(
     return result || undefined;
   };
 
-  // Build person shown string
+  // Build person shown string using the format setting
   let personShown: string | undefined;
-  if (iptcProfile.personShownTemplate && participant?.name) {
-    personShown = buildPersonShownString(iptcProfile.personShownTemplate, participant);
+  if (participant?.name) {
+    personShown = resolvePersonShown(
+      iptcProfile.personShownFormat,
+      iptcProfile.personShownTemplate,
+      participant
+    );
   }
+
+  // Build extended name for {persons} placeholder in descriptions/headlines
+  const personsExtended = participant?.name
+    ? buildExtendedName(participant)
+    : '';
 
   // Build keywords: merge base + AI keywords based on mode
   let keywords: string[] = [];
