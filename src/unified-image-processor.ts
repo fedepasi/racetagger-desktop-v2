@@ -1298,7 +1298,8 @@ class UnifiedImageWorker extends EventEmitter {
     compressedBuffer: Buffer,
     mimeType: string,
     uploadReadyPath?: string,
-    storagePath?: string  // Storage path from Supabase upload
+    storagePath?: string,  // Storage path from Supabase upload
+    processor?: UnifiedImageProcessor
   ): Promise<any> {
     const startTime = Date.now();
     // Detailed timing for AI analysis breakdown
@@ -2962,7 +2963,7 @@ class UnifiedImageWorker extends EventEmitter {
         // PERFORMANCE: Run AI analysis and visual tagging IN PARALLEL
         const visualTaggingEnabled = this.config.visualTagging?.enabled && storagePath;
         const [cropContextResult, parallelVisualTags] = await Promise.all([
-          this.analyzeWithCropContext(imageFile, buffer, mimeType, uploadReadyPath, storagePath),
+          this.analyzeWithCropContext(imageFile, buffer, mimeType, uploadReadyPath, storagePath, processor),
           visualTaggingEnabled
             ? this.invokeVisualTagging(storagePath, null).catch(err => {
                 log.warn(`[VisualTagging] Failed in parallel (continuing): ${err.message}`);
@@ -3944,8 +3945,8 @@ class UnifiedImageWorker extends EventEmitter {
 
     if (!bestBuffer) {
       // Last resort: use minimum quality
-      const processor = await createImageProcessor(imageBuffer);
-      bestBuffer = await processor
+      const fallbackProcessor = await createImageProcessor(imageBuffer);
+      bestBuffer = await fallbackProcessor
         .rotate()
         .withMetadata() // Preserve EXIF metadata (GPS, camera info, timestamps)
         .resize(this.config.maxDimension, this.config.maxDimension, {
@@ -3959,7 +3960,7 @@ class UnifiedImageWorker extends EventEmitter {
         .toBuffer();
     }
 
-    return bestBuffer;
+    return bestBuffer!;
   }
 
   /**
