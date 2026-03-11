@@ -867,21 +867,24 @@ export class AuthService {
     }
   }
 
-  // Request a password reset email (for users who registered via download page without setting a password)
+  // Request a password reset email via web API route (sends via Brevo for better deliverability)
   async requestPasswordReset(email: string): Promise<{ success: boolean; error?: string }> {
     try {
       const normalizedEmail = email.toLowerCase().trim();
 
-      const { error } = await this.supabase.auth.resetPasswordForEmail(normalizedEmail, {
-        redirectTo: 'https://www.racetagger.cloud/reset-password'
+      // Use the web API route which sends via Brevo (better deliverability than Supabase native email)
+      const response = await fetch('https://www.racetagger.cloud/api/auth/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: normalizedEmail }),
       });
 
-      if (error) {
-        console.error('Password reset request error:', error);
-        return { success: false, error: error.message };
+      if (!response.ok) {
+        console.error('Password reset request failed:', response.status, response.statusText);
+        return { success: false, error: 'Failed to send recovery email' };
       }
 
-      console.log(`Password reset email sent to ${normalizedEmail}`);
+      console.log(`Password reset email requested for ${normalizedEmail} (via web API)`);
       return { success: true };
     } catch (error: any) {
       console.error('Password reset request exception:', error);
