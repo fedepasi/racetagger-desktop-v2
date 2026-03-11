@@ -42,7 +42,7 @@ jobs:
         include:
           - os: macos-14       # Apple Silicon runner
             arch: arm64
-          - os: macos-13       # Intel runner
+          - os: macos-14       # Cross-compile x64 on Apple Silicon
             arch: x64
 
     runs-on: ${{ matrix.os }}
@@ -174,29 +174,12 @@ jobs:
       - name: Compile TypeScript
         run: npm run compile
 
-      # Windows code signing setup (EV/OV certificate)
-      # Supports two methods:
-      #   1. Cloud signing (Azure SignTool / DigiCert KeyLocker) — recommended for EV
-      #   2. PFX file-based signing — for OV certificates
-      - name: Setup Windows code signing (PFX)
-        if: env.WIN_CSC_LINK != ''
-        env:
-          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-        shell: pwsh
-        run: |
-          # Decode PFX from base64 and save to temp
-          $pfxBytes = [Convert]::FromBase64String($env:WIN_CSC_LINK)
-          $pfxPath = Join-Path $env:RUNNER_TEMP "win-certificate.pfx"
-          [IO.File]::WriteAllBytes($pfxPath, $pfxBytes)
-          echo "WIN_CSC_LINK_PATH=$pfxPath" >> $env:GITHUB_ENV
-
+      # Windows code signing: will use Azure Trusted Signing when configured.
+      # For now, builds unsigned. PFX-based signing available as fallback.
       - name: Build Electron app (Windows x64)
         run: npm run build:win:x64
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Windows code signing (electron-builder reads these)
-          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
 
       - name: Verify build artifacts
         shell: bash
@@ -206,13 +189,6 @@ jobs:
           ls -lh release/*.exe release/*.zip 2>/dev/null || echo "No artifacts found"
           ls -lh release/*.exe release/*.zip 2>/dev/null >> $GITHUB_STEP_SUMMARY || echo "No artifacts found" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-
-      - name: Clean up certificate
-        if: always()
-        shell: pwsh
-        run: |
-          $pfxPath = Join-Path $env:RUNNER_TEMP "win-certificate.pfx"
-          if (Test-Path $pfxPath) { Remove-Item $pfxPath -Force }
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
