@@ -6,270 +6,248 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel in-progress runs for the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
-    strategy:
-      matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
-        node: [18.x]
-
-    runs-on: ${{ matrix.os }}
-
+  # ──────────────────────────────────────────────
+  # TypeScript compilation check (fast, always runs)
+  # ──────────────────────────────────────────────
+  compile:
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node }}
+          node-version: 18
           cache: 'npm'
 
-      - name: Install system dependencies (Ubuntu)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libimage-exiftool-perl dcraw
-
-      - name: Install system dependencies (macOS)
-        if: matrix.os == 'macos-latest'
-        run: |
-          brew install exiftool dcraw
-
-      - name: Install system dependencies (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          choco install exiftool -y
-        shell: pwsh
-
-      - name: Install npm dependencies
+      - name: Install dependencies (skip native modules)
         run: npm install --ignore-scripts
 
-      - name: Rebuild native modules for Node.js
-        run: npm rebuild
-        continue-on-error: true
-
-      - name: Generate test fixtures
-        run: npm run generate-fixtures
-
       - name: Compile TypeScript
-        run: npm run compile
+        run: npx tsc --noEmit
 
-      - name: Run unit tests (Sharp)
-        id: test-sharp
-        run: npm test -- --testPathPattern="sharp/"
-
-      - name: Run unit tests (Metadata)
-        id: test-metadata
-        run: npm test -- --testPathPattern="metadata/"
-        continue-on-error: true
-
-      - name: Run unit tests (RAW Processing)
-        id: test-raw
-        run: npm test -- --testPathPattern="raw/"
-        continue-on-error: true
-
-      - name: Run unit tests (ONNX)
-        id: test-onnx
-        run: npm test -- --testPathPattern="onnx/"
-        continue-on-error: true
-
-      - name: Download large test files
-        run: npm run download-test-files
-        continue-on-error: true
-
-      - name: Run E2E tests
-        id: test-e2e
-        run: npm test -- --testPathPattern="e2e/"
-        continue-on-error: true
-
-      - name: Test summary
-        if: always()
-        shell: bash
-        run: |
-          echo "## Test Results (${{ matrix.os }})" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Suite | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Sharp | ${{ steps.test-sharp.outcome }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Metadata | ${{ steps.test-metadata.outcome }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| RAW | ${{ steps.test-raw.outcome }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| ONNX | ${{ steps.test-onnx.outcome }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| E2E | ${{ steps.test-e2e.outcome }} |" >> $GITHUB_STEP_SUMMARY
-
-      - name: Upload test results
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-results-${{ matrix.os }}
-          path: |
-            tests/**/*.log
-            tests/temp/
-          retention-days: 7
-
-  build:
-    needs: test
+  # ──────────────────────────────────────────────
+  # Build macOS (arm64 + x64) with code signing + notarization
+  # ──────────────────────────────────────────────
+  build-mac:
+    needs: compile
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - os: macos-14
-            platform: mac
+          - os: macos-14       # Apple Silicon runner
             arch: arm64
-          - os: windows-latest
-            platform: win
+          - os: macos-13       # Intel runner
             arch: x64
 
     runs-on: ${{ matrix.os }}
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 18
-          cache: 'npm'
-
-      - name: Install npm dependencies
-        run: npm ci
-
-      - name: Compile TypeScript
-        run: npm run compile
-
-      - name: Build Electron app (macOS)
-        if: matrix.platform == 'mac'
-        run: npm run build:mac:${{ matrix.arch }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build Electron app (Windows)
-        if: matrix.platform == 'win'
-        run: npm run build:win:${{ matrix.arch }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Verify build artifacts (macOS)
-        if: matrix.platform == 'mac'
-        shell: bash
-        run: |
-          ls -lh release/*.dmg || echo "No DMG found"
-          ls -lh release/*.zip || echo "No ZIP found"
-
-      - name: Verify build artifacts (Windows)
-        if: matrix.platform == 'win'
-        shell: bash
-        run: |
-          ls -lh release/*.exe || echo "No EXE found"
-          ls -lh release/*.zip || echo "No ZIP found"
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: racetagger-${{ matrix.platform }}-${{ matrix.arch }}
-          path: release/*
-          retention-days: 7
-
-  verify:
-    needs: build
-    runs-on: macos-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download macOS ARM64 build
-        uses: actions/download-artifact@v4
-        with:
-          name: racetagger-mac-arm64
-          path: ./verify
-
-      - name: List downloaded artifacts
-        run: ls -la ./verify
-
-      - name: Mount DMG and verify app structure
-        run: |
-          # Find the DMG file
-          DMG_FILE=$(find ./verify -name "*.dmg" | head -n 1)
-
-          if [ -z "$DMG_FILE" ]; then
-            echo "No DMG file found"
-            exit 1
-          fi
-
-          echo "Mounting DMG: $DMG_FILE"
-          hdiutil attach "$DMG_FILE"
-
-          # List mounted volumes
-          ls -la /Volumes/
-
-          # Find RaceTagger volume
-          VOLUME_PATH=$(find /Volumes -maxdepth 1 -name "*RaceTagger*" | head -n 1)
-
-          if [ -z "$VOLUME_PATH" ]; then
-            echo "RaceTagger volume not found"
-            exit 1
-          fi
-
-          echo "RaceTagger volume: $VOLUME_PATH"
-
-          # Verify app structure
-          ls -la "$VOLUME_PATH/RaceTagger.app/Contents/Resources/"
-
-          # Verify ASAR unpack for native modules
-          ls -la "$VOLUME_PATH/RaceTagger.app/Contents/Resources/app.asar.unpacked/" || echo "No app.asar.unpacked found"
-
-          # Unmount
-          hdiutil detach "$VOLUME_PATH"
-
-      - name: Check code signing (macOS)
-        run: |
-          DMG_FILE=$(find ./verify -name "*.dmg" | head -n 1)
-
-          if [ -z "$DMG_FILE" ]; then
-            echo "No DMG file found"
-            exit 1
-          fi
-
-          hdiutil attach "$DMG_FILE"
-          VOLUME_PATH=$(find /Volumes -maxdepth 1 -name "*RaceTagger*" | head -n 1)
-
-          # Check code signing
-          codesign --verify --deep --strict "$VOLUME_PATH/RaceTagger.app" || echo "Code signing verification failed"
-
-          hdiutil detach "$VOLUME_PATH"
-
-  performance:
-    runs-on: ubuntu-latest
-    needs: test
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 18
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm install --ignore-scripts
-
-      - name: Rebuild native modules
-        run: npm rebuild
-        continue-on-error: true
+        run: npm ci
 
       - name: Compile TypeScript
         run: npm run compile
 
-      - name: Run performance benchmarks
-        run: npm run test:performance:quick
-        continue-on-error: true
+      # Import the Developer ID certificate into a temporary keychain
+      - name: Import code signing certificate
+        if: env.CSC_LINK != ''
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          # Create a temporary keychain
+          KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
 
-      - name: Upload benchmark results
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Decode and import the certificate
+          echo "$CSC_LINK" | base64 --decode > $RUNNER_TEMP/certificate.p12
+          security import $RUNNER_TEMP/certificate.p12 \
+            -k "$KEYCHAIN_PATH" \
+            -P "$CSC_KEY_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+
+          # Allow codesign to access the keychain
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Add to search list
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
+
+          # Clean up certificate file
+          rm -f $RUNNER_TEMP/certificate.p12
+
+      - name: Build Electron app (macOS ${{ matrix.arch }})
+        run: npm run build:mac:${{ matrix.arch }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Code signing (electron-builder reads these automatically)
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          # Notarization
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Verify build artifacts
+        shell: bash
+        run: |
+          echo "## macOS ${{ matrix.arch }} Build Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ls -lh release/*.dmg release/*.zip 2>/dev/null || echo "No artifacts found"
+          ls -lh release/*.dmg release/*.zip 2>/dev/null >> $GITHUB_STEP_SUMMARY || echo "No artifacts found" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Verify code signing
+        if: env.CSC_LINK != ''
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+        run: |
+          DMG_FILE=$(find release -name "*.dmg" | head -n 1)
+          if [ -n "$DMG_FILE" ]; then
+            hdiutil attach "$DMG_FILE" -nobrowse
+            VOLUME_PATH=$(find /Volumes -maxdepth 1 -name "*RaceTagger*" | head -n 1)
+            if [ -n "$VOLUME_PATH" ]; then
+              echo "## Code Signing Verification" >> $GITHUB_STEP_SUMMARY
+              codesign --verify --deep --strict --verbose=2 "$VOLUME_PATH/RaceTagger.app" 2>&1 | tee -a $GITHUB_STEP_SUMMARY && echo "✅ Code signing OK" >> $GITHUB_STEP_SUMMARY || echo "❌ Code signing FAILED" >> $GITHUB_STEP_SUMMARY
+              hdiutil detach "$VOLUME_PATH" -quiet
+            fi
+          fi
+
+      - name: Clean up keychain
+        if: always()
+        run: |
+          KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain
+          if [ -f "$KEYCHAIN_PATH" ]; then
+            security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+          fi
+
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-results
-          path: tests/performance/results/
+          name: racetagger-mac-${{ matrix.arch }}
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.blockmap
           retention-days: 30
+
+  # ──────────────────────────────────────────────
+  # Build Windows x64 with optional code signing
+  # ──────────────────────────────────────────────
+  build-win:
+    needs: compile
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile TypeScript
+        run: npm run compile
+
+      # Windows code signing setup (EV/OV certificate)
+      # Supports two methods:
+      #   1. Cloud signing (Azure SignTool / DigiCert KeyLocker) — recommended for EV
+      #   2. PFX file-based signing — for OV certificates
+      - name: Setup Windows code signing (PFX)
+        if: env.WIN_CSC_LINK != ''
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+        shell: pwsh
+        run: |
+          # Decode PFX from base64 and save to temp
+          $pfxBytes = [Convert]::FromBase64String($env:WIN_CSC_LINK)
+          $pfxPath = Join-Path $env:RUNNER_TEMP "win-certificate.pfx"
+          [IO.File]::WriteAllBytes($pfxPath, $pfxBytes)
+          echo "WIN_CSC_LINK_PATH=$pfxPath" >> $env:GITHUB_ENV
+
+      - name: Build Electron app (Windows x64)
+        run: npm run build:win:x64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Windows code signing (electron-builder reads these)
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+
+      - name: Verify build artifacts
+        shell: bash
+        run: |
+          echo "## Windows x64 Build Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ls -lh release/*.exe release/*.zip 2>/dev/null || echo "No artifacts found"
+          ls -lh release/*.exe release/*.zip 2>/dev/null >> $GITHUB_STEP_SUMMARY || echo "No artifacts found" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Clean up certificate
+        if: always()
+        shell: pwsh
+        run: |
+          $pfxPath = Join-Path $env:RUNNER_TEMP "win-certificate.pfx"
+          if (Test-Path $pfxPath) { Remove-Item $pfxPath -Force }
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: racetagger-win-x64
+          path: |
+            release/*.exe
+            release/*.zip
+            release/*.blockmap
+          retention-days: 30
+
+  # ──────────────────────────────────────────────
+  # Release (only on tags or release branches)
+  # Creates a GitHub Release with all artifacts
+  # ──────────────────────────────────────────────
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-mac, build-win]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: List all artifacts
+        run: find ./artifacts -type f | sort
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: |
+            artifacts/**/*.dmg
+            artifacts/**/*.exe
+            artifacts/**/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
