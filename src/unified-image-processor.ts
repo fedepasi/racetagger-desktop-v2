@@ -93,7 +93,9 @@ function isEdgeFunctionRetryable(errorMessage: string): boolean {
   // Network errors
   if (msg.includes('fetch failed') || msg.includes('econnrefused') ||
       msg.includes('etimedout') || msg.includes('failed to send') ||
-      msg.includes('econnreset') || msg.includes('socket hang up')) {
+      msg.includes('econnreset') || msg.includes('socket hang up') ||
+      msg.includes('failed to load image') || msg.includes('error reading a body') ||
+      msg.includes('connection error') || msg.includes('connection reset')) {
     return true;
   }
   // HTTP capacity/rate-limit errors

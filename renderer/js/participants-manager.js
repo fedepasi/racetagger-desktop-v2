@@ -488,8 +488,11 @@ function createPresetCard(preset) {
   // Generate different actions based on whether preset is official or user-owned
   let actionsHtml;
   if (isOfficial) {
-    // Official presets: only allow duplicate and view (no edit/delete)
+    // Official presets: view (read-only) and duplicate (no edit/delete)
     actionsHtml = `
+      <button class="btn btn-sm btn-secondary" onclick="viewOfficialPreset('${preset.id}')" title="View participants">
+        <span class="btn-icon">👁️</span> View
+      </button>
       <button class="btn btn-sm btn-primary" onclick="duplicateOfficialPreset('${preset.id}')" title="Duplicate to My Presets">
         <span class="btn-icon">📋</span> Duplicate
       </button>
@@ -1617,6 +1620,116 @@ async function editPreset(presetId) {
 }
 
 /**
+ * View an official preset in read-only mode.
+ * The modal shows participants but disables editing.
+ * The Save button becomes "Duplicate & Customize".
+ */
+async function viewOfficialPreset(presetId) {
+  try {
+    const response = await window.api.invoke('supabase-get-participant-preset-by-id', presetId);
+    if (!response.success || !response.data) {
+      showNotification('Error loading preset: ' + (response.error || 'Unknown error'), 'error');
+      return;
+    }
+
+    currentPreset = response.data;
+    isEditingPreset = false;
+    participantsData = currentPreset.participants || [];
+
+    // Load custom folders
+    customFolders = (currentPreset.custom_folders || []).map(f => {
+      const name = getFolderDisplayName(f);
+      const path = (typeof f === 'object' && f !== null) ? (f.path || '') : '';
+      const obj = { name };
+      if (path) obj.path = path;
+      return obj;
+    });
+    renderCustomFolders();
+
+    // Fill form with preset data
+    document.getElementById('preset-name').value = currentPreset.name || '';
+    document.getElementById('preset-description').value = currentPreset.description || '';
+    document.getElementById('preset-editor-title').textContent = 'Official Preset (Read Only)';
+
+    // Populate sport category dropdown
+    populateSportCategoryDropdown(currentPreset.category_id);
+
+    // Load participants into table
+    loadParticipantsIntoTable(participantsData);
+
+    // Apply read-only state to the modal
+    setPresetEditorReadOnly(true);
+
+    // Change Save button to "Duplicate & Customize"
+    const saveBtn = document.getElementById('save-preset-btn');
+    saveBtn.innerHTML = '<span class="btn-icon">📋</span>Duplicate & Customize';
+    saveBtn.setAttribute('onclick', `duplicateAndEditOfficialPreset('${presetId}')`);
+
+    // Show modal
+    const modal = document.getElementById('preset-editor-modal');
+    if (!modal) {
+      console.error('[Participants] Modal element not found in DOM');
+      return;
+    }
+    modal.classList.add('show');
+
+  } catch (error) {
+    console.error('[Participants] Error viewing official preset:', error);
+    showNotification('Error loading preset', 'error');
+  }
+}
+
+/**
+ * Toggle read-only state on the preset editor modal.
+ * Disables form inputs, hides add/delete buttons, etc.
+ */
+function setPresetEditorReadOnly(readOnly) {
+  const modal = document.getElementById('preset-editor-modal');
+  if (!modal) return;
+
+  // Disable/enable form fields
+  const fields = ['preset-name', 'preset-description', 'preset-sport-category'];
+  fields.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = readOnly;
+  });
+
+  // Toggle read-only class on modal for CSS-based hiding
+  if (readOnly) {
+    modal.classList.add('preset-read-only');
+  } else {
+    modal.classList.remove('preset-read-only');
+  }
+}
+
+/**
+ * Duplicate an official preset and immediately open it for editing.
+ */
+async function duplicateAndEditOfficialPreset(presetId) {
+  try {
+    showNotification('Duplicating preset...', 'info');
+
+    const response = await window.api.invoke('supabase-duplicate-official-preset', presetId);
+
+    if (response.success && response.data) {
+      // Close the read-only view
+      closePresetEditor();
+
+      showNotification(`Created "${response.data.name}" - opening for editing...`, 'success');
+
+      // Refresh list and open the new copy for editing
+      await loadParticipantPresets();
+      await editPreset(response.data.id);
+    } else {
+      showNotification('Error duplicating preset: ' + (response.error || 'Unknown error'), 'error');
+    }
+  } catch (error) {
+    console.error('[Participants] Error duplicating official preset:', error);
+    showNotification('Error duplicating preset', 'error');
+  }
+}
+
+/**
  * Duplicate an official preset to create a personal copy
  */
 async function duplicateOfficialPreset(presetId) {
@@ -1696,11 +1809,20 @@ async function exportPresetJSON(presetId) {
             participant_numero: p.numero,
             driver_name: d.driver_name,
             driver_metatag: d.driver_metatag,
+            driver_nationality: d.driver_nationality || '',
             driver_order: d.driver_order
           });
         });
       }
     }
+
+    // Build a lookup: participant numero → nationality from first driver
+    const nationalityByNumero = {};
+    allDrivers.forEach(d => {
+      if (d.driver_nationality && !nationalityByNumero[d.participant_numero]) {
+        nationalityByNumero[d.participant_numero] = d.driver_nationality;
+      }
+    });
 
     // Prepare export data with English field names
     const exportData = {
@@ -1712,6 +1834,8 @@ async function exportPresetJSON(presetId) {
         team: p.squadra,
         category: p.categoria,
         plate_number: p.plate_number,
+        car_model: p.car_model || '',
+        nationality: nationalityByNumero[p.numero] || '',
         sponsors: p.sponsor,
         metatag: p.metatag,
         folder_1: p.folder_1,
@@ -1721,10 +1845,10 @@ async function exportPresetJSON(presetId) {
         folder_2_path: p.folder_2_path,
         folder_3_path: p.folder_3_path
       })),
-      drivers: allDrivers,  // NEW: Complete driver data with IDs
+      drivers: allDrivers,  // Complete driver data with IDs
       custom_folders: preset.custom_folders || [],
       exported_at: new Date().toISOString(),
-      version: '2.1'  // Bump version to indicate folder path support
+      version: '2.2'  // Bump: car_model, nationality, driver_nationality support
     };
 
     // Convert to JSON
@@ -1798,7 +1922,7 @@ async function exportPresetCSV(presetId) {
     };
 
     // CSV Header (English column names + hidden driver preservation columns)
-    const csvHeader = 'Number,Driver,Team,Category,Plate_Number,Sponsors,Metatag,Folder_1,Folder_2,Folder_3,Folder_1_Path,Folder_2_Path,Folder_3_Path,_Driver_IDs,_Driver_Metatags';
+    const csvHeader = 'Number,Driver,Team,Category,Plate_Number,Car_Model,Nationality,Sponsors,Metatag,Folder_1,Folder_2,Folder_3,Folder_1_Path,Folder_2_Path,Folder_3_Path,_Driver_IDs,_Driver_Metatags,_Driver_Nationalities';
 
     // Convert participants to CSV rows (fetch drivers for each participant)
     const csvRows = await Promise.all(participants.map(async (p) => {
@@ -1809,6 +1933,10 @@ async function exportPresetCSV(presetId) {
       // Build pipe-separated driver metadata
       const driverIds = drivers.map(d => d.id).join('|');
       const driverMetatags = drivers.map(d => d.driver_metatag || '').join('|');
+      const driverNationalities = drivers.map(d => d.driver_nationality || '').join('|');
+
+      // Nationality: use first driver's nationality
+      const primaryNationality = drivers.length > 0 ? (drivers[0].driver_nationality || '') : '';
 
       return [
         escapeCSV(p.numero || ''),
@@ -1816,6 +1944,8 @@ async function exportPresetCSV(presetId) {
         escapeCSV(p.squadra || ''),
         escapeCSV(p.categoria || ''),
         escapeCSV(p.plate_number || ''),
+        escapeCSV(p.car_model || ''),
+        escapeCSV(primaryNationality),
         escapeCSV(p.sponsor || ''),
         escapeCSV(p.metatag || ''),
         escapeCSV(p.folder_1 || ''),
@@ -1825,7 +1955,8 @@ async function exportPresetCSV(presetId) {
         escapeCSV(p.folder_2_path || ''),
         escapeCSV(p.folder_3_path || ''),
         escapeCSV(driverIds),
-        escapeCSV(driverMetatags)
+        escapeCSV(driverMetatags),
+        escapeCSV(driverNationalities)
       ].join(',');
     }));
 
@@ -2283,6 +2414,16 @@ function closePresetEditor() {
   currentPreset = null;
   isEditingPreset = false;
   participantsData = [];
+
+  // Reset read-only state
+  setPresetEditorReadOnly(false);
+
+  // Reset Save button to default
+  const saveBtn = document.getElementById('save-preset-btn');
+  if (saveBtn) {
+    saveBtn.innerHTML = '<span class="btn-icon">💾</span>Save Preset';
+    saveBtn.setAttribute('onclick', 'savePreset()');
+  }
 }
 
 /**
@@ -2658,11 +2799,15 @@ async function importJsonPreset() {
       categoria: p.category || p.categoria || '',
       squadra: p.team || p.squadra || '',
       plate_number: p.plate_number || '',
+      car_model: p.car_model || '',
       sponsor: p.sponsors || p.sponsor || '',
       metatag: p.metatag || '',
       folder_1: p.folder_1 || '',
       folder_2: p.folder_2 || '',
-      folder_3: p.folder_3 || ''
+      folder_3: p.folder_3 || '',
+      folder_1_path: p.folder_1_path || '',
+      folder_2_path: p.folder_2_path || '',
+      folder_3_path: p.folder_3_path || ''
     }));
 
     // Create preset with Supabase
@@ -2716,6 +2861,7 @@ async function importJsonPreset() {
               id: d.id,  // Preserve original ID
               driver_name: d.driver_name,
               driver_metatag: d.driver_metatag,
+              driver_nationality: d.driver_nationality || null,
               driver_order: d.driver_order
             }))
           });
@@ -3650,6 +3796,7 @@ async function importPdfPreset() {
       nome: p.nome || '', // Comma-separated driver names
       categoria: p.categoria || '',
       squadra: p.squadra || '',
+      car_model: p.car_model || '',
       sponsor: Array.isArray(p.sponsors) ? p.sponsors.join(', ') : (p.sponsor || ''),
       metatag: '',
       plate_number: '',
@@ -3657,6 +3804,14 @@ async function importPdfPreset() {
       folder_2: '',
       folder_3: ''
     }));
+
+    // Build nationality lookup from PDF data for driver records
+    const pdfNationalityByNumero = {};
+    pdfImportData.participants.forEach(p => {
+      if (p.nationality) {
+        pdfNationalityByNumero[p.numero] = p.nationality;
+      }
+    });
 
     // Create preset
     const createResponse = await window.api.invoke('supabase-create-participant-preset', {
@@ -3685,24 +3840,45 @@ async function importPdfPreset() {
 
     const savedParticipants = saveResponse.participants || [];
 
-    // NEW: Auto-create driver records for multi-driver vehicles
+    // Auto-create driver records for all participants (multi-driver + single with nationality)
     let driversCreated = 0;
     for (const savedP of savedParticipants) {
-      if (savedP.nome && savedP.nome.includes(',')) {
+      const driverNames = savedP.nome ? savedP.nome.split(',').map(s => s.trim()).filter(Boolean) : [];
+      const nationality = pdfNationalityByNumero[savedP.numero] || '';
+
+      if (driverNames.length > 1) {
         // Multi-driver detected
-        const driverNames = savedP.nome.split(',').map(s => s.trim()).filter(Boolean);
+        console.log(`[PDF Import] Creating ${driverNames.length} drivers for #${savedP.numero}`);
 
-        if (driverNames.length > 1) {
-          console.log(`[PDF Import] Creating ${driverNames.length} drivers for #${savedP.numero}`);
+        const syncResult = await window.api.invoke('preset-driver-sync', {
+          participantId: savedP.id,
+          driverNames: driverNames
+        });
 
-          const syncResult = await window.api.invoke('preset-driver-sync', {
-            participantId: savedP.id,
-            driverNames: driverNames
-          });
+        if (syncResult.success) {
+          driversCreated += syncResult.created || 0;
 
-          if (syncResult.success) {
-            driversCreated += syncResult.created || 0;
+          // Propagate nationality to the first driver record
+          if (nationality && syncResult.drivers && syncResult.drivers.length > 0) {
+            await window.api.invoke('preset-update-driver', {
+              driverId: syncResult.drivers[0].id,
+              updates: { driver_nationality: nationality }
+            });
           }
+        }
+      } else if (driverNames.length === 1 && nationality) {
+        // Single driver with nationality - create driver record to preserve nationality
+        const batchResult = await window.api.invoke('preset-create-drivers-batch', {
+          participantId: savedP.id,
+          drivers: [{
+            driver_name: driverNames[0],
+            driver_nationality: nationality,
+            driver_order: 0
+          }]
+        });
+
+        if (batchResult.success) {
+          driversCreated += batchResult.count || 0;
         }
       }
     }
@@ -3736,6 +3912,8 @@ window.createNewPreset = createNewPreset;
 window.editPreset = editPreset;
 window.deletePreset = deletePreset;
 window.duplicateOfficialPreset = duplicateOfficialPreset;
+window.viewOfficialPreset = viewOfficialPreset;
+window.duplicateAndEditOfficialPreset = duplicateAndEditOfficialPreset;
 window.exportPresetJSON = exportPresetJSON;
 window.exportPresetCSV = exportPresetCSV;
 window.usePreset = usePreset;

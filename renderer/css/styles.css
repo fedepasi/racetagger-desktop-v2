@@ -1196,6 +1196,29 @@ html {
   font-size: 0.875rem;
 }
 
+/* Read-only mode for official presets viewed in editor */
+.preset-read-only .table-actions,
+.preset-read-only .csv-import-section,
+.preset-read-only .custom-folders-section {
+  display: none !important;
+}
+
+/* Hide the actions column (last td) in participant rows */
+.preset-read-only .participants-table td.no-sort,
+.preset-read-only .participants-table th:last-child {
+  display: none !important;
+}
+
+.preset-read-only .preset-form-fields input,
+.preset-read-only .preset-form-fields select,
+.preset-read-only .preset-form-fields textarea,
+.preset-read-only input,
+.preset-read-only select,
+.preset-read-only textarea {
+  pointer-events: none;
+  opacity: 0.7;
+}
+
 .form-actions {
   display: flex;
   flex-direction: column;

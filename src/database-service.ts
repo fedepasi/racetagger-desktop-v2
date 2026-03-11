@@ -1532,7 +1532,10 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
       console.log('[DB Save] 💾 Inserting', newParticipants.length, 'new participants');
       const { data: insertedData, error: insertError } = await supabase
         .from('preset_participants')
-        .insert(newParticipants.map(p => ({ ...p, preset_id: presetId })))
+        .insert(newParticipants.map(p => {
+          const { id, created_at, ...cleanData } = p as any;
+          return { ...cleanData, preset_id: presetId };
+        }))
         .select();
 
       if (insertError) {
@@ -1892,7 +1895,7 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
       custom_fields: {
         // Store any additional CSV fields
         ...Object.keys(row).reduce((acc, key) => {
-          const knownFields = ['numero', 'Number', 'nome', 'Driver', 'categoria', 'Category', 'squadra', 'team', 'Team', 'sponsor', 'Sponsors', 'metatag', 'Metatag', 'plate_number', 'Plate_Number', 'folder_1', 'Folder_1', 'folder_2', 'Folder_2', 'folder_3', 'Folder_3', 'folder_1_path', 'Folder_1_Path', 'folder_2_path', 'Folder_2_Path', 'folder_3_path', 'Folder_3_Path', '_Driver_IDs', '_driver_ids', '_Driver_Metatags', '_driver_metatags', '_Driver_Nationalities', '_driver_nationalities', 'car_model', 'Car_Model'];
+          const knownFields = ['numero', 'Number', 'nome', 'Driver', 'categoria', 'Category', 'squadra', 'team', 'Team', 'sponsor', 'Sponsors', 'metatag', 'Metatag', 'plate_number', 'Plate_Number', 'folder_1', 'Folder_1', 'folder_2', 'Folder_2', 'folder_3', 'Folder_3', 'folder_1_path', 'Folder_1_Path', 'folder_2_path', 'Folder_2_Path', 'folder_3_path', 'Folder_3_Path', '_Driver_IDs', '_driver_ids', '_Driver_Metatags', '_driver_metatags', '_Driver_Nationalities', '_driver_nationalities', 'car_model', 'Car_Model', 'nationality', 'Nationality'];
           if (!knownFields.includes(key)) {
             acc[key] = row[key];
           }
@@ -1944,11 +1947,16 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
 
     } else if (driverNames.length > 1) {
       // LEGACY MODE: No IDs in CSV - create new drivers
+      // Check for nationality column (Nationality or _Driver_Nationalities)
+      const nationalityRaw = row.Nationality || row.nationality || '';
+      const legacyNationalities = driverNationalitiesRaw ? driverNationalitiesRaw.split('|').map((s: string) => s.trim()) : [];
+
       const driversToCreate = driverNames.map((name: string, idx: number) => ({
         id: crypto.randomUUID(),
         participant_id: savedParticipant.id,
         driver_name: name,
         driver_metatag: null,
+        driver_nationality: legacyNationalities[idx] || (idx === 0 ? nationalityRaw : null) || null,
         driver_order: idx,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
@@ -1957,6 +1965,26 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
       await supabase.from('preset_participant_drivers').insert(driversToCreate);
 
       console.log(`[DB] CSV Import: Created ${driversToCreate.length} new drivers for participant ${savedParticipant.numero}`);
+    } else if (driverNames.length === 1) {
+      // SINGLE DRIVER: Still check for nationality to preserve
+      const nationalityRaw = row.Nationality || row.nationality || '';
+      const singleNationality = driverNationalitiesRaw ? driverNationalitiesRaw.split('|')[0]?.trim() : nationalityRaw;
+
+      if (singleNationality) {
+        const driverToCreate = {
+          id: crypto.randomUUID(),
+          participant_id: savedParticipant.id,
+          driver_name: driverNames[0],
+          driver_metatag: null,
+          driver_nationality: singleNationality || null,
+          driver_order: 0,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
+
+        await supabase.from('preset_participant_drivers').insert([driverToCreate]);
+        console.log(`[DB] CSV Import: Created single driver with nationality for participant ${savedParticipant.numero}`);
+      }
     }
   }
 

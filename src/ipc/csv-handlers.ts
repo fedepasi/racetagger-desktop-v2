@@ -251,11 +251,11 @@ function handleCsvTemplateDownload(event: IpcMainEvent): void {
 
     // Create CSV template content with all supported columns
     const csvTemplate =
-      "Number,Driver,Team,Category,Plate_Number,Sponsors,Metatag,Folder_1,Folder_2,Folder_3\n" +
-      "1,John Doe,Racing Team A,GT3,AB123CD,Sponsor Corp,Pro Driver,Team-A,GT3-Drivers,\n" +
-      "2,Mike Johnson,Speed Team,GT4,XY987ZW,Brand X,Semi-Pro,Speed-Team,GT4-Rookies,\n" +
-      "3,\"Balthasar, Ponzo, Roe\",Imperiale Racing,GT3,FE456GH,\"elea costruzioni, topcon\",VIP,Imperiale,,\n" +
-      "51,\"Alessandro Pier Guidi / James Calado\",Ferrari,GT3,FE488GT,\"Shell, Santander\",Pro,Ferrari-Team,GT3-Pro,";
+      "Number,Driver,Team,Category,Plate_Number,Car_Model,Nationality,Sponsors,Metatag,Folder_1,Folder_2,Folder_3\n" +
+      "1,John Doe,Racing Team A,GT3,AB123CD,Porsche 911 GT3 R,GBR,Sponsor Corp,Pro Driver,Team-A,GT3-Drivers,\n" +
+      "2,Mike Johnson,Speed Team,GT4,XY987ZW,BMW M4 GT4,USA,Brand X,Semi-Pro,Speed-Team,GT4-Rookies,\n" +
+      "3,\"Balthasar, Ponzo, Roe\",Imperiale Racing,GT3,FE456GH,Lamborghini Huracan GT3,ITA,\"elea costruzioni, topcon\",VIP,Imperiale,,\n" +
+      "51,\"Alessandro Pier Guidi / James Calado\",Ferrari,GT3,FE488GT,Ferrari 296 GT3,ITA,\"Shell, Santander\",Pro,Ferrari-Team,GT3-Pro,";
 
     // Show save dialog
     dialog.showSaveDialog(mainWindow, {
