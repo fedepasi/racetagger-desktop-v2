@@ -1466,6 +1466,110 @@ function openPresetGuide() {
   window.api.invoke('open-external-url', 'https://www.racetagger.cloud/blog/3-CSV-Starting-Lists-for-Race-Photography');
 }
 
+// ==================== Invalid Paths Warning Modal ====================
+
+let invalidPathsWarningCallback = null;
+
+/**
+ * Check for invalid folder paths in the selected preset before proceeding with analysis.
+ * If invalid paths found, shows a warning modal; otherwise proceeds directly.
+ */
+async function checkInvalidPathsThenProceed() {
+  const preset = window.enhancedFileBrowser?.selectedPreset;
+  if (!preset || !preset.id) {
+    return proceedWithFolderAnalysis();
+  }
+
+  // Collect folder paths from participants (localStorage priority, then DB fields)
+  const localPaths = typeof getLocalFolderPaths === 'function' ? getLocalFolderPaths(preset.id) : {};
+  const participants = preset.participants || [];
+  const folders = preset.custom_folders || [];
+  const pathsToCheck = new Set();
+
+  // Check custom folder paths
+  for (const f of folders) {
+    const name = (typeof f === 'object' && f !== null) ? (f.name || f) : f;
+    const dbPath = (typeof f === 'object' && f !== null) ? (f.path || '') : '';
+    const resolved = localPaths[name] || dbPath;
+    if (resolved) pathsToCheck.add(resolved);
+  }
+
+  // Check participant-level folder paths
+  for (const p of participants) {
+    for (const key of ['folder_1', 'folder_2', 'folder_3']) {
+      const folderName = p[key];
+      if (!folderName) continue;
+      const pathKey = key + '_path';
+      const resolved = localPaths[folderName] || p[pathKey] || '';
+      if (resolved) pathsToCheck.add(resolved);
+    }
+  }
+
+  if (pathsToCheck.size === 0) {
+    return proceedWithFolderAnalysis();
+  }
+
+  try {
+    const result = await window.api.invoke('validate-preset-folder-paths', { paths: Array.from(pathsToCheck) });
+    if (result.success && result.data && !result.data.valid && result.data.invalidPaths.length > 0) {
+      // Show warning modal
+      return new Promise((resolve) => {
+        invalidPathsWarningCallback = (shouldContinue) => {
+          invalidPathsWarningCallback = null;
+          if (shouldContinue) {
+            proceedWithFolderAnalysis();
+          }
+          resolve();
+        };
+        showInvalidPathsWarning(result.data.invalidPaths);
+      });
+    }
+  } catch (e) {
+    console.warn('[Analysis] Error validating folder paths:', e);
+  }
+
+  return proceedWithFolderAnalysis();
+}
+
+/**
+ * Show warning modal with list of invalid folder paths
+ */
+function showInvalidPathsWarning(invalidPaths) {
+  const modal = document.getElementById('invalid-paths-warning-modal');
+  if (!modal) {
+    console.warn('[Analysis] Invalid paths modal not found, proceeding anyway');
+    if (invalidPathsWarningCallback) invalidPathsWarningCallback(true);
+    return;
+  }
+
+  const list = document.getElementById('invalid-paths-list');
+  if (list) {
+    list.innerHTML = invalidPaths.map(p =>
+      `<li><span class="path-icon">&#10060;</span> ${p}</li>`
+    ).join('');
+  }
+
+  modal.classList.add('show');
+}
+
+/**
+ * Close invalid paths warning and cancel analysis
+ */
+function closeInvalidPathsWarning() {
+  const modal = document.getElementById('invalid-paths-warning-modal');
+  if (modal) modal.classList.remove('show');
+  if (invalidPathsWarningCallback) invalidPathsWarningCallback(false);
+}
+
+/**
+ * Continue with analysis despite invalid paths
+ */
+function continueWithInvalidPaths() {
+  const modal = document.getElementById('invalid-paths-warning-modal');
+  if (modal) modal.classList.remove('show');
+  if (invalidPathsWarningCallback) invalidPathsWarningCallback(true);
+}
+
 // Handle folder analysis
 async function handleFolderAnalysis() {
   // Wait for any in-progress preset loading before checking (fixes race condition
@@ -1511,8 +1615,8 @@ async function handleFolderAnalysis() {
       noPresetWarningCallback = (shouldContinue) => {
         noPresetWarningCallback = null;
         if (shouldContinue) {
-          // Continue with analysis
-          proceedWithFolderAnalysis();
+          // Continue with analysis (after invalid paths check)
+          checkInvalidPathsThenProceed();
         }
         resolve();
       };
@@ -1520,8 +1624,8 @@ async function handleFolderAnalysis() {
     });
   }
 
-  // Normal flow - proceed with analysis
-  return proceedWithFolderAnalysis();
+  // Normal flow - check invalid paths then proceed
+  return checkInvalidPathsThenProceed();
 }
 
 // Actual folder analysis logic (extracted from handleFolderAnalysis)

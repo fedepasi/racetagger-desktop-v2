@@ -287,22 +287,20 @@ ${stats.totalUsers > 0 ? `
 
 ## 💳 Pricing & Business Model
 
-### Pricing Beta (Pacchetti una tantum)
-| Piano | Prezzo | Token | Note |
-|-------|--------|-------|------|
-| **STARTER** | €29 | 3,000 | Test del servizio |
-| **PROFESSIONAL** | €49 | 10,000 | ⭐ Consigliato (1-2 eventi) |
-| **STUDIO** | €99 | 25,000 | Best value per token |
+### Pacchetti Token (una tantum)
+| Piano | Prezzo EB | Prezzo Standard | Token | Note |
+|-------|-----------|-----------------|-------|------|
+| **STARTER** | €25 | €39 | 2.000 | Test del servizio |
+| **PRO** | €69 | €119 | 7.000 | ⭐ Consigliato (1-2 eventi) |
+| **BUSINESS** | €149 | €279 | 20.000 | Best value per token |
 
-### Pricing Futuro (Abbonamenti)
-| Piano | Prezzo/mese | Foto/mese | Target |
-|-------|-------------|-----------|--------|
+### Abbonamenti Mensili
+| Piano | Prezzo/mese | Token/mese | Target |
+|-------|-------------|------------|--------|
 | **FREE** | Gratis | 100 | Trial |
-| **HOBBY** | €39 | 2,000 | Weekend hobbyist |
-| **ENTHUSIAST** | €79 | 5,000 | Semi-pro (2-4 eventi) |
-| **PROFESSIONAL** | €129 | 10,000 | Fotografo professionale |
-| **STUDIO** | €199 | 25,000 | Team 2 fotografi |
-| **AGENCY** | €399 | 50,000 | Team 3-5 fotografi |
+| **HOBBY** | €9.99 | 500 | Weekend hobbyist |
+| **PRO** | €29.99 | 2.000 | Fotografo professionale |
+| **BUSINESS** | €79.99 | 7.000 | Studi e agenzie |
 
 ---
 
@@ -416,7 +414,7 @@ ${stats.totalUsers > 0 ? `
 ### Revenue Metrics (Stima)
 ${stats.totalTokensPurchased > 0 ? `
 - **Token Venduti Totali**: ${stats.totalTokensPurchased.toLocaleString('it-IT')}
-- **Revenue Stimato** (a €49/10k): €${((stats.totalTokensPurchased / 10000) * 49).toFixed(2)}
+- **Revenue Stimato** (a €69/7k Pro EB): €${((stats.totalTokensPurchased / 7000) * 69).toFixed(2)}
 ` : '- Dati insufficienti per stime revenue'}
 
 ---

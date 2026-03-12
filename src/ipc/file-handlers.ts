@@ -168,5 +168,17 @@ export function registerFileHandlers(): void {
     }
   });
 
-  console.log('[IPC] File handlers registered (8 handlers)');
+  // ==================== FOLDER PATH VALIDATION ====================
+
+  ipcMain.handle('validate-preset-folder-paths', async (_, { paths }: { paths: string[] }) => {
+    const invalidPaths: string[] = [];
+    for (const p of paths) {
+      if (p && !fs.existsSync(p)) {
+        invalidPaths.push(p);
+      }
+    }
+    return { success: true, data: { valid: invalidPaths.length === 0, invalidPaths } };
+  });
+
+  console.log('[IPC] File handlers registered (9 handlers)');
 }

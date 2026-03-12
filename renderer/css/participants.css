@@ -3794,3 +3794,28 @@
     align-self: flex-end;
   }
 }
+
+/* ===== PRESET FOLDER PATH WARNING BADGE ===== */
+
+.preset-path-warning {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  margin-top: 0.5rem;
+  background: rgba(234, 179, 8, 0.12);
+  border: 1px solid rgba(234, 179, 8, 0.3);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  color: #ca8a04;
+  cursor: default;
+}
+
+.preset-path-warning .warning-icon {
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+
+.preset-card.preset-paths-warning {
+  border-color: rgba(234, 179, 8, 0.4);
+}

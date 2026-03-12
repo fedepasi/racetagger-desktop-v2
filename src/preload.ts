@@ -254,6 +254,9 @@ const validInvokeChannels: string[] = [
   'preset-iptc-save',
   'preset-iptc-import-xmp',
   'iptc-finalize-batch',
+
+  // Folder Path Validation
+  'validate-preset-folder-paths',
 ];
 
 

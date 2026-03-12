@@ -262,10 +262,16 @@ export class FolderOrganizer {
       // COPY FILE TO ALL FOLDERS
       for (let i = 0; i < foldersToCreate.length; i++) {
         const folderTarget = foldersToCreate[i];
-        // Use absolute path if set, otherwise fall back to baseDir/name
-        const targetFolder = folderTarget.absolutePath
-          ? folderTarget.absolutePath
-          : path.join(baseDir, folderTarget.name);
+        // Use absolute path if set and exists, otherwise fall back to baseDir/name
+        let targetFolder: string;
+        if (folderTarget.absolutePath && fs.existsSync(folderTarget.absolutePath)) {
+          targetFolder = folderTarget.absolutePath;
+        } else {
+          if (folderTarget.absolutePath) {
+            console.warn(`[FolderOrganizer] Absolute path not found: ${folderTarget.absolutePath} — falling back to relative: ${folderTarget.name}`);
+          }
+          targetFolder = path.join(baseDir, folderTarget.name);
+        }
 
         await this.ensureFolderExists(targetFolder);
 

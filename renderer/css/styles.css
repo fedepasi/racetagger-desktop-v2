@@ -5396,3 +5396,69 @@ body.modal-open {
   accent-color: var(--primary-color);
   cursor: pointer;
 }
+
+/* ===== INVALID PATHS WARNING MODAL ===== */
+
+.invalid-paths-modal {
+  max-width: 520px;
+  width: 95%;
+}
+
+#invalid-paths-warning-modal .modal-body {
+  padding: 1.5rem 2rem;
+  display: block;
+}
+
+.invalid-paths-hero {
+  text-align: center;
+  margin-bottom: 1.5rem;
+}
+
+.invalid-paths-hero .hero-icon {
+  font-size: 3rem;
+  margin-bottom: 0.75rem;
+}
+
+.invalid-paths-hero .hero-text {
+  font-size: 1.1rem;
+  color: var(--text-primary);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.invalid-paths-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1rem 0;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.invalid-paths-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.75rem;
+  margin-bottom: 0.25rem;
+  background: rgba(239, 68, 68, 0.08);
+  border-radius: 4px;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  font-family: monospace;
+  word-break: break-all;
+}
+
+.invalid-paths-list li .path-icon {
+  color: #ef4444;
+  flex-shrink: 0;
+}
+
+.invalid-paths-fallback-note {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin-bottom: 0;
+  padding: 0.75rem;
+  background: rgba(234, 179, 8, 0.08);
+  border-radius: 6px;
+}

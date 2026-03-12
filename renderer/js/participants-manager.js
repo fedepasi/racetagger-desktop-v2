@@ -463,6 +463,9 @@ function displayParticipantPresets(presets) {
     });
     userSection.appendChild(userGrid);
     container.appendChild(userSection);
+
+    // Validate folder paths asynchronously for user presets
+    validatePresetFolderPaths(userPresets);
   } else if (officialPresets.length > 0) {
     // Show message about creating first preset if only official presets exist
     const userSection = document.createElement('div');
@@ -484,6 +487,7 @@ function createPresetCard(preset) {
   const card = document.createElement('div');
   const isOfficial = preset.is_official === true;
   card.className = `preset-card${isOfficial ? ' official-preset-card' : ''}`;
+  card.setAttribute('data-preset-id', preset.id);
 
   // Generate different actions based on whether preset is official or user-owned
   let actionsHtml;
@@ -1375,6 +1379,11 @@ async function browseFolderPath() {
   if (result && result.filePaths && result.filePaths.length > 0) {
     const pathInput = document.getElementById('folder-path-input');
     if (pathInput) pathInput.value = result.filePaths[0];
+    // Also save to localStorage for this device
+    const nameInput = document.getElementById('folder-name-input');
+    if (nameInput && nameInput.value.trim() && currentPreset && currentPreset.id) {
+      updateLocalFolderPath(currentPreset.id, nameInput.value.trim(), result.filePaths[0]);
+    }
   }
 }
 
@@ -1397,6 +1406,11 @@ async function browseEditFolderPath() {
   if (result && result.filePaths && result.filePaths.length > 0) {
     const pathInput = document.getElementById('edit-folder-path-input');
     if (pathInput) pathInput.value = result.filePaths[0];
+    // Also save to localStorage for this device
+    const nameInput = document.getElementById('edit-folder-name-input');
+    if (nameInput && nameInput.value.trim() && currentPreset && currentPreset.id) {
+      updateLocalFolderPath(currentPreset.id, nameInput.value.trim(), result.filePaths[0]);
+    }
   }
 }
 
@@ -1413,9 +1427,118 @@ function clearEditFolderPath() {
  */
 function getFolderPath(folderName) {
   if (!folderName) return '';
+  // Priority: localStorage (per-device) > customFolders array (from DB)
+  if (currentPreset && currentPreset.id) {
+    const localPaths = getLocalFolderPaths(currentPreset.id);
+    if (localPaths[folderName]) return localPaths[folderName];
+  }
   const folder = customFolders.find(f => (getFolderDisplayName(f)) === folderName);
   if (!folder || typeof folder === 'string') return '';
   return folder.path || '';
+}
+
+// ==================== LOCAL FOLDER PATHS (per-device) ====================
+
+/**
+ * Get folder paths from localStorage for a given preset.
+ * Returns object: { folderName: absolutePath, ... }
+ */
+function getLocalFolderPaths(presetId) {
+  if (!presetId) return {};
+  try {
+    const stored = localStorage.getItem(`racetagger-folder-paths-${presetId}`);
+    return stored ? JSON.parse(stored) : {};
+  } catch (e) {
+    console.warn('[Participants] Error reading local folder paths:', e);
+    return {};
+  }
+}
+
+/**
+ * Save folder paths to localStorage for a given preset.
+ */
+function setLocalFolderPaths(presetId, pathsObj) {
+  if (!presetId) return;
+  try {
+    localStorage.setItem(`racetagger-folder-paths-${presetId}`, JSON.stringify(pathsObj));
+  } catch (e) {
+    console.warn('[Participants] Error saving local folder paths:', e);
+  }
+}
+
+/**
+ * Update a single folder path in localStorage for a given preset.
+ */
+function updateLocalFolderPath(presetId, folderName, folderPath) {
+  if (!presetId || !folderName) return;
+  const paths = getLocalFolderPaths(presetId);
+  if (folderPath) {
+    paths[folderName] = folderPath;
+  } else {
+    delete paths[folderName];
+  }
+  setLocalFolderPaths(presetId, paths);
+}
+
+// ==================== FOLDER PATH VALIDATION ====================
+
+/**
+ * Validate folder paths for preset cards. Adds warning badges to cards with invalid paths.
+ */
+async function validatePresetFolderPaths(presets) {
+  for (const preset of presets) {
+    const folders = preset.custom_folders || [];
+    if (folders.length === 0) continue;
+
+    // Collect all folder paths (localStorage priority, then DB)
+    const localPaths = getLocalFolderPaths(preset.id);
+    const pathsToCheck = [];
+    for (const f of folders) {
+      const name = (typeof f === 'object' && f !== null) ? (f.name || f) : f;
+      const dbPath = (typeof f === 'object' && f !== null) ? (f.path || '') : '';
+      const resolvedPath = localPaths[name] || dbPath;
+      if (resolvedPath) pathsToCheck.push(resolvedPath);
+    }
+
+    if (pathsToCheck.length === 0) continue;
+
+    try {
+      const result = await window.api.invoke('validate-preset-folder-paths', { paths: pathsToCheck });
+      if (result.success && result.data && !result.data.valid) {
+        markPresetCardInvalid(preset.id, result.data.invalidPaths);
+      }
+    } catch (e) {
+      console.warn('[Participants] Error validating folder paths for preset', preset.id, e);
+    }
+  }
+}
+
+/**
+ * Add a warning badge to a preset card with invalid folder paths.
+ */
+function markPresetCardInvalid(presetId, invalidPaths) {
+  const card = document.querySelector(`.preset-card[data-preset-id="${presetId}"]`);
+  if (!card) return;
+
+  card.classList.add('preset-paths-warning');
+
+  // Add warning banner below preset info
+  const existing = card.querySelector('.preset-path-warning');
+  if (existing) existing.remove();
+
+  const warning = document.createElement('div');
+  warning.className = 'preset-path-warning';
+  const count = invalidPaths.length;
+  warning.innerHTML = `<span class="warning-icon">&#9888;</span> ${count} folder path${count > 1 ? 's' : ''} not found on this device`;
+  warning.title = invalidPaths.join('\n');
+
+  // Insert after preset-info section
+  const presetInfo = card.querySelector('.preset-info') || card.querySelector('.preset-actions');
+  if (presetInfo) {
+    presetInfo.parentNode.insertBefore(warning, presetInfo.nextSibling);
+  } else {
+    card.appendChild(warning);
+  }
 }
 
 function saveEditedFolderName() {
@@ -1580,11 +1703,14 @@ async function editPreset(presetId) {
     participantsData = currentPreset.participants || [];
 
     // Load custom folders from preset (normalize all entries to {name, path?} objects)
+    // Merge with localStorage paths (per-device), giving localStorage priority
+    const localPaths = getLocalFolderPaths(currentPreset.id);
     customFolders = (currentPreset.custom_folders || []).map(f => {
       const name = getFolderDisplayName(f);
-      const path = (typeof f === 'object' && f !== null) ? (f.path || '') : '';
+      const dbPath = (typeof f === 'object' && f !== null) ? (f.path || '') : '';
+      const resolvedPath = localPaths[name] || dbPath;
       const obj = { name };
-      if (path) obj.path = path;
+      if (resolvedPath) obj.path = resolvedPath;
       return obj;
     });
     renderCustomFolders();
@@ -1636,12 +1762,14 @@ async function viewOfficialPreset(presetId) {
     isEditingPreset = false;
     participantsData = currentPreset.participants || [];
 
-    // Load custom folders
+    // Load custom folders, merge with localStorage paths (per-device)
+    const localPaths = getLocalFolderPaths(currentPreset.id);
     customFolders = (currentPreset.custom_folders || []).map(f => {
       const name = getFolderDisplayName(f);
-      const path = (typeof f === 'object' && f !== null) ? (f.path || '') : '';
+      const dbPath = (typeof f === 'object' && f !== null) ? (f.path || '') : '';
+      const resolvedPath = localPaths[name] || dbPath;
       const obj = { name };
-      if (path) obj.path = path;
+      if (resolvedPath) obj.path = resolvedPath;
       return obj;
     });
     renderCustomFolders();
@@ -2317,6 +2445,17 @@ async function savePreset() {
 
       presetId = createResponse.data.id;
     }
+
+    // Save folder paths to localStorage for this device
+    const localPathsToSave = {};
+    customFolders.forEach(f => {
+      const name = getFolderDisplayName(f);
+      const folderPath = (typeof f === 'object' && f !== null) ? (f.path || '') : '';
+      if (name && folderPath) {
+        localPathsToSave[name] = folderPath;
+      }
+    });
+    setLocalFolderPaths(presetId, localPathsToSave);
 
     // Save participants
     if (participants.length > 0) {

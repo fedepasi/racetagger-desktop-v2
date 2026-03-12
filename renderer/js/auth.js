@@ -72,6 +72,12 @@ function initializeAuth() {
   if (continueDemo) continueDemo.addEventListener('click', handleContinueWithoutLogin);
   if (backToLogin) backToLogin.addEventListener('click', () => switchAuthTab('login'));
 
+  // Forgot password link
+  const forgotPasswordLink = document.getElementById('forgot-password-link');
+  if (forgotPasswordLink) {
+    forgotPasswordLink.addEventListener('click', handleForgotPassword);
+  }
+
   // Sidebar logout button (in Settings section)
   const sidebarLogoutBtn = document.getElementById('sidebar-logout-btn');
   if (sidebarLogoutBtn) {
@@ -400,55 +406,78 @@ function handleLoginResult(result) {
 function showLoginPasswordHelp() {
   const errorElement = document.getElementById('login-error');
   if (errorElement) {
-    const email = document.getElementById('login-email').value.toLowerCase().trim();
     errorElement.innerHTML = `
       <div style="text-align: left;">
-        <p style="margin: 0 0 6px 0;"><strong>Account not yet activated.</strong></p>
+        <p style="margin: 0 0 6px 0;"><strong>Invalid credentials or account not yet activated.</strong></p>
         <p style="margin: 0 0 6px 0; font-size: 13px;">
           Check your inbox (and spam folder) for the activation email from RaceTagger, then click the link to set your password.
         </p>
         <a href="#" id="resend-password-setup" style="font-size: 12px; color: #667eea; text-decoration: underline; cursor: pointer;">
-          Didn't receive it? Resend activation email
+          Reset password on racetagger.cloud
         </a>
       </div>
     `;
     errorElement.style.display = 'flex';
     errorElement.className = 'error-message';
 
-    // Attach resend handler
+    // Attach handler that opens the web-based reset page
     const resendLink = document.getElementById('resend-password-setup');
     if (resendLink) {
       resendLink.addEventListener('click', (e) => {
         e.preventDefault();
-        if (!email) {
-          showAuthError('login', 'Enter your email address first');
-          return;
-        }
-        resendLink.textContent = 'Sending...';
-        resendLink.style.pointerEvents = 'none';
-        if (window.api) {
-          window.api.send('request-password-reset', { email });
+        if (window.api && window.api.invoke) {
+          window.api.invoke('open-external-url', 'https://www.racetagger.cloud/reset-password');
         }
       });
     }
   }
 }
 
+// Handle "Forgot your password?" click — opens the web reset page in the system browser
+function handleForgotPassword(e) {
+  e.preventDefault();
+
+  // Open the web-based reset password page in the default browser.
+  // The entire password recovery flow is handled on racetagger.cloud.
+  if (window.api && window.api.invoke) {
+    window.api.invoke('open-external-url', 'https://www.racetagger.cloud/reset-password');
+  }
+}
+
 // Handle password reset result
 function handlePasswordResetResult(result) {
   const resendLink = document.getElementById('resend-password-setup');
+  const forgotLink = document.getElementById('forgot-password-link');
+  const forgotMessage = document.getElementById('forgot-password-message');
+
   if (result.success) {
+    // Update inline resend link (from failed login flow)
     if (resendLink) {
       resendLink.textContent = '✓ Email sent! Check your inbox.';
       resendLink.style.color = '#10b981';
       resendLink.style.textDecoration = 'none';
       resendLink.style.pointerEvents = 'none';
     }
+    // Update forgot password link
+    if (forgotLink) {
+      forgotLink.textContent = 'Forgot your password?';
+      forgotLink.style.pointerEvents = 'auto';
+    }
+    // Show success message
+    if (forgotMessage) {
+      forgotMessage.textContent = 'Recovery email sent! Check your inbox (and spam folder).';
+      forgotMessage.style.display = 'flex';
+    }
   } else {
     if (resendLink) {
       resendLink.textContent = 'Didn\'t receive it? Resend activation email';
       resendLink.style.pointerEvents = 'auto';
     }
+    if (forgotLink) {
+      forgotLink.textContent = 'Forgot your password?';
+      forgotLink.style.pointerEvents = 'auto';
+    }
+    if (forgotMessage) forgotMessage.style.display = 'none';
     showAuthError('login', result.error || 'Failed to send email. Please try again.');
   }
 }
