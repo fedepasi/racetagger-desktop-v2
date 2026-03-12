@@ -1530,12 +1530,26 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
     // 2. INSERT new participants
     if (newParticipants.length > 0) {
       console.log('[DB Save] 💾 Inserting', newParticipants.length, 'new participants');
+      const insertPayload = newParticipants.map(p => {
+        const { id, created_at, ...cleanData } = p as any;
+        // FIX #78: Explicitly remove id and created_at to ensure Postgres uses DEFAULT gen_random_uuid()
+        // Edge case: if id was null/undefined, destructuring removes it from cleanData,
+        // but an extra safety delete ensures no serialization quirk sends null to Postgres
+        const record: any = { ...cleanData, preset_id: presetId };
+        delete record.id;
+        delete record.created_at;
+        return record;
+      });
+
+      // Log first record shape for debugging (omit actual data values)
+      if (insertPayload.length > 0) {
+        console.log('[DB Save] 📋 Insert record keys:', Object.keys(insertPayload[0]).join(', '),
+          '| has id?', 'id' in insertPayload[0]);
+      }
+
       const { data: insertedData, error: insertError } = await supabase
         .from('preset_participants')
-        .insert(newParticipants.map(p => {
-          const { id, created_at, ...cleanData } = p as any;
-          return { ...cleanData, preset_id: presetId };
-        }))
+        .insert(insertPayload)
         .select();
 
       if (insertError) {

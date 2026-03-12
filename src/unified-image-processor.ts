@@ -7071,10 +7071,17 @@ export class UnifiedImageProcessor extends EventEmitter {
     const activeWorkers = new Map<number, WorkerTracker>();
     let nextWorkerId = 0;
     
-    // Verifica token balance per l'intero batch
-    const canProcessBatch = await authService.canUseToken(imageFiles.length);
-    if (!canProcessBatch) {
-      throw new Error(`Token insufficienti per elaborare ${imageFiles.length} immagini`);
+    // FIX #78: Token balance check REMOVED — redundant with pre-auth system (v1.1.0+).
+    // pre_authorize_tokens() already verifies balance AND atomically increments tokens_used
+    // to reserve them. Calling canUseToken() here re-checks the balance AFTER the reservation
+    // has already reduced it, causing a false "Token insufficienti" for users with exact balance.
+    // The pre-auth at processBatch() line ~6222 is the single source of truth for token validation.
+    if (!this.usePreAuthSystem) {
+      // Legacy fallback: only check if pre-auth system is NOT active (shouldn't happen in v1.1.0+)
+      const canProcessBatch = await authService.canUseToken(imageFiles.length);
+      if (!canProcessBatch) {
+        throw new Error(`Token insufficienti per elaborare ${imageFiles.length} immagini`);
+      }
     }
     
     // Avvia worker iniziali

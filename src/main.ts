@@ -1654,14 +1654,19 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
         }
       })
       .catch(async (error) => {
-        console.error('[Main Process] Unified processing error:', error);
+        // FIX #78: Improved error logging — Error objects serialize as {} with JSON.stringify
+        // because message/stack are non-enumerable. Log message and stack explicitly.
+        const errorMessage = error instanceof Error ? error.message : (typeof error === 'string' ? error : JSON.stringify(error));
+        const errorStack = error instanceof Error ? error.stack : undefined;
+        console.error('[Main Process] Unified processing error:', errorMessage);
+        if (errorStack) console.error('[Main Process] Stack trace:', errorStack);
 
         // Aggiorna status execution in caso di errore
         if (currentExecutionId) {
           try {
             await updateExecutionOnline(currentExecutionId, {
               status: 'failed',
-              results_reference: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
+              results_reference: `Error: ${errorMessage}`
             });
           } catch (updateError) {
             if (DEBUG_MODE) console.warn('[Tracking] Failed to update execution status on error:', updateError);
@@ -1675,8 +1680,9 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
         }
 
         safeSend('processing-error', {
-          error: error instanceof Error ? error.message : 'Unknown error occurred',
-          details: error
+          error: errorMessage || 'Unknown error occurred',
+          details: error,
+          stack: errorStack
         });
 
         // CRITICAL FIX: Also send batch-complete so the renderer can redirect to results.html
