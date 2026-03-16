@@ -1288,11 +1288,16 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
         name: executionName,
         execution_at: new Date().toISOString(),
         status: 'running',
+        category: config.category || 'motorsport', // FIX: Include category field for management portal display
         sport_category_id: sportCategoryId
       });
       currentExecutionId = newExecution.id!;
+      console.log(`[Execution] Created execution ${currentExecutionId} for category "${config.category || 'motorsport'}"`);
     } catch (error: any) {
-      if (DEBUG_MODE) console.warn('[Tracking] Failed to create execution for tracking:', error);
+      // ALWAYS log execution creation failures — these are critical for management portal visibility
+      const errMsg = error instanceof Error ? error.message : JSON.stringify(error);
+      console.error(`[Execution] ⚠️ Failed to create execution record: ${errMsg}`);
+      if (error?.code) console.error(`[Execution] Error code: ${error.code} (42501=RLS violation, 42P01=missing table)`);
     }
   }
 
@@ -1531,8 +1536,10 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
               total_images: executionStats.totalImages,
               processed_images: results.length
             });
-          } catch (error) {
-            if (DEBUG_MODE) console.warn('[Tracking] Failed to update execution status:', error);
+            console.log(`[Execution] Updated execution ${currentExecutionId} → ${wasCancelled ? 'cancelled' : 'completed'} (${results.length}/${executionStats.totalImages} images)`);
+          } catch (error: any) {
+            // ALWAYS log — execution update failures affect management portal visibility
+            console.error(`[Execution] ⚠️ Failed to update execution status: ${error instanceof Error ? error.message : JSON.stringify(error)}`);
           }
         }
 
@@ -1668,8 +1675,8 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
               status: 'failed',
               results_reference: `Error: ${errorMessage}`
             });
-          } catch (updateError) {
-            if (DEBUG_MODE) console.warn('[Tracking] Failed to update execution status on error:', updateError);
+          } catch (updateError: any) {
+            console.error(`[Execution] ⚠️ Failed to update execution status on error: ${updateError instanceof Error ? updateError.message : JSON.stringify(updateError)}`);
           }
 
           // Traccia comunque le impostazioni anche in caso di errore
@@ -1742,11 +1749,17 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
         name: executionName,
         execution_at: new Date().toISOString(),
         status: 'running',
-        sport_category_id: sportCategoryId
+        category: config.category || 'motorsport', // FIX: Include category field for management portal display
+        sport_category_id: sportCategoryId,
+        total_images: 0 // Will be updated after processing
       });
       currentExecutionId = newExecution.id!;
+      console.log(`[Execution] Created folder analysis execution ${currentExecutionId} for category "${config.category || 'motorsport'}"`);
     } catch (error: any) {
-      if (DEBUG_MODE) console.warn('[Tracking] Failed to create execution for tracking:', error);
+      // ALWAYS log execution creation failures — these are critical for management portal visibility
+      const errMsg = error instanceof Error ? error.message : JSON.stringify(error);
+      console.error(`[Execution] ⚠️ Failed to create execution record: ${errMsg}`);
+      if (error?.code) console.error(`[Execution] Error code: ${error.code} (42501=RLS violation, 42P01=missing table)`);
     }
   }
 
@@ -2141,8 +2154,9 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
           total_images: totalImages,
           processed_images: completedImages
         });
-      } catch (error) {
-        if (DEBUG_MODE) console.warn('[Tracking] Failed to update execution status:', error);
+        console.log(`[Execution] Updated execution ${currentExecutionId} → completed (${completedImages}/${totalImages} images)`);
+      } catch (error: any) {
+        console.error(`[Execution] ⚠️ Failed to update execution status: ${error instanceof Error ? error.message : JSON.stringify(error)}`);
       }
     }
 
@@ -2191,8 +2205,8 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
           status: 'failed',
           results_reference: `Error: ${error.message || 'Unknown error'}`
         });
-      } catch (updateError) {
-        if (DEBUG_MODE) console.warn('[Tracking] Failed to update execution status on error:', updateError);
+      } catch (updateError: any) {
+        console.error(`[Execution] ⚠️ Failed to update execution status on error: ${updateError instanceof Error ? updateError.message : JSON.stringify(updateError)}`);
       }
 
       // Traccia comunque le impostazioni anche in caso di errore

@@ -197,7 +197,13 @@ export async function createExecutionOnline(executionData: Omit<Execution, 'id' 
   const userId = getCurrentUserId();
   if (!userId) throw new Error('User not authenticated.');
 
-  const { data, error } = await supabase
+  // FIX: Always use the authenticated client for execution creation.
+  // The module-level `supabase` variable starts as anon key client and only gets updated
+  // when getSupabaseClient() is called. Without this, INSERT may fail with RLS violation
+  // (code 42501) since executions table has RLS enabled with user-based policies.
+  const client = getSupabaseClient();
+
+  const { data, error } = await client
     .from('executions')
     .insert([{ ...executionData, user_id: userId }])
     .select()
@@ -206,7 +212,6 @@ export async function createExecutionOnline(executionData: Omit<Execution, 'id' 
   if (error) throw error;
   if (!data) throw new Error('Failed to create execution: no data returned.');
 
-  // cacheExecutionLocal(data as Execution); // TODO: Implementare caching
   return data as Execution;
 }
 
@@ -214,7 +219,9 @@ export async function getExecutionByIdOnline(id: string): Promise<Execution | nu
   const userId = getCurrentUserId();
   if (!userId) throw new Error('User not authenticated.');
 
-  const { data, error } = await supabase
+  const client = getSupabaseClient(); // FIX: Use authenticated client
+
+  const { data, error } = await client
     .from('executions')
     .select('*')
     .eq('id', id)
@@ -225,7 +232,6 @@ export async function getExecutionByIdOnline(id: string): Promise<Execution | nu
     if (error.code === 'PGRST116') return null;
     throw error;
   }
-  // if (data) cacheExecutionLocal(data as Execution); // TODO: Implementare caching
   return data as Execution | null;
 }
 
@@ -233,18 +239,19 @@ export async function updateExecutionOnline(id: string, executionUpdateData: Par
   const userId = getCurrentUserId();
   if (!userId) throw new Error('User not authenticated.');
 
-  const { data, error } = await supabase
+  const client = getSupabaseClient(); // FIX: Use authenticated client
+
+  const { data, error } = await client
     .from('executions')
     .update(executionUpdateData)
     .eq('id', id)
     .eq('user_id', userId)
     .select()
     .single();
-  
+
   if (error) throw error;
   if (!data) throw new Error('Failed to update execution or execution not found.');
 
-  // cacheExecutionLocal(data as Execution); // TODO: Implementare caching
   return data as Execution;
 }
 
@@ -252,7 +259,9 @@ export async function deleteExecutionOnline(id: string): Promise<void> {
   const userId = getCurrentUserId();
   if (!userId) throw new Error('User not authenticated.');
 
-  const { error } = await supabase
+  const client = getSupabaseClient(); // FIX: Use authenticated client
+
+  const { error } = await client
     .from('executions')
     .delete()
     .eq('id', id)

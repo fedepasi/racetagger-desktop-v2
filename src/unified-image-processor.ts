@@ -160,6 +160,8 @@ export interface UnifiedProcessingResult {
   // Metadata writing status
   metadataWritten?: boolean;
   metadataSkipReason?: 'no_keywords' | 'no_preset_match';
+  // Supabase public URL for the uploaded image (preserved after pendingLogEntry is cleared)
+  supabaseUrl?: string;
   // Pending database update (passed from worker to processor for batch flushing)
   pendingUpdate?: {
     imageId: string;
@@ -7473,10 +7475,12 @@ export class UnifiedImageProcessor extends EventEmitter {
       console.log(`[FINALIZE] 📋 Uploading analysis log...`);
       try {
         const logFinalizePromise = this.analysisLogger.finalize();
-        const logTimeout = new Promise<string | null>((resolve) =>
-          setTimeout(() => { console.warn('[FINALIZE] ⚠️ Analysis log upload timeout (15s)'); resolve(null); }, 15000)
-        );
+        let logTimeoutId: ReturnType<typeof setTimeout>;
+        const logTimeout = new Promise<string | null>((resolve) => {
+          logTimeoutId = setTimeout(() => { console.warn('[FINALIZE] ⚠️ Analysis log upload timeout (15s)'); resolve(null); }, 15000);
+        });
         const logUrl = await Promise.race([logFinalizePromise, logTimeout]);
+        clearTimeout(logTimeoutId!); // FIX: Cancel timeout to prevent false warning after success
         console.log(`[FINALIZE] ✅ Analysis log ${logUrl ? 'uploaded' : 'skipped/local only'}`);
       } catch (error) {
         console.error('[FINALIZE] ❌ Analysis log upload failed (non-fatal):', error);
@@ -7498,10 +7502,12 @@ export class UnifiedImageProcessor extends EventEmitter {
             .select('execution_settings')
             .eq('id', this.config.executionId)
             .single();
-          const execSelectTimeout = new Promise<{ data: null }>((resolve) =>
-            setTimeout(() => { console.warn('[FINALIZE] ⚠️ Execution select timeout (10s)'); resolve({ data: null }); }, 10000)
-          );
+          let execSelectTimeoutId: ReturnType<typeof setTimeout>;
+          const execSelectTimeout = new Promise<{ data: null }>((resolve) => {
+            execSelectTimeoutId = setTimeout(() => { console.warn('[FINALIZE] ⚠️ Execution select timeout (10s)'); resolve({ data: null }); }, 10000);
+          });
           const { data: currentExecution } = await Promise.race([execSelectPromise, execSelectTimeout]) as any;
+          clearTimeout(execSelectTimeoutId!); // FIX: Cancel timeout to prevent false warning
 
           // Update execution_settings with RF-DETR metrics
           const updatedExecutionSettings = {
@@ -7531,10 +7537,12 @@ export class UnifiedImageProcessor extends EventEmitter {
             .update(executionUpdate)
             .eq('id', this.config.executionId)
             .eq('user_id', currentUserId);
-          const execUpdateTimeout = new Promise<{ error: null }>((resolve) =>
-            setTimeout(() => { console.warn('[FINALIZE] ⚠️ Execution update timeout (10s)'); resolve({ error: null }); }, 10000)
-          );
+          let execUpdateTimeoutId: ReturnType<typeof setTimeout>;
+          const execUpdateTimeout = new Promise<{ error: null }>((resolve) => {
+            execUpdateTimeoutId = setTimeout(() => { console.warn('[FINALIZE] ⚠️ Execution update timeout (10s)'); resolve({ error: null }); }, 10000);
+          });
           const { error } = await Promise.race([execUpdatePromise, execUpdateTimeout]) as any;
+          clearTimeout(execUpdateTimeoutId!); // FIX: Cancel timeout to prevent false warning
 
           if (error) {
             console.error(`[FINALIZE] ❌ Failed to update execution record:`, error);
@@ -7571,10 +7579,11 @@ export class UnifiedImageProcessor extends EventEmitter {
 
     // Ghost image anomaly detection: images with local:// URLs (missing Supabase upload)
     // Ghost images appear as records without photos in admin panel
+    // FIX: Use result.supabaseUrl (preserved before pendingLogEntry was cleared for memory optimization)
     if (totalImages > 5) {
       const ghostCount = successfulResults.filter(r =>
-        r.pendingLogEntry?.supabaseUrl?.startsWith('local://') ||
-        (!r.pendingLogEntry?.supabaseUrl && r.success)
+        r.supabaseUrl?.startsWith('local://') ||
+        (!r.supabaseUrl && r.success)
       ).length;
       const ghostPercentage = Math.round((ghostCount / totalImages) * 100);
       if (ghostCount > 3 && ghostPercentage > 5) {
@@ -7770,6 +7779,10 @@ export class UnifiedImageProcessor extends EventEmitter {
       // pendingLogEntry was already written to JSONL above; pendingAnalysisInsert and pendingUpdate
       // were already accumulated by the processor. Keeping them in the result object wastes memory
       // as the result will be stored in the results[] array for the entire batch duration.
+      // FIX: Preserve supabaseUrl before clearing pendingLogEntry — the ghost image detector
+      // at batch-end reads result.pendingLogEntry.supabaseUrl, but it was always undefined
+      // because we clear pendingLogEntry here. This caused 100% false-positive ghost images.
+      result.supabaseUrl = result.pendingLogEntry?.supabaseUrl;
       result.pendingLogEntry = undefined;
       result.pendingAnalysisInsert = undefined;
       result.pendingUpdate = undefined;
