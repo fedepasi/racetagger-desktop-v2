@@ -633,26 +633,26 @@ export class AnalysisLogger {
     switch (correction.correctionType) {
       case 'TEMPORAL':
         if (correction.details?.burstMode) {
-          return `Corretto "${correction.field}" da "${correction.originalValue}" a "${correction.correctedValue}" per burst mode: foto vicine (±${correction.details.maxTimeDiff}ms) mostrano tutte "${correction.correctedValue}"`;
+          return `Corrected "${correction.field}" from "${correction.originalValue}" to "${correction.correctedValue}" via burst mode: nearby photos (±${correction.details.maxTimeDiff}ms) all show "${correction.correctedValue}"`;
         } else {
-          return `Corretto "${correction.field}" da "${correction.originalValue}" a "${correction.correctedValue}" per vicinanza temporale: foto vicine confermano "${correction.correctedValue}"`;
+          return `Corrected "${correction.field}" from "${correction.originalValue}" to "${correction.correctedValue}" via temporal proximity: nearby photos confirm "${correction.correctedValue}"`;
         }
 
       case 'FUZZY':
         const similarity = Math.round((correction.confidence || 0) * 100);
-        return `Match fuzzy: "${correction.originalValue}" → "${correction.correctedValue}" (${similarity}% similarità${correction.details?.participantName ? ` con ${correction.details.participantName}` : ''})`;
+        return `Fuzzy match: "${correction.originalValue}" → "${correction.correctedValue}" (${similarity}% similarity${correction.details?.participantName ? ` with ${correction.details.participantName}` : ''})`;
 
       case 'PARTICIPANT':
-        return `Identificato tramite participant data: ${correction.details?.matchType || 'match'} con ${correction.details?.participantName || 'participant'} (score: ${correction.details?.score || 'N/A'})`;
+        return `Identified via participant data: ${correction.details?.matchType || 'match'} with ${correction.details?.participantName || 'participant'} (score: ${correction.details?.score || 'N/A'})`;
 
       case 'SPONSOR':
-        return `Riconosciuto sponsor "${correction.correctedValue}" (confidence: ${Math.round((correction.confidence || 0) * 100)}%), confermato ${correction.field} "${correction.originalValue}"`;
+        return `Recognized sponsor "${correction.correctedValue}" (confidence: ${Math.round((correction.confidence || 0) * 100)}%), confirmed ${correction.field} "${correction.originalValue}"`;
 
       case 'OCR':
-        return `Correzione OCR: "${correction.originalValue}" → "${correction.correctedValue}" (${correction.reason})`;
+        return `OCR correction: "${correction.originalValue}" → "${correction.correctedValue}" (${correction.reason})`;
 
       default:
-        return correction.reason || `Correzione ${correction.correctionType}: ${correction.originalValue} → ${correction.correctedValue}`;
+        return correction.reason || `Correction ${correction.correctionType}: ${correction.originalValue} → ${correction.correctedValue}`;
     }
   }
 

@@ -546,7 +546,7 @@ async function handleFolderSelection(event: IpcMainEvent) {
     // Verifica se la cartella esiste
     if (!fs.existsSync(folderPath)) {
       console.error('Selected folder does not exist:', folderPath);
-      event.sender.send('folder-selected', { success: false, message: 'La cartella selezionata non esiste' });
+      event.sender.send('folder-selected', { success: false, message: 'Selected folder does not exist' });
       return;
     }
 
@@ -1773,7 +1773,7 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
     
     // Verifica se la cartella esiste
     if (!fs.existsSync(folderPath)) {
-      throw new Error(`La cartella ${folderPath} non esiste`);
+      throw new Error(`Folder ${folderPath} does not exist`);
     }
     
     // Ottieni la lista delle immagini nella cartella
@@ -1790,7 +1790,7 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
     // Verifica token balance
     const canProcessImages = await authService.canUseToken(imageFiles.length);
     if (!canProcessImages) {
-      safeSend('upload-error', `Token insufficienti per elaborare ${imageFiles.length} immagini`);
+      safeSend('upload-error', `Insufficient tokens to process ${imageFiles.length} images`);
       return;
     }
     
@@ -2435,7 +2435,7 @@ async function handleRawPreviewExtraction(event: IpcMainEvent) {
     const rawFileExtension = path.extname(rawFilePath).toLowerCase();
     if (!RAW_EXTENSIONS.includes(rawFileExtension)) { // Use global RAW_EXTENSIONS
       mainWindow.webContents.send('raw-preview-error', {
-        message: 'Il file selezionato non è un formato RAW supportato.'
+        message: 'The selected file is not a supported RAW format.'
       });
       return;
     }
@@ -3001,12 +3001,12 @@ app.whenReady().then(async () => { // Added async here
       console.log('[FolderSelection] select-folder-by-path called with:', folderPath);
 
       if (!folderPath || !fs.existsSync(folderPath)) {
-        return { success: false, message: 'La cartella selezionata non esiste' };
+        return { success: false, message: 'Selected folder does not exist' };
       }
 
       const stat = fs.statSync(folderPath);
       if (!stat.isDirectory()) {
-        return { success: false, message: 'Il percorso selezionato non è una cartella' };
+        return { success: false, message: 'The selected path is not a folder' };
       }
 
       const imageFiles = await getImagesFromFolder(folderPath);

@@ -20,12 +20,12 @@ export function setupFolderSelectHandlers(mainWindow: BrowserWindow | null) {
     try {
       const result = await dialog.showOpenDialog(mainWindow, {
         properties: ['openDirectory'],
-        title: 'Seleziona una cartella di immagini'
+        title: 'Select an image folder'
       });
       
       if (result.canceled) {
         console.log('Folder selection canceled by user');
-        return { success: false, message: 'Selezione annullata' };
+        return { success: false, message: 'Selection cancelled' };
       }
       
       const folderPath = result.filePaths[0];
@@ -34,7 +34,7 @@ export function setupFolderSelectHandlers(mainWindow: BrowserWindow | null) {
       // Verifica se la cartella esiste
       if (!fs.existsSync(folderPath)) {
         console.error('Selected folder does not exist:', folderPath);
-        return { success: false, message: 'La cartella selezionata non esiste' };
+        return { success: false, message: 'Selected folder does not exist' };
       }
       
       // Ottieni la lista delle immagini nella cartella

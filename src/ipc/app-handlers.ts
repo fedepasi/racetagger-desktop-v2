@@ -127,7 +127,7 @@ export function registerAppHandlers(): void {
 
     ipcMain.handle('get-folder-organization-config', async () => {
       if (!authService.hasFolderOrganizationAccess()) {
-        throw new Error('Feature non disponibile');
+        throw new Error('Feature not available');
       }
       const { createDefaultConfig } = await import('../utils/folder-organizer');
       return createDefaultConfig();

@@ -6295,13 +6295,13 @@ export class UnifiedImageProcessor extends EventEmitter {
       );
 
       if (!preAuth.authorized) {
-        // Token insufficienti - emetti evento e ritorna vuoto
+        // Insufficient tokens - emit event and bail out
         this.emit('preAuthFailed', {
           error: preAuth.error,
           available: preAuth.available,
           needed: preAuth.needed
         });
-        throw new Error(`Token insufficienti: ${preAuth.available || 0} disponibili, ${tokensNeeded} richiesti`);
+        throw new Error(`Insufficient tokens: ${preAuth.available || 0} available, ${tokensNeeded} needed`);
       }
 
       // Salva stato reservation
@@ -7142,7 +7142,7 @@ export class UnifiedImageProcessor extends EventEmitter {
       // Legacy fallback: only check if pre-auth system is NOT active (shouldn't happen in v1.1.0+)
       const canProcessBatch = await authService.canUseToken(imageFiles.length);
       if (!canProcessBatch) {
-        throw new Error(`Token insufficienti per elaborare ${imageFiles.length} immagini`);
+        throw new Error(`Insufficient tokens to process ${imageFiles.length} images`);
       }
     }
     

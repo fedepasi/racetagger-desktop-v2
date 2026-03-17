@@ -932,7 +932,7 @@ function checkTokenBalance(requiredTokens = 1, forceRefresh = false) {
   }
   
   if (authState.tokens.remaining < requiredTokens) {
-    showNotification('Token insufficienti', `Hai bisogno di almeno ${requiredTokens} token per completare questa operazione. Il tuo saldo attuale è di ${authState.tokens.remaining} token.`);
+    showNotification('Insufficient tokens', `You need at least ${requiredTokens} tokens to complete this operation. Your current balance is ${authState.tokens.remaining} tokens.`);
     return false;
   }
   
