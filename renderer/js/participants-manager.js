@@ -502,7 +502,7 @@ function createPresetCard(preset) {
       </button>
     `;
   } else {
-    // User presets: full edit/delete/export capabilities
+    // User presets: full edit/delete/export/duplicate capabilities
     actionsHtml = `
       <div class="export-dropdown" data-preset-id="${preset.id}">
         <button class="btn btn-sm btn-secondary dropdown-toggle" title="Export preset">
@@ -525,6 +525,9 @@ function createPresetCard(preset) {
           </button>
         </div>
       </div>
+      <button class="btn btn-sm btn-secondary" onclick="duplicatePreset('${preset.id}')" title="Duplicate">
+        <span class="btn-icon">📋</span>
+      </button>
       <button class="btn btn-sm btn-secondary" onclick="editPreset('${preset.id}')" title="Edit">
         <span class="btn-icon">✏️</span>
       </button>
@@ -1831,7 +1834,7 @@ function setPresetEditorReadOnly(readOnly) {
 }
 
 /**
- * Duplicate an official preset and immediately open it for editing.
+ * Duplicate any preset and immediately open it for editing.
  */
 async function duplicateAndEditOfficialPreset(presetId) {
   try {
@@ -1858,14 +1861,21 @@ async function duplicateAndEditOfficialPreset(presetId) {
 }
 
 /**
- * Duplicate an official preset to create a personal copy
+ * Duplicate any preset (official or user-owned) to create a personal copy
  */
 async function duplicateOfficialPreset(presetId) {
+  return duplicatePreset(presetId);
+}
+
+/**
+ * Duplicate any preset to create a personal copy
+ */
+async function duplicatePreset(presetId) {
   try {
     // Show confirmation
     const confirmed = await showConfirmDialog(
-      'Duplicate Official Preset',
-      'This will create a personal copy of this official preset that you can customize. Continue?'
+      'Duplicate Preset',
+      'This will create a personal copy of this preset that you can customize. Continue?'
     );
 
     if (!confirmed) return;
@@ -1882,7 +1892,7 @@ async function duplicateOfficialPreset(presetId) {
       showNotification('Error duplicating preset: ' + (response.error || 'Unknown error'), 'error');
     }
   } catch (error) {
-    console.error('[Participants] Error duplicating official preset:', error);
+    console.error('[Participants] Error duplicating preset:', error);
     showNotification('Error duplicating preset', 'error');
   }
 }
@@ -4047,6 +4057,7 @@ window.createNewPreset = createNewPreset;
 window.editPreset = editPreset;
 window.deletePreset = deletePreset;
 window.duplicateOfficialPreset = duplicateOfficialPreset;
+window.duplicatePreset = duplicatePreset;
 window.viewOfficialPreset = viewOfficialPreset;
 window.duplicateAndEditOfficialPreset = duplicateAndEditOfficialPreset;
 window.exportPresetJSON = exportPresetJSON;

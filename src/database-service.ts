@@ -922,6 +922,20 @@ export interface SportCategory {
   use_local_onnx?: boolean;              // Use local ONNX model for detection (PRO recognition)
   active_model_id?: string;              // UUID FK to model_registry - active ONNX model for this category
   recognition_method?: string;           // Detection method type (e.g., 'onnx', 'cloud')
+  recognition_config?: {
+    maxResults: number;
+    minConfidence: number;
+    confidenceDecayFactor: number;
+    relativeConfidenceGap: number;
+    focusMode: string;
+    ignoreBackground: boolean;
+    prioritizeForeground: boolean;
+  };
+  sharpness_filter_config?: {
+    enabled: boolean;
+    dominanceRatio: number;
+    debug: boolean;
+  };
 }
 
 // A custom folder can be a simple name string or an object with name + optional absolute path
@@ -1798,15 +1812,15 @@ export async function savePresetIptcMetadata(presetId: string, iptcMetadata: any
 }
 
 /**
- * Duplicate an official preset for the current user
- * Creates a personal copy of an official preset that the user can customize
+ * Duplicate any preset for the current user
+ * Creates a personal copy of a preset (official or user-owned) that the user can customize
  */
 export async function duplicateOfficialPresetSupabase(sourcePresetId: string): Promise<ParticipantPresetSupabase> {
   try {
     const userId = getCurrentUserId();
     if (!userId) throw new Error('User not authenticated');
 
-    // Get the source preset (must be official)
+    // Get the source preset (official or user-owned)
     const { data: sourcePreset, error: sourceError } = await supabase
       .from('participant_presets')
       .select(`
@@ -1814,18 +1828,17 @@ export async function duplicateOfficialPresetSupabase(sourcePresetId: string): P
         preset_participants(*)
       `)
       .eq('id', sourcePresetId)
-      .eq('is_official', true)
       .single();
 
     if (sourceError || !sourcePreset) {
-      throw new Error('Source preset not found or is not an official preset');
+      throw new Error('Source preset not found');
     }
 
     // Create the new preset (personal copy)
     const newPreset = await createParticipantPresetSupabase({
       user_id: userId,
       name: `${sourcePreset.name} (My Copy)`,
-      description: sourcePreset.description || `Duplicated from Official RT Preset: ${sourcePreset.name}`,
+      description: sourcePreset.description || `Duplicated from: ${sourcePreset.name}`,
       category_id: sourcePreset.category_id,
       custom_folders: sourcePreset.custom_folders || []
     });

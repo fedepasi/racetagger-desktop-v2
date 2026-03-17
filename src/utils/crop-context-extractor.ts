@@ -538,6 +538,201 @@ export interface SegmentedDetection {
   detectionId: string;
 }
 
+// ==================== SHARPNESS ANALYSIS ====================
+
+/**
+ * Configuration for sharpness-based subject filtering
+ */
+export interface SharpnessFilterConfig {
+  enabled: boolean;
+  /** Minimum ratio between best and worst sharpness to trigger filtering (e.g., 1.8 = best must be 1.8x sharper) */
+  dominanceRatio: number;
+  /** If true, log sharpness scores for debugging */
+  debug: boolean;
+}
+
+export const DEFAULT_SHARPNESS_FILTER_CONFIG: SharpnessFilterConfig = {
+  enabled: false,
+  dominanceRatio: 1.8,
+  debug: true,
+};
+
+/**
+ * Sharpness score result for a single crop
+ */
+export interface SharpnessScore {
+  detectionId: string;
+  laplacianVariance: number;
+  /** Normalized score 0-1 relative to other crops in the same image */
+  normalizedScore: number;
+}
+
+/**
+ * Calculate sharpness score for a crop buffer using Laplacian variance
+ * on a center-weighted ROI at a standardized resolution.
+ *
+ * IMPORTANT: Crops arrive already resized (maxDimension=1024px). Larger subjects
+ * in the original image get downscaled more aggressively, which artificially smooths
+ * them. We normalize by resizing ALL crops to the SAME fixed resolution before
+ * computing the Laplacian, ensuring a fair comparison across different subject sizes.
+ *
+ * Additionally, we sample only the CENTER 60% of the crop to focus on the actual
+ * subject rather than padding, background, or track elements at the edges.
+ *
+ * Pipeline: crop → center 60% ROI → resize to 512px → grayscale → Laplacian → stdev²
+ *
+ * Typically ~3-8ms per crop.
+ */
+const SHARPNESS_ANALYSIS_SIZE = 512;  // Fixed size for fair comparison
+const SHARPNESS_CENTER_RATIO = 0.6;   // Use center 60% of the crop
+
+export async function calculateSharpnessScore(cropBuffer: Buffer): Promise<number> {
+  try {
+    // Get crop dimensions
+    const metadata = await sharp(cropBuffer).metadata();
+    const w = metadata.width || 512;
+    const h = metadata.height || 512;
+
+    // Calculate center ROI (60% of the crop)
+    const roiW = Math.round(w * SHARPNESS_CENTER_RATIO);
+    const roiH = Math.round(h * SHARPNESS_CENTER_RATIO);
+    const roiX = Math.round((w - roiW) / 2);
+    const roiY = Math.round((h - roiH) / 2);
+
+    // Extract center ROI → resize to fixed size → grayscale → Laplacian
+    const stats = await sharp(cropBuffer)
+      .extract({ left: roiX, top: roiY, width: roiW, height: roiH })
+      .resize(SHARPNESS_ANALYSIS_SIZE, SHARPNESS_ANALYSIS_SIZE, { fit: 'fill' })
+      .grayscale()
+      .convolve({
+        width: 3,
+        height: 3,
+        kernel: [0, 1, 0, 1, -4, 1, 0, 1, 0],  // Laplacian kernel
+      })
+      .stats();
+
+    // Variance of Laplacian = stdev² of the convolved image
+    // Higher = sharper/more in-focus
+    const stdev = stats.channels[0]?.stdev || 0;
+    return stdev * stdev;  // Laplacian variance
+  } catch (error) {
+    log.warn(`Sharpness calculation failed, returning 0:`, error);
+    return 0;
+  }
+}
+
+/**
+ * Filter crops by sharpness when multiple subjects are detected.
+ *
+ * IMPORTANT: This filter only activates when there are 2+ crops.
+ * With a single crop, it returns it unchanged.
+ *
+ * Logic:
+ * 1. Calculate sharpness score for each crop
+ * 2. Find the sharpest crop (likely the in-focus subject)
+ * 3. If the sharpness ratio between best and others exceeds dominanceRatio,
+ *    filter out the blurry ones (they're background/bokeh subjects)
+ * 4. If all crops have similar sharpness, keep them all (no dominant subject)
+ *
+ * Returns: filtered array of crops + sharpness metadata for logging
+ */
+export async function filterCropsBySharpness<T extends CropResult>(
+  crops: T[],
+  config: SharpnessFilterConfig = DEFAULT_SHARPNESS_FILTER_CONFIG
+): Promise<{
+  filteredCrops: T[];
+  sharpnessScores: SharpnessScore[];
+  filtered: boolean;
+  reason: string;
+}> {
+  // Bypass: single crop or disabled
+  if (!config.enabled || crops.length <= 1) {
+    return {
+      filteredCrops: crops,
+      sharpnessScores: [],
+      filtered: false,
+      reason: crops.length <= 1 ? 'single_subject' : 'disabled',
+    };
+  }
+
+  // Calculate sharpness for all crops in parallel
+  const startTime = Date.now();
+  const rawScores = await Promise.all(
+    crops.map(async (crop) => ({
+      detectionId: crop.detectionId,
+      laplacianVariance: await calculateSharpnessScore(crop.buffer),
+      normalizedScore: 0,  // Filled below
+    }))
+  );
+
+  // Find max sharpness for normalization
+  const maxSharpness = Math.max(...rawScores.map(s => s.laplacianVariance), 1);
+
+  // Normalize scores relative to the best
+  const sharpnessScores: SharpnessScore[] = rawScores.map(s => ({
+    ...s,
+    normalizedScore: maxSharpness > 0 ? s.laplacianVariance / maxSharpness : 0,
+  }));
+
+  // Sort scores to find the sharpest
+  const sortedBySharpness = [...sharpnessScores].sort(
+    (a, b) => b.laplacianVariance - a.laplacianVariance
+  );
+
+  const bestScore = sortedBySharpness[0];
+  const elapsedMs = Date.now() - startTime;
+
+  if (config.debug) {
+    log.info(`[Sharpness] Scores (${elapsedMs}ms): ${
+      sharpnessScores.map(s =>
+        `${s.detectionId}: ${s.laplacianVariance.toFixed(1)} (${(s.normalizedScore * 100).toFixed(0)}%)`
+      ).join(', ')
+    }`);
+  }
+
+  // Check if any crop is significantly blurrier than the best
+  const cropsToKeep: T[] = [];
+  const cropsFiltered: string[] = [];
+
+  for (let i = 0; i < crops.length; i++) {
+    const score = sharpnessScores.find(s => s.detectionId === crops[i].detectionId);
+    if (!score) {
+      cropsToKeep.push(crops[i]);
+      continue;
+    }
+
+    const ratio = bestScore.laplacianVariance / Math.max(score.laplacianVariance, 0.001);
+
+    if (ratio >= config.dominanceRatio && score.detectionId !== bestScore.detectionId) {
+      // This crop is significantly blurrier than the best — filter it
+      cropsFiltered.push(`${score.detectionId} (ratio: ${ratio.toFixed(1)}x)`);
+    } else {
+      cropsToKeep.push(crops[i]);
+    }
+  }
+
+  if (cropsFiltered.length > 0) {
+    log.info(`[Sharpness] Filtered ${cropsFiltered.length} blurry crop(s): ${cropsFiltered.join(', ')}. Keeping ${cropsToKeep.length} sharp crop(s).`);
+    return {
+      filteredCrops: cropsToKeep,
+      sharpnessScores,
+      filtered: true,
+      reason: `sharpness_dominance (${cropsFiltered.length} blurry removed)`,
+    };
+  }
+
+  if (config.debug) {
+    log.info(`[Sharpness] All ${crops.length} crops have similar sharpness — keeping all.`);
+  }
+
+  return {
+    filteredCrops: crops,
+    sharpnessScores,
+    filtered: false,
+    reason: 'similar_sharpness',
+  };
+}
+
 /**
  * Check if two bounding boxes overlap
  */

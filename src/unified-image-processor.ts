@@ -49,7 +49,10 @@ import {
   DEFAULT_MASK_CROP_CONFIG,
   SegmentationMaskData,
   MaskedCropBase64Result,
-  ExtractMaskOptions
+  ExtractMaskOptions,
+  filterCropsBySharpness,
+  SharpnessFilterConfig,
+  DEFAULT_SHARPNESS_FILTER_CONFIG,
 } from './utils/crop-context-extractor';
 import { AdaptiveUploadSemaphore, AdaptiveUploadConfig } from './utils/adaptive-upload-semaphore';
 
@@ -1494,6 +1497,15 @@ class UnifiedImageWorker extends EventEmitter {
       let extractedCrops: any[] = [];
       // V6 Baseline 2026: Track detection source for bboxSource field
       let detectionSource: 'yolo-seg' | 'onnx-detr' | 'full-image' | 'gemini' = 'gemini';
+      // Sharpness filter tracking (for logging/visualization in web modal)
+      let sharpnessFilterData: {
+        applied: boolean;
+        scores: Array<{ detectionId: string; laplacianVariance: number; normalizedScore: number }>;
+        cropsBeforeFilter: number;
+        cropsAfterFilter: number;
+        reason: string;
+        dominanceRatio: number;
+      } | undefined;
 
       // Step 1: Try SEGMENTATION first (YOLO with masks) if enabled
       phaseStart = Date.now();
@@ -1541,9 +1553,45 @@ class UnifiedImageWorker extends EventEmitter {
           if (maskedCropResult.crops.length > 0) {
             log.info(`[CropContext] Extracted ${maskedCropResult.crops.length} masked crops in ${maskedCropResult.processingTimeMs}ms${saveSegmentationMasks ? ' (with RLE mask data)' : ''}`);
 
+            // ==================== SHARPNESS FILTER (multi-subject only) ====================
+            // When multiple crops are detected, filter out blurry/out-of-focus subjects.
+            // This handles cases where a foreground subject is bokeh'd and the real subject
+            // is further away but in-focus, OR where background subjects should be ignored.
+            // Single-crop images are NEVER filtered (bypass inside filterCropsBySharpness).
+            let cropsToProcess = maskedCropResult.crops;
+            if (maskedCropResult.crops.length > 1) {
+              const sharpnessConfig: SharpnessFilterConfig = {
+                ...DEFAULT_SHARPNESS_FILTER_CONFIG,
+                // Allow sport category to override sharpness settings
+                ...(this.currentSportCategory?.sharpness_filter_config || {}),
+              };
+
+              const sharpnessResult = await filterCropsBySharpness(
+                maskedCropResult.crops,
+                sharpnessConfig
+              );
+
+              if (sharpnessResult.filtered) {
+                log.info(`[CropContext] Sharpness filter: ${maskedCropResult.crops.length} → ${sharpnessResult.filteredCrops.length} crops (${sharpnessResult.reason})`);
+              }
+
+              // Track sharpness data for logging/visualization
+              sharpnessFilterData = {
+                applied: sharpnessResult.filtered,
+                scores: sharpnessResult.sharpnessScores,
+                cropsBeforeFilter: maskedCropResult.crops.length,
+                cropsAfterFilter: sharpnessResult.filteredCrops.length,
+                reason: sharpnessResult.reason,
+                dominanceRatio: sharpnessConfig.dominanceRatio,
+              };
+
+              cropsToProcess = sharpnessResult.filteredCrops;
+              aiTiming['sharpnessFilter'] = Date.now() - phaseStart;
+            }
+
             // Convert to base64 payload for V6, optionally including RLE mask data
-            cropsPayload = maskedCropsToBase64(maskedCropResult.crops, { includeRawMaskData: saveSegmentationMasks });
-            extractedCrops = maskedCropResult.crops;
+            cropsPayload = maskedCropsToBase64(cropsToProcess, { includeRawMaskData: saveSegmentationMasks });
+            extractedCrops = cropsToProcess;
             // V6 Baseline 2026: Mark as yolo-seg detection source
             detectionSource = 'yolo-seg';
 
@@ -1629,10 +1677,40 @@ class UnifiedImageWorker extends EventEmitter {
 
         log.info(`[CropContext] Extracted ${cropContextResult.crops.length} bbox crops${cropContextResult.negative ? ' + negative' : ''} in ${cropContextResult.processingTimeMs}ms`);
 
+        // ==================== SHARPNESS FILTER (BBOX path, multi-subject only) ====================
+        let bboxCropsToProcess = cropContextResult.crops;
+        if (cropContextResult.crops.length > 1) {
+          const sharpnessConfig: SharpnessFilterConfig = {
+            ...DEFAULT_SHARPNESS_FILTER_CONFIG,
+            ...(this.currentSportCategory?.sharpness_filter_config || {}),
+          };
+
+          const sharpnessResult = await filterCropsBySharpness(
+            cropContextResult.crops,
+            sharpnessConfig
+          );
+
+          if (sharpnessResult.filtered) {
+            log.info(`[CropContext] BBOX Sharpness filter: ${cropContextResult.crops.length} → ${sharpnessResult.filteredCrops.length} crops (${sharpnessResult.reason})`);
+          }
+
+          // Track sharpness data for logging/visualization
+          sharpnessFilterData = {
+            applied: sharpnessResult.filtered,
+            scores: sharpnessResult.sharpnessScores,
+            cropsBeforeFilter: cropContextResult.crops.length,
+            cropsAfterFilter: sharpnessResult.filteredCrops.length,
+            reason: sharpnessResult.reason,
+            dominanceRatio: sharpnessConfig.dominanceRatio,
+          };
+
+          bboxCropsToProcess = sharpnessResult.filteredCrops;
+        }
+
         // Prepare payload for V6 edge function (bbox mode)
-        cropsPayload = cropsToBase64(cropContextResult.crops);
+        cropsPayload = cropsToBase64(bboxCropsToProcess);
         // NOTE: negativePayload eliminated — V6 now fetches the full image from Storage via contextStoragePath
-        extractedCrops = cropContextResult.crops;
+        extractedCrops = bboxCropsToProcess;
         // V6 Baseline 2026: Mark as onnx-detr detection source
         detectionSource = 'onnx-detr';
       }
@@ -2201,7 +2279,9 @@ class UnifiedImageWorker extends EventEmitter {
         // Include detection bboxes for visualization (always available when detections exist)
         ...(this.lastSegmentationMetadata.detections ? { detections: this.lastSegmentationMetadata.detections } : {}),
         // Include RLE mask data only if available (non-empty array)
-        ...(extractedMasks.length > 0 ? { masks: extractedMasks } : {})
+        ...(extractedMasks.length > 0 ? { masks: extractedMasks } : {}),
+        // Sharpness filter results (only present when multiple crops were analyzed)
+        ...(sharpnessFilterData ? { sharpnessFilter: sharpnessFilterData } : {})
       } : undefined;
 
       return {
