@@ -218,6 +218,8 @@ const validInvokeChannels: string[] = [
   'preset-driver-delete',
   'preset-driver-sync',
   'preset-driver-migrate-orphaned-photos',
+  'preset-get-drivers-for-participant',   // FIX #79: Missing from whitelist — needed for JSON preset export
+  'preset-create-drivers-batch',          // FIX #79: Missing from whitelist — needed for JSON preset import
 
   'get-app-path',
 

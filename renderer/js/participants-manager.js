@@ -2378,11 +2378,7 @@ async function savePreset() {
       return;
     }
 
-    if (!sportCategoryId) {
-      showNotification('Please select a sport category', 'error');
-      document.getElementById('preset-sport-category').focus();
-      return;
-    }
+    // Sport category is optional - no validation needed
 
     // Use participants data from memory (already updated via modal)
     // ⚠️ CRITICAL FIX: Include ID to enable UPSERT (UPDATE existing instead of INSERT new)
@@ -3999,9 +3995,9 @@ async function importPdfPreset() {
 
           // Propagate nationality to the first driver record
           if (nationality && syncResult.drivers && syncResult.drivers.length > 0) {
-            await window.api.invoke('preset-update-driver', {
+            await window.api.invoke('preset-driver-update', {
               driverId: syncResult.drivers[0].id,
-              updates: { driver_nationality: nationality }
+              driverNationality: nationality
             });
           }
         }

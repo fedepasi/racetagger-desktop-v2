@@ -676,7 +676,7 @@ class UnifiedImageWorker extends EventEmitter {
    * Now includes: image upload, DB tracking, and token deduction (feature parity with cloud API)
    * Returns analysis results in the same format as edge function
    */
-  private async analyzeImageLocal(imageBuffer: Buffer, fileName: string, mimeType: string): Promise<any> {
+  private async analyzeImageLocal(imageBuffer: Buffer, fileName: string, mimeType: string, preUploadedStoragePath?: string | null): Promise<any> {
     if (!this.onnxDetector || !this.onnxModelLoaded) {
       throw new Error('ONNX detector not initialized');
     }
@@ -714,18 +714,22 @@ class UnifiedImageWorker extends EventEmitter {
       if (analysis.length === 0) {
         log.warn(`[Local ONNX] No detections above confidence threshold, falling back to Gemini`);
 
-        // Upload image if not already done
-        let fallbackStoragePath: string | null = null;
-        try {
-          fallbackStoragePath = await this.uploadToStorage(fileName, imageBuffer, mimeType);
-          log.info(`[Local ONNX Fallback] Image uploaded for Gemini: ${fallbackStoragePath}`);
-        } catch (uploadError) {
-          log.error(`[Local ONNX Fallback] Upload failed, cannot fallback to Gemini: ${uploadError}`);
-          // Return empty result instead of throwing
-          return {
-            success: false,
-            error: 'No detections above threshold and upload failed for Gemini fallback'
-          };
+        // Upload image if not already done (reuse pre-uploaded path if available)
+        let fallbackStoragePath: string | null = preUploadedStoragePath || null;
+        if (!fallbackStoragePath) {
+          try {
+            fallbackStoragePath = await this.uploadToStorage(fileName, imageBuffer, mimeType);
+            log.info(`[Local ONNX Fallback] Image uploaded for Gemini: ${fallbackStoragePath}`);
+          } catch (uploadError) {
+            log.error(`[Local ONNX Fallback] Upload failed, cannot fallback to Gemini: ${uploadError}`);
+            // Return empty result instead of throwing
+            return {
+              success: false,
+              error: 'No detections above threshold and upload failed for Gemini fallback'
+            };
+          }
+        } else {
+          log.info(`[Local ONNX Fallback] Reusing pre-uploaded image for Gemini: ${fallbackStoragePath}`);
         }
 
         // Call standard Gemini analysis
@@ -747,13 +751,18 @@ class UnifiedImageWorker extends EventEmitter {
       let storagePath: string | null = null;
       let tokenDeducted = false;
 
-      // 2. Upload image to Supabase Storage (same as cloud API)
-      try {
-        storagePath = await this.uploadToStorage(fileName, imageBuffer, mimeType);
-        log.info(`[Local ONNX] Image uploaded to storage: ${storagePath}`);
-      } catch (uploadError) {
-        log.error(`[Local ONNX] Upload FAILED - image will not be saved to database: ${uploadError}`);
-        // Continue processing even if upload fails, but log as error for visibility
+      // 2. Upload image to Supabase Storage (reuse pre-uploaded path if available)
+      if (preUploadedStoragePath) {
+        storagePath = preUploadedStoragePath;
+        log.info(`[Local ONNX] Reusing pre-uploaded storage path: ${storagePath}`);
+      } else {
+        try {
+          storagePath = await this.uploadToStorage(fileName, imageBuffer, mimeType);
+          log.info(`[Local ONNX] Image uploaded to storage: ${storagePath}`);
+        } catch (uploadError) {
+          log.error(`[Local ONNX] Upload FAILED - image will not be saved to database: ${uploadError}`);
+          // Continue processing even if upload fails, but log as error for visibility
+        }
       }
 
       // 3. Create image record in database (same as cloud API)
@@ -888,14 +897,18 @@ class UnifiedImageWorker extends EventEmitter {
       if (this.currentSportCategory?.recognition_method === 'local-onnx') {
         log.warn(`[Local ONNX] Falling back to Gemini cloud analysis`);
 
-        // Upload image if not already done
-        let fallbackStoragePath: string | null = null;
-        try {
-          fallbackStoragePath = await this.uploadToStorage(fileName, imageBuffer, mimeType);
-          log.info(`[Local ONNX Fallback] Image uploaded for Gemini: ${fallbackStoragePath}`);
-        } catch (uploadError) {
-          log.error(`[Local ONNX Fallback] Upload failed, cannot fallback to Gemini: ${uploadError}`);
-          throw error;  // Re-throw original ONNX error
+        // Upload image if not already done (reuse pre-uploaded path if available)
+        let fallbackStoragePath: string | null = preUploadedStoragePath || null;
+        if (!fallbackStoragePath) {
+          try {
+            fallbackStoragePath = await this.uploadToStorage(fileName, imageBuffer, mimeType);
+            log.info(`[Local ONNX Fallback] Image uploaded for Gemini: ${fallbackStoragePath}`);
+          } catch (uploadError) {
+            log.error(`[Local ONNX Fallback] Upload failed, cannot fallback to Gemini: ${uploadError}`);
+            throw error;  // Re-throw original ONNX error
+          }
+        } else {
+          log.info(`[Local ONNX Fallback] Reusing pre-uploaded image for Gemini: ${fallbackStoragePath}`);
         }
 
         // Call standard Gemini analysis
@@ -3016,10 +3029,28 @@ class UnifiedImageWorker extends EventEmitter {
         // Now with full cloud tracking for feature parity
         log.info(`[Local ONNX] Using local inference on full image for ${imageFile.fileName}`);
 
-        analysisResult = await this.analyzeImageLocal(buffer, imageFile.fileName, mimeType);
+        // PERFORMANCE: Pre-upload image to storage so we can run ONNX inference
+        // and visual tagging IN PARALLEL (visual tagging needs storagePath).
+        // analyzeImageLocal will reuse this path instead of uploading again.
+        storagePath = await this.uploadToStorage(imageFile.fileName, buffer, mimeType);
+        log.info(`[Local ONNX] Pre-uploaded reference image to storage: ${storagePath}`);
 
-        // Update storagePath from local ONNX result (for downstream processing)
-        if (analysisResult.storagePath) {
+        // Run ONNX inference and visual tagging in parallel
+        const onnxVisualTaggingEnabled = this.config.visualTagging?.enabled && storagePath;
+        const [onnxResult, onnxParallelVisualTags] = await Promise.all([
+          this.analyzeImageLocal(buffer, imageFile.fileName, mimeType, storagePath),
+          onnxVisualTaggingEnabled
+            ? this.invokeVisualTagging(storagePath, null).catch(err => {
+                log.warn(`[VisualTagging] Failed in parallel with ONNX (continuing): ${err.message}`);
+                return null;
+              })
+            : Promise.resolve(null)
+        ]);
+
+        analysisResult = onnxResult;
+
+        // Update storagePath from local ONNX result (may differ if fallback to Gemini occurred)
+        if (analysisResult.storagePath && analysisResult.storagePath !== storagePath) {
           storagePath = analysisResult.storagePath;
         }
 
@@ -3029,6 +3060,11 @@ class UnifiedImageWorker extends EventEmitter {
             this.recognitionMethod = 'local-onnx';
           }
           log.info(`[Local ONNX] Completed: ${analysisResult.localOnnxUsage.detectionsCount} detections in ${analysisResult.localOnnxUsage.inferenceMs}ms`);
+        }
+
+        // Store parallel visual tags result for later use
+        if (onnxParallelVisualTags) {
+          (analysisResult as any)._parallelVisualTags = onnxParallelVisualTags;
         }
       } else {
         // PRIORITY 3: STANDARD CLOUD API - Upload and analyze via Edge Function (V2/V3/V4/V5)
@@ -3427,6 +3463,21 @@ class UnifiedImageWorker extends EventEmitter {
 
     } catch (error: any) {
       console.error(`[UnifiedWorker] Failed to process ${imageFile.fileName}:`, error);
+
+      // Report per-image fatal error to telemetry (creates GitHub issue automatically)
+      errorTelemetryService.reportCriticalError({
+        errorType: error.message?.includes('Edge Function') || error.message?.includes('Function error') ? 'edge_function' :
+                   error.message?.includes('token') ? 'token_reservation' :
+                   error.message?.includes('ONNX') || error.message?.includes('onnx') ? 'onnx_model' :
+                   error.message?.includes('memory') || error.message?.includes('ENOMEM') ? 'memory' :
+                   'uncaught',
+        severity: 'recoverable',
+        error: error,
+        executionId: this.config.executionId,
+        batchPhase: processingErrors.length > 0 ? processingErrors[processingErrors.length - 1].phase : 'unknown',
+        imageIndex: imageFile.id ? parseInt(imageFile.id) || undefined : undefined,
+        categoryName: this.config.category
+      });
 
       return {
         fileId: imageFile.id,
@@ -4257,6 +4308,15 @@ class UnifiedImageWorker extends EventEmitter {
 
     if (!response.data.success) {
       console.error(`[UnifiedProcessor] Analysis failed for ${fileName}:`, response.data.error);
+      // Report edge function logical failure to telemetry
+      errorTelemetryService.reportCriticalError({
+        errorType: 'edge_function',
+        severity: 'recoverable',
+        error: new Error(`Analysis failed: ${response.data.error || 'Unknown function error'}`),
+        executionId: this.config.executionId,
+        batchPhase: 'ai_analysis',
+        categoryName: this.config.category
+      });
       throw new Error(`Analysis failed: ${response.data.error || 'Unknown function error'}`);
     }
 
@@ -7557,9 +7617,28 @@ export class UnifiedImageProcessor extends EventEmitter {
       }
     }
 
-    // Zero results anomaly detection: batch >20 images with 0 recognized numbers
+    // High error rate detection: batch with >30% failed images
+    const failedResults = results.filter(r => !r.success && r.error !== 'Processing cancelled by user');
     const successfulResults = results.filter(r => r.success);
     const totalImages = results.length;
+    if (totalImages >= 5 && failedResults.length > 0) {
+      const errorRate = Math.round((failedResults.length / totalImages) * 100);
+      if (errorRate >= 30) {
+        // Collect unique error messages for diagnostic
+        const uniqueErrors = [...new Set(failedResults.map(r => r.error).filter(Boolean))].slice(0, 5);
+        errorTelemetryService.reportCriticalError({
+          errorType: 'edge_function',
+          severity: errorRate >= 50 ? 'fatal' : 'recoverable',
+          error: `High error rate: ${failedResults.length}/${totalImages} images failed (${errorRate}%). Errors: ${uniqueErrors.join('; ')}`,
+          executionId: this.config.executionId,
+          batchPhase: 'batch_complete',
+          totalImages,
+          categoryName: this.config.category
+        });
+      }
+    }
+
+    // Zero results anomaly detection: batch >20 images with 0 recognized numbers
     if (totalImages > 20 && successfulResults.length > 0) {
       const hasAnyNumbers = successfulResults.some(r =>
         r.analysis && r.analysis.length > 0 && r.analysis.some((a: any) => a.raceNumber || a.number)
