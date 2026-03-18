@@ -101,7 +101,7 @@ import { authService } from './auth-service';
 import * as piexif from 'piexifjs';
 import { createImageProcessor, initializeImageProcessor } from './utils/native-modules';
 import { createXmpSidecar, xmpSidecarExists } from './utils/xmp-manager';
-import { writeKeywordsToImage, readStructuredData, RaceTaggerStructuredData } from './utils/metadata-writer';
+import { writeKeywordsToImage, readStructuredData, writeStructuredData, RaceTaggerStructuredData } from './utils/metadata-writer';
 import { rawConverter } from './utils/raw-converter'; // Import for temp cleanup only
 import { rawPreviewExtractor } from './utils/raw-preview-native'; // Native RAW preview extraction
 import { unifiedImageProcessor, UnifiedImageFile, UnifiedProcessingResult, UnifiedProcessorConfig } from './unified-image-processor';
@@ -3613,6 +3613,70 @@ app.whenReady().then(async () => { // Added async here
           if (DEBUG_MODE) console.warn('[Main Process] Failed to update image metadata:', metadataError);
           // Continue with log update even if metadata update fails
         }
+
+        // === Update analysis_results in Supabase DB ===
+        // Critical for: retraining pipelines (ONNX/YOLO), web platform accuracy,
+        // management portal data, and gallery correctness.
+        // Each manual correction is valuable ground truth for model improvement.
+        if (imageAnalysisEvent?.imageId && correction.changes.raceNumber) {
+          try {
+            const { getSupabaseClient } = await import('./database-service');
+            const supabase = getSupabaseClient();
+
+            // Build the update payload
+            const dbUpdate: Record<string, any> = {
+              recognized_number: correction.changes.raceNumber,
+              confidence_score: 1.0, // Manual correction = 100% confidence
+              confidence_level: 'manual',
+            };
+
+            // Update raw_response.vehicles with corrected data
+            // First read current raw_response to merge
+            const { data: currentRow } = await supabase
+              .from('analysis_results')
+              .select('raw_response, training_flags')
+              .eq('image_id', imageAnalysisEvent.imageId)
+              .maybeSingle();
+
+            if (currentRow?.raw_response) {
+              const rawResponse = { ...currentRow.raw_response };
+              // Update the specific vehicle in the vehicles array
+              if (rawResponse.vehicles && rawResponse.vehicles[correction.vehicleIndex]) {
+                const vehicle = rawResponse.vehicles[correction.vehicleIndex];
+                vehicle.raceNumber = correction.changes.raceNumber;
+                if (correction.changes.team) vehicle.teamName = correction.changes.team;
+                if (correction.changes.drivers) vehicle.drivers = correction.changes.drivers;
+                vehicle.manuallyCorreected = true;
+                vehicle.correctedAt = correction.timestamp;
+              }
+              rawResponse.lastManualCorrection = correction.timestamp;
+              dbUpdate.raw_response = rawResponse;
+
+              // Mark training_flags to indicate manual correction (ground truth for retraining)
+              const trainingFlags = currentRow.training_flags || {};
+              trainingFlags.has_manual_correction = true;
+              trainingFlags.manual_correction_at = correction.timestamp;
+              trainingFlags.corrected_vehicle_index = correction.vehicleIndex;
+              trainingFlags.original_number = currentRow.raw_response?.vehicles?.[correction.vehicleIndex]?.raceNumber || null;
+              trainingFlags.corrected_number = correction.changes.raceNumber;
+              dbUpdate.training_flags = trainingFlags;
+            }
+
+            const { error: dbError } = await supabase
+              .from('analysis_results')
+              .update(dbUpdate)
+              .eq('image_id', imageAnalysisEvent.imageId);
+
+            if (dbError) {
+              console.warn(`[Main Process] Failed to update analysis_results for ${correction.fileName}: ${dbError.message}`);
+            } else {
+              console.log(`[Main Process] ✅ Updated analysis_results for ${correction.fileName} (image_id: ${imageAnalysisEvent.imageId}, #${correction.changes.raceNumber})`);
+            }
+          } catch (dbUpdateError) {
+            console.warn('[Main Process] Failed to update analysis_results in DB:', dbUpdateError);
+            // Non-critical: JSONL and metadata updates still succeed
+          }
+        }
       }
 
       // Update EXECUTION_COMPLETE event with manual correction stats (if it exists)
@@ -3813,6 +3877,74 @@ app.whenReady().then(async () => { // Added async here
       if (keywords.length > 0) {
         if (DEBUG_MODE) console.log(`[Main Process] Writing corrected metadata to ${effectivePath}:`, keywords);
         await writeKeywordsToImage(effectivePath, keywords, true, 'overwrite');
+      }
+
+      // === FIX: Also update XMP:Instructions structured data ===
+      // Folder organization reads XMP:Instructions as PRIMARY source.
+      // Without this update, manual corrections are invisible to folder org
+      // because it finds the old structured data and never falls back to JSONL.
+      try {
+        const existingData = await readStructuredData(effectivePath);
+        if (existingData && correction.changes.raceNumber) {
+          const idx = correction.vehicleIndex;
+
+          // Update the race number at the correct vehicle index
+          if (idx < existingData.numbers.length) {
+            existingData.numbers[idx] = correction.changes.raceNumber;
+          } else {
+            // Vehicle index beyond current array — pad and set
+            while (existingData.numbers.length <= idx) {
+              existingData.numbers.push('');
+              existingData.drivers.push([]);
+              existingData.teams.push('');
+            }
+            existingData.numbers[idx] = correction.changes.raceNumber;
+          }
+
+          // Update drivers if provided
+          if (correction.changes.drivers) {
+            const driversList = Array.isArray(correction.changes.drivers)
+              ? correction.changes.drivers
+              : [correction.changes.drivers];
+            if (idx < existingData.drivers.length) {
+              existingData.drivers[idx] = driversList;
+            }
+          }
+
+          // Update team if provided
+          if (correction.changes.team) {
+            if (idx < existingData.teams.length) {
+              existingData.teams[idx] = correction.changes.team;
+            }
+          }
+
+          // Update folders from participant match if available
+          if (correction.changes.participantMatch?.entry) {
+            const entry = correction.changes.participantMatch.entry;
+            if (entry.folder_1 || entry.folder_2 || entry.folder_3) {
+              existingData.folders = {
+                folder_1: entry.folder_1 || undefined,
+                folder_2: entry.folder_2 || undefined,
+                folder_3: entry.folder_3 || undefined,
+                folder_1_path: entry.folder_1_path || undefined,
+                folder_2_path: entry.folder_2_path || undefined,
+                folder_3_path: entry.folder_3_path || undefined,
+              };
+            }
+            if (entry.metatag) {
+              existingData.metatag = entry.metatag;
+            }
+          }
+
+          // Update timestamp to reflect the correction
+          existingData.ts = new Date().toISOString();
+
+          await writeStructuredData(effectivePath, existingData);
+          console.log(`[Main Process] Updated XMP:Instructions for ${correction.fileName} (vehicle ${idx} → #${correction.changes.raceNumber})`);
+        }
+      } catch (structuredErr) {
+        // Non-critical: IPTC keywords were already written, JSONL fallback still works
+        if (DEBUG_MODE) console.warn(`[Main Process] Failed to update XMP:Instructions for ${correction.fileName}:`, structuredErr);
       }
 
       return { success: true };
