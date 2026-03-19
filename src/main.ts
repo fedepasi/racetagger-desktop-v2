@@ -89,14 +89,20 @@ import {
   // Export Destinations - most moved to export-handlers.ts, kept only those used in main.ts
   ExportDestination,
   getActiveExportDestinations,
-  getExportDestinationById
+  getExportDestinationById,
+  // Delivery & Gallery - post-execution auto-routing
+  autoRouteImagesToGalleries,
+  getUserPlanLimits,
+  getImagesForR2Upload,
+  markImagesUploadQueued,
 } from './database-service';
+import { r2UploadService } from './r2-upload-service';
 // Determine if we're in development mode - will be set after app is ready
 let isDev = true; // Default to true for safety during initialization
 // Don't import @electron/remote at top level - it will be required when needed
 let remoteEnable: any = null; // Will be set after app is ready
 import { createClient } from '@supabase/supabase-js';
-import { SUPABASE_CONFIG, APP_CONFIG, ResizePreset, RESIZE_PRESETS, PIPELINE_CONFIG, DEBUG_MODE } from './config';
+import { SUPABASE_CONFIG, APP_CONFIG, ResizePreset, RESIZE_PRESETS, PIPELINE_CONFIG, DEBUG_MODE, SEND_PRESET_TO_AI } from './config';
 import { authService } from './auth-service';
 import * as piexif from 'piexifjs';
 import { createImageProcessor, initializeImageProcessor } from './utils/native-modules';
@@ -175,7 +181,7 @@ type BatchProcessConfig = {
   folderPath: string;
   csvData?: CsvEntry[];
   updateExif: boolean;
-  projectId?: string; // DEPRECATED: Projects removed. This will always be null.
+  projectId?: string; // Optional: link execution to a project for delivery auto-routing
   executionName?: string;
   model?: string;                      // Modello AI da utilizzare per l'analisi
   category?: string;                   // Categoria di sport per prompt dedicato
@@ -1284,7 +1290,7 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
       }
 
       const newExecution = await createExecutionOnline({
-        project_id: null, // Projects removed - always null
+        project_id: config.projectId || null, // Link to project for delivery auto-routing (null for standalone)
         name: executionName,
         execution_at: new Date().toISOString(),
         status: 'running',
@@ -1292,7 +1298,7 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
         sport_category_id: sportCategoryId
       });
       currentExecutionId = newExecution.id!;
-      console.log(`[Execution] Created execution ${currentExecutionId} for category "${config.category || 'motorsport'}"`);
+      console.log(`[Execution] Created execution ${currentExecutionId} for category "${config.category || 'motorsport'}"${config.projectId ? `, project: ${config.projectId}` : ''}`);
     } catch (error: any) {
       // ALWAYS log execution creation failures — these are critical for management portal visibility
       const errMsg = error instanceof Error ? error.message : JSON.stringify(error);
@@ -1548,6 +1554,114 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
           trackExecutionSettings(currentExecutionId, config, executionStats).catch(error => {
             if (DEBUG_MODE) console.warn('[Tracking] Failed to track execution settings:', error);
           });
+        }
+
+        // ==================== POST-EXECUTION: Delivery Auto-Routing ====================
+        // If execution has a project_id, auto-route photos to galleries via delivery rules
+        if (currentExecutionId && !wasCancelled) {
+          try {
+            // Check if execution has a project_id
+            const executionData = await getExecutionByIdOnline(currentExecutionId);
+            if (executionData && executionData.project_id) {
+              console.log(`[Delivery] Auto-routing photos for project ${executionData.project_id}...`);
+              const routingResult = await autoRouteImagesToGalleries(executionData.project_id, currentExecutionId);
+              console.log(`[Delivery] Auto-routing complete: ${routingResult.routed} routed, ${routingResult.unmatched} unmatched`);
+              safeSend('delivery-routing-complete', {
+                executionId: currentExecutionId,
+                projectId: executionData.project_id,
+                routed: routingResult.routed,
+                unmatched: routingResult.unmatched,
+              });
+            }
+          } catch (routingError: any) {
+            console.warn(`[Delivery] Auto-routing failed (non-blocking): ${routingError.message || routingError}`);
+          }
+        }
+
+        // ==================== POST-EXECUTION: R2 Original Upload ====================
+        // Queue high-res originals for R2 upload in background (fire-and-forget)
+        // Uses originalPath from processing results (real local filesystem paths)
+        if (currentExecutionId && !wasCancelled && results.length > 0) {
+          (async () => {
+            try {
+              const planLimits = await getUserPlanLimits();
+              if (!planLimits.r2_storage_enabled) {
+                if (DEBUG_MODE) console.log('[R2 Upload] R2 storage not enabled for user, skipping');
+                return;
+              }
+
+              // Build a map of DB imageId → local originalPath from processing results
+              // Each result has pendingUpdate.imageId (DB UUID) and originalPath (local filesystem)
+              const localPathMap = new Map<string, { path: string; filename: string; fileSize: number }>();
+              for (const result of results) {
+                const dbImageId = (result as any).pendingUpdate?.imageId;
+                const localPath = (result as any).originalPath;
+                if (dbImageId && localPath) {
+                  localPathMap.set(dbImageId, {
+                    path: localPath,
+                    filename: (result as any).fileName || `${dbImageId}.jpg`,
+                    fileSize: 0, // Will be read from filesystem
+                  });
+                }
+              }
+
+              if (localPathMap.size === 0) {
+                if (DEBUG_MODE) console.log('[R2 Upload] No images with local paths available');
+                return;
+              }
+
+              // Get DB records that need upload (status is null/pending/failed)
+              const imagesToUpload = await getImagesForR2Upload(currentExecutionId!);
+              if (imagesToUpload.length === 0) {
+                if (DEBUG_MODE) console.log('[R2 Upload] No images pending R2 upload in DB');
+                return;
+              }
+
+              // Match DB records with local paths — only upload those we have local files for
+              const uploadItems = [];
+              for (const img of imagesToUpload) {
+                const localInfo = localPathMap.get(img.id);
+                if (localInfo) {
+                  // Get actual file size from filesystem
+                  let actualSize = 0;
+                  try {
+                    const stat = require('fs').statSync(localInfo.path);
+                    actualSize = stat.size;
+                  } catch { /* file may have been moved */ }
+
+                  if (actualSize > 0) {
+                    uploadItems.push({
+                      imageId: img.id,
+                      executionId: currentExecutionId!,
+                      localPath: localInfo.path,
+                      filename: localInfo.filename,
+                      fileSize: actualSize,
+                    });
+                  }
+                }
+              }
+
+              if (uploadItems.length === 0) {
+                if (DEBUG_MODE) console.log('[R2 Upload] No original files accessible on disk');
+                return;
+              }
+
+              console.log(`[R2 Upload] Queueing ${uploadItems.length} originals for R2 upload...`);
+              const imageIds = uploadItems.map((item) => item.imageId);
+              await markImagesUploadQueued(imageIds);
+              r2UploadService.queueExecution(currentExecutionId!, uploadItems);
+              r2UploadService.start();
+
+              // Forward R2 upload progress to renderer
+              r2UploadService.on('upload-progress', (data: any) => safeSend('r2-upload-progress', data));
+              r2UploadService.on('all-uploads-complete', (data: any) => {
+                console.log(`[R2 Upload] Complete: ${data.completed}/${data.total} uploaded, ${data.failed} failed`);
+                safeSend('r2-upload-complete', data);
+              });
+            } catch (r2Error: any) {
+              console.warn(`[R2 Upload] Failed to start (non-blocking): ${r2Error.message || r2Error}`);
+            }
+          })();
         }
 
         // Automatic export to destinations (if configured)
@@ -2880,6 +2994,9 @@ async function logStartupHealthReport(startupMs: number): Promise<void> {
       logLine(`[RaceTagger]  RAM: ${ramStr || 'N/A'} \u2502 CPU: ${cpuStr || 'N/A'}`);
     }
     logLine(`[RaceTagger]  Startup: ${startupMs.toLocaleString()}ms`);
+    if (!SEND_PRESET_TO_AI) {
+      logLine(`[RaceTagger]  ⚠️ SEND_PRESET_TO_AI: DISABLED (Gemini will do pure OCR)`);
+    }
     logLine(`[RaceTagger] ${sep}`);
 
     // Also send to renderer DevTools console

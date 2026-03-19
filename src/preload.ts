@@ -67,6 +67,10 @@ const validSendReceiveChannels: string[] = [
   'iptc-finalize-error',
   // Unified export progress channel
   'unified-export-progress',
+  // Delivery & Gallery channels
+  'delivery-routing-complete',
+  'r2-upload-progress',
+  'r2-upload-complete',
 ];
 
 const validInvokeChannels: string[] = [
@@ -259,6 +263,30 @@ const validInvokeChannels: string[] = [
 
   // Folder Path Validation
   'validate-preset-folder-paths',
+
+  // Delivery Operations
+  'delivery-create-project',
+  'delivery-get-projects',
+  'delivery-get-project',
+  'delivery-update-project',
+  'delivery-delete-project',
+  'delivery-create-gallery',
+  'delivery-get-galleries',
+  'delivery-update-gallery',
+  'delivery-delete-gallery',
+  'delivery-create-rule',
+  'delivery-get-rules',
+  'delivery-delete-rule',
+  'delivery-add-images',
+  'delivery-auto-route',
+  'delivery-send-execution-to-gallery',
+  'delivery-get-plan-limits',
+  'delivery-get-recent-executions',
+  'delivery-r2-upload-start',
+  'delivery-r2-upload-progress',
+  'delivery-r2-upload-cancel',
+  'delivery-submit-survey',
+  'delivery-check-survey',
 ];
 
 

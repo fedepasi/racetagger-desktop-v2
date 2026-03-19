@@ -30,7 +30,8 @@
     'settings',
     'destinations',
     'participants',
-    'analysis'
+    'analysis',
+    'delivery'
   ]);
 
   // Legacy pages still using the old section-based system
@@ -354,6 +355,10 @@
         updateNavActiveState('settings');
         loadPage('settings');
       })
+      .on('/delivery', () => {
+        updateNavActiveState('delivery');
+        loadPage('delivery');
+      })
       .notFound(() => {
         router.navigate('/');
       });
@@ -385,7 +390,8 @@
           'analysis': '/analysis',
           'participants': '/participants',
           'destinations': '/destinations',
-          'settings': '/settings'
+          'settings': '/settings',
+          'delivery': '/delivery'
         };
 
         const route = routeMap[section] || '/';

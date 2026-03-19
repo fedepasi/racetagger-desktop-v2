@@ -2930,3 +2930,358 @@ export async function getPresetParticipantFacePhotoCount(targetId: string, isDri
   }
 }
 
+// ==================== PROJECTS ====================
+
+export async function createProject(data: any) {
+  const client = getSupabaseClient();
+  const userId = authService.getCurrentUserId();
+  if (!userId) throw new Error('Not authenticated');
+  const { data: result, error } = await client.from('projects').insert({ ...data, user_id: userId }).select().single();
+  if (error) throw new Error(error.message);
+  return result;
+}
+
+export async function getUserProjects() {
+  const client = getSupabaseClient();
+  const userId = authService.getCurrentUserId();
+  if (!userId) throw new Error('Not authenticated');
+  const { data, error } = await client
+    .from('projects')
+    .select('*, galleries!galleries_project_id_fkey(id, title, slug, status)')
+    .eq('user_id', userId)
+    .eq('status', 'active')
+    .order('created_at', { ascending: false });
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+export async function getProjectById(id: string) {
+  const client = getSupabaseClient();
+  const { data, error } = await client
+    .from('projects')
+    .select('*, galleries!galleries_project_id_fkey(id, title, slug, status, total_views, total_downloads), delivery_rules(*)')
+    .eq('id', id)
+    .single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+export async function updateProject(id: string, updateData: any) {
+  const client = getSupabaseClient();
+  const { data, error } = await client
+    .from('projects')
+    .update({ ...updateData, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+export async function deleteProject(id: string) {
+  const client = getSupabaseClient();
+  const { error } = await client.from('projects').update({ status: 'deleted' }).eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+// ==================== GALLERIES (from desktop) ====================
+
+export async function createGallery(data: any) {
+  const client = getSupabaseClient();
+  const userId = authService.getCurrentUserId();
+  if (!userId) throw new Error('Not authenticated');
+  const slug = data.slug || (data.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') + '-' + Math.random().toString(36).substring(2, 10));
+  const { data: result, error } = await client
+    .from('galleries')
+    .insert({ ...data, slug, user_id: userId, status: 'draft' })
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return result;
+}
+
+export async function getUserGalleries() {
+  const client = getSupabaseClient();
+  const userId = authService.getCurrentUserId();
+  if (!userId) throw new Error('Not authenticated');
+  const { data, error } = await client
+    .from('galleries')
+    .select('id, title, slug, status, gallery_type, access_type, project_id, total_views, total_downloads, created_at')
+    .eq('user_id', userId)
+    .neq('status', 'suspended')
+    .order('created_at', { ascending: false });
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+// ==================== DELIVERY RULES ====================
+
+export async function createDeliveryRule(data: any) {
+  const client = getSupabaseClient();
+  const { data: result, error } = await client.from('delivery_rules').insert(data).select().single();
+  if (error) throw new Error(error.message);
+  return result;
+}
+
+export async function getDeliveryRulesForProject(projectId: string) {
+  const client = getSupabaseClient();
+  const { data, error } = await client
+    .from('delivery_rules')
+    .select('*, galleries(title, slug)')
+    .eq('project_id', projectId)
+    .order('priority', { ascending: false });
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+export async function deleteDeliveryRule(id: string) {
+  const client = getSupabaseClient();
+  const { error } = await client.from('delivery_rules').delete().eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+// ==================== GALLERY IMAGES ====================
+
+export async function addImagesToGallery(galleryId: string, images: any[]) {
+  const client = getSupabaseClient();
+  const rows = images.map((img: any) => ({ gallery_id: galleryId, ...img }));
+  const { error } = await client.from('gallery_images').upsert(rows, { onConflict: 'gallery_id,image_id' });
+  if (error) throw new Error(error.message);
+}
+
+// ==================== AUTO-ROUTING ====================
+
+export async function autoRouteImagesToGalleries(projectId: string, executionId: string) {
+  const client = getSupabaseClient();
+
+  // Get delivery rules for project
+  const { data: rules } = await client
+    .from('delivery_rules')
+    .select('*')
+    .eq('project_id', projectId)
+    .eq('is_active', true)
+    .order('priority', { ascending: false });
+
+  if (!rules || rules.length === 0) return { routed: 0, unmatched: 0 };
+
+  // Get images + analysis for this execution
+  const { data: images } = await client
+    .from('images')
+    .select('id, analysis_results(recognized_number), visual_tags(participant_name, participant_team)')
+    .eq('execution_id', executionId);
+
+  if (!images) return { routed: 0, unmatched: 0 };
+
+  let routed = 0;
+  let unmatched = 0;
+  const inserts: any[] = [];
+
+  for (const img of images) {
+    const ar = Array.isArray((img as any).analysis_results) ? (img as any).analysis_results[0] : (img as any).analysis_results;
+    const vt = Array.isArray((img as any).visual_tags) ? (img as any).visual_tags[0] : (img as any).visual_tags;
+    const number = ar?.recognized_number || '';
+    const team = vt?.participant_team || '';
+    const name = vt?.participant_name || '';
+    let matched = false;
+
+    for (const rule of rules) {
+      const mc = rule.match_criteria || {};
+      const matchesNumber = (mc as any).numbers?.includes(number);
+      const matchesTeam = (mc as any).teams?.some((t: string) => team.toLowerCase().includes(t.toLowerCase()));
+      const matchesParticipant = (mc as any).participants?.some((p: string) => name.toLowerCase().includes(p.toLowerCase()));
+
+      if (matchesNumber || matchesTeam || matchesParticipant) {
+        inserts.push({
+          gallery_id: rule.gallery_id,
+          image_id: img.id,
+          execution_id: executionId,
+          delivery_rule_id: rule.id,
+          match_type: 'auto',
+          recognized_numbers: number ? [number] : [],
+          participant_name: name,
+          participant_team: team,
+        });
+        matched = true;
+        routed++;
+      }
+    }
+    if (!matched) unmatched++;
+  }
+
+  if (inserts.length > 0) {
+    for (let i = 0; i < inserts.length; i += 100) {
+      await client.from('gallery_images').upsert(inserts.slice(i, i + 100), { onConflict: 'gallery_id,image_id' });
+    }
+  }
+
+  return { routed, unmatched };
+}
+
+// ==================== USER PLAN LIMITS ====================
+
+export async function getUserPlanLimits() {
+  const client = getSupabaseClient();
+  const userId = authService.getCurrentUserId();
+  if (!userId) throw new Error('Not authenticated');
+
+  // Check feature_flags first (per-user overrides)
+  const { data: flags } = await client
+    .from('feature_flags')
+    .select('feature_name, is_enabled')
+    .eq('user_id', userId);
+
+  const flagMap: Record<string, boolean> = {};
+  (flags || []).forEach((f: any) => { flagMap[f.feature_name] = f.is_enabled; });
+
+  // Check subscription plan limits
+  const { data: sub } = await client
+    .from('subscriptions')
+    .select('subscription_plans(limits)')
+    .eq('user_id', userId)
+    .eq('status', 'active')
+    .maybeSingle();
+
+  const planLimits = (sub as any)?.subscription_plans?.limits || {};
+
+  return {
+    gallery_enabled: flagMap['gallery_enabled'] ?? planLimits.gallery_enabled ?? false,
+    delivery_enabled: flagMap['delivery_enabled'] ?? planLimits.delivery_enabled ?? false,
+    projects_enabled: flagMap['projects_enabled'] ?? planLimits.projects_enabled ?? false,
+    r2_storage_enabled: flagMap['r2_storage_enabled'] ?? planLimits.r2_storage_enabled ?? false,
+    r2_storage_max_gb: planLimits.r2_storage_max_gb ?? 0,
+    gallery_max_galleries: planLimits.gallery_max_galleries ?? 3,
+  };
+}
+
+// ==================== GALLERY UPDATES ====================
+
+export async function updateGallery(id: string, updateData: any) {
+  const client = getSupabaseClient();
+  const { data, error } = await client
+    .from('galleries')
+    .update({ ...updateData, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+export async function deleteGallery(id: string) {
+  const client = getSupabaseClient();
+  const { error } = await client.from('galleries').update({ status: 'suspended' }).eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+// ==================== SEND EXECUTION TO GALLERY ====================
+
+export async function sendExecutionToGallery(galleryId: string, executionId: string) {
+  const client = getSupabaseClient();
+
+  // Get images + analysis for this execution
+  const { data: images, error: imgError } = await client
+    .from('images')
+    .select('id, analysis_results(recognized_number), visual_tags(participant_name, participant_team)')
+    .eq('execution_id', executionId);
+
+  if (imgError) throw new Error(imgError.message);
+  if (!images || images.length === 0) return { added: 0 };
+
+  const rows = images.map((img: any) => {
+    const ar = Array.isArray(img.analysis_results) ? img.analysis_results[0] : img.analysis_results;
+    const vt = Array.isArray(img.visual_tags) ? img.visual_tags[0] : img.visual_tags;
+    const number = ar?.recognized_number || '';
+    const name = vt?.participant_name || '';
+    const team = vt?.participant_team || '';
+    return {
+      gallery_id: galleryId,
+      image_id: img.id,
+      execution_id: executionId,
+      match_type: 'manual',
+      recognized_numbers: number ? [number] : [],
+      participant_name: name,
+      participant_team: team,
+    };
+  });
+
+  // Upsert in chunks of 100
+  let added = 0;
+  for (let i = 0; i < rows.length; i += 100) {
+    const chunk = rows.slice(i, i + 100);
+    const { error } = await client.from('gallery_images').upsert(chunk, { onConflict: 'gallery_id,image_id' });
+    if (!error) added += chunk.length;
+  }
+
+  return { added };
+}
+
+// ==================== GET USER EXECUTIONS (for gallery send dropdown) ====================
+
+export async function getUserRecentExecutions() {
+  const client = getSupabaseClient();
+  const userId = authService.getCurrentUserId();
+  if (!userId) throw new Error('Not authenticated');
+  const { data, error } = await client
+    .from('executions')
+    .select('id, name, execution_at, status, processed_images, project_id')
+    .eq('user_id', userId)
+    .in('status', ['completed', 'completed_with_errors'])
+    .order('execution_at', { ascending: false })
+    .limit(20);
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+// ==================== R2 UPLOAD: Get images needing upload for an execution ====================
+
+export async function getImagesForR2Upload(executionId: string) {
+  const client = getSupabaseClient();
+  const { data, error } = await client
+    .from('images')
+    .select('id, original_filename, storage_path, file_size')
+    .eq('execution_id', executionId)
+    .or('original_upload_status.is.null,original_upload_status.eq.pending,original_upload_status.eq.failed');
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+export async function markImagesUploadQueued(imageIds: string[]) {
+  const client = getSupabaseClient();
+  for (let i = 0; i < imageIds.length; i += 100) {
+    const chunk = imageIds.slice(i, i + 100);
+    await client.from('images').update({ original_upload_status: 'queued' }).in('id', chunk);
+  }
+}
+
+// ==================== FEATURE INTEREST SURVEYS ====================
+
+export async function submitFeatureInterestSurvey(data: { responses: any; comment: string | null }) {
+  const client = getSupabaseClient();
+  const userId = authService.getCurrentUserId();
+  if (!userId) throw new Error('Not authenticated');
+  const { error } = await client.from('feature_interest_surveys').upsert(
+    {
+      user_id: userId,
+      feature_area: 'delivery_gallery',
+      responses: data.responses,
+      comment: data.comment,
+      submitted_at: new Date().toISOString(),
+    },
+    { onConflict: 'user_id,feature_area' }
+  );
+  if (error) throw new Error(error.message);
+}
+
+export async function checkFeatureInterestSurvey(): Promise<{ submitted: boolean }> {
+  const client = getSupabaseClient();
+  const userId = authService.getCurrentUserId();
+  if (!userId) throw new Error('Not authenticated');
+  const { data } = await client
+    .from('feature_interest_surveys')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('feature_area', 'delivery_gallery')
+    .maybeSingle();
+  return { submitted: !!data };
+}
+

@@ -88,6 +88,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // Initialize enhanced UX components integration
   initializeEnhancedUXIntegration();
 
+  // Initialize project selector for delivery auto-routing
+  initProjectSelector();
+
   // Load dynamic categories from database
   // NOTE: Categories will be loaded after authentication in handleLoginResult()
   // or handleAuthStatus() to avoid race conditions with backend cache
@@ -1785,6 +1788,13 @@ async function proceedWithFolderAnalysis() {
       }
     }
 
+    // Add project_id if a project is selected (for delivery auto-routing)
+    const projectSelectEl = document.getElementById('project-select');
+    if (projectSelectEl && projectSelectEl.value) {
+      config.projectId = projectSelectEl.value;
+      console.log('[Analysis] Linking execution to project:', config.projectId);
+    }
+
     // Save current analysis settings for next time
     if (typeof window.saveLastAnalysisSettings === 'function') {
       window.saveLastAnalysisSettings();
@@ -2719,6 +2729,39 @@ function filterAndDisplayPresets() {
 
 window.loadPresetsForSelector = loadPresetsForSelector;
 window.filterAndDisplayPresets = filterAndDisplayPresets;
+
+/**
+ * Initialize project selector dropdown for delivery auto-routing.
+ * Shows the dropdown only if the user has delivery enabled, and populates with their projects.
+ */
+function initProjectSelector() {
+  if (!window.api || !window.api.invoke) return;
+
+  // Check if user has delivery/projects enabled
+  window.api.invoke('delivery-get-plan-limits').then(function(result) {
+    if (!result || !result.success || !result.data) return;
+    var limits = result.data;
+    if (!limits.projects_enabled) return;
+
+    // Show the project selector section
+    var section = document.getElementById('project-selector-section');
+    if (section) section.style.display = 'block';
+
+    // Populate with user's projects
+    window.api.invoke('delivery-get-projects').then(function(projResult) {
+      if (!projResult || !projResult.success || !projResult.data) return;
+      var select = document.getElementById('project-select');
+      if (!select) return;
+
+      projResult.data.forEach(function(p) {
+        var option = document.createElement('option');
+        option.value = p.id;
+        option.textContent = p.name + (p.event_location ? ' — ' + p.event_location : '');
+        select.appendChild(option);
+      });
+    }).catch(function() {});
+  }).catch(function() {});
+}
 
 /**
  * Initialize metadata overwrite options visibility based on preset selection

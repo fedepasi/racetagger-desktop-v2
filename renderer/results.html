@@ -27,6 +27,12 @@
         </div>
 
         <div class="results-actions">
+          <button id="btn-send-to-gallery" class="btn-export" style="display: none;" title="Send photos to a gallery for client delivery">
+            🖼️ Send to Gallery
+          </button>
+          <button id="btn-r2-upload" class="btn-export" style="display: none;" title="Upload originals to cloud storage for HD delivery">
+            ☁️ Upload HD
+          </button>
           <button id="btn-unified-export" class="btn-export" style="display: none;" title="Export files with rename, organize, and IPTC metadata — or write IPTC to originals">
             📤 Export & IPTC
           </button>
@@ -91,10 +97,51 @@
     </div>
   </div>
 
+  <!-- Send to Gallery Modal -->
+  <div id="modal-results-gallery" style="display: none; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); align-items: center; justify-content: center;">
+    <div style="background: var(--bg-medium, #1e1e2e); border: 1px solid var(--border-color, #333); border-radius: 12px; padding: 24px; width: 100%; max-width: 460px; margin: auto;">
+      <h3 style="color: var(--text-primary, #fff); margin: 0 0 16px; font-size: 18px;">🖼️ Send Photos to Gallery</h3>
+      <div style="display: flex; flex-direction: column; gap: 12px;">
+        <div>
+          <label style="display: block; color: var(--text-muted, #888); font-size: 12px; margin-bottom: 4px;">Select Gallery</label>
+          <select id="results-gallery-select" style="width: 100%; padding: 8px 12px; background: var(--bg-dark, #1a1a2e); border: 1px solid var(--border-color, #333); border-radius: 8px; color: var(--text-primary, #fff); font-size: 14px;">
+            <option value="">Loading galleries...</option>
+          </select>
+        </div>
+        <div>
+          <label style="display: block; color: var(--text-muted, #888); font-size: 12px; margin-bottom: 4px;">Or create a new gallery</label>
+          <div style="display: flex; gap: 8px;">
+            <input id="results-new-gallery-name" type="text" placeholder="Gallery name (e.g., IMSA Daytona 2026)" style="flex: 1; padding: 8px 12px; background: var(--bg-dark, #1a1a2e); border: 1px solid var(--border-color, #333); border-radius: 8px; color: var(--text-primary, #fff); font-size: 13px; outline: none;">
+            <button id="btn-results-create-gallery" style="padding: 8px 12px; background: var(--bg-light, #2a2a3e); border: 1px solid var(--border-color, #333); border-radius: 8px; color: var(--text-primary, #fff); cursor: pointer; font-size: 12px; white-space: nowrap;">+ Create</button>
+          </div>
+        </div>
+        <div id="results-gallery-info" style="display: none; padding: 10px; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 8px; font-size: 12px; color: var(--text-muted, #888);">
+        </div>
+      </div>
+      <div style="display: flex; gap: 8px; margin-top: 20px; justify-content: flex-end;">
+        <button id="btn-results-gallery-cancel" style="padding: 8px 16px; background: var(--bg-light, #2a2a3e); border: 1px solid var(--border-color, #333); border-radius: 8px; color: var(--text-primary, #fff); cursor: pointer; font-size: 13px;">Cancel</button>
+        <button id="btn-results-gallery-send" style="padding: 8px 16px; background: var(--accent-primary, #3b82f6); border: none; border-radius: 8px; color: white; cursor: pointer; font-size: 13px; font-weight: 600;">Send All Photos</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- R2 Upload Progress Banner -->
+  <div id="r2-upload-banner" style="display: none; position: fixed; bottom: 80px; right: 24px; z-index: 900; background: var(--bg-medium, #1e1e2e); border: 1px solid rgba(59, 130, 246, 0.4); border-radius: 12px; padding: 16px 20px; min-width: 280px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+      <span style="color: var(--text-primary, #fff); font-size: 13px; font-weight: 600;">☁️ Uploading HD Originals</span>
+      <button id="btn-r2-cancel" style="background: none; border: none; color: var(--text-muted, #888); cursor: pointer; font-size: 16px;">&times;</button>
+    </div>
+    <div style="background: var(--bg-dark, #1a1a2e); border-radius: 6px; height: 6px; overflow: hidden;">
+      <div id="r2-upload-progress-bar" style="height: 100%; background: linear-gradient(90deg, #3b82f6, #60a5fa); width: 0%; transition: width 0.3s;"></div>
+    </div>
+    <div id="r2-upload-status" style="color: var(--text-muted, #888); font-size: 11px; margin-top: 6px;">Preparing...</div>
+  </div>
+
   <script src="js/gallery-zoom.js"></script>
   <script src="js/log-visualizer.js"></script>
   <script src="js/results-page.js"></script>
   <script src="js/unified-export-iptc-modal.js"></script>
+  <script src="js/results-delivery.js"></script>
   <script src="js/feedback-modal.js"></script>
 
   <script>
