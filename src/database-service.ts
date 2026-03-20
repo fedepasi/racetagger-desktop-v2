@@ -40,6 +40,7 @@ export interface Execution {
   category?: string; // Sport category (motorsport, running, altro)
   sport_category_id?: string | null; // UUID - FK to sport_categories table
   execution_settings?: Record<string, any>; // Execution configuration (JSONB)
+  source_folder?: string | null; // Local filesystem path of source folder (for R2 HD upload)
 }
 
 // Interfacce per sistema preset partecipanti
@@ -82,6 +83,7 @@ export interface PresetParticipant {
   folder_1_path?: string;    // Absolute filesystem path for folder 1
   folder_2_path?: string;    // Absolute filesystem path for folder 2
   folder_3_path?: string;    // Absolute filesystem path for folder 3
+  delivery_to_client_id?: string | null; // FK to projects (client) for auto-delivery routing
   created_at?: string;
 }
 
@@ -980,6 +982,7 @@ export interface PresetParticipantSupabase {
   folder_1_path?: string;    // Absolute filesystem path for folder 1
   folder_2_path?: string;    // Absolute filesystem path for folder 2
   folder_3_path?: string;    // Absolute filesystem path for folder 3
+  delivery_to_client_id?: string | null; // FK to projects (client) for auto-delivery routing
   custom_fields?: any;
   sort_order?: number;
   created_at?: string;
@@ -1022,6 +1025,16 @@ let categoriesCache: SportCategory[] = [];
 let presetsCache: ParticipantPresetSupabase[] = [];
 let cacheLastUpdated: number = 0;
 let cacheIncludesInactive: boolean = false; // Track if cache includes inactive categories (admin mode)
+
+/**
+ * Invalidate the presets cache so next fetch returns fresh data from Supabase.
+ * Used after learned data is saved to preset_participants.
+ */
+export function invalidatePresetsCache(): void {
+  presetsCache = [];
+  cacheLastUpdated = 0;
+  console.log('[Cache] Presets cache invalidated');
+}
 
 /**
  * Cache all Supabase data at app startup
@@ -2936,6 +2949,13 @@ export async function createProject(data: any) {
   const client = getSupabaseClient();
   const userId = authService.getCurrentUserId();
   if (!userId) throw new Error('Not authenticated');
+
+  // Auto-generate client_slug from name if not provided
+  const clientName = data.client_name || data.name || 'client';
+  if (!data.client_slug) {
+    data.client_slug = generateSlug(clientName) + '-' + Math.random().toString(36).substring(2, 6);
+  }
+
   const { data: result, error } = await client.from('projects').insert({ ...data, user_id: userId }).select().single();
   if (error) throw new Error(error.message);
   return result;
@@ -2959,7 +2979,7 @@ export async function getProjectById(id: string) {
   const client = getSupabaseClient();
   const { data, error } = await client
     .from('projects')
-    .select('*, galleries!galleries_project_id_fkey(id, title, slug, status, total_views, total_downloads), delivery_rules(*)')
+    .select('*, galleries!galleries_project_id_fkey(id, title, slug, status, total_views, total_downloads, event_date, season), delivery_rules(*, galleries(title, slug))')
     .eq('id', id)
     .single();
   if (error) throw new Error(error.message);
@@ -3034,10 +3054,157 @@ export async function getDeliveryRulesForProject(projectId: string) {
   return data || [];
 }
 
+export async function updateDeliveryRule(id: string, updateData: any) {
+  const client = getSupabaseClient();
+  const { data, error } = await client
+    .from('delivery_rules')
+    .update({ ...updateData, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
 export async function deleteDeliveryRule(id: string) {
   const client = getSupabaseClient();
   const { error } = await client.from('delivery_rules').delete().eq('id', id);
   if (error) throw new Error(error.message);
+}
+
+// ==================== SYNC DELIVERY RULES FROM PRESET ====================
+
+/**
+ * Sync delivery rules from preset participant "delivery_to_client_id" associations.
+ *
+ * For each participant that has a delivery_to_client_id set:
+ * - Finds the client (project) and its default gallery
+ * - Creates/updates an auto-generated delivery rule with source_type='preset_auto'
+ * - Removes stale auto-generated rules for participants that no longer have a delivery_to_client_id
+ *
+ * This is called after saving a preset's participants.
+ */
+export async function syncDeliveryRulesFromPreset(presetId: string): Promise<{ created: number; updated: number; deleted: number }> {
+  const client = getSupabaseClient();
+
+  // 1. Get all participants for this preset with delivery_to_client_id set
+  const { data: participants, error: pErr } = await client
+    .from('preset_participants')
+    .select('id, numero, nome, squadra, categoria, delivery_to_client_id')
+    .eq('preset_id', presetId);
+
+  if (pErr) throw new Error(`Failed to load preset participants: ${pErr.message}`);
+
+  // 2. Get existing auto-generated rules for this preset
+  const { data: existingRules, error: rErr } = await client
+    .from('delivery_rules')
+    .select('id, source_participant_id, project_id, gallery_id, match_criteria')
+    .eq('source_preset_id', presetId)
+    .eq('source_type', 'preset_auto');
+
+  if (rErr) throw new Error(`Failed to load existing auto-rules: ${rErr.message}`);
+
+  const existingByParticipant = new Map<string, any>();
+  (existingRules || []).forEach((r: any) => {
+    if (r.source_participant_id) existingByParticipant.set(r.source_participant_id, r);
+  });
+
+  // 3. Get all clients (projects) that have galleries, grouped by project
+  const participantsWithDelivery = (participants || []).filter((p: any) => p.delivery_to_client_id);
+  const clientIds = [...new Set(participantsWithDelivery.map((p: any) => p.delivery_to_client_id))];
+
+  // Get default galleries for each client
+  const clientGalleryMap = new Map<string, string>();
+  if (clientIds.length > 0) {
+    for (const clientId of clientIds) {
+      // First try default_gallery_id, then fall back to first gallery
+      const { data: project } = await client
+        .from('projects')
+        .select('id, default_gallery_id')
+        .eq('id', clientId)
+        .single();
+
+      if (project?.default_gallery_id) {
+        clientGalleryMap.set(clientId as string, project.default_gallery_id);
+      } else {
+        // Get first active gallery for this client
+        const { data: galleries } = await client
+          .from('galleries')
+          .select('id')
+          .eq('project_id', clientId)
+          .neq('status', 'suspended')
+          .order('created_at', { ascending: true })
+          .limit(1);
+
+        if (galleries && galleries.length > 0) {
+          clientGalleryMap.set(clientId as string, galleries[0].id);
+        }
+      }
+    }
+  }
+
+  let created = 0;
+  let updated = 0;
+  let deleted = 0;
+
+  // 4. Create/update rules for participants with delivery_to_client_id
+  for (const p of participantsWithDelivery) {
+    const galleryId = clientGalleryMap.get(p.delivery_to_client_id);
+    if (!galleryId) continue; // No gallery available for this client yet
+
+    // Build match criteria from participant data
+    const matchCriteria: any = {};
+    if (p.numero) matchCriteria.numbers = [p.numero];
+    if (p.squadra) matchCriteria.teams = [p.squadra];
+    if (p.nome) matchCriteria.participants = [p.nome];
+
+    const existingRule = existingByParticipant.get(p.id);
+
+    if (existingRule) {
+      // Update existing rule
+      const { error: uErr } = await client
+        .from('delivery_rules')
+        .update({
+          gallery_id: galleryId,
+          project_id: p.delivery_to_client_id,
+          match_criteria: matchCriteria,
+          rule_name: `Auto: #${p.numero || ''} ${p.nome || p.squadra || ''}`.trim(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', existingRule.id);
+      if (!uErr) updated++;
+      existingByParticipant.delete(p.id); // Mark as processed
+    } else {
+      // Create new rule
+      const { error: cErr } = await client
+        .from('delivery_rules')
+        .insert({
+          project_id: p.delivery_to_client_id,
+          gallery_id: galleryId,
+          rule_name: `Auto: #${p.numero || ''} ${p.nome || p.squadra || ''}`.trim(),
+          match_criteria: matchCriteria,
+          priority: 0,
+          is_active: true,
+          source_type: 'preset_auto',
+          source_participant_id: p.id,
+          source_preset_id: presetId,
+        });
+      if (!cErr) created++;
+    }
+  }
+
+  // 5. Delete stale auto-generated rules (participant no longer has delivery_to)
+  const staleRuleIds = [...existingByParticipant.values()].map((r: any) => r.id);
+  if (staleRuleIds.length > 0) {
+    const { error: dErr } = await client
+      .from('delivery_rules')
+      .delete()
+      .in('id', staleRuleIds);
+    if (!dErr) deleted = staleRuleIds.length;
+  }
+
+  console.log(`[Delivery] Synced rules from preset ${presetId}: created=${created}, updated=${updated}, deleted=${deleted}`);
+  return { created, updated, deleted };
 }
 
 // ==================== GALLERY IMAGES ====================
@@ -3114,7 +3281,10 @@ export async function autoRouteImagesToGalleries(projectId: string, executionId:
     }
   }
 
-  return { routed, unmatched };
+  // Count distinct galleries that received photos
+  const galleriesHit = new Set(inserts.map(i => i.gallery_id));
+
+  return { routed, unmatched, galleriesCount: galleriesHit.size };
 }
 
 // ==================== USER PLAN LIMITS ====================
@@ -3157,13 +3327,18 @@ export async function getUserPlanLimits() {
 
 export async function updateGallery(id: string, updateData: any) {
   const client = getSupabaseClient();
+  console.log('[DB] updateGallery called:', id, JSON.stringify(updateData));
   const { data, error } = await client
     .from('galleries')
     .update({ ...updateData, updated_at: new Date().toISOString() })
     .eq('id', id)
     .select()
     .single();
-  if (error) throw new Error(error.message);
+  if (error) {
+    console.error('[DB] updateGallery error:', error.message, error.details, error.hint);
+    throw new Error(error.message);
+  }
+  console.log('[DB] updateGallery result:', data?.id, 'status:', data?.status);
   return data;
 }
 
@@ -3173,34 +3348,82 @@ export async function deleteGallery(id: string) {
   if (error) throw new Error(error.message);
 }
 
+/**
+ * Get all galleries not yet assigned to any client (project_id is null).
+ */
+export async function getUnlinkedGalleries() {
+  const client = getSupabaseClient();
+  const userId = authService.getCurrentUserId();
+  if (!userId) throw new Error('Not authenticated');
+  const { data, error } = await client
+    .from('galleries')
+    .select('id, title, slug, status, gallery_type, access_type, created_at')
+    .eq('user_id', userId)
+    .is('project_id', null)
+    .neq('status', 'suspended')
+    .order('created_at', { ascending: false });
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+/**
+ * Link an existing gallery to a client (project) by setting its project_id.
+ */
+export async function linkGalleryToProject(galleryId: string, projectId: string) {
+  const client = getSupabaseClient();
+  const { data, error } = await client
+    .from('galleries')
+    .update({ project_id: projectId, updated_at: new Date().toISOString() })
+    .eq('id', galleryId)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
 // ==================== SEND EXECUTION TO GALLERY ====================
 
 export async function sendExecutionToGallery(galleryId: string, executionId: string) {
   const client = getSupabaseClient();
 
-  // Get images + analysis for this execution
+  // Step 1: Get image IDs for this execution (fast, indexed query)
   const { data: images, error: imgError } = await client
     .from('images')
-    .select('id, analysis_results(recognized_number), visual_tags(participant_name, participant_team)')
+    .select('id')
     .eq('execution_id', executionId);
 
   if (imgError) throw new Error(imgError.message);
   if (!images || images.length === 0) return { added: 0 };
 
-  const rows = images.map((img: any) => {
-    const ar = Array.isArray(img.analysis_results) ? img.analysis_results[0] : img.analysis_results;
-    const vt = Array.isArray(img.visual_tags) ? img.visual_tags[0] : img.visual_tags;
-    const number = ar?.recognized_number || '';
-    const name = vt?.participant_name || '';
-    const team = vt?.participant_team || '';
+  const imageIds = images.map((img: any) => img.id);
+
+  // Step 2: Get analysis_results and visual_tags separately (uses indexes)
+  const [arResult, vtResult] = await Promise.all([
+    client.from('analysis_results').select('image_id, recognized_number').in('image_id', imageIds),
+    client.from('visual_tags').select('image_id, participant_name, participant_team').in('image_id', imageIds),
+  ]);
+
+  // Build lookup maps
+  const arMap: Record<string, string> = {};
+  if (arResult.data) {
+    arResult.data.forEach((ar: any) => { if (ar.recognized_number) arMap[ar.image_id] = ar.recognized_number; });
+  }
+  const vtMap: Record<string, { name: string; team: string }> = {};
+  if (vtResult.data) {
+    vtResult.data.forEach((vt: any) => { vtMap[vt.image_id] = { name: vt.participant_name || '', team: vt.participant_team || '' }; });
+  }
+
+  const rows = imageIds.map((imgId: string) => {
+    const number = arMap[imgId] || '';
+    const vt = vtMap[imgId];
     return {
       gallery_id: galleryId,
-      image_id: img.id,
+      image_id: imgId,
       execution_id: executionId,
       match_type: 'manual',
       recognized_numbers: number ? [number] : [],
-      participant_name: name,
-      participant_team: team,
+      participant_name: vt?.name || '',
+      participant_team: vt?.team || '',
     };
   });
 
@@ -3232,13 +3455,52 @@ export async function getUserRecentExecutions() {
   return data || [];
 }
 
+// ==================== GET EXECUTIONS LINKED TO A GALLERY ====================
+
+export async function getGalleryExecutions(galleryId: string) {
+  const client = getSupabaseClient();
+
+  // Get distinct execution_ids from gallery_images for this gallery
+  const { data, error } = await client
+    .from('gallery_images')
+    .select('execution_id')
+    .eq('gallery_id', galleryId)
+    .not('execution_id', 'is', null);
+
+  if (error) throw new Error(error.message);
+  if (!data || data.length === 0) return [];
+
+  // Get unique execution IDs
+  const executionIds = [...new Set(data.map((row: any) => row.execution_id))];
+
+  // Fetch execution details
+  const { data: executions, error: execError } = await client
+    .from('executions')
+    .select('id, name, execution_at, processed_images, project_id')
+    .in('id', executionIds)
+    .order('execution_at', { ascending: false });
+
+  if (execError) throw new Error(execError.message);
+
+  // Count images per execution in this gallery
+  const countMap: Record<string, number> = {};
+  data.forEach((row: any) => {
+    countMap[row.execution_id] = (countMap[row.execution_id] || 0) + 1;
+  });
+
+  return (executions || []).map((exec: any) => ({
+    ...exec,
+    gallery_image_count: countMap[exec.id] || 0,
+  }));
+}
+
 // ==================== R2 UPLOAD: Get images needing upload for an execution ====================
 
 export async function getImagesForR2Upload(executionId: string) {
   const client = getSupabaseClient();
   const { data, error } = await client
     .from('images')
-    .select('id, original_filename, storage_path, file_size')
+    .select('id, original_filename, storage_path, original_file_size')
     .eq('execution_id', executionId)
     .or('original_upload_status.is.null,original_upload_status.eq.pending,original_upload_status.eq.failed');
   if (error) throw new Error(error.message);
@@ -3285,3 +3547,179 @@ export async function checkFeatureInterestSurvey(): Promise<{ submitted: boolean
   return { submitted: !!data };
 }
 
+// ==================== CLIENT USERS (AUTHENTICATION) ====================
+
+/**
+ * Create a client user for gallery/portal access.
+ * Password is hashed client-side before sending to the database.
+ */
+export async function createClientUser(data: {
+  project_id: string;
+  username?: string;
+  password_hash?: string;
+  display_name?: string;
+  email?: string;
+  status?: string;
+  invite_token?: string;
+  invite_token_expires_at?: string;
+  is_active?: boolean;
+}) {
+  const client = getSupabaseClient();
+  // Auto-generate username from email if not provided
+  if (!data.username && data.email) {
+    data.username = data.email.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '-');
+  }
+  const { data: result, error } = await client
+    .from('client_users')
+    .insert(data)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return result;
+}
+
+export async function getClientUsersForProject(projectId: string) {
+  const client = getSupabaseClient();
+  const { data, error } = await client
+    .from('client_users')
+    .select('id, project_id, username, display_name, email, is_active, status, last_login_at, invite_token_expires_at, created_at')
+    .eq('project_id', projectId)
+    .order('created_at', { ascending: true });
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+export async function updateClientUser(id: string, updateData: any) {
+  const client = getSupabaseClient();
+  const { data, error } = await client
+    .from('client_users')
+    .update({ ...updateData, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+export async function deleteClientUser(id: string) {
+  const client = getSupabaseClient();
+  const { error } = await client.from('client_users').delete().eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+// ==================== CLIENT SLUG / SHAREABLE LINKS ====================
+
+/**
+ * Generate a URL-friendly slug from a client name.
+ * Ensures uniqueness by appending a random suffix if needed.
+ */
+function generateSlug(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // Remove accents
+    .replace(/[^a-z0-9]+/g, '-')     // Replace non-alphanumeric with hyphens
+    .replace(/^-+|-+$/g, '')          // Trim leading/trailing hyphens
+    .substring(0, 50);
+}
+
+/**
+ * Set or regenerate the client_slug for a project.
+ * Used for client portal shareable links: /c/{client_slug}
+ */
+export async function setClientSlug(projectId: string, clientName: string): Promise<string> {
+  const client = getSupabaseClient();
+  let slug = generateSlug(clientName);
+
+  // Check uniqueness, append random suffix if needed
+  const { data: existing } = await client
+    .from('projects')
+    .select('id')
+    .eq('client_slug', slug)
+    .neq('id', projectId)
+    .maybeSingle();
+
+  if (existing) {
+    slug = `${slug}-${Math.random().toString(36).substring(2, 6)}`;
+  }
+
+  const { data, error } = await client
+    .from('projects')
+    .update({ client_slug: slug, updated_at: new Date().toISOString() })
+    .eq('id', projectId)
+    .select('client_slug')
+    .single();
+
+  if (error) throw new Error(error.message);
+  return data.client_slug;
+}
+
+// ==================== CLIENT INVITE EMAIL ====================
+
+/**
+ * Send invite email to a client user.
+ * Fetches project info for the email template, then delegates to email-service.
+ */
+export async function sendClientInviteEmail(params: {
+  clientUserId: string;
+  email: string;
+  displayName: string;
+  inviteToken: string;
+  projectId: string;
+}) {
+  // Import here to avoid circular deps
+  const { sendClientInviteEmailViaBrevo } = await import('./email-service');
+
+  // Get project info for the email (client name, photographer name)
+  const project = await getProjectById(params.projectId);
+  const projectName = project?.client_name || project?.name || 'Client Portal';
+
+  return sendClientInviteEmailViaBrevo({
+    recipientEmail: params.email,
+    recipientName: params.displayName,
+    inviteToken: params.inviteToken,
+    clientName: projectName,
+    portalSlug: project?.client_slug || '',
+  });
+}
+
+/**
+ * Resend invitation: generate new token + send email.
+ */
+export async function resendClientInvite(clientUserId: string) {
+  const client = getSupabaseClient();
+
+  // Get the client user
+  const { data: user, error: fetchError } = await client
+    .from('client_users')
+    .select('id, project_id, email, display_name, status')
+    .eq('id', clientUserId)
+    .single();
+  if (fetchError || !user) throw new Error('Client user not found');
+  if (user.status !== 'invited') throw new Error('User is already registered');
+
+  // Generate new token
+  const crypto = require('crypto');
+  const newToken = crypto.randomBytes(16).toString('hex');
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  // Update token in DB
+  const { error: updateError } = await client
+    .from('client_users')
+    .update({
+      invite_token: newToken,
+      invite_token_expires_at: expiresAt,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', clientUserId);
+  if (updateError) throw new Error(updateError.message);
+
+  // Send email
+  return sendClientInviteEmail({
+    clientUserId,
+    email: user.email!,
+    displayName: user.display_name || 'User',
+    inviteToken: newToken,
+    projectId: user.project_id,
+  });
+}

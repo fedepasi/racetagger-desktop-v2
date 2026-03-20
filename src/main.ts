@@ -1295,7 +1295,8 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
         execution_at: new Date().toISOString(),
         status: 'running',
         category: config.category || 'motorsport', // FIX: Include category field for management portal display
-        sport_category_id: sportCategoryId
+        sport_category_id: sportCategoryId,
+        source_folder: config.folderPath || null, // Save source folder for R2 HD upload to locate originals
       });
       currentExecutionId = newExecution.id!;
       console.log(`[Execution] Created execution ${currentExecutionId} for category "${config.category || 'motorsport'}"${config.projectId ? `, project: ${config.projectId}` : ''}`);
@@ -1565,12 +1566,13 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
             if (executionData && executionData.project_id) {
               console.log(`[Delivery] Auto-routing photos for project ${executionData.project_id}...`);
               const routingResult = await autoRouteImagesToGalleries(executionData.project_id, currentExecutionId);
-              console.log(`[Delivery] Auto-routing complete: ${routingResult.routed} routed, ${routingResult.unmatched} unmatched`);
+              console.log(`[Delivery] Auto-routing complete: ${routingResult.routed} routed to ${routingResult.galleriesCount} galleries, ${routingResult.unmatched} unmatched`);
               safeSend('delivery-routing-complete', {
                 executionId: currentExecutionId,
                 projectId: executionData.project_id,
                 routed: routingResult.routed,
                 unmatched: routingResult.unmatched,
+                galleriesCount: routingResult.galleriesCount,
               });
             }
           } catch (routingError: any) {
@@ -1865,7 +1867,8 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
         status: 'running',
         category: config.category || 'motorsport', // FIX: Include category field for management portal display
         sport_category_id: sportCategoryId,
-        total_images: 0 // Will be updated after processing
+        total_images: 0, // Will be updated after processing
+        source_folder: config.folderPath || null,
       });
       currentExecutionId = newExecution.id!;
       console.log(`[Execution] Created folder analysis execution ${currentExecutionId} for category "${config.category || 'motorsport'}"`);
@@ -3794,6 +3797,77 @@ app.whenReady().then(async () => { // Added async here
             // Non-critical: JSONL and metadata updates still succeed
           }
         }
+
+        // === Write USER_MANUAL correction to image_corrections table ===
+        // This feeds the feedback learning system (Strategy G):
+        // When a user corrects a race number, we capture the Vehicle DNA
+        // (sponsors, team, make, model, livery) that Gemini detected for that crop.
+        // The learned-data-enricher will later aggregate these to enrich the preset.
+        try {
+          const { getSupabaseClient } = await import('./database-service');
+          const supabase = getSupabaseClient();
+          const userId = authService.getAuthState().user?.id;
+
+          if (userId) {
+            // Extract Vehicle DNA snapshot from the Gemini analysis data
+            const vehicleDna: Record<string, any> = {};
+            if (imageAnalysisEvent?.aiResponse?.vehicles?.[correction.vehicleIndex]) {
+              const v = imageAnalysisEvent.aiResponse.vehicles[correction.vehicleIndex];
+              if (v.sponsors?.length > 0 || v.otherText?.length > 0) {
+                vehicleDna.detected_sponsors = v.sponsors || v.otherText || [];
+              }
+              if (v.team) vehicleDna.detected_team = v.team;
+              if (v.make) vehicleDna.detected_make = v.make;
+              if (v.model) vehicleDna.detected_model = v.model;
+              if (v.livery) vehicleDna.detected_livery = v.livery;
+              if (v.category) vehicleDna.detected_category = v.category;
+              if (v.plateNumber) vehicleDna.detected_plate = v.plateNumber;
+              if (v.context) vehicleDna.detected_context = v.context;
+            }
+
+            // Build the original and corrected values
+            const originalValue: Record<string, any> = {};
+            const correctedValue: Record<string, any> = {};
+
+            // Capture all changed fields
+            for (const [field, newVal] of Object.entries(correction.changes)) {
+              if (imageAnalysisEvent?.aiResponse?.vehicles?.[correction.vehicleIndex]) {
+                originalValue[field] = imageAnalysisEvent.aiResponse.vehicles[correction.vehicleIndex][field] ?? null;
+              }
+              correctedValue[field] = newVal;
+            }
+
+            // Add confidence to original if it was a number change
+            if (correction.changes.raceNumber && imageAnalysisEvent?.aiResponse?.vehicles?.[correction.vehicleIndex]) {
+              originalValue.confidence = imageAnalysisEvent.aiResponse.vehicles[correction.vehicleIndex].confidence ?? null;
+            }
+
+            const { error: corrError } = await supabase.from('image_corrections').insert({
+              execution_id: executionId,
+              user_id: userId,
+              image_id: imageAnalysisEvent?.imageId || `${correction.fileName}_${correction.vehicleIndex}`,
+              correction_type: 'USER_MANUAL',
+              field: Object.keys(correction.changes).join(','),
+              original_value: originalValue,
+              corrected_value: correctedValue,
+              confidence: imageAnalysisEvent?.aiResponse?.vehicles?.[correction.vehicleIndex]?.confidence ?? null,
+              reason: 'Manual user correction via results page',
+              message: `User corrected ${Object.keys(correction.changes).join(', ')} for ${correction.fileName} vehicle ${correction.vehicleIndex}`,
+              vehicle_index: correction.vehicleIndex,
+              details: Object.keys(vehicleDna).length > 0 ? vehicleDna : null,
+              preset_id: executionStartEvent?.participantPresetId || null,
+            });
+
+            if (corrError) {
+              console.warn(`[Main Process] Failed to write USER_MANUAL correction to image_corrections: ${corrError.message} [code: ${corrError.code}]`);
+            } else {
+              console.log(`[Main Process] ✅ Wrote USER_MANUAL correction to image_corrections for ${correction.fileName} vehicle ${correction.vehicleIndex}`);
+            }
+          }
+        } catch (corrInsertError) {
+          console.warn('[Main Process] Failed to insert USER_MANUAL correction:', corrInsertError);
+          // Non-critical: JSONL update already succeeded
+        }
       }
 
       // Update EXECUTION_COMPLETE event with manual correction stats (if it exists)
@@ -3939,6 +4013,180 @@ app.whenReady().then(async () => { // Added async here
 
     } catch (error) {
       console.error('[Main Process] Error updating analysis log:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  // ============================================
+  // LEARNED DATA: Save user-accepted learned data to preset participants
+  // Part of Strategy G (Feedback Learning System)
+  // ============================================
+
+  // Check if learned data from a given execution already exists in the preset
+  ipcMain.handle('check-learned-data-exists', async (_, data: { presetId: string; executionId: string }) => {
+    try {
+      const { getSupabaseClient } = await import('./database-service');
+      const supabase = getSupabaseClient();
+      if (!supabase) return { success: false, error: 'No Supabase client' };
+
+      const { data: rows, error } = await supabase
+        .from('preset_participants')
+        .select('id')
+        .eq('preset_id', data.presetId)
+        .contains('custom_fields', { learned: { source_execution_ids: [data.executionId] } })
+        .limit(1);
+
+      if (error) {
+        console.warn(`[LearnedData] Check query failed: ${error.message}`);
+        return { success: false, error: error.message };
+      }
+
+      return { success: true, data: { exists: rows && rows.length > 0 } };
+    } catch (error) {
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  ipcMain.handle('save-learned-participant-data', async (_, data: {
+    presetId: string;
+    executionId: string;
+    participants: Array<{
+      raceNumber: string;
+      participantId: string | null;
+      fields: Record<string, any>;
+      observationCount: number;
+      isAutoDetected: boolean;
+    }>;
+  }) => {
+    try {
+      const { presetId, executionId, participants } = data;
+      const { getSupabaseClient } = await import('./database-service');
+      const supabase = getSupabaseClient();
+      const userId = authService.getAuthState().user?.id;
+
+      if (!userId) {
+        return { success: false, error: 'User not authenticated' };
+      }
+
+      let updatedCount = 0;
+
+      for (const participant of participants) {
+        // If we don't have a participantId, look it up by number + preset
+        let participantId = participant.participantId;
+        if (!participantId) {
+          const { data: found } = await supabase
+            .from('preset_participants')
+            .select('id')
+            .eq('preset_id', presetId)
+            .eq('numero', participant.raceNumber)
+            .maybeSingle();
+
+          if (found) {
+            participantId = found.id;
+          } else {
+            console.warn(`[LearnedData] Participant #${participant.raceNumber} not found in preset ${presetId}`);
+            continue;
+          }
+        }
+
+        // Build the learned data object for custom_fields
+        const learnedData: Record<string, any> = {
+          observation_count: participant.observationCount,
+          confidence: 0.90, // User-accepted data starts at high confidence
+          source_execution_ids: [executionId],
+          last_confirmed_at: new Date().toISOString(),
+          user_accepted: true,
+          user_accepted_at: new Date().toISOString(),
+        };
+
+        // Map fields to learned data structure
+        if (participant.fields.sponsors) learnedData.sponsors = participant.fields.sponsors;
+        if (participant.fields.team) learnedData.team = participant.fields.team;
+        if (participant.fields.car_model) {
+          // Try to split into make + model
+          const parts = participant.fields.car_model.split(' ');
+          if (parts.length >= 2) {
+            learnedData.make = parts[0];
+            learnedData.model = parts.slice(1).join(' ');
+          } else {
+            learnedData.make = participant.fields.car_model;
+          }
+        }
+        if (participant.fields.category) learnedData.category = participant.fields.category;
+        if (participant.fields.plate_number) learnedData.plate = participant.fields.plate_number;
+        if (participant.fields.livery) learnedData.livery = participant.fields.livery;
+
+        // Also update the main preset fields directly (sponsor, squadra, car_model)
+        // so they're immediately visible and used by SmartMatcher without custom_fields parsing
+        const directUpdate: Record<string, any> = {};
+        if (participant.fields.sponsors) {
+          // Append to existing sponsor field
+          const { data: current } = await supabase
+            .from('preset_participants')
+            .select('sponsor')
+            .eq('id', participantId)
+            .maybeSingle();
+
+          const existingSponsors = current?.sponsor ? current.sponsor.split(',').map((s: string) => s.trim()) : [];
+          const newSponsors = participant.fields.sponsors.filter((s: string) => !existingSponsors.map((e: string) => e.toLowerCase()).includes(s.toLowerCase()));
+          if (newSponsors.length > 0) {
+            directUpdate.sponsor = [...existingSponsors, ...newSponsors].join(', ');
+          }
+        }
+        if (participant.fields.team) directUpdate.squadra = participant.fields.team;
+        if (participant.fields.car_model) directUpdate.car_model = participant.fields.car_model;
+        if (participant.fields.category) directUpdate.categoria = participant.fields.category;
+        if (participant.fields.plate_number) directUpdate.plate_number = participant.fields.plate_number;
+
+        // Write learned data to custom_fields AND direct fields in a single update
+        const { data: existingRow } = await supabase
+          .from('preset_participants')
+          .select('custom_fields')
+          .eq('id', participantId)
+          .maybeSingle();
+
+        const existingCustomFields = existingRow?.custom_fields || {};
+        const existingLearned = existingCustomFields.learned || {};
+
+        // Merge: keep existing learned data, add/update with new data
+        const mergedLearned = { ...existingLearned, ...learnedData };
+        // Merge sponsors arrays (union)
+        if (existingLearned.sponsors && learnedData.sponsors) {
+          mergedLearned.sponsors = [...new Set([...existingLearned.sponsors, ...learnedData.sponsors])];
+        }
+        // Merge execution IDs
+        if (existingLearned.source_execution_ids) {
+          mergedLearned.source_execution_ids = [...new Set([...existingLearned.source_execution_ids, executionId])];
+        }
+
+        const updatePayload: Record<string, any> = {
+          custom_fields: { ...existingCustomFields, learned: mergedLearned },
+          ...directUpdate,
+        };
+
+        const { error } = await supabase
+          .from('preset_participants')
+          .update(updatePayload)
+          .eq('id', participantId);
+
+        if (error) {
+          console.warn(`[LearnedData] Failed to update participant #${participant.raceNumber}: ${error.message}`);
+        } else {
+          updatedCount++;
+          console.log(`[LearnedData] ✅ Updated participant #${participant.raceNumber} with learned data:`, Object.keys(participant.fields).join(', '));
+        }
+      }
+
+      // Invalidate presets cache so next fetch returns fresh data with learned fields
+      if (updatedCount > 0) {
+        const { invalidatePresetsCache } = await import('./database-service');
+        invalidatePresetsCache();
+      }
+
+      return { success: true, data: { updated: updatedCount, total: participants.length } };
+
+    } catch (error) {
+      console.error('[LearnedData] Error saving learned data:', error);
       return { success: false, error: (error as Error).message };
     }
   });

@@ -33,6 +33,14 @@ export interface OnnxDetection {
   classIndex: number;  // Class index
   className: string;   // Class name (e.g., "SF-25_16")
   raceNumber: string | null;  // Extracted race number (e.g., "16")
+  /** Diagnostic: second-best class info for ambiguity analysis */
+  _ambiguityInfo?: {
+    secondClassName: string;
+    secondConfidence: number;
+    secondRaceNumber: string | null;
+    gap: number;          // confidence - secondConfidence
+    ratio: number;        // secondConfidence / confidence
+  };
 }
 
 /**
@@ -48,6 +56,8 @@ export interface OnnxAnalysisResult {
     width: number;
     height: number;
   };
+  /** Diagnostic: ambiguity info propagated from detection */
+  _ambiguityInfo?: OnnxDetection['_ambiguityInfo'];
 }
 
 /**
@@ -437,6 +447,7 @@ export class OnnxDetector {
             confidence: d.confidence,
             className: d.className,
             boundingBox: { x: bx, y: by, width: bw, height: bh },
+            ...(d._ambiguityInfo ? { _ambiguityInfo: d._ambiguityInfo } : {}),
           };
         })
         .filter(r => r.raceNumber !== 'unknown');
@@ -521,12 +532,16 @@ export class OnnxDetector {
       for (let i = 0; i < numDetections; i++) {
         let confidence: number;
         let classIndex: number;
+        let secondBestScore = -Infinity;
+        let secondBestIdx = -1;
 
         if (isMultiClassFormat) {
           // Multi-class format: find argmax across class scores for this detection
           // Skip index 0 if model has background class (score indices start from 1)
           let maxScore = -Infinity;
+          let secondMaxScore = -Infinity;
           let bestClassIndex = 0;
+          let secondBestClassIndex = 0;
           const startIdx = hasBackgroundClass ? 1 : 0;  // Skip background if present
           const endIdx = hasBackgroundClass ? numClasses + 1 : numClasses;  // Only check real classes
 
@@ -534,14 +549,21 @@ export class OnnxDetector {
             const scoreIdx = i * scoresPerDetection + c;
             const classScore = this.sigmoid(scores[scoreIdx]);
             if (classScore > maxScore) {
+              secondMaxScore = maxScore;
+              secondBestClassIndex = bestClassIndex;
               maxScore = classScore;
               bestClassIndex = c;
+            } else if (classScore > secondMaxScore) {
+              secondMaxScore = classScore;
+              secondBestClassIndex = c;
             }
           }
 
           confidence = maxScore;
           // Adjust for background offset: model index 1 = our index 0
           classIndex = hasBackgroundClass ? bestClassIndex - 1 : bestClassIndex;
+          secondBestScore = secondMaxScore;
+          secondBestIdx = hasBackgroundClass ? secondBestClassIndex - 1 : secondBestClassIndex;
         } else {
           // Single score format: use labels tensor for class
           confidence = this.sigmoid(scores[i]);
@@ -602,6 +624,11 @@ export class OnnxDetector {
         const cornerX = centerX - boxWidth / 2;
         const cornerY = centerY - boxHeight / 2;
 
+        // Build ambiguity info if multi-class format had a valid second candidate
+        const secondClassName = (isMultiClassFormat && secondBestScore > -Infinity && secondBestIdx >= 0)
+          ? (this.modelConfig.classes[secondBestIdx] || `class_${secondBestIdx}`)
+          : undefined;
+
         detections.push({
           x: cornerX,      // Top-left X (normalized 0-1)
           y: cornerY,      // Top-left Y (normalized 0-1)
@@ -611,6 +638,15 @@ export class OnnxDetector {
           classIndex,
           className,
           raceNumber: this.extractRaceNumber(className),
+          ...(isMultiClassFormat && secondClassName && secondBestScore > 0.05 ? {
+            _ambiguityInfo: {
+              secondClassName,
+              secondConfidence: secondBestScore,
+              secondRaceNumber: this.extractRaceNumber(secondClassName),
+              gap: confidence - secondBestScore,
+              ratio: secondBestScore / confidence,
+            }
+          } : {}),
         });
       }
     }
@@ -759,24 +795,30 @@ export class OnnxDetector {
               }
             }
 
+            let secondMaxClassScore = 0;
+            let secondBestClassIndex = 0;
+
             for (let c = 0; c < numClasses; c++) {
               const classScore = output[(4 + c) * numAnchors + i];
               if (classScore > maxClassScore) {
+                secondMaxClassScore = maxClassScore;
+                secondBestClassIndex = bestClassIndex;
                 maxClassScore = classScore;
                 bestClassIndex = c;
+              } else if (classScore > secondMaxClassScore) {
+                secondMaxClassScore = classScore;
+                secondBestClassIndex = c;
               }
             }
 
             const confidence = maxClassScore; // YOLOv11 already combines objectness*class_prob
 
-            // DEBUG: Sample first 10 anchors unconditionally to see raw values
-            if (sampledAnchors < 10) {
-              const className = this.modelConfig.classes[bestClassIndex] || `class_${bestClassIndex}`;
-            }
-
             if (confidence < 0.1) continue;
 
             const className = this.modelConfig.classes[bestClassIndex] || `class_${bestClassIndex}`;
+            const secondClassName = (secondMaxClassScore > 0.05)
+              ? (this.modelConfig.classes[secondBestClassIndex] || `class_${secondBestClassIndex}`)
+              : undefined;
 
             // YOLOv11 outputs center-based coords, normalized 0-1
             const [inputW, inputH] = this.modelConfig.inputSize;
@@ -798,6 +840,15 @@ export class OnnxDetector {
               classIndex: bestClassIndex,
               className,
               raceNumber: this.extractRaceNumber(className),
+              ...(secondClassName ? {
+                _ambiguityInfo: {
+                  secondClassName,
+                  secondConfidence: secondMaxClassScore,
+                  secondRaceNumber: this.extractRaceNumber(secondClassName),
+                  gap: confidence - secondMaxClassScore,
+                  ratio: secondMaxClassScore / confidence,
+                }
+              } : {}),
             });
           }
         } else {
@@ -818,20 +869,31 @@ export class OnnxDetector {
 
             // Find best class (apply sigmoid to class scores)
             let maxClassScore = 0;
+            let secondMaxClassScore = 0;
             let bestClassIndex = 0;
+            let secondBestClassIndex = 0;
 
             for (let c = 0; c < this.modelConfig.classes.length; c++) {
               const classScore = this.sigmoid(output[offset + 5 + c] || 0);
               if (classScore > maxClassScore) {
+                secondMaxClassScore = maxClassScore;
+                secondBestClassIndex = bestClassIndex;
                 maxClassScore = classScore;
                 bestClassIndex = c;
+              } else if (classScore > secondMaxClassScore) {
+                secondMaxClassScore = classScore;
+                secondBestClassIndex = c;
               }
             }
 
             const confidence = objectness * maxClassScore;
+            const secondConfidence = objectness * secondMaxClassScore;
             if (confidence < 0.1) continue;
 
             const className = this.modelConfig.classes[bestClassIndex] || `class_${bestClassIndex}`;
+            const secondClassName = (secondConfidence > 0.05)
+              ? (this.modelConfig.classes[secondBestClassIndex] || `class_${secondBestClassIndex}`)
+              : undefined;
 
             detections.push({
               x,
@@ -842,6 +904,15 @@ export class OnnxDetector {
               classIndex: bestClassIndex,
               className,
               raceNumber: this.extractRaceNumber(className),
+              ...(secondClassName ? {
+                _ambiguityInfo: {
+                  secondClassName,
+                  secondConfidence,
+                  secondRaceNumber: this.extractRaceNumber(secondClassName),
+                  gap: confidence - secondConfidence,
+                  ratio: secondConfidence / confidence,
+                }
+              } : {}),
             });
           }
         }
@@ -853,6 +924,36 @@ export class OnnxDetector {
     }
 
     console.log(`[ONNX-Parse] Parsed ${detections.length} detections before NMS`);
+
+    // === DIAGNOSTIC: Ambiguity analysis ===
+    const ambiguousDetections = detections.filter(d => d._ambiguityInfo);
+    if (ambiguousDetections.length > 0) {
+      console.log(`[ONNX-Ambiguity] 📊 ${ambiguousDetections.length}/${detections.length} detections have a second candidate (conf > 0.05)`);
+
+      // Categorize by gap severity
+      const critical = ambiguousDetections.filter(d => d._ambiguityInfo!.gap < 0.05);
+      const warning = ambiguousDetections.filter(d => d._ambiguityInfo!.gap >= 0.05 && d._ambiguityInfo!.gap < 0.15);
+      const safe = ambiguousDetections.filter(d => d._ambiguityInfo!.gap >= 0.15);
+
+      console.log(`[ONNX-Ambiguity]   🔴 CRITICAL (gap < 0.05): ${critical.length} — needs_review candidates`);
+      console.log(`[ONNX-Ambiguity]   🟡 WARNING  (gap 0.05-0.15): ${warning.length} — borderline`);
+      console.log(`[ONNX-Ambiguity]   🟢 SAFE     (gap > 0.15): ${safe.length} — confident`);
+
+      // Detail critical cases (the ones that would trigger needs_review)
+      for (const d of critical) {
+        const a = d._ambiguityInfo!;
+        const sameRaceNumber = d.raceNumber === a.secondRaceNumber;
+        console.log(`[ONNX-Ambiguity]   🔴 "${d.className}" (${(d.confidence * 100).toFixed(1)}%) vs "${a.secondClassName}" (${(a.secondConfidence * 100).toFixed(1)}%) — gap=${(a.gap * 100).toFixed(2)}% ratio=${(a.ratio * 100).toFixed(1)}%${sameRaceNumber ? ' [SAME RACE#]' : ` [#${d.raceNumber} vs #${a.secondRaceNumber}]`}`);
+      }
+      // Also detail warning cases for completeness
+      for (const d of warning) {
+        const a = d._ambiguityInfo!;
+        console.log(`[ONNX-Ambiguity]   🟡 "${d.className}" (${(d.confidence * 100).toFixed(1)}%) vs "${a.secondClassName}" (${(a.secondConfidence * 100).toFixed(1)}%) — gap=${(a.gap * 100).toFixed(2)}%`);
+      }
+    } else {
+      console.log(`[ONNX-Ambiguity] ✅ All ${detections.length} detections have clear winner (no second candidate > 0.05)`);
+    }
+
     return detections;
   }
 

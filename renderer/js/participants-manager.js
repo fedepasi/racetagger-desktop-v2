@@ -7,6 +7,8 @@ var currentPreset = null;
 var participantsData = [];
 var isEditingPreset = false;
 var customFolders = []; // Array of {name, path?} objects for custom folders
+var deliveryClientsCache = []; // Cached list of clients (projects) for "Delivery to" dropdown
+var deliveryFeatureEnabled = false; // Feature gate for delivery_enabled
 
 /**
  * Detect if an error is a network connectivity issue and return a user-friendly message.
@@ -95,6 +97,9 @@ async function initParticipantsManager() {
   // Load sport categories for dropdown
   await loadSportCategoriesForDropdown();
 
+  // Load delivery feature status and clients (non-blocking)
+  loadDeliveryClientsIfEnabled();
+
   // Load existing presets
   await loadParticipantPresets();
 }
@@ -134,6 +139,68 @@ function populateSportCategoryDropdown(selectedCategoryId = null) {
       option.selected = true;
     }
     dropdown.appendChild(option);
+  });
+}
+
+/**
+ * Load delivery clients if the delivery feature is enabled.
+ * Non-blocking — if the feature is off, the "Delivery to" field stays hidden.
+ */
+async function loadDeliveryClientsIfEnabled() {
+  try {
+    const planLimits = await window.api.invoke('delivery-get-plan-limits');
+    if (!planLimits.success || !planLimits.data) return;
+
+    deliveryFeatureEnabled = planLimits.data.delivery_enabled === true;
+
+    if (!deliveryFeatureEnabled) {
+      console.log('[Participants] Delivery feature not enabled, hiding "Delivery to" field');
+      return;
+    }
+
+    // Load clients (projects) for the dropdown
+    const projectsResult = await window.api.invoke('delivery-get-projects');
+    if (projectsResult.success && projectsResult.data) {
+      deliveryClientsCache = projectsResult.data;
+      console.log('[Participants] Loaded', deliveryClientsCache.length, 'delivery clients');
+    }
+
+    // Show the "Delivery to" field in the edit modal
+    const deliveryGroup = document.getElementById('delivery-to-group');
+    if (deliveryGroup) deliveryGroup.style.display = '';
+  } catch (error) {
+    console.warn('[Participants] Could not load delivery clients:', error.message || error);
+  }
+}
+
+/**
+ * Populate the "Delivery to" dropdown with cached clients
+ * @param {string|null} selectedClientId - Client ID to pre-select
+ */
+function populateDeliveryToDropdown(selectedClientId = null) {
+  const select = document.getElementById('edit-delivery-to');
+  if (!select) return;
+
+  // Keep first option (no delivery)
+  select.innerHTML = '<option value="">— No delivery —</option>';
+
+  if (!deliveryFeatureEnabled || deliveryClientsCache.length === 0) return;
+
+  // Flat list of clients (sorted alphabetically by name)
+  const sorted = [...deliveryClientsCache].sort((a, b) => {
+    const nameA = (a.client_name || a.name || '').toLowerCase();
+    const nameB = (b.client_name || b.name || '').toLowerCase();
+    return nameA.localeCompare(nameB);
+  });
+
+  sorted.forEach(client => {
+    const option = document.createElement('option');
+    option.value = client.id;
+    const typeIcons = { team: '🏎️', sponsor: '💰', organizer: '🏟️', media: '📷', other: '📋' };
+    const icon = typeIcons[client.client_type] || '📋';
+    option.textContent = `${icon} ${client.client_name || client.name}`;
+    if (selectedClientId && client.id === selectedClientId) option.selected = true;
+    select.appendChild(option);
   });
 }
 
@@ -964,6 +1031,9 @@ async function openParticipantEditModal(rowIndex = -1) {
     document.getElementById('edit-sponsor').value = participant.sponsor || '';
     document.getElementById('edit-metatag').value = participant.metatag || '';
 
+    // Populate "Delivery to" dropdown (feature-gated)
+    populateDeliveryToDropdown(participant.delivery_to_client_id || null);
+
     // Populate drivers tag input
     // Use driver records from database if available, otherwise fallback to nome field
     let existingDriverRecords = null;
@@ -1022,6 +1092,9 @@ async function openParticipantEditModal(rowIndex = -1) {
     document.getElementById('edit-plate-number').value = '';
     document.getElementById('edit-sponsor').value = '';
     document.getElementById('edit-metatag').value = '';
+
+    // Populate "Delivery to" dropdown (no selection for new participant)
+    populateDeliveryToDropdown(null);
 
     // Clear drivers tags
     clearDriversTags();
@@ -1107,6 +1180,10 @@ async function saveParticipantEdit(closeAfterSave = true) {
   // Comma-separated for nome field (legacy compatibility)
   const nome = driversArray.join(', ');
 
+  // Get delivery_to_client_id if feature is enabled
+  const deliveryToSelect = document.getElementById('edit-delivery-to');
+  const deliveryToClientId = (deliveryFeatureEnabled && deliveryToSelect && deliveryToSelect.value) ? deliveryToSelect.value : null;
+
   const participant = {
     numero,
     nome,
@@ -1119,7 +1196,8 @@ async function saveParticipantEdit(closeAfterSave = true) {
     metatag: document.getElementById('edit-metatag').value.trim(),
     folder_1: document.getElementById('edit-folder-1').value,
     folder_2: document.getElementById('edit-folder-2').value,
-    folder_3: document.getElementById('edit-folder-3').value
+    folder_3: document.getElementById('edit-folder-3').value,
+    delivery_to_client_id: deliveryToClientId
   };
 
   // Salva il numero per lo scroll successivo
@@ -2343,6 +2421,21 @@ function addParticipantRow(participant, rowIndex) {
     `<span class="plate-badge">${escapeHtml(plateNumber)}</span>` :
     '<span class="text-muted">-</span>';
 
+  // Create delivery-to badge (feature-gated)
+  let deliveryTd = '';
+  if (deliveryFeatureEnabled) {
+    const clientId = participant?.delivery_to_client_id;
+    const client = clientId ? deliveryClientsCache.find(c => c.id === clientId) : null;
+    const deliveryDisplay = client
+      ? `<span class="delivery-badge">${escapeHtml(client.client_name || client.name)}</span>`
+      : '<span class="text-muted">-</span>';
+    deliveryTd = `<td data-sort="${client ? escapeHtml(client.client_name || client.name) : ''}">${deliveryDisplay}</td>`;
+
+    // Show the column header
+    const thDelivery = document.getElementById('th-delivery-to');
+    if (thDelivery) thDelivery.style.display = '';
+  }
+
   // Store original index as data attribute for stable indexing during sorting
   row.setAttribute('data-original-index', rowIndex);
 
@@ -2353,6 +2446,7 @@ function addParticipantRow(participant, rowIndex) {
     <td data-sort="${categoria}">${categoryDisplay}</td>
     <td data-sort="${squadra}">${squadra || '<span class="text-muted">-</span>'}</td>
     <td data-sort="${plateNumber}">${plateDisplay}</td>
+    ${deliveryTd}
     <td class="no-sort">
       <button class="btn btn-sm btn-secondary" onclick="duplicateParticipantFromRow(this)" title="Duplicate participant">
         <span class="btn-icon">📋</span>
@@ -2423,7 +2517,8 @@ function duplicateParticipant(rowIndex) {
     metatag: originalParticipant.metatag || '',
     folder_1: originalParticipant.folder_1 || '',
     folder_2: originalParticipant.folder_2 || '',
-    folder_3: originalParticipant.folder_3 || ''
+    folder_3: originalParticipant.folder_3 || '',
+    delivery_to_client_id: originalParticipant.delivery_to_client_id || null
   };
 
   // Add the duplicated participant to the array
@@ -2525,7 +2620,8 @@ async function savePreset() {
       folder_3: p.folder_3 || '',
       folder_1_path: getFolderPath(p.folder_1) || p.folder_1_path || '',
       folder_2_path: getFolderPath(p.folder_2) || p.folder_2_path || '',
-      folder_3_path: getFolderPath(p.folder_3) || p.folder_3_path || ''
+      folder_3_path: getFolderPath(p.folder_3) || p.folder_3_path || '',
+      delivery_to_client_id: p.delivery_to_client_id || null
     }));
 
     // Disable save button during operation
@@ -2597,6 +2693,20 @@ async function savePreset() {
     // Save IPTC metadata (if preset-iptc-editor.js is loaded)
     if (typeof saveIptcMetadata === 'function') {
       await saveIptcMetadata(presetId);
+    }
+
+    // Sync delivery rules from preset (non-blocking, fire-and-forget)
+    if (deliveryFeatureEnabled && participants.some(p => p.delivery_to_client_id)) {
+      window.api.invoke('delivery-sync-rules-from-preset', presetId)
+        .then(result => {
+          if (result.success && result.data) {
+            const { created, updated, deleted } = result.data;
+            if (created > 0 || updated > 0 || deleted > 0) {
+              console.log(`[Participants] Delivery rules synced: +${created} ~${updated} -${deleted}`);
+            }
+          }
+        })
+        .catch(err => console.warn('[Participants] Delivery rule sync failed (non-critical):', err));
     }
 
     showNotification(

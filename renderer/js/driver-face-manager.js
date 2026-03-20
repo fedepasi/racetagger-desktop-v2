@@ -340,7 +340,7 @@ class DriverFaceManagerMulti {
     nationalityGroup.innerHTML = `
       <label>
         Nationality
-        <span class="field-destination">→ IPTC:Caption, PersonShown</span>
+        <span class="field-destination field-destination-matching">→ {nationality}</span>
       </label>
       <input
         type="text"
@@ -375,7 +375,7 @@ class DriverFaceManagerMulti {
     metatagGroup.innerHTML = `
       <label>
         Person Meta Tag
-        <span class="field-destination">→ IPTC:Keywords</span>
+        <span class="field-destination">→ IPTC:Caption/Description</span>
       </label>
       <input
         type="text"
@@ -386,7 +386,7 @@ class DriverFaceManagerMulti {
         data-driver-id="${driver.id || ''}"
       >
       <small class="form-hint">
-        Custom keywords added per-person (e.g. titles, championships)
+        Written to Caption/Description during analysis. Per-person metadata (e.g. titles, championships)
       </small>
     `;
     panel.appendChild(metatagGroup);

@@ -225,7 +225,9 @@ class ResultsPageManager {
           team: vehicle.finalResult?.team || null,
           drivers: vehicle.finalResult?.drivers || [],
           confidence: vehicle.confidence || 0,
-          matchedBy: vehicle.finalResult?.matchedBy || 'none'
+          matchedBy: vehicle.finalResult?.matchedBy || 'none',
+          matchStatus: vehicle.finalResult?.matchStatus || 'no_match',
+          alternativeCandidates: vehicle.finalResult?.alternativeCandidates || null
         }));
 
         // Cerca i path locali delle anteprime usando saved thumbnail paths o search
@@ -583,12 +585,7 @@ class SmartCacheManager {
     }
 
     this.loggedErrors.add(errorKey);
-    console.warn(`[SmartCacheManager] Failed to load ${fileName} (${context}):`, error);
-
-    // Clean up logged errors periodically to allow retry after some time
-    setTimeout(() => {
-      this.loggedErrors.delete(errorKey);
-    }, 60000); // 1 minute
+    console.debug(`[SmartCacheManager] Image fallback for ${fileName} (${context})`);
   }
 
   /**

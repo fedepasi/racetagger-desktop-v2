@@ -156,12 +156,37 @@
   color: var(--accent-success, #10b981);
 }
 
+.results-stat-item--review .results-stat-value {
+  color: #eab308;
+}
+
 .results-stat-item--warning .results-stat-value {
   color: var(--accent-warning, #f59e0b);
 }
 
 .results-stat-item--info .results-stat-value {
   color: var(--accent-primary);
+}
+
+/* Stat items as clickable filter shortcuts */
+.results-stat-item {
+  cursor: pointer;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease;
+  border-radius: 4px;
+}
+
+.results-stat-item:hover {
+  background-color: rgba(0, 0, 0, 0.03);
+}
+
+.results-stat-item--active {
+  background-color: rgba(59, 130, 246, 0.06);
+  box-shadow: inset 0 -2px 0 0 var(--accent-primary, #3b82f6);
+}
+
+.results-stat-item--active .results-stat-label {
+  color: var(--accent-primary, #3b82f6);
+  font-weight: 600;
 }
 
 .results-actions {
@@ -2785,4 +2810,275 @@
 
 .unified-export-modal .export-btn-browse:hover {
   background: rgba(59, 130, 246, 0.2);
+}
+
+/* ==========================================
+   LEARNED DATA (Strategy G)
+   ========================================== */
+
+/* Learned data button in footer */
+.lv-btn-learned {
+  background: rgba(34, 197, 94, 0.12) !important;
+  border: 1px solid rgba(34, 197, 94, 0.3) !important;
+  color: #22c55e !important;
+  animation: learnedPulse 2s ease-in-out infinite;
+}
+
+.lv-btn-learned:hover {
+  background: rgba(34, 197, 94, 0.22) !important;
+  border-color: rgba(34, 197, 94, 0.5) !important;
+}
+
+@keyframes learnedPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.3); }
+  50% { box-shadow: 0 0 0 6px rgba(34, 197, 94, 0); }
+}
+
+/* Modal */
+
+.learned-data-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(8px);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: learnedFadeIn 0.2s ease;
+}
+
+@keyframes learnedFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.learned-data-container {
+  background: var(--bg-card, #1a1a2e);
+  border: 1px solid var(--border-color, #2a2a4a);
+  border-radius: var(--radius-lg, 12px);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+  max-width: 560px;
+  width: 90%;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: learnedSlideUp 0.3s ease;
+}
+
+@keyframes learnedSlideUp {
+  from { transform: translateY(20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.learned-data-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--border-color, #2a2a4a);
+}
+
+.learned-data-icon {
+  font-size: 28px;
+  line-height: 1;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.learned-data-title {
+  flex: 1;
+}
+
+.learned-data-title h3 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary, #e0e0e0);
+}
+
+.learned-data-title p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary, #888);
+  line-height: 1.4;
+}
+
+.learned-data-close {
+  background: none;
+  border: none;
+  color: var(--text-secondary, #888);
+  font-size: 22px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.learned-data-close:hover {
+  color: var(--text-primary, #e0e0e0);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.learned-data-body {
+  padding: 16px 24px;
+  overflow-y: auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Proposal card */
+.learned-proposal-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color, #2a2a4a);
+  border-radius: var(--radius-md, 8px);
+  padding: 14px 16px;
+}
+
+.learned-proposal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.learned-proposal-number {
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--text-primary, #e0e0e0);
+}
+
+.learned-source-manual {
+  font-size: 11px;
+  color: #22c55e;
+  background: rgba(34, 197, 94, 0.12);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.learned-source-auto {
+  font-size: 11px;
+  color: #60a5fa;
+  background: rgba(96, 165, 250, 0.12);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.learned-proposal-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Field row */
+.learned-field-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s;
+  user-select: none;
+}
+
+.learned-field-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.learned-field-checkbox {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  accent-color: #22c55e;
+  cursor: pointer;
+}
+
+.learned-field-label {
+  font-size: 12px;
+  color: var(--text-secondary, #888);
+  min-width: 70px;
+  flex-shrink: 0;
+}
+
+.learned-field-value {
+  font-size: 13px;
+  color: var(--text-primary, #e0e0e0);
+  font-weight: 500;
+  word-break: break-word;
+}
+
+/* Footer */
+.learned-data-footer {
+  padding: 16px 24px;
+  border-top: 1px solid var(--border-color, #2a2a4a);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.learned-data-footer-info {
+  font-size: 11px;
+  color: var(--text-secondary, #888);
+  line-height: 1.4;
+  flex: 1;
+}
+
+.learned-data-footer-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.learned-data-btn {
+  padding: 8px 18px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.15s;
+}
+
+.learned-data-btn-skip {
+  background: transparent;
+  border-color: var(--border-color, #2a2a4a);
+  color: var(--text-secondary, #888);
+}
+
+.learned-data-btn-skip:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary, #e0e0e0);
+}
+
+.learned-data-btn-accept {
+  background: #22c55e;
+  color: #fff;
+  border-color: #22c55e;
+}
+
+.learned-data-btn-accept:hover {
+  background: #16a34a;
+  border-color: #16a34a;
+}
+
+.learned-data-btn-accept:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.learned-data-btn-success {
+  background: rgba(34, 197, 94, 0.15) !important;
+  border-color: rgba(34, 197, 94, 0.3) !important;
+  color: #22c55e !important;
 }

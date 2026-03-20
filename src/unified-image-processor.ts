@@ -708,7 +708,8 @@ class UnifiedImageWorker extends EventEmitter {
         otherText: [],
         boundingBox: d.boundingBox,
         vehicleIndex: index,
-        modelSource: 'local-onnx' as const
+        modelSource: 'local-onnx' as const,
+        _ambiguityInfo: d._ambiguityInfo,  // Propagate ONNX ambiguity diagnostic
       }));
 
       log.info(`[Local ONNX] Detected ${analysis.length} race numbers in ${inferenceMs}ms - ${fileName}`);
@@ -3378,6 +3379,14 @@ class UnifiedImageWorker extends EventEmitter {
           box_2d,  // Original Gemini format [y1, x1, y2, x2] (0-1000)
           boundingBox,  // Converted format {x, y, width, height}
           modelSource: vehicle.modelSource, // Recognition method used (gemini/rf-detr)
+          // Diagnostic: ONNX ambiguity info (when model is uncertain between two classes)
+          onnxAmbiguity: vehicle._ambiguityInfo ? {
+            secondClassName: vehicle._ambiguityInfo.secondClassName,
+            secondRaceNumber: vehicle._ambiguityInfo.secondRaceNumber,
+            secondConfidence: Math.round(vehicle._ambiguityInfo.secondConfidence * 1000) / 1000,
+            gap: Math.round(vehicle._ambiguityInfo.gap * 1000) / 1000,
+            ratio: Math.round(vehicle._ambiguityInfo.ratio * 1000) / 1000,
+          } : undefined,
           corrections: corrections.filter((c: any) => c.vehicleIndex === index),
           participantMatch: csvMatch,
           // Temporal information from SmartMatcher (FIXED)
@@ -3388,7 +3397,13 @@ class UnifiedImageWorker extends EventEmitter {
             raceNumber: csvMatch?.entry?.numero || vehicle.raceNumber,
             team: csvMatch?.entry?.squadra || vehicle.teamName,
             drivers: this.extractDriversFromMatch(csvMatch) || vehicle.drivers,
-            matchedBy: csvMatch?.matchType || 'none'
+            matchedBy: csvMatch?.matchType || 'none',
+            matchStatus: csvMatch?.smartMatch?.matchStatus || 'no_match',
+            // Include alternative candidates for needs_review status (top 5 for user selection)
+            alternativeCandidates: (csvMatch?.smartMatch?.matchStatus === 'needs_review' ||
+                                    (csvMatch?.smartMatch?.multipleHighScores && !csvMatch?.smartMatch?.resolvedByOverride))
+              ? (csvMatch?.smartMatch?.alternativeCandidates || []).slice(0, 5)
+              : undefined
           }
         };
       });
@@ -4665,6 +4680,103 @@ class UnifiedImageWorker extends EventEmitter {
 
       // Store all matches for further processing
       csvMatch = csvMatches;
+    } else if (
+      // TEMPORAL BACKFILL: When YOLO detected a vehicle but AI returned 0 results,
+      // check temporal neighbors for a high-confidence match and create a needs_review entry.
+      // This handles burst-mode scenarios where consecutive photos of the same car
+      // have one unreadable number (e.g., motion blur, angle).
+      analysisResult.segmentationPreprocessing?.detectionsCount > 0 &&
+      temporalContext?.temporalNeighbors &&
+      temporalContext.temporalNeighbors.length > 0 &&
+      this.participantsData.length > 0
+    ) {
+      const neighborPaths = temporalContext.temporalNeighbors.map(n => n.filePath);
+      const neighborResults = SmartMatcher.getTemporalNeighborResults(neighborPaths);
+
+      if (neighborResults.length > 0) {
+        // Find the best neighbor result (highest confidence)
+        const bestNeighbor = neighborResults.reduce((best, curr) =>
+          curr.confidence > best.confidence ? curr : best
+        );
+
+        // Look up the participant entry from the preset
+        const participantEntry = this.participantsData.find(
+          (p: any) => String(p.numero) === bestNeighbor.participantNumber
+        );
+
+        if (participantEntry) {
+          console.log(`[TemporalBackfill] ${imageFile.fileName}: YOLO detected vehicle but AI returned 0. ` +
+            `Neighbor ${bestNeighbor.fileName} matched #${bestNeighbor.participantNumber} (conf=${bestNeighbor.confidence.toFixed(2)}). ` +
+            `Creating needs_review entry.`);
+
+          // Use the YOLO bounding box from segmentation as a reference
+          const yoloDetection = analysisResult.segmentationPreprocessing?.detections?.[0];
+          const bbox = yoloDetection?.bbox;
+
+          // Create a synthetic vehicle entry with needs_review status
+          const syntheticVehicle = {
+            raceNumber: bestNeighbor.participantNumber,
+            drivers: participantEntry.nome ? [participantEntry.nome] : [],
+            teamName: participantEntry.squadra || null,
+            otherText: [],
+            confidence: 0, // Zero AI confidence — this is a temporal suggestion only
+            modelSource: 'temporal_backfill',
+            boundingBox: bbox ? {
+              x: bbox.x * 100,
+              y: bbox.y * 100,
+              width: bbox.width * 100,
+              height: bbox.height * 100
+            } : undefined
+          };
+
+          // Create a synthetic csvMatch with needs_review status
+          const syntheticMatch = {
+            matchType: 'temporal_backfill',
+            matchedValue: bestNeighbor.participantNumber,
+            entry: participantEntry,
+            smartMatch: {
+              score: 0,
+              confidence: 0,
+              evidenceCount: 0,
+              multipleHighScores: false,
+              resolvedByOverride: false,
+              matchStatus: 'needs_review' as const,
+              reasoning: [
+                `Temporal backfill: YOLO detected vehicle (conf=${yoloDetection?.confidence?.toFixed(3) || 'N/A'}) but AI returned 0 results.`,
+                `Neighbor "${bestNeighbor.fileName}" matched #${bestNeighbor.participantNumber} with confidence ${bestNeighbor.confidence.toFixed(2)}.`,
+                `${neighborResults.length} temporal neighbor(s) available. Assigned as needs_review for manual verification.`
+              ],
+              alternativeCandidates: neighborResults.map(nr => ({
+                participantNumber: nr.participantNumber,
+                participantName: this.participantsData.find((p: any) => String(p.numero) === nr.participantNumber)?.nome || 'Unknown',
+                score: 0,
+                confidence: nr.confidence,
+                evidenceCount: 0,
+                temporalBonus: 0,
+                isBurstMode: false,
+                sourceFileName: nr.fileName
+              })).slice(0, 5)
+            },
+            matchResult: {
+              bestMatch: {
+                temporalBonus: 0,
+                temporalClusterSize: neighborResults.length,
+                isBurstModeCandidate: false
+              }
+            }
+          };
+
+          // Set the synthetic data as the analysis result
+          analysisResult.analysis = [syntheticVehicle];
+          csvMatch = [syntheticMatch];
+
+          // Build keywords so metadata gets written (marking as needs_review)
+          const keywords = this.buildMetatag([syntheticVehicle], [syntheticMatch]);
+          description = keywords && keywords.length > 0 ? keywords.join(', ') : null;
+        }
+      } else {
+        console.log(`[TemporalBackfill] ${imageFile.fileName}: YOLO detected vehicle but AI returned 0 and no temporal neighbors with cached results.`);
+      }
     }
 
     // Apply SmartMatcher corrections to analysis data for UI display (now handles all vehicles)
@@ -4685,9 +4797,9 @@ class UnifiedImageWorker extends EventEmitter {
           const originalVehicle = originalAnalysis[originalIndex];
           const match = csvMatch[originalIndex];
 
-          // Check if this vehicle has a match in participant preset
-          if (match && match.entry) {
-            // Vehicle has match - include in filtered csvMatch
+          // Check if this vehicle has a match in participant preset OR has diagnostic data
+          if (match && (match.entry || match.matchType === 'rejected')) {
+            // Vehicle has match or diagnostic data - include in filtered csvMatch
             filteredCsvMatch.push(match);
             correctedIndex++;
           }
@@ -4956,6 +5068,12 @@ class UnifiedImageWorker extends EventEmitter {
         const isUsingParticipantPreset = this.participantsData.length > 0;
 
         if (isUsingParticipantPreset) {
+          // Preserve vehicles with diagnostic data (rejected or needs_review without entry)
+          // so the UI can display scoring details even for unmatched vehicles
+          if (csvMatch && csvMatch.smartMatch && csvMatch.matchType === 'rejected') {
+            // Vehicle has diagnostic scoring data — keep it for UI visibility
+            return vehicle;
+          }
           // When using a preset and no match found, filter out this vehicle
           return null; // Return null to filter out this vehicle when using preset
         } else {
@@ -5075,7 +5193,11 @@ class UnifiedImageWorker extends EventEmitter {
           otherText: vehicle.otherText || [],
           confidence: matchConfidence,
           plateNumber: vehicle.plateNumber,
-          plateConfidence: vehicle.plateConfidence
+          plateConfidence: vehicle.plateConfidence,
+          // V6 Vehicle DNA fields for visual matching
+          make: vehicle.make || null,
+          model: vehicle.model || null,
+          livery: vehicle.livery || null
         };
 
         // Generate cache keys for caching
@@ -5147,7 +5269,11 @@ class UnifiedImageWorker extends EventEmitter {
 
             matches.push(fallbackMatch);
           } else {
-            matches.push(null); // Maintain array alignment
+            // DIAGNOSTIC: Preserve rejected match scoring for UI visibility
+            // Even when no match is accepted, include the candidate scores
+            // so Image Analysis Details can show why the match was rejected
+            const rejectedDiagnostic = this.buildRejectedMatchDiagnostic(matchResult);
+            matches.push(rejectedDiagnostic); // null if no candidates, diagnostic object otherwise
           }
         }
       }
@@ -5229,9 +5355,9 @@ class UnifiedImageWorker extends EventEmitter {
     const sportCategory = this.smartMatcher.getCurrentSport();
     const scoreBreakdown = this.smartMatcher.getScoreBreakdown(bestMatch);
 
-    // Get top 3 alternative candidates for comparison
+    // Get top 5 alternative candidates for comparison (supports needs_review user selection)
     const topAlternatives = matchResult.allCandidates
-      .slice(0, 3)
+      .slice(0, 5)
       .map(candidate => ({
         participantNumber: candidate.participant.numero || candidate.participant.number,
         participantName: getPrimaryDriverName(candidate.participant),
@@ -5273,7 +5399,8 @@ class UnifiedImageWorker extends EventEmitter {
         // Status indicators
         isClearWinner: !matchResult.multipleHighScores,
         passedMinimumThreshold: bestMatch.score >= thresholds.minimumScore,
-        winMargin: topAlternatives.length > 1 ? (topAlternatives[0].score - topAlternatives[1].score) : null
+        winMargin: topAlternatives.length > 1 ? (topAlternatives[0].score - topAlternatives[1].score) : null,
+        matchStatus: matchResult.matchStatus || (matchResult.multipleHighScores && !matchResult.resolvedByOverride ? 'needs_review' : 'matched')
       },
       // TEMPORAL FIX: Add temporal context from bestMatch for JSONL logging
       matchResult: {
@@ -5292,6 +5419,69 @@ class UnifiedImageWorker extends EventEmitter {
    */
   private logMatchResults(matchResult: MatchResult, vehicleIndex?: number): void {
     // Logging disabled for production - uncomment for debugging
+  }
+
+  /**
+   * Build a diagnostic-only match object for rejected matches.
+   * This preserves scoring details (candidates, evidence, thresholds) in the JSONL
+   * so the management portal can show WHY a match was rejected, even when no match is accepted.
+   * Returns null if there are no candidates at all.
+   */
+  private buildRejectedMatchDiagnostic(matchResult: MatchResult): any | null {
+    const candidates = matchResult.allCandidates || [];
+    if (candidates.length === 0) return null;
+
+    const thresholds = this.smartMatcher.getActiveThresholds();
+    const weights = this.smartMatcher.getActiveWeights();
+    const sportCategory = this.smartMatcher.getCurrentSport();
+
+    // Build top candidate info for display
+    const topCandidates = candidates.slice(0, 5).map(c => ({
+      participantNumber: c.participant?.numero || c.participant?.number || 'N/A',
+      participantName: getPrimaryDriverName(c.participant),
+      score: c.score,
+      confidence: c.confidence,
+      evidenceCount: c.evidence?.length || 0,
+      reasoning: c.reasoning || []
+    }));
+
+    return {
+      matchType: 'rejected',
+      matchedValue: null,
+      entry: null, // No accepted match — this is a diagnostic-only entry
+      smartMatch: {
+        score: candidates[0]?.score || 0,
+        confidence: candidates[0]?.confidence || 0,
+        evidenceCount: candidates[0]?.evidence?.length || 0,
+        multipleHighScores: matchResult.multipleHighScores || false,
+        resolvedByOverride: false,
+        matchStatus: 'no_match',
+        reasoning: [
+          `Match rejected: best score ${candidates[0]?.score?.toFixed(1) || 0} < minimumScore ${thresholds.minimumScore}`,
+          ...(matchResult.debugInfo?.needsReviewThreshold
+            ? [`needsReviewThreshold: ${matchResult.debugInfo.needsReviewThreshold.toFixed(1)}`]
+            : []),
+          ...(candidates[0]?.reasoning || [])
+        ],
+        thresholds: {
+          minimumScore: thresholds.minimumScore,
+          clearWinner: thresholds.clearWinner,
+          nameSimilarity: thresholds.nameSimilarity,
+          strongNonNumberEvidence: thresholds.strongNonNumberEvidence
+        },
+        weights: {
+          raceNumber: weights.raceNumber,
+          driverName: weights.driverName,
+          sponsor: weights.sponsor,
+          team: weights.team
+        },
+        sportCategory,
+        alternativeCandidates: topCandidates,
+        isClearWinner: false,
+        passedMinimumThreshold: false,
+        winMargin: topCandidates.length > 1 ? (topCandidates[0].score - topCandidates[1].score) : null
+      }
+    };
   }
 
   /**
@@ -7466,6 +7656,176 @@ export class UnifiedImageProcessor extends EventEmitter {
     console.log(`\n${'='.repeat(60)}`);
     console.log(`[FINALIZE] 🏁 Batch processing complete: ${results.length} images. Starting finalization...`);
     console.log(`${'='.repeat(60)}`);
+
+    // ==================== TEMPORAL BACKFILL SECOND PASS ====================
+    // After ALL images are processed, the temporal cache is fully populated.
+    // Revisit images where YOLO detected a vehicle but AI returned 0 results
+    // and the first-pass backfill couldn't help (because the neighbor hadn't been processed yet).
+    // This is a lightweight pass: only cache lookups + metadata writes, no AI calls.
+    const participantsPresetData = this.config.participantPresetData || this.config.csvData || [];
+    if (participantsPresetData.length > 0) {
+      const secondPassStart = Date.now();
+      let backfilledCount = 0;
+
+      // Find candidates: successful processing, no metadata written, but had YOLO detections
+      const backfillCandidates = results.filter(r =>
+        r.success &&
+        !r.metadataWritten &&
+        r.pendingLogEntry?.segmentationPreprocessing?.detectionsCount > 0 &&
+        (!r.analysis || r.analysis.length === 0)
+      );
+
+      if (backfillCandidates.length > 0) {
+        console.log(`[TemporalBackfill-2ndPass] Found ${backfillCandidates.length} candidate(s) with YOLO detection but no AI results`);
+
+        for (const result of backfillCandidates) {
+          try {
+            // Get temporal context for this image
+            const temporalCtx = this.getTemporalContext(result.originalPath);
+            if (!temporalCtx || temporalCtx.temporalNeighbors.length === 0) continue;
+
+            // Query the (now fully populated) temporal cache for neighbor results
+            const neighborPaths = temporalCtx.temporalNeighbors.map(n => n.filePath);
+            const neighborResults = SmartMatcher.getTemporalNeighborResults(neighborPaths);
+            if (neighborResults.length === 0) continue;
+
+            // Find the best neighbor result (highest confidence)
+            const bestNeighbor = neighborResults.reduce((best, curr) =>
+              curr.confidence > best.confidence ? curr : best
+            );
+
+            // Look up participant entry from the processor's config preset data
+            const participantEntry = participantsPresetData.find(
+              (p: any) => String(p.numero) === bestNeighbor.participantNumber
+            );
+            if (!participantEntry) continue;
+
+            console.log(`[TemporalBackfill-2ndPass] ${result.fileName}: ` +
+              `Neighbor ${bestNeighbor.fileName} matched #${bestNeighbor.participantNumber} ` +
+              `(conf=${bestNeighbor.confidence.toFixed(2)}). Backfilling as needs_review.`);
+
+            // Use YOLO bounding box from segmentation
+            const yoloDetection = result.pendingLogEntry?.segmentationPreprocessing?.detections?.[0];
+            const bbox = yoloDetection?.bbox;
+
+            // Build synthetic vehicle and match (same structure as first-pass backfill)
+            const syntheticVehicle: any = {
+              vehicleIndex: 0,
+              raceNumber: bestNeighbor.participantNumber,
+              drivers: participantEntry.nome ? [participantEntry.nome] : [],
+              team: participantEntry.squadra || null,
+              sponsors: [],
+              confidence: 0,
+              modelSource: 'temporal_backfill',
+              boundingBox: bbox ? {
+                x: bbox.x * 100, y: bbox.y * 100,
+                width: bbox.width * 100, height: bbox.height * 100
+              } : undefined,
+              participantMatch: {
+                matchType: 'temporal_backfill',
+                matchedValue: bestNeighbor.participantNumber,
+                entry: participantEntry,
+                smartMatch: {
+                  score: 0,
+                  confidence: 0,
+                  evidenceCount: 0,
+                  multipleHighScores: false,
+                  resolvedByOverride: false,
+                  matchStatus: 'needs_review',
+                  reasoning: [
+                    `2nd-pass temporal backfill: YOLO detected vehicle but AI returned 0 results.`,
+                    `Neighbor "${bestNeighbor.fileName}" matched #${bestNeighbor.participantNumber} (conf=${bestNeighbor.confidence.toFixed(2)}).`,
+                    `${neighborResults.length} temporal neighbor(s) confirmed. Assigned as needs_review.`
+                  ],
+                  alternativeCandidates: neighborResults.map(nr => ({
+                    participantNumber: nr.participantNumber,
+                    participantName: participantsPresetData.find((p: any) => String(p.numero) === nr.participantNumber)?.nome || 'Unknown',
+                    score: 0, confidence: nr.confidence, evidenceCount: 0,
+                    temporalBonus: 0, isBurstMode: false, sourceFileName: nr.fileName
+                  })).slice(0, 5)
+                },
+                matchResult: { bestMatch: { temporalBonus: 0, temporalClusterSize: neighborResults.length, isBurstModeCandidate: false } }
+              },
+              finalResult: {
+                raceNumber: bestNeighbor.participantNumber,
+                team: participantEntry.squadra || null,
+                drivers: participantEntry.nome ? [participantEntry.nome] : [],
+                matchedBy: 'temporal_backfill',
+                matchStatus: 'needs_review'
+              }
+            };
+
+            // Build keywords directly from participant entry (lightweight, no Worker needed)
+            const keywords: string[] = [];
+            if (participantEntry.numero) keywords.push(String(participantEntry.numero));
+            if (participantEntry.nome) {
+              const nameWords = String(participantEntry.nome).split(/[,&\/\-\s]+/).map((w: string) => w.trim()).filter((w: string) => w);
+              keywords.push(...nameWords);
+            }
+            if (participantEntry.squadra) keywords.push(participantEntry.squadra);
+            if (participantEntry.metatag) {
+              const metatagWords = String(participantEntry.metatag)
+                .split(/[,\s\-\/&]+/)
+                .map((w: string) => w.trim())
+                .filter((w: string) => w && w.length > 2)
+                .filter((w: string) => !['the', 'and', 'or', 'for', 'with', 'by', 'at', 'in', 'on'].includes(w.toLowerCase()));
+              keywords.push(...metatagWords);
+            }
+
+            if (keywords.length > 0) {
+              // Find the original imageFile for metadata writing
+              const imageFile = imageFiles.find(f => f.originalPath === result.originalPath);
+              if (imageFile) {
+                // Write metadata directly using imported functions (no Worker instance needed)
+                try {
+                  if (imageFile.isRaw) {
+                    await createXmpSidecar(imageFile.originalPath, keywords);
+                  } else {
+                    await writeKeywordsToImage(imageFile.originalPath, keywords, false, 'append');
+                  }
+                } catch (metaErr: any) {
+                  console.error(`[TemporalBackfill-2ndPass] Metadata write failed for ${result.fileName}: ${metaErr.message}`);
+                  continue;
+                }
+
+                // Update the result in-place
+                result.analysis = [syntheticVehicle];
+                result.csvMatch = [syntheticVehicle.participantMatch];
+                result.metadataWritten = true;
+                result.metadataSkipReason = undefined;
+
+                // Update the JSONL log entry if present
+                if (result.pendingLogEntry) {
+                  result.pendingLogEntry.aiResponse = {
+                    rawText: `TEMPORAL_BACKFILL_2ND_PASS: neighbor=${bestNeighbor.fileName} → #${bestNeighbor.participantNumber}`,
+                    totalVehicles: 1,
+                    vehicles: [syntheticVehicle]
+                  };
+                  result.pendingLogEntry.primaryVehicle = syntheticVehicle;
+                  result.pendingLogEntry.metadataWritten = true;
+                  delete result.pendingLogEntry.metadataSkipReason;
+                }
+
+                backfilledCount++;
+              }
+            }
+          } catch (backfillErr: any) {
+            console.error(`[TemporalBackfill-2ndPass] Error processing ${result.fileName}: ${backfillErr.message}`);
+          }
+        }
+
+        const secondPassMs = Date.now() - secondPassStart;
+        console.log(`[TemporalBackfill-2ndPass] Complete: ${backfilledCount}/${backfillCandidates.length} images backfilled in ${secondPassMs}ms`);
+
+        if (backfilledCount > 0) {
+          this.emit('temporalBackfillComplete', {
+            candidates: backfillCandidates.length,
+            backfilled: backfilledCount,
+            durationMs: secondPassMs
+          });
+        }
+      }
+    }
 
     // ==================== SYNTHETIC PRESET SELF-HEALING ====================
     // When no participant preset was loaded, build one from the execution's own data

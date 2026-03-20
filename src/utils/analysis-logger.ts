@@ -10,6 +10,7 @@ import path from 'path';
 import { app } from 'electron';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabaseClient } from '../database-service';
+import { DEBUG_MODE } from '../config';
 import type { HardwareInfo } from './hardware-detector';
 import type { NetworkMetrics } from './network-monitor';
 import type { PhaseTimings } from './performance-timer';
@@ -300,7 +301,7 @@ export class AnalysisLogger {
   private supabase: SupabaseClient;
   private stats = {
     totalImages: 0,
-    corrections: { OCR: 0, TEMPORAL: 0, FUZZY: 0, PARTICIPANT: 0, SPONSOR: 0, FAST_TRACK: 0 },
+    corrections: { OCR: 0, TEMPORAL: 0, FUZZY: 0, PARTICIPANT: 0, SPONSOR: 0, FAST_TRACK: 0, USER_MANUAL: 0 },
     temporalClusters: 0,
     participantMatches: 0,
     totalConfidence: 0,
@@ -769,6 +770,14 @@ export class AnalysisLogger {
     this.dbWriteQueue = [];
 
     try {
+      // Refresh the Supabase client to ensure we have a valid auth session
+      // The client cached at constructor time may have an expired token or
+      // may have been created before auth was fully initialized
+      const freshClient = getSupabaseClient();
+      if (freshClient) {
+        this.supabase = freshClient;
+      }
+
       // Group by type for batch inserts
       const corrections = batch.filter(b => b.type === 'correction').map(b => b.data);
       const clusters = batch.filter(b => b.type === 'cluster').map(b => b.data);
@@ -780,7 +789,11 @@ export class AnalysisLogger {
         promises.push(
           (async () => {
             const { error } = await this.supabase.from('image_corrections').insert(corrections);
-            // Silently ignore errors - JSONL is primary backup
+            if (error) {
+              console.warn(`[AnalysisLogger] DB write to image_corrections failed (${corrections.length} rows): ${error.message} [code: ${error.code}]`);
+            } else if (DEBUG_MODE) {
+              console.log(`[AnalysisLogger] ✅ Wrote ${corrections.length} corrections to DB`);
+            }
           })()
         );
       }
@@ -789,7 +802,9 @@ export class AnalysisLogger {
         promises.push(
           (async () => {
             const { error } = await this.supabase.from('temporal_clusters').insert(clusters);
-            // Silently ignore errors - JSONL is primary backup
+            if (error) {
+              console.warn(`[AnalysisLogger] DB write to temporal_clusters failed (${clusters.length} rows): ${error.message} [code: ${error.code}]`);
+            }
           })()
         );
       }
@@ -798,7 +813,9 @@ export class AnalysisLogger {
         promises.push(
           (async () => {
             const { error } = await this.supabase.from('unknown_numbers').insert(unknowns);
-            // Silently ignore errors - JSONL is primary backup
+            if (error) {
+              console.warn(`[AnalysisLogger] DB write to unknown_numbers failed (${unknowns.length} rows): ${error.message} [code: ${error.code}]`);
+            }
           })()
         );
       }

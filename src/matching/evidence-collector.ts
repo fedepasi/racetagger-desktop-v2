@@ -19,7 +19,11 @@ export enum EvidenceType {
   SPONSOR = 'sponsor',
   TEAM = 'team',
   CATEGORY = 'category',
-  PLATE_NUMBER = 'plate_number'
+  PLATE_NUMBER = 'plate_number',
+  // Visual DNA evidence (V6 Vehicle DNA / Gemini visual analysis)
+  VEHICLE_MAKE = 'vehicle_make',     // Manufacturer: Ferrari, Honda, Pinarello, etc.
+  VEHICLE_MODEL = 'vehicle_model',   // Model: 296 GT3, CBR1000RR, Dogma F, etc.
+  LIVERY_COLOR = 'livery_color'      // Primary livery/jersey/gear color
 }
 
 export interface Evidence {
@@ -39,6 +43,10 @@ export interface MatchingConfig {
     driverName?: number;
     sponsor: number;
     team: number;
+    // Visual DNA weights (optional for backward compatibility)
+    vehicleMake?: number;     // Weight for manufacturer match
+    vehicleModel?: number;    // Weight for model match
+    liveryColor?: number;     // Weight for primary livery/jersey color match
   };
   thresholds: {
     minimumScore: number;
@@ -157,6 +165,51 @@ export class EvidenceCollector {
         source: 'ocr_plate_recognition',
         quality: this.assessPlateNumberQuality(analysisResult.plateNumber)
       });
+    }
+
+    // Extract Vehicle DNA evidence (V6 visual analysis from Gemini)
+    // These provide make, model, and livery color for visual matching
+    if (analysisResult.make && typeof analysisResult.make === 'string') {
+      const make = String(analysisResult.make).trim();
+      if (make.length >= 2) {
+        evidence.push({
+          type: EvidenceType.VEHICLE_MAKE,
+          value: make,
+          confidence: 0.85, // Gemini vehicle make detection is generally reliable
+          source: 'ai_visual_analysis',
+          quality: this.assessMakeModelQuality(make)
+        });
+      }
+    }
+
+    if (analysisResult.model && typeof analysisResult.model === 'string') {
+      const model = String(analysisResult.model).trim();
+      if (model.length >= 2) {
+        evidence.push({
+          type: EvidenceType.VEHICLE_MODEL,
+          value: model,
+          confidence: 0.8, // Model detection slightly less reliable than make
+          source: 'ai_visual_analysis',
+          quality: this.assessMakeModelQuality(model)
+        });
+      }
+    }
+
+    if (analysisResult.livery) {
+      // Livery can be an object { primary: string, secondary: string[] } or a string
+      const primaryColor = typeof analysisResult.livery === 'string'
+        ? analysisResult.livery.trim()
+        : analysisResult.livery?.primary?.trim();
+
+      if (primaryColor && primaryColor.length >= 2) {
+        evidence.push({
+          type: EvidenceType.LIVERY_COLOR,
+          value: primaryColor,
+          confidence: 0.75, // Color detection has some subjectivity
+          source: 'ai_visual_analysis',
+          quality: this.assessColorQuality(primaryColor)
+        });
+      }
     }
 
     // Sort evidence by quality and confidence
@@ -374,6 +427,73 @@ export class EvidenceCollector {
     const specialChars = clean.replace(/[A-Z0-9]/gi, '').length;
     if (specialChars > 0) {
       quality *= 0.6;
+    }
+
+    return Math.max(0.1, Math.min(1.0, quality));
+  }
+
+  /**
+   * Assess the quality of make/model evidence (Vehicle DNA)
+   */
+  private assessMakeModelQuality(value: string): number {
+    let quality = 1.0;
+
+    const clean = value.trim();
+
+    // Penalize very short values (likely incomplete)
+    if (clean.length < 3) {
+      quality *= 0.5;
+    }
+
+    // Penalize values that look like garbage
+    const GARBAGE_VALUES = ['unknown', 'n/a', 'na', 'none', '-', '?', 'other'];
+    if (GARBAGE_VALUES.includes(clean.toLowerCase())) {
+      return 0.1;
+    }
+
+    // Bonus for well-known manufacturers/models (high confidence from Gemini)
+    const wellKnownMakes = [
+      'ferrari', 'porsche', 'lamborghini', 'mclaren', 'mercedes', 'bmw', 'audi',
+      'honda', 'yamaha', 'kawasaki', 'suzuki', 'ducati', 'ktm', 'husqvarna',
+      'pinarello', 'trek', 'specialized', 'colnago', 'bianchi', 'cannondale',
+      'cervelo', 'giant', 'bmc', 'canyon', 'scott', 'wilier', 'de rosa', 'factor',
+      'toyota', 'ford', 'chevrolet', 'hyundai', 'citroen', 'skoda' // Rally
+    ];
+    if (wellKnownMakes.some(m => clean.toLowerCase().includes(m))) {
+      quality *= 1.2;
+    }
+
+    return Math.max(0.1, Math.min(1.0, quality));
+  }
+
+  /**
+   * Assess the quality of color evidence (livery/jersey/gear)
+   */
+  private assessColorQuality(color: string): number {
+    let quality = 1.0;
+
+    const clean = color.trim().toLowerCase();
+
+    // Penalize very short or vague colors
+    if (clean.length < 3) {
+      quality *= 0.4;
+    }
+
+    // Penalize garbage values
+    const GARBAGE_COLORS = ['unknown', 'n/a', 'none', '-', '?', 'mixed', 'various', 'multi'];
+    if (GARBAGE_COLORS.includes(clean)) {
+      return 0.1;
+    }
+
+    // Well-defined colors get a bonus
+    const wellDefinedColors = [
+      'rosso', 'red', 'blu', 'blue', 'verde', 'green', 'giallo', 'yellow',
+      'nero', 'black', 'bianco', 'white', 'arancione', 'orange', 'rosa', 'pink',
+      'viola', 'purple', 'grigio', 'grey', 'gray', 'argento', 'silver',
+      'oro', 'gold', 'azzurro', 'celeste', 'marrone', 'brown', 'cyan', 'teal'
+    ];
+    if (wellDefinedColors.includes(clean)) {
+      quality *= 1.2;
     }
 
     return Math.max(0.1, Math.min(1.0, quality));

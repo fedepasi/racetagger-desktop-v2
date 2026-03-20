@@ -24,6 +24,10 @@ export interface AnalysisResult {
   confidence?: number;
   plateNumber?: string;        // License plate number detected by AI
   plateConfidence?: number;    // Confidence score for plate number (0.0-1.0)
+  // Vehicle DNA fields (V6 visual analysis from Gemini)
+  make?: string | null;        // Manufacturer (Ferrari, Honda, Pinarello, etc.)
+  model?: string | null;       // Model (296 GT3, CBR1000RR, Dogma F, etc.)
+  livery?: { primary: string; secondary: string[] } | string | null;  // Livery/jersey colors
   // Temporal context for proximity matching
   imageTimestamp?: ImageTimestamp;
   temporalNeighbors?: ImageTimestamp[];
@@ -49,6 +53,22 @@ export interface Participant {
   category?: string;
   plate_number?: string; // License plate for car recognition
   metatag?: string;
+  // Vehicle DNA / Visual profile fields (from custom_fields.learned or direct DB fields)
+  // Applicable across sports: car make for motorsport, bike brand for cycling/motocross, etc.
+  make?: string | null;
+  model?: string | null;
+  livery?: { primary: string; secondary: string[] } | null;
+  jersey_colors?: string[] | null;  // For running/cycling: jersey/kit primary colors
+  custom_fields?: {
+    learned?: {
+      make?: string;
+      model?: string;
+      livery?: { primary: string; secondary: string[] };
+      jersey_colors?: string[];
+      [key: string]: any;
+    };
+    [key: string]: any;
+  };
 }
 
 /**
@@ -113,16 +133,24 @@ export interface MatchCandidate {
   ghostVehicleWarning?: boolean;
 }
 
+export type MatchStatus = 'matched' | 'needs_review' | 'no_match';
+
 export interface MatchResult {
   bestMatch: MatchCandidate | null;
   allCandidates: MatchCandidate[];
   multipleHighScores: boolean;
   resolvedByOverride: boolean;
+  /** Overall match status: 'matched' (clear winner), 'needs_review' (ambiguous, user should choose), 'no_match' */
+  matchStatus: MatchStatus;
   debugInfo: {
     totalEvidence: number;
     evidenceTypes: EvidenceType[];
     ocrCorrections: string[];
     processingTimeMs: number;
+    // Diagnostic fields for rejected/needs_review matches
+    belowMinimumScore?: boolean;
+    needsReviewThreshold?: number;
+    rejectedBestScore?: number;
   };
 }
 
@@ -335,6 +363,32 @@ export class SmartMatcher {
     if (!SmartMatcher.isActiveSession) {
       SmartMatcher.temporalAnalysisCache.clear();
     }
+  }
+
+  /**
+   * Query temporal analysis cache for neighbor results.
+   * Used by temporal backfill: when YOLO detects a vehicle but AI returns 0 results,
+   * we check if any temporal neighbor had a high-confidence match to suggest as needs_review.
+   */
+  static getTemporalNeighborResults(
+    neighborPaths: string[]
+  ): Array<{ participantNumber: string; confidence: number; timestamp: Date; fileName: string }> {
+    const results: Array<{ participantNumber: string; confidence: number; timestamp: Date; fileName: string }> = [];
+
+    for (const neighborPath of neighborPaths) {
+      const cacheKey = neighborPath.toLowerCase();
+      const cached = SmartMatcher.temporalAnalysisCache.get(cacheKey);
+      if (cached && cached.confidence >= 0.7) {
+        results.push({
+          participantNumber: cached.participantNumber,
+          confidence: cached.confidence,
+          timestamp: cached.timestamp,
+          fileName: cached.fileName
+        });
+      }
+    }
+
+    return results;
   }
 
   /**
@@ -669,6 +723,7 @@ export class SmartMatcher {
         allCandidates: [fastTrackMatch],
         multipleHighScores: false,
         resolvedByOverride: true, // This was resolved by fast-track name matching
+        matchStatus: 'matched' as MatchStatus, // Fast-track is always a clear match
         debugInfo: {
           totalEvidence: analysisResult.drivers?.length || 0,
           evidenceTypes: [EvidenceType.DRIVER_NAME],
@@ -748,20 +803,55 @@ export class SmartMatcher {
     // Step 6: Apply intelligent resolution rules
     const resolvedResult = this.resolveMatches(candidates, correctedEvidence);
 
-    // Step 7: If restrictToPreset is true and we have no valid match, return empty result
+    // Step 7: If restrictToPreset is true and we have no valid match, check for needs_review threshold
+    // needsReviewThreshold: half of minimumScore — enough evidence to warrant human review
+    // but not enough for confident automatic matching
+    const needsReviewThreshold = this.config.thresholds.minimumScore * 0.5;
+
     if (restrictToPreset && (!resolvedResult.bestMatch || resolvedResult.bestMatch.score < this.config.thresholds.minimumScore)) {
       const processingTime = Date.now() - startTime;
 
+      // Check if the best candidate has enough evidence for needs_review
+      // (above needsReviewThreshold but below minimumScore)
+      // Use the top sorted candidate directly — resolvedResult.bestMatch may be null
+      // when resolveMatches nullifies it due to score < minimumScore
+      const topCandidate = candidates.length > 0 ? candidates[0] : null;
+
+      if (topCandidate && topCandidate.score >= needsReviewThreshold) {
+        console.log(`[SmartMatcher] Score ${topCandidate.score.toFixed(1)} below minimumScore (${this.config.thresholds.minimumScore}) ` +
+          `but above needsReviewThreshold (${needsReviewThreshold.toFixed(1)}) → needs_review`);
+
+        return {
+          bestMatch: topCandidate, // Use topCandidate (may differ from resolvedResult.bestMatch which could be null)
+          allCandidates: candidates,
+          multipleHighScores: true, // Force needs_review display
+          resolvedByOverride: false,
+          matchStatus: 'needs_review' as MatchStatus,
+          debugInfo: {
+            totalEvidence: evidence.length,
+            evidenceTypes: evidence.map(e => e.type),
+            ocrCorrections: this.ocrCorrector.getLastCorrections(),
+            processingTimeMs: processingTime,
+            belowMinimumScore: true,
+            needsReviewThreshold
+          }
+        };
+      }
+
+      // Score too low even for needs_review — still preserve candidates for diagnostics
       return {
         bestMatch: null,
         allCandidates: candidates,
         multipleHighScores: resolvedResult.multipleHighScores,
         resolvedByOverride: false,
+        matchStatus: 'no_match' as MatchStatus,
         debugInfo: {
           totalEvidence: evidence.length,
           evidenceTypes: evidence.map(e => e.type),
           ocrCorrections: this.ocrCorrector.getLastCorrections(),
-          processingTimeMs: processingTime
+          processingTimeMs: processingTime,
+          rejectedBestScore: resolvedResult.bestMatch?.score || 0,
+          needsReviewThreshold
         }
       };
     }
@@ -773,11 +863,19 @@ export class SmartMatcher {
 
     const processingTime = Date.now() - startTime;
 
+    // Determine match status: needs_review when ambiguous (multiple high scores and not resolved by override)
+    const matchStatus: MatchStatus = !resolvedResult.bestMatch
+      ? 'no_match'
+      : (resolvedResult.multipleHighScores && !resolvedResult.resolvedByOverride)
+        ? 'needs_review'
+        : 'matched';
+
     return {
       bestMatch: resolvedResult.bestMatch,
       allCandidates: candidates,
       multipleHighScores: resolvedResult.multipleHighScores,
       resolvedByOverride: resolvedResult.resolvedByOverride,
+      matchStatus,
       debugInfo: {
         totalEvidence: evidence.length,
         evidenceTypes: evidence.map(e => e.type),
@@ -872,6 +970,39 @@ export class SmartMatcher {
       }
     }
 
+    // CROSS-MATCHING: Gemini may misclassify team names as sponsors (in otherText) or vice versa.
+    // Try unmatched sponsors as team names, and unmatched team evidence as sponsors.
+    const matchedEvidenceValues = new Set(matchedEvidence.map(e => e.value.toLowerCase().trim()));
+
+    // 1. Sponsors that didn't match as sponsors → try as team name
+    for (const sEvidence of sponsorEvidence) {
+      if (matchedEvidenceValues.has(sEvidence.value.toLowerCase().trim())) continue; // Already matched
+      const teamMatch = this.evaluateTeam(participant, { ...sEvidence, type: EvidenceType.TEAM });
+      if (teamMatch.score > 0) {
+        const crossScore = teamMatch.score * 0.7; // Discount for cross-field match
+        const boostedCrossScore = noNumberDetected ? crossScore * noNumberBoostMultiplier : crossScore;
+        totalScore += boostedCrossScore;
+        matchedEvidence.push({ ...sEvidence, type: EvidenceType.TEAM, score: boostedCrossScore });
+        reasoning.push(`CROSS-MATCH: sponsor "${sEvidence.value}" matched as team → +${boostedCrossScore.toFixed(1)} pts (${teamMatch.reason})`);
+        matchedEvidenceValues.add(sEvidence.value.toLowerCase().trim());
+      }
+    }
+
+    // 2. Team evidence that didn't match as team → try as sponsor
+    const teamEvidence = nonSponsorEvidence.filter(e => e.type === EvidenceType.TEAM);
+    for (const tEvidence of teamEvidence) {
+      if (matchedEvidenceValues.has(tEvidence.value.toLowerCase().trim())) continue; // Already matched
+      const sponsorMatch = this.evaluateSponsor(participant, { ...tEvidence, type: EvidenceType.SPONSOR });
+      if (sponsorMatch.score > 0) {
+        const crossScore = sponsorMatch.score * 0.7; // Discount for cross-field match
+        const boostedCrossScore = noNumberDetected ? crossScore * noNumberBoostMultiplier : crossScore;
+        totalScore += boostedCrossScore;
+        matchedEvidence.push({ ...tEvidence, type: EvidenceType.SPONSOR, score: boostedCrossScore });
+        reasoning.push(`CROSS-MATCH: team "${tEvidence.value}" matched as sponsor → +${boostedCrossScore.toFixed(1)} pts (${sponsorMatch.reason})`);
+        matchedEvidenceValues.add(tEvidence.value.toLowerCase().trim());
+      }
+    }
+
     // Apply multi-evidence bonus
     if (matchedEvidence.length >= 2) {
       const bonus = totalScore * this.config.multiEvidenceBonus;
@@ -921,6 +1052,15 @@ export class SmartMatcher {
 
       case EvidenceType.PLATE_NUMBER:
         return this.evaluatePlateNumber(participant, evidence);
+
+      case EvidenceType.VEHICLE_MAKE:
+        return this.evaluateVehicleMake(participant, evidence);
+
+      case EvidenceType.VEHICLE_MODEL:
+        return this.evaluateVehicleModel(participant, evidence);
+
+      case EvidenceType.LIVERY_COLOR:
+        return this.evaluateLiveryColor(participant, evidence);
 
       default:
         return { score: 0, reason: 'Unknown evidence type' };
@@ -1546,6 +1686,314 @@ export class SmartMatcher {
         };
       }
     );
+  }
+
+  // ==========================================
+  // VISUAL DNA MATCHING (Vehicle Make, Model, Livery/Jersey Color)
+  // ==========================================
+
+  /**
+   * Get participant's visual DNA fields, resolving from direct fields or custom_fields.learned
+   */
+  private getParticipantVisualDNA(participant: Participant): {
+    make?: string;
+    model?: string;
+    liveryPrimary?: string;
+    liverySecondary?: string[];
+  } {
+    // Priority: direct fields > custom_fields.learned
+    const make = participant.make
+      || participant.custom_fields?.learned?.make
+      || undefined;
+
+    const model = participant.model
+      || participant.custom_fields?.learned?.model
+      || undefined;
+
+    // Livery: from direct field, custom_fields.learned, or jersey_colors
+    let liveryPrimary: string | undefined;
+    let liverySecondary: string[] | undefined;
+
+    if (participant.livery) {
+      liveryPrimary = participant.livery.primary;
+      liverySecondary = participant.livery.secondary;
+    } else if (participant.custom_fields?.learned?.livery) {
+      liveryPrimary = participant.custom_fields.learned.livery.primary;
+      liverySecondary = participant.custom_fields.learned.livery.secondary;
+    } else if (participant.jersey_colors && participant.jersey_colors.length > 0) {
+      liveryPrimary = participant.jersey_colors[0];
+      liverySecondary = participant.jersey_colors.slice(1);
+    } else if (participant.custom_fields?.learned?.jersey_colors && participant.custom_fields.learned.jersey_colors.length > 0) {
+      liveryPrimary = participant.custom_fields.learned.jersey_colors[0];
+      liverySecondary = participant.custom_fields.learned.jersey_colors.slice(1);
+    }
+
+    return { make, model, liveryPrimary, liverySecondary };
+  }
+
+  /**
+   * Evaluate vehicle make evidence (Ferrari, Honda, Pinarello, etc.)
+   * Uses empty-aware evaluation with fuzzy matching for brand name variations
+   */
+  private evaluateVehicleMake(
+    participant: Participant,
+    evidence: Evidence
+  ): { score: number; reason: string } {
+    const visual = this.getParticipantVisualDNA(participant);
+    if (!visual.make) {
+      return { score: 0, reason: 'No make data in participant' };
+    }
+
+    const weight = this.config.weights.vehicleMake || 0;
+    if (weight === 0) {
+      return { score: 0, reason: 'vehicleMake weight is 0 (disabled)' };
+    }
+
+    const pMake = visual.make.toLowerCase().trim();
+    const eMake = String(evidence.value).toLowerCase().trim();
+
+    // Exact match
+    if (pMake === eMake) {
+      return {
+        score: weight,
+        reason: `Make EXACT: ${evidence.value} (+${weight} pts)`
+      };
+    }
+
+    // Partial/contains match (e.g., "Mercedes-AMG" contains "Mercedes")
+    if (pMake.includes(eMake) || eMake.includes(pMake)) {
+      const partialScore = weight * 0.85;
+      return {
+        score: partialScore,
+        reason: `Make PARTIAL: ${evidence.value} ≈ ${visual.make} (+${partialScore.toFixed(1)} pts)`
+      };
+    }
+
+    // Known aliases (common brand abbreviations/variations)
+    const makeAliases: { [key: string]: string[] } = {
+      'mercedes': ['mercedes-amg', 'merc', 'amg'],
+      'bmw': ['bmw motorsport', 'bmw m'],
+      'porsche': ['porsche motorsport'],
+      'ferrari': ['scuderia ferrari', 'ferrari af corse'],
+      'lamborghini': ['lambo', 'lamborghini squadra corse'],
+      'mclaren': ['mclaren racing'],
+      'honda': ['honda racing', 'hrc'],
+      'yamaha': ['yamaha racing', 'yamaha factory'],
+      'kawasaki': ['kawasaki racing', 'krt'],
+      'ducati': ['ducati corse', 'ducati racing'],
+      'ktm': ['ktm factory', 'ktm racing', 'red bull ktm'],
+      'husqvarna': ['husqvarna factory', 'husky'],
+      'specialized': ['s-works'],
+      'pinarello': ['pinarello dogma'],
+      'trek': ['trek-segafredo', 'trek factory'],
+    };
+
+    for (const [canonical, aliases] of Object.entries(makeAliases)) {
+      const allNames = [canonical, ...aliases];
+      const pMatch = allNames.some(a => pMake.includes(a) || a.includes(pMake));
+      const eMatch = allNames.some(a => eMake.includes(a) || a.includes(eMake));
+      if (pMatch && eMatch) {
+        const aliasScore = weight * 0.8;
+        return {
+          score: aliasScore,
+          reason: `Make ALIAS: ${evidence.value} ≈ ${visual.make} (+${aliasScore.toFixed(1)} pts)`
+        };
+      }
+    }
+
+    // Mismatch: different make is a moderate negative signal
+    // (not as strong as plate mismatch, since Gemini can misidentify brands)
+    return {
+      score: -10,
+      reason: `Make MISMATCH: ${evidence.value} ≠ ${visual.make} (-10 pts)`
+    };
+  }
+
+  /**
+   * Evaluate vehicle model evidence (296 GT3, CBR1000RR, Dogma F, etc.)
+   * More lenient than make matching since models are harder to identify visually
+   */
+  private evaluateVehicleModel(
+    participant: Participant,
+    evidence: Evidence
+  ): { score: number; reason: string } {
+    const visual = this.getParticipantVisualDNA(participant);
+    if (!visual.model) {
+      return { score: 0, reason: 'No model data in participant' };
+    }
+
+    const weight = this.config.weights.vehicleModel || 0;
+    if (weight === 0) {
+      return { score: 0, reason: 'vehicleModel weight is 0 (disabled)' };
+    }
+
+    const pModel = visual.model.toLowerCase().trim();
+    const eModel = String(evidence.value).toLowerCase().trim();
+
+    // Exact match
+    if (pModel === eModel) {
+      return {
+        score: weight,
+        reason: `Model EXACT: ${evidence.value} (+${weight} pts)`
+      };
+    }
+
+    // Partial match (e.g., "911 GT3 R" contains "911 GT3", or "Dogma F" ≈ "Dogma")
+    if (pModel.includes(eModel) || eModel.includes(pModel)) {
+      const partialScore = weight * 0.75;
+      return {
+        score: partialScore,
+        reason: `Model PARTIAL: ${evidence.value} ≈ ${visual.model} (+${partialScore.toFixed(1)} pts)`
+      };
+    }
+
+    // Fuzzy match: check if significant words overlap (e.g., "Huracan GT3 EVO2" vs "Huracan GT3")
+    const pWords = pModel.split(/[\s\-]+/).filter(w => w.length >= 2);
+    const eWords = eModel.split(/[\s\-]+/).filter(w => w.length >= 2);
+    const commonWords = pWords.filter(pw => eWords.some(ew => pw === ew || pw.includes(ew) || ew.includes(pw)));
+
+    if (commonWords.length >= 2 || (commonWords.length === 1 && Math.max(pWords.length, eWords.length) <= 2)) {
+      const overlapRatio = commonWords.length / Math.max(pWords.length, eWords.length);
+      const fuzzyScore = weight * overlapRatio * 0.7;
+      return {
+        score: fuzzyScore,
+        reason: `Model FUZZY: ${evidence.value} ≈ ${visual.model} (${commonWords.join('+')} overlap, +${fuzzyScore.toFixed(1)} pts)`
+      };
+    }
+
+    // No match (no penalty for model - too many variations and naming conventions)
+    return {
+      score: 0,
+      reason: `Model NO MATCH: ${evidence.value} ≠ ${visual.model}`
+    };
+  }
+
+  /**
+   * Evaluate livery/jersey color evidence
+   * Supports color matching with tolerance for naming variations and multilingual color names
+   */
+  private evaluateLiveryColor(
+    participant: Participant,
+    evidence: Evidence
+  ): { score: number; reason: string } {
+    const visual = this.getParticipantVisualDNA(participant);
+    if (!visual.liveryPrimary) {
+      return { score: 0, reason: 'No livery/color data in participant' };
+    }
+
+    const weight = this.config.weights.liveryColor || 0;
+    if (weight === 0) {
+      return { score: 0, reason: 'liveryColor weight is 0 (disabled)' };
+    }
+
+    const eColor = String(evidence.value).toLowerCase().trim();
+    const pPrimary = visual.liveryPrimary.toLowerCase().trim();
+
+    // Normalize colors to canonical form (handles IT/EN and common variations)
+    const normalizedEvidence = this.normalizeColor(eColor);
+    const normalizedParticipant = this.normalizeColor(pPrimary);
+
+    // Primary color exact match (after normalization)
+    if (normalizedEvidence === normalizedParticipant) {
+      return {
+        score: weight,
+        reason: `Color PRIMARY MATCH: ${evidence.value} = ${visual.liveryPrimary} (+${weight} pts)`
+      };
+    }
+
+    // Check secondary colors
+    if (visual.liverySecondary && visual.liverySecondary.length > 0) {
+      for (const secondary of visual.liverySecondary) {
+        const normalizedSecondary = this.normalizeColor(secondary.toLowerCase().trim());
+        if (normalizedEvidence === normalizedSecondary) {
+          const secondaryScore = weight * 0.5; // Secondary color match is worth half
+          return {
+            score: secondaryScore,
+            reason: `Color SECONDARY MATCH: ${evidence.value} = ${secondary} (+${secondaryScore.toFixed(1)} pts)`
+          };
+        }
+      }
+    }
+
+    // Color family match (e.g., "rosso" vs "rosso scuro", "blu" vs "azzurro")
+    if (this.isColorFamilyMatch(normalizedEvidence, normalizedParticipant)) {
+      const familyScore = weight * 0.6;
+      return {
+        score: familyScore,
+        reason: `Color FAMILY: ${evidence.value} ≈ ${visual.liveryPrimary} (+${familyScore.toFixed(1)} pts)`
+      };
+    }
+
+    // Color mismatch: moderate negative signal
+    // (a red car is clearly not a blue car, but Gemini color detection isn't perfect)
+    return {
+      score: -8,
+      reason: `Color MISMATCH: ${evidence.value} ≠ ${visual.liveryPrimary} (-8 pts)`
+    };
+  }
+
+  /**
+   * Normalize color names to canonical English form
+   * Handles Italian, English, and common variations
+   */
+  private normalizeColor(color: string): string {
+    const colorMap: { [key: string]: string } = {
+      // Italian → English canonical
+      'rosso': 'red', 'rossa': 'red',
+      'blu': 'blue',
+      'azzurro': 'light_blue', 'azzurra': 'light_blue', 'celeste': 'light_blue',
+      'verde': 'green',
+      'giallo': 'yellow', 'gialla': 'yellow',
+      'nero': 'black', 'nera': 'black',
+      'bianco': 'white', 'bianca': 'white',
+      'arancione': 'orange', 'arancio': 'orange',
+      'rosa': 'pink',
+      'viola': 'purple',
+      'grigio': 'gray', 'grigia': 'gray',
+      'argento': 'silver', 'argentato': 'silver',
+      'oro': 'gold', 'dorato': 'gold',
+      'marrone': 'brown',
+      // English variations
+      'grey': 'gray',
+      'cyan': 'light_blue', 'teal': 'light_blue',
+      'magenta': 'pink', 'fuchsia': 'pink',
+      'lime': 'green', 'chartreuse': 'green',
+      'navy': 'blue', 'dark blue': 'blue',
+      'crimson': 'red', 'scarlet': 'red', 'burgundy': 'red',
+      'amber': 'orange',
+    };
+
+    return colorMap[color] || color;
+  }
+
+  /**
+   * Check if two colors belong to the same color family
+   * (e.g., "red" and "dark red" are the same family)
+   */
+  private isColorFamilyMatch(color1: string, color2: string): boolean {
+    // If either contains the other, it's a family match
+    if (color1.includes(color2) || color2.includes(color1)) {
+      return true;
+    }
+
+    // Color families
+    const families: string[][] = [
+      ['red', 'dark_red', 'light_red', 'maroon'],
+      ['blue', 'dark_blue', 'light_blue', 'navy'],
+      ['green', 'dark_green', 'light_green', 'lime'],
+      ['yellow', 'gold', 'amber'],
+      ['orange', 'amber'],
+      ['gray', 'silver'],
+      ['pink', 'light_red'],
+    ];
+
+    for (const family of families) {
+      if (family.includes(color1) && family.includes(color2)) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   /**

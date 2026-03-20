@@ -1,33 +1,36 @@
 /**
- * Results Page — Delivery Integration
+ * Results Page — Unified Deliver Modal
  *
- * Adds "Send to Gallery" and "Upload HD" buttons to the results page.
- * Buttons are only visible if the user's plan enables gallery/delivery features.
- * Handles gallery picker modal, inline gallery creation, R2 upload trigger, and progress.
+ * Single "Deliver" button opens a modal with two sections:
+ *   1. Send to Gallery (preview images → gallery_images table)
+ *   2. Upload HD Originals (full-res → Cloudflare R2, runs in background)
+ *
+ * Each section is only visible if the user's plan enables it.
+ * If only one feature is enabled, the modal shows just that section.
+ * The confirm button handles whichever combination is active.
  */
 (function () {
   'use strict';
 
-  let planLimits = null;
-  let galleries = [];
-  let executionId = null;
+  var planLimits = null;
+  var galleries = [];
+  var executionId = null;
 
   // ==================== INIT ====================
 
-  // Wait for results page to be fully loaded (ResultsPageManager sets window.logVisualizer)
   var initAttempts = 0;
   var initInterval = setInterval(function () {
     initAttempts++;
     if (window.logVisualizer && window.logVisualizer.executionId) {
       clearInterval(initInterval);
       executionId = window.logVisualizer.executionId;
-      initDeliveryButtons();
+      initDeliveryButton();
     } else if (initAttempts > 30) {
-      clearInterval(initInterval); // Give up after 15 seconds
+      clearInterval(initInterval);
     }
   }, 500);
 
-  async function initDeliveryButtons() {
+  async function initDeliveryButton() {
     if (!window.api || !window.api.invoke) return;
 
     try {
@@ -39,22 +42,16 @@
       return;
     }
 
-    // Show "Send to Gallery" if gallery is enabled
-    if (planLimits.gallery_enabled) {
-      var btnGallery = document.getElementById('btn-send-to-gallery');
-      if (btnGallery) {
-        btnGallery.style.display = '';
-        btnGallery.addEventListener('click', openGalleryModal);
-      }
-    }
+    var hasGallery = !!planLimits.gallery_enabled;
+    var hasR2 = !!planLimits.r2_storage_enabled;
 
-    // Show "Upload HD" if R2 storage is enabled
-    if (planLimits.r2_storage_enabled) {
-      var btnR2 = document.getElementById('btn-r2-upload');
-      if (btnR2) {
-        btnR2.style.display = '';
-        btnR2.addEventListener('click', startR2Upload);
-      }
+    // Show the unified button only if at least one feature is enabled
+    if (!hasGallery && !hasR2) return;
+
+    var btnDeliver = document.getElementById('btn-deliver');
+    if (btnDeliver) {
+      btnDeliver.style.display = '';
+      btnDeliver.addEventListener('click', openDeliverModal);
     }
 
     // Listen for R2 upload events from main process
@@ -66,50 +63,100 @@
     bindModalEvents();
   }
 
-  // ==================== GALLERY MODAL ====================
+  // ==================== DELIVER MODAL ====================
 
-  async function openGalleryModal() {
-    // Load galleries
-    try {
-      var result = await window.api.invoke('delivery-get-galleries');
-      if (result && result.success) galleries = result.data || [];
-    } catch (e) {
-      galleries = [];
+  async function openDeliverModal() {
+    var hasGallery = !!planLimits.gallery_enabled;
+    var hasR2 = !!planLimits.r2_storage_enabled;
+
+    // Show/hide sections based on plan
+    var gallerySection = document.getElementById('deliver-gallery-section');
+    var hdSection = document.getElementById('deliver-hd-section');
+    var divider = document.getElementById('deliver-divider');
+
+    if (gallerySection) gallerySection.style.display = hasGallery ? 'block' : 'none';
+    if (hdSection) hdSection.style.display = hasR2 ? 'block' : 'none';
+    if (divider) divider.style.display = (hasGallery && hasR2) ? 'block' : 'none';
+
+    // Default: HD toggle checked when available
+    var hdToggle = document.getElementById('deliver-hd-toggle');
+    if (hdToggle) hdToggle.checked = true;
+
+    // Update confirm button text based on visible options
+    updateConfirmButtonText();
+
+    // Load galleries if gallery section is visible
+    if (hasGallery) {
+      try {
+        var result = await window.api.invoke('delivery-get-galleries');
+        if (result && result.success) galleries = result.data || [];
+      } catch (e) {
+        galleries = [];
+      }
+
+      var select = document.getElementById('results-gallery-select');
+      if (select) {
+        select.innerHTML = '<option value="">-- Select a gallery --</option>';
+        galleries.forEach(function (g) {
+          var option = document.createElement('option');
+          option.value = g.id;
+          option.textContent = g.title + (g.status === 'published' ? ' (published)' : ' (draft)');
+          select.appendChild(option);
+        });
+      }
+
+      var nameInput = document.getElementById('results-new-gallery-name');
+      if (nameInput) nameInput.value = '';
+
+      // Show photo count
+      var infoDiv = document.getElementById('results-gallery-info');
+      if (infoDiv && window.logVisualizer) {
+        var total = window.logVisualizer.imageResults ? window.logVisualizer.imageResults.length : 0;
+        infoDiv.style.display = 'block';
+        infoDiv.innerHTML = '<strong>' + total + ' photos</strong> from this analysis will be delivered.';
+      }
     }
 
-    var select = document.getElementById('results-gallery-select');
-    if (select) {
-      select.innerHTML = '<option value="">-- Select a gallery --</option>';
-      galleries.forEach(function (g) {
-        var option = document.createElement('option');
-        option.value = g.id;
-        option.textContent = g.title + (g.status === 'published' ? ' (published)' : ' (draft)');
-        select.appendChild(option);
-      });
-    }
-
-    // Clear new gallery input
-    var nameInput = document.getElementById('results-new-gallery-name');
-    if (nameInput) nameInput.value = '';
-
-    // Show total photos count
-    var infoDiv = document.getElementById('results-gallery-info');
-    if (infoDiv && window.logVisualizer) {
-      var total = window.logVisualizer.imageResults ? window.logVisualizer.imageResults.length : 0;
-      infoDiv.style.display = 'block';
-      infoDiv.innerHTML = '<strong>' + total + ' photos</strong> from this analysis will be sent to the selected gallery.';
-    }
-
-    showModal('modal-results-gallery');
+    showModal('modal-deliver');
   }
 
-  async function sendToGallery() {
-    var select = document.getElementById('results-gallery-select');
-    var galleryId = select ? select.value : '';
+  function updateConfirmButtonText() {
+    var btnConfirm = document.getElementById('btn-deliver-confirm');
+    if (!btnConfirm) return;
 
-    if (!galleryId) {
-      alert('Please select a gallery first.');
-      return;
+    var hasGallery = !!planLimits.gallery_enabled;
+    var hasR2 = !!planLimits.r2_storage_enabled;
+    var hdToggle = document.getElementById('deliver-hd-toggle');
+    var hdChecked = hdToggle && hdToggle.checked;
+
+    if (hasGallery && hasR2 && hdChecked) {
+      btnConfirm.textContent = 'Send to Gallery + Upload HD';
+    } else if (hasGallery && (!hasR2 || !hdChecked)) {
+      btnConfirm.textContent = 'Send to Gallery';
+    } else if (!hasGallery && hasR2) {
+      btnConfirm.textContent = 'Upload HD Originals';
+    } else {
+      btnConfirm.textContent = 'Deliver';
+    }
+  }
+
+  // ==================== CONFIRM ACTION ====================
+
+  async function handleDeliver() {
+    var hasGallery = !!planLimits.gallery_enabled;
+    var hasR2 = !!planLimits.r2_storage_enabled;
+    var hdToggle = document.getElementById('deliver-hd-toggle');
+    var wantsHD = hasR2 && hdToggle && hdToggle.checked;
+
+    // Validate gallery selection if gallery section is active
+    var galleryId = null;
+    if (hasGallery) {
+      var select = document.getElementById('results-gallery-select');
+      galleryId = select ? select.value : '';
+      if (!galleryId) {
+        alert('Please select a gallery first.');
+        return;
+      }
     }
 
     if (!executionId) {
@@ -117,35 +164,82 @@
       return;
     }
 
-    var btnSend = document.getElementById('btn-results-gallery-send');
-    if (btnSend) {
-      btnSend.disabled = true;
-      btnSend.textContent = 'Sending...';
+    var btnConfirm = document.getElementById('btn-deliver-confirm');
+    if (btnConfirm) {
+      btnConfirm.disabled = true;
+      btnConfirm.textContent = 'Delivering...';
     }
+
+    var gallerySent = false;
+    var hdStarted = false;
 
     try {
-      var result = await window.api.invoke('delivery-send-execution-to-gallery', {
-        galleryId: galleryId,
-        executionId: executionId,
-      });
+      // Step 1: Send to gallery (if enabled)
+      if (hasGallery && galleryId) {
+        var galleryResult = await window.api.invoke('delivery-send-execution-to-gallery', {
+          galleryId: galleryId,
+          executionId: executionId,
+        });
 
-      if (result && result.success) {
-        var added = result.data ? result.data.added : 0;
-        hideModal('modal-results-gallery');
-        showToast('Sent ' + added + ' photos to gallery!', 'success');
-      } else {
-        alert('Error: ' + (result ? result.error : 'Unknown'));
+        if (galleryResult && galleryResult.success) {
+          var added = galleryResult.data ? galleryResult.data.added : 0;
+          gallerySent = true;
+          showToast('Sent ' + added + ' photos to gallery!', 'success');
+        } else {
+          alert('Error sending to gallery: ' + (galleryResult ? galleryResult.error : 'Unknown'));
+          resetConfirmButton();
+          return;
+        }
       }
+
+      // Step 2: Start R2 upload in background (if enabled and checked)
+      if (wantsHD) {
+        var r2Result = await window.api.invoke('delivery-r2-upload-start', executionId);
+        if (r2Result && r2Result.success) {
+          var queued = r2Result.data ? r2Result.data.queued : 0;
+          var r2Error = r2Result.data ? r2Result.data.error : null;
+          if (queued > 0) {
+            hdStarted = true;
+            showR2Banner(queued);
+          } else if (r2Error) {
+            // Source folder missing or files not found — show actionable message
+            console.warn('[ResultsDelivery] R2 upload:', r2Error);
+            showToast(r2Error, 'error');
+          } else {
+            showToast('HD originals already uploaded.', 'success');
+          }
+        } else {
+          // Don't block — gallery was already sent successfully
+          console.warn('[ResultsDelivery] R2 upload error:', r2Result ? r2Result.error : 'Unknown');
+          showToast('Gallery sent, but HD upload failed to start.', 'error');
+        }
+      }
+
+      // Close modal
+      hideModal('modal-deliver');
+
+      // Summary toast if both actions happened
+      if (gallerySent && hdStarted) {
+        // Gallery toast already shown; R2 progress banner is visible
+      }
+
     } catch (e) {
-      alert('Error sending photos to gallery.');
-      console.error('[ResultsDelivery] Send error:', e);
+      alert('Error during delivery.');
+      console.error('[ResultsDelivery] Deliver error:', e);
     } finally {
-      if (btnSend) {
-        btnSend.disabled = false;
-        btnSend.textContent = 'Send All Photos';
-      }
+      resetConfirmButton();
     }
   }
+
+  function resetConfirmButton() {
+    var btnConfirm = document.getElementById('btn-deliver-confirm');
+    if (btnConfirm) {
+      btnConfirm.disabled = false;
+      updateConfirmButtonText();
+    }
+  }
+
+  // ==================== GALLERY INLINE CREATE ====================
 
   async function createGalleryInline() {
     var nameInput = document.getElementById('results-new-gallery-name');
@@ -169,7 +263,6 @@
       });
 
       if (result && result.success && result.data) {
-        // Add to galleries array and select it
         galleries.push(result.data);
         var select = document.getElementById('results-gallery-select');
         if (select) {
@@ -195,60 +288,15 @@
     }
   }
 
-  // ==================== R2 UPLOAD ====================
+  // ==================== R2 UPLOAD PROGRESS ====================
 
-  async function startR2Upload() {
-    if (!executionId) {
-      alert('No execution found.');
-      return;
-    }
-
-    var btnR2 = document.getElementById('btn-r2-upload');
-    if (btnR2) {
-      btnR2.disabled = true;
-      btnR2.textContent = '☁️ Uploading...';
-    }
-
-    // Show progress banner
+  function showR2Banner(queued) {
     var banner = document.getElementById('r2-upload-banner');
     if (banner) banner.style.display = 'block';
-
     var statusEl = document.getElementById('r2-upload-status');
-    if (statusEl) statusEl.textContent = 'Starting upload...';
-
-    try {
-      var result = await window.api.invoke('delivery-r2-upload-start', executionId);
-      if (result && result.success) {
-        var queued = result.data ? result.data.queued : 0;
-        if (queued === 0) {
-          if (statusEl) statusEl.textContent = 'No images to upload (already uploaded or not available).';
-          if (btnR2) {
-            btnR2.disabled = false;
-            btnR2.textContent = '☁️ Upload HD';
-          }
-          setTimeout(function () {
-            if (banner) banner.style.display = 'none';
-          }, 3000);
-        } else {
-          if (statusEl) statusEl.textContent = queued + ' files queued for upload...';
-        }
-      } else {
-        alert('Error: ' + (result ? result.error : 'Unknown'));
-        if (btnR2) {
-          btnR2.disabled = false;
-          btnR2.textContent = '☁️ Upload HD';
-        }
-        if (banner) banner.style.display = 'none';
-      }
-    } catch (e) {
-      alert('Error starting upload.');
-      console.error('[ResultsDelivery] R2 upload error:', e);
-      if (btnR2) {
-        btnR2.disabled = false;
-        btnR2.textContent = '☁️ Upload HD';
-      }
-      if (banner) banner.style.display = 'none';
-    }
+    if (statusEl) statusEl.textContent = queued + ' files queued for upload...';
+    var progressBar = document.getElementById('r2-upload-progress-bar');
+    if (progressBar) progressBar.style.width = '0%';
   }
 
   function handleR2Progress(data) {
@@ -271,7 +319,6 @@
     var progressBar = document.getElementById('r2-upload-progress-bar');
     var statusEl = document.getElementById('r2-upload-status');
     var banner = document.getElementById('r2-upload-banner');
-    var btnR2 = document.getElementById('btn-r2-upload');
 
     if (progressBar) progressBar.style.width = '100%';
     if (statusEl) {
@@ -279,14 +326,9 @@
         'Complete! ' + (data.completed || 0) + ' uploaded' +
         (data.failed > 0 ? ', ' + data.failed + ' failed' : '');
     }
-    if (btnR2) {
-      btnR2.disabled = false;
-      btnR2.textContent = '☁️ Upload HD';
-    }
 
     showToast((data.completed || 0) + ' HD originals uploaded to cloud!', 'success');
 
-    // Auto-hide banner after 5 seconds
     setTimeout(function () {
       if (banner) banner.style.display = 'none';
     }, 5000);
@@ -295,35 +337,37 @@
   // ==================== EVENT BINDING ====================
 
   function bindModalEvents() {
-    var btnSend = document.getElementById('btn-results-gallery-send');
-    if (btnSend) btnSend.addEventListener('click', sendToGallery);
+    // Confirm
+    var btnConfirm = document.getElementById('btn-deliver-confirm');
+    if (btnConfirm) btnConfirm.addEventListener('click', handleDeliver);
 
-    var btnCancel = document.getElementById('btn-results-gallery-cancel');
-    if (btnCancel) btnCancel.addEventListener('click', function () { hideModal('modal-results-gallery'); });
+    // Cancel
+    var btnCancel = document.getElementById('btn-deliver-cancel');
+    if (btnCancel) btnCancel.addEventListener('click', function () { hideModal('modal-deliver'); });
 
+    // Create gallery inline
     var btnCreate = document.getElementById('btn-results-create-gallery');
     if (btnCreate) btnCreate.addEventListener('click', createGalleryInline);
 
+    // HD toggle → update button text
+    var hdToggle = document.getElementById('deliver-hd-toggle');
+    if (hdToggle) hdToggle.addEventListener('change', updateConfirmButtonText);
+
     // Backdrop close
-    var modal = document.getElementById('modal-results-gallery');
+    var modal = document.getElementById('modal-deliver');
     if (modal) {
       modal.addEventListener('click', function (e) {
-        if (e.target === modal) hideModal('modal-results-gallery');
+        if (e.target === modal) hideModal('modal-deliver');
       });
     }
 
-    // R2 cancel button
+    // R2 cancel button (on progress banner)
     var btnR2Cancel = document.getElementById('btn-r2-cancel');
     if (btnR2Cancel) {
       btnR2Cancel.addEventListener('click', function () {
         window.api.invoke('delivery-r2-upload-cancel').catch(function () {});
         var banner = document.getElementById('r2-upload-banner');
         if (banner) banner.style.display = 'none';
-        var btnR2 = document.getElementById('btn-r2-upload');
-        if (btnR2) {
-          btnR2.disabled = false;
-          btnR2.textContent = '☁️ Upload HD';
-        }
       });
     }
   }
@@ -341,7 +385,6 @@
   }
 
   function showToast(message, type) {
-    // Simple toast notification
     var toast = document.createElement('div');
     toast.style.cssText =
       'position: fixed; top: 24px; right: 24px; z-index: 9999; padding: 12px 20px; ' +

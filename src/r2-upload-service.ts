@@ -95,6 +95,18 @@ class R2UploadService extends EventEmitter {
     failed: 0,
   };
 
+  /** Track the current execution being uploaded */
+  private currentExecutionId: string | null = null;
+
+  /** Session-level upload history (not persisted across app restarts) */
+  private uploadHistory: Array<{
+    completed: number;
+    failed: number;
+    total: number;
+    timestamp: string;
+    executionId: string | null;
+  }> = [];
+
   private readonly BATCH_SIZE = 50;
   private readonly MAX_RETRIES = 2;
   private readonly RETRY_DELAYS = [1000, 3000]; // exponential backoff: 1s, 3s
@@ -115,6 +127,8 @@ class R2UploadService extends EventEmitter {
     if (DEBUG_MODE) {
       console.log(`[R2Upload] Queueing ${imagePaths.length} images for execution ${executionId}`);
     }
+
+    this.currentExecutionId = executionId;
 
     const newItems: QueuedImage[] = imagePaths.map((item) => ({
       ...item,
@@ -179,7 +193,7 @@ class R2UploadService extends EventEmitter {
   /**
    * Get current upload progress
    */
-  getProgress(): UploadProgress {
+  getProgress(): UploadProgress & { executionId: string | null } {
     return {
       total: this.stats.total,
       completed: this.stats.completed,
@@ -189,7 +203,15 @@ class R2UploadService extends EventEmitter {
         this.stats.total > 0
           ? Math.round(((this.stats.completed + this.stats.failed) / this.stats.total) * 100)
           : 0,
+      executionId: this.currentExecutionId,
     };
+  }
+
+  /**
+   * Get session-level upload history (most recent first)
+   */
+  getUploadHistory(): typeof this.uploadHistory {
+    return this.uploadHistory;
   }
 
   /**
@@ -214,10 +236,21 @@ class R2UploadService extends EventEmitter {
 
     if (this.isRunning && !this.isCancelled) {
       this.isRunning = false;
+
+      // Record in session history
+      this.uploadHistory.unshift({
+        completed: this.stats.completed,
+        failed: this.stats.failed,
+        total: this.stats.total,
+        timestamp: new Date().toISOString(),
+        executionId: this.currentExecutionId,
+      });
+
       this.emit('all-uploads-complete', {
         total: this.stats.total,
         completed: this.stats.completed,
         failed: this.stats.failed,
+        executionId: this.currentExecutionId,
       });
 
       if (DEBUG_MODE) {

@@ -1199,10 +1199,339 @@
   border: 1px solid rgba(239, 68, 68, 0.3);
 }
 
+.lv-confidence.confidence-review {
+  background: rgba(234, 179, 8, 0.15);
+  color: #eab308;
+  border: 1px solid rgba(234, 179, 8, 0.4);
+}
+
 .lv-csv-matched {
   font-size: 11px;
   color: var(--accent-primary);
   font-weight: 600;
+}
+
+/* ===== Needs Review Card Styling ===== */
+.lv-result-card.needs-review {
+  border-color: #eab308;
+  border-width: 2px;
+  box-shadow: 0 0 8px rgba(234, 179, 8, 0.15);
+}
+
+.lv-result-card.review-resolved {
+  border-color: var(--accent-success);
+  border-width: 2px;
+}
+
+.lv-needs-review-badge {
+  position: absolute;
+  top: var(--spacing-xs);
+  right: var(--spacing-xs);
+  background: #eab308;
+  color: #1a1a2e;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-radius: var(--border-radius-sm);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  z-index: 2;
+}
+
+.lv-resolved-badge {
+  position: absolute;
+  top: var(--spacing-xs);
+  right: var(--spacing-xs);
+  background: var(--accent-success, #10b981);
+  color: white;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-radius: var(--border-radius-sm);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.lv-ambiguous-hint {
+  font-size: 11px;
+  color: #eab308;
+  font-weight: 600;
+  margin-top: 2px;
+  cursor: pointer;
+}
+
+/* ===== Candidate Selector Popup ===== */
+/* ── In-Gallery Review Candidates (shared styles) ──────────── */
+
+.lv-candidate-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lv-candidate-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-dark, #1a1a2e);
+  border: 2px solid var(--border-color, #333);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, transform 0.1s;
+}
+
+.lv-candidate-option:hover {
+  border-color: #eab308;
+  background: rgba(234, 179, 8, 0.06);
+  transform: translateX(2px);
+}
+
+.lv-candidate-option.selected,
+.lv-candidate-option.lv-candidate-active {
+  border-color: var(--accent-success, #10b981);
+  background: rgba(16, 185, 129, 0.08);
+  transform: none;
+}
+
+.lv-candidate-active .lv-candidate-rank {
+  background: rgba(16, 185, 129, 0.25);
+  border-color: rgba(16, 185, 129, 0.5);
+  color: #10b981;
+  font-size: 11px;
+}
+
+.lv-candidate-rank {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(234, 179, 8, 0.15);
+  border: 1px solid rgba(234, 179, 8, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #eab308;
+}
+
+.lv-candidate-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.lv-candidate-number {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary, #fff);
+}
+
+.lv-candidate-name {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lv-candidate-team {
+  font-size: 10px;
+  color: var(--text-secondary, #aaa);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lv-candidate-score {
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #eab308;
+  text-align: right;
+}
+
+.lv-candidate-conf {
+  display: block;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-muted, #888);
+}
+
+.lv-candidate-btn-none {
+  padding: 6px 14px;
+  background: transparent;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  color: var(--text-muted, #888);
+  cursor: pointer;
+  font-size: 12px;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.lv-candidate-btn-none:hover {
+  color: var(--accent-danger, #ef4444);
+  border-color: var(--accent-danger, #ef4444);
+}
+
+.lv-candidate-btn-none.lv-btn-none-active {
+  color: var(--accent-danger, #ef4444);
+  border-color: var(--accent-danger, #ef4444);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+/* ── Option A: Sidebar Review Panel (visible on large screens) ── */
+
+.lv-review-panel {
+  background: rgba(234, 179, 8, 0.06);
+  border: 1px solid rgba(234, 179, 8, 0.35);
+  border-radius: 10px;
+  padding: 14px;
+  margin-bottom: 12px;
+  transition: background 0.3s, border-color 0.3s;
+}
+
+/* Resolved state: green tint */
+.lv-review-panel.lv-review-state-resolved,
+.lv-review-bar.lv-review-state-resolved {
+  background: rgba(16, 185, 129, 0.05);
+  border-color: rgba(16, 185, 129, 0.3);
+}
+
+.lv-review-state-resolved .lv-review-title {
+  color: #10b981;
+}
+
+.lv-review-state-resolved .lv-review-icon {
+  color: #10b981;
+}
+
+/* None state: grey/red tint */
+.lv-review-panel.lv-review-state-none,
+.lv-review-bar.lv-review-state-none {
+  background: rgba(107, 114, 128, 0.06);
+  border-color: rgba(107, 114, 128, 0.3);
+}
+
+.lv-review-state-none .lv-review-title {
+  color: #9ca3af;
+}
+
+.lv-review-state-none .lv-review-icon {
+  color: #9ca3af;
+}
+
+.lv-review-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.lv-review-icon {
+  font-size: 16px;
+}
+
+.lv-review-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #eab308;
+}
+
+.lv-review-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+/* ── Option B: Horizontal Review Bar (visible on small screens) ── */
+
+.lv-review-bar {
+  background: rgba(234, 179, 8, 0.08);
+  border-top: 2px solid rgba(234, 179, 8, 0.4);
+  border-bottom: 1px solid var(--border-color, #333);
+  padding: 10px 16px;
+  transition: opacity 0.3s, max-height 0.3s;
+}
+
+.lv-review-bar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #eab308;
+}
+
+.lv-review-bar-none {
+  padding: 4px 10px;
+  font-size: 11px;
+}
+
+.lv-review-bar-candidates {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(234, 179, 8, 0.3) transparent;
+}
+
+.lv-review-bar-candidates::-webkit-scrollbar {
+  height: 4px;
+}
+
+.lv-review-bar-candidates::-webkit-scrollbar-thumb {
+  background: rgba(234, 179, 8, 0.3);
+  border-radius: 2px;
+}
+
+/* Compact candidate cards for horizontal bar */
+.lv-candidate-compact {
+  flex-shrink: 0;
+  min-width: 140px;
+  max-width: 180px;
+  padding: 8px 10px;
+  gap: 8px;
+}
+
+.lv-candidate-compact .lv-candidate-rank {
+  width: 22px;
+  height: 22px;
+  font-size: 11px;
+}
+
+.lv-candidate-compact .lv-candidate-number {
+  font-size: 13px;
+}
+
+.lv-candidate-compact .lv-candidate-name {
+  font-size: 10px;
+}
+
+.lv-candidate-compact .lv-candidate-score {
+  font-size: 11px;
+}
+
+/* ── Responsive: which review layout is visible ──────────── */
+
+/* Default (vertical layout): show horizontal bar below image, hide sidebar panel */
+.lv-review-panel {
+  display: none;
+}
+
+.lv-review-bar {
+  display: block;
+}
+
+/* When gallery is in side-by-side grid layout: show sidebar panel, hide horizontal bar */
+@media (min-width: 1200px) {
+  .lv-review-panel {
+    display: block;
+  }
+
+  .lv-review-bar {
+    display: none;
+  }
 }
 
 /* Footer Actions */
@@ -1290,6 +1619,10 @@
   flex-direction: column;
   box-shadow: var(--shadow-xl);
 }
+
+/* Gallery large-screen layout is defined later in the file,
+   after the base gallery styles, to ensure correct CSS cascade.
+   See: "Gallery Large Screen Grid Layout" section below. */
 
 .lv-gallery-header {
   padding: var(--spacing-lg);
@@ -1826,5 +2159,50 @@
   .lv-zoom-controls {
     background: rgba(0, 0, 0, 0.75);
     border-color: rgba(255, 255, 255, 0.15);
+  }
+}
+
+/* ── Gallery Large Screen Grid Layout ──────────────────────── */
+/* MUST be at the end of the file so it overrides base gallery styles */
+
+@media (min-width: 1200px) {
+  .lv-gallery-container {
+    max-width: 95vw;
+    max-height: 95vh;
+    display: grid;
+    grid-template-rows: auto 1fr;
+    grid-template-columns: 1fr 420px;
+  }
+
+  .lv-gallery-header {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  .lv-gallery-image-container {
+    grid-column: 1;
+    grid-row: 2;
+    min-height: 0;        /* allow grid child to shrink properly */
+  }
+
+  .lv-gallery-controls {
+    grid-column: 2;
+    grid-row: 2;
+    max-height: none;
+    min-height: 0;        /* allow grid child to shrink and enable scroll */
+    border-top: none;
+    border-left: 1px solid var(--border-color);
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+  }
+
+  .lv-gallery-controls::-webkit-scrollbar {
+    width: 5px;
+  }
+
+  .lv-gallery-controls::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 3px;
   }
 }

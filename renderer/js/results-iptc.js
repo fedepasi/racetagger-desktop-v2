@@ -201,8 +201,8 @@ function createIptcProModal() {
                 <input type="text" id="iptc-pro-keywords-input" placeholder="Add keyword...">
               </div>
               <div class="ipf-radio-row">
-                <label><input type="radio" name="ipf-kw-mode" value="append" ${m.appendKeywords !== false ? 'checked' : ''}> Append to AI keywords</label>
-                <label><input type="radio" name="ipf-kw-mode" value="overwrite" ${m.appendKeywords === false ? 'checked' : ''}> Overwrite</label>
+                <label><input type="radio" name="ipf-kw-mode" value="append" ${m.appendKeywords !== false ? 'checked' : ''}> Merge with existing keywords</label>
+                <label><input type="radio" name="ipf-kw-mode" value="overwrite" ${m.appendKeywords === false ? 'checked' : ''}> Replace all keywords</label>
               </div>
             </div>
           </div>

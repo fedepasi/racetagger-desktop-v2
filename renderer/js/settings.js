@@ -44,6 +44,23 @@ const SettingsManager = {
     }
   },
 
+  // ============================================================
+  // IPTC Pro Global Defaults (localStorage)
+  // ============================================================
+
+  getIptcProDefaults() {
+    try {
+      const stored = localStorage.getItem('iptc-pro-defaults');
+      if (stored) return JSON.parse(stored);
+    } catch (e) { /* ignore */ }
+    // Defaults: auto-write OFF (manual), face-only ON
+    return { autoWrite: false, faceOnly: true };
+  },
+
+  saveIptcProDefaults(defaults) {
+    localStorage.setItem('iptc-pro-defaults', JSON.stringify(defaults));
+  },
+
   /**
    * Render settings data to the UI
    */
@@ -97,6 +114,13 @@ const SettingsManager = {
       }
     }
 
+    // IPTC Pro defaults
+    const iptcDefaults = this.getIptcProDefaults();
+    const autoWriteToggle = document.getElementById('settings-iptc-auto-write');
+    if (autoWriteToggle) autoWriteToggle.checked = iptcDefaults.autoWrite;
+    const faceOnlyToggle = document.getElementById('settings-iptc-face-only');
+    if (faceOnlyToggle) faceOnlyToggle.checked = iptcDefaults.faceOnly;
+
     // App version
     this.loadAppVersion();
   },
@@ -138,6 +162,34 @@ const SettingsManager = {
     if (buyTokensBtn) {
       buyTokensBtn.addEventListener('click', () => {
         this.handleBuyTokens();
+      });
+    }
+
+    // IPTC Pro: auto-write toggle
+    const autoWriteToggle = document.getElementById('settings-iptc-auto-write');
+    if (autoWriteToggle) {
+      autoWriteToggle.addEventListener('change', (e) => {
+        const defaults = this.getIptcProDefaults();
+        defaults.autoWrite = e.target.checked;
+        this.saveIptcProDefaults(defaults);
+        const msg = e.target.checked
+          ? 'Metadata will be written automatically during analysis.'
+          : 'Metadata will only be written when you use Export & IPTC.';
+        this.showNotification('IPTC Pro Default Updated', msg, 'success');
+      });
+    }
+
+    // IPTC Pro: face-only toggle
+    const faceOnlyToggle = document.getElementById('settings-iptc-face-only');
+    if (faceOnlyToggle) {
+      faceOnlyToggle.addEventListener('change', (e) => {
+        const defaults = this.getIptcProDefaults();
+        defaults.faceOnly = e.target.checked;
+        this.saveIptcProDefaults(defaults);
+        const msg = e.target.checked
+          ? 'Portraits will only include the recognized person\'s data.'
+          : 'All participants linked to the number will always be included.';
+        this.showNotification('IPTC Pro Default Updated', msg, 'success');
       });
     }
   },

@@ -76,6 +76,10 @@ export interface PresetIptcMetadata {
   // === PERSON SHOWN ===
   personShownFormat?: 'simple' | 'extended' | 'custom';  // Format for PersonInImage field
   personShownTemplate?: string; // Custom template: "{name}" o "({number}) {name} ({nationality}) - {team}"
+
+  // === WRITING BEHAVIOR (per-preset overrides, null/undefined = use app default) ===
+  writingTiming?: 'auto' | 'manual';       // When to write IPTC: during analysis or only on Export & IPTC
+  faceScope?: 'recognized-only' | 'all';   // Face recognition: write only recognized person or all linked participants
 }
 
 /**

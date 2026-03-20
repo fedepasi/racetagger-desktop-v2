@@ -34,10 +34,12 @@ class LogVisualizer {
     // Lazy loading with Intersection Observer
     this.imageObserver = null;
     this.preloadedImages = new Set(); // Track preloaded images
+    this.dataUrlCache = new Map(); // Cache IPC data URLs by fileName to survive DOM re-renders
 
     // Error handling and throttling
     this.loggedErrors = new Set(); // Track logged errors to prevent spam
     this.failedImages = new Set(); // Track failed images to avoid retrying
+    this.failedPaths = new Set(); // Track failed file paths to avoid repeated IPC calls
 
     // Auto-save functionality
     this.autoSaveTimer = null;
@@ -103,6 +105,13 @@ class LogVisualizer {
 
     // Calculate statistics
     this.updateStatistics();
+
+    // Strategy G: Check for learnable data after initial load
+    try {
+      this._checkLearnedDataAvailability();
+    } catch (e) {
+      // Non-critical
+    }
 
     console.log('[LogVisualizer] Initialization complete');
   }
@@ -210,10 +219,16 @@ class LogVisualizer {
 
             // Apply each field change
             Object.entries(changes).forEach(([field, value]) => {
-              if (field !== 'deleted' && field !== 'deletedAt' && field !== 'originalData') {
+              if (field !== 'deleted' && field !== 'deletedAt' && field !== 'originalData' &&
+                  field !== 'resolvedFromReview' && field !== 'chosenCandidate') {
                 result.analysis[vehicleIndex][field] = value;
               }
             });
+
+            // If this correction was a review resolution, mark the result accordingly
+            if (changes.resolvedFromReview) {
+              result._reviewResolved = true;
+            }
 
             // Set confidence to 100% for manually corrected vehicles
             result.analysis[vehicleIndex].confidence = 1.0;
@@ -246,6 +261,9 @@ class LogVisualizer {
     this.renderResults();
     this.updateStatistics(); // Aggiorna le statistiche dopo il render
 
+    // Strategy G: Check for learnable data after render
+    try { this._checkLearnedDataAvailability(); } catch (e) { /* non-critical */ }
+
     console.log('[LogVisualizer] Dashboard rendered');
   }
 
@@ -266,6 +284,7 @@ class LogVisualizer {
             <select id="lv-filter-type" class="lv-filter-select">
               <option value="all">All Results</option>
               <option value="matched">Matched Only</option>
+              <option value="needs-review">⚠️ Needs Review</option>
               <option value="no-match">No Match Only</option>
               <option value="corrected">Manually Corrected</option>
               <option value="high-confidence">High Confidence (>90%)</option>
@@ -325,6 +344,9 @@ class LogVisualizer {
           </button>
           <button id="lv-save-all" class="lv-action-btn lv-btn-primary">
             💾 Save All Changes
+          </button>
+          <button id="lv-learned-data" class="lv-action-btn lv-btn-learned" style="display: none;" title="AI detected useful data to improve your preset">
+            ✨ <span id="lv-learned-data-count"></span> Improve Preset
           </button>
         </div>
       </div>
@@ -426,6 +448,31 @@ class LogVisualizer {
       });
     }
 
+    // Stat items as filter shortcuts — click a counter to filter by that category
+    // Click the active counter again to reset to "All Results"
+    const statFilterMap = {
+      'lv-total': 'all',
+      'lv-matched': 'matched',
+      'lv-needs-review': 'needs-review',
+      'lv-no-match': 'no-match',
+      'lv-corrections': 'corrected'
+    };
+    Object.entries(statFilterMap).forEach(([elId, filterValue]) => {
+      const statEl = document.getElementById(elId);
+      const statItem = statEl?.closest('.results-stat-item');
+      if (statItem) {
+        statItem.style.cursor = 'pointer';
+        statItem.addEventListener('click', () => {
+          if (filterSelect) {
+            // Toggle: if already active, reset to "all"
+            const newValue = filterSelect.value === filterValue ? 'all' : filterValue;
+            filterSelect.value = newValue;
+            this.filterResults();
+          }
+        });
+      }
+    });
+
     // Gallery navigation
     this.setupGalleryListeners();
 
@@ -517,6 +564,13 @@ class LogVisualizer {
     if (saveAllBtn) {
       saveAllBtn.style.display = 'none';
       saveAllBtn.addEventListener('click', () => this.saveAllChanges());
+    }
+
+    // Strategy G: Learned data button (hidden until data is available)
+    const learnedBtn = document.getElementById('lv-learned-data');
+    if (learnedBtn) {
+      learnedBtn.style.display = 'none';
+      learnedBtn.addEventListener('click', () => this._openLearnedDataModal());
     }
 
     if (exportBtn) {
@@ -896,7 +950,6 @@ class LogVisualizer {
    * Load image lazily using multi-level strategy
    */
   async loadImageLazily(imgElement, fileName) {
-    console.log(`[LogVisualizer] loadImageLazily called for ${fileName}`);
 
     // Skip if already marked as failed
     if (this.failedImages.has(fileName)) {
@@ -930,36 +983,38 @@ class LogVisualizer {
         imgElement.style.opacity = '0.5';
       }
 
-      // Strategy 1: Try thumbnail first (high quality 280x280)
-      if (thumbPath) {
+      // Strategy 1: Try thumbnail first (high quality 280x280) — skip if already known to be missing
+      if (thumbPath && !this.failedPaths.has(thumbPath)) {
         try {
           await this.loadImageWithIPC(imgElement, thumbPath);
           this.preloadedImages.add(fileName);
           return;
         } catch (error) {
+          this.failedPaths.add(thumbPath);
           this.logImageError(fileName, error, 'thumbnail');
         }
       }
 
-      // Strategy 2: Try compressed (full quality fallback)
-      if (compressedPath) {
+      // Strategy 2: Try compressed (full quality fallback) — skip if already known to be missing
+      if (compressedPath && !this.failedPaths.has(compressedPath)) {
         try {
           await this.loadImageWithIPC(imgElement, compressedPath);
           this.preloadedImages.add(fileName);
           return;
         } catch (error) {
+          this.failedPaths.add(compressedPath);
           this.logImageError(fileName, error, 'compressed');
         }
       }
 
       // Strategy 3: Try micro-thumbnail as last resort (32x32 - pixelated)
-      if (microPath) {
+      if (microPath && !this.failedPaths.has(microPath)) {
         try {
           await this.loadImageWithIPC(imgElement, microPath);
           this.preloadedImages.add(fileName);
-          console.warn(`[LogVisualizer] Using micro-thumbnail for ${fileName} - quality will be low`);
           return;
         } catch (error) {
+          this.failedPaths.add(microPath);
           this.logImageError(fileName, error, 'micro-thumbnail');
         }
       }
@@ -1028,40 +1083,35 @@ class LogVisualizer {
     this.loggedErrors.add(errorKey);
     this.failedImages.add(fileName);
 
-    // Log only once per fileName+context combination
-    console.warn(`[LogVisualizer] Failed to load image ${fileName}${context ? ` (${context})` : ''}:`, error.message);
-
-    // Clear error log after 30 seconds to allow retry logging
-    setTimeout(() => {
-      this.loggedErrors.delete(errorKey);
-    }, 30000);
+    // Log only once per fileName+context combination — use debug level to reduce noise
+    console.debug(`[LogVisualizer] Image fallback for ${fileName}${context ? ` (${context})` : ''}: ${error.message}`);
   }
 
   /**
    * Load image with IPC for local files or direct loading for URLs
    */
   async loadImageWithIPC(imgElement, src) {
-    console.log(`[LogVisualizer] Loading image with IPC support: ${src}`);
-
     // Check if this is a local file path
     const isLocalPath = src && src.startsWith('/') && !src.startsWith('http');
 
     if (isLocalPath) {
       // Use IPC for local file access
       try {
-        console.log(`[LogVisualizer] Using IPC for local image: ${src}`);
         const dataUrl = await window.api.invoke('get-local-image', src);
         if (dataUrl) {
           imgElement.src = dataUrl;
           imgElement.style.opacity = '1';
           imgElement.style.transition = 'opacity 0.3s ease';
-          console.log(`[LogVisualizer] Successfully loaded local image via IPC: ${src}`);
+          // Cache the data URL so it survives DOM re-renders (e.g. filter changes)
+          const fileName = imgElement.dataset?.fileName;
+          if (fileName) {
+            this.dataUrlCache.set(fileName, dataUrl);
+          }
           return;
         } else {
           throw new Error(`IPC returned null for local image: ${src}`);
         }
       } catch (error) {
-        console.warn(`[LogVisualizer] IPC failed for local image ${src}:`, error);
         throw new Error(`IPC failed for local image: ${src} - ${error.message}`);
       }
     } else {
@@ -1080,6 +1130,11 @@ class LogVisualizer {
         imgElement.src = src;
         imgElement.style.opacity = '1';
         imgElement.style.transition = 'opacity 0.3s ease';
+        // Cache the URL so it survives DOM re-renders
+        const fileName = imgElement.dataset?.fileName;
+        if (fileName) {
+          this.dataUrlCache.set(fileName, src);
+        }
         resolve();
       };
       tempImg.onerror = () => {
@@ -1147,9 +1202,13 @@ class LogVisualizer {
       // Type filter
       switch (filterType) {
         case 'matched':
-          return result.analysis && result.analysis.length > 0;
+          return result.analysis && result.analysis.length > 0 &&
+                 !result.analysis.some(v => v.matchStatus === 'needs_review' && !result._reviewResolved);
         case 'no-match':
           return !result.analysis || result.analysis.length === 0;
+        case 'needs-review':
+          return result.analysis && result.analysis.length > 0 &&
+                 result.analysis.some(v => v.matchStatus === 'needs_review') && !result._reviewResolved;
         case 'corrected':
           return this.manualCorrections.has(result.fileName);
         case 'high-confidence':
@@ -1236,20 +1295,56 @@ class LogVisualizer {
     const totalEl = document.getElementById('lv-total');
     const matchedEl = document.getElementById('lv-matched');
     const noMatchEl = document.getElementById('lv-no-match');
+    const needsReviewEl = document.getElementById('lv-needs-review');
     const correctionsEl = document.getElementById('lv-corrections');
 
-    const total = this.filteredResults.length;
-    const matched = this.filteredResults.filter(r => {
+    // FIXED: Always use imageResults (full dataset) for global counters,
+    // not filteredResults which changes with the active filter
+    const allResults = this.imageResults || [];
+    const total = allResults.length;
+
+    // Count needs_review: has a match but ambiguous (not yet resolved by user)
+    const needsReview = allResults.filter(r => {
       return r.analysis && r.analysis.length > 0 &&
-             r.analysis.some(vehicle => vehicle.raceNumber && vehicle.raceNumber !== 'N/A');
+             r.analysis.some(v => v.matchStatus === 'needs_review') &&
+             !r._reviewResolved;
     }).length;
-    const noMatch = total - matched;
+
+    const matched = allResults.filter(r => {
+      if (!r.analysis || r.analysis.length === 0) return false;
+      const hasRaceNumber = r.analysis.some(vehicle => vehicle.raceNumber && vehicle.raceNumber !== 'N/A');
+      if (!hasRaceNumber) return false;
+      // Exclude needs_review (unless resolved)
+      const isUnresolvedReview = r.analysis.some(v => v.matchStatus === 'needs_review') && !r._reviewResolved;
+      return !isUnresolvedReview;
+    }).length;
+
+    const noMatch = total - matched - needsReview;
     const corrections = this.manualCorrections.size;
 
     if (totalEl) totalEl.textContent = total.toLocaleString();
     if (matchedEl) matchedEl.textContent = matched.toLocaleString();
     if (noMatchEl) noMatchEl.textContent = noMatch.toLocaleString();
+    if (needsReviewEl) needsReviewEl.textContent = needsReview.toLocaleString();
     if (correctionsEl) correctionsEl.textContent = corrections.toLocaleString();
+
+    // Update active state on stat items based on current filter
+    const currentFilter = document.getElementById('lv-filter-type')?.value || 'all';
+    const filterMap = {
+      'all': 'lv-total',
+      'matched': 'lv-matched',
+      'needs-review': 'lv-needs-review',
+      'no-match': 'lv-no-match',
+      'corrected': 'lv-corrections'
+    };
+    document.querySelectorAll('.results-stat-item').forEach(item => {
+      item.classList.remove('results-stat-item--active');
+    });
+    const activeId = filterMap[currentFilter];
+    if (activeId) {
+      const activeEl = document.getElementById(activeId);
+      if (activeEl) activeEl.closest('.results-stat-item')?.classList.add('results-stat-item--active');
+    }
   }
 
   /**
@@ -1295,10 +1390,12 @@ class LogVisualizer {
       </div>
     `;
 
-    // Register lazy images with Intersection Observer
+    // Register lazy images with Intersection Observer (skip already-cached ones)
     const lazyImages = resultsContainer.querySelectorAll('.lv-lazy-image');
     lazyImages.forEach(img => {
-      if (this.imageObserver && !this.preloadedImages.has(img.dataset.fileName)) {
+      const fileName = img.dataset.fileName;
+      const alreadyCached = this.preloadedImages.has(fileName) || (this.dataUrlCache && this.dataUrlCache.has(fileName));
+      if (this.imageObserver && !alreadyCached) {
         this.imageObserver.observe(img);
       }
     });
@@ -1318,12 +1415,19 @@ class LogVisualizer {
     const vehicles = result.analysis || [];
     const primaryVehicle = vehicles[0] || {};
 
+    // Determine if any vehicle needs review (ambiguous match)
+    const needsReview = vehicles.some(v => v.matchStatus === 'needs_review');
+    const isResolved = result._reviewResolved === true; // User already chose a candidate
+
     // Check if we already have a cached image URL for this result
     const cachedImageUrl = this.getCachedImageUrl(result);
     const imageSrc = cachedImageUrl || this.getPlaceholderUrl();
 
+    // Count alternative candidates for needs_review badge
+    const altCount = primaryVehicle.alternativeCandidates ? primaryVehicle.alternativeCandidates.length : 0;
+
     return `
-      <div class="lv-result-card ${isModified ? 'modified' : ''}" data-index="${index}">
+      <div class="lv-result-card ${isModified ? 'modified' : ''} ${needsReview && !isResolved ? 'needs-review' : ''} ${isResolved ? 'review-resolved' : ''}" data-index="${index}">
         <div class="lv-card-image">
           <img src="${imageSrc}"
                alt="${result.fileName}"
@@ -1335,6 +1439,8 @@ class LogVisualizer {
                class="lv-lazy-image"
                style="${cachedImageUrl ? 'opacity: 1;' : ''}" />
           ${isModified ? '<div class="lv-modified-badge">✏️ Modified</div>' : ''}
+          ${needsReview && !isResolved ? '<div class="lv-needs-review-badge">⚠️ Review</div>' : ''}
+          ${isResolved ? '<div class="lv-resolved-badge">✅ Resolved</div>' : ''}
           ${result.metadataWritten === false ? '<div class="lv-no-metadata-badge">No metadata</div>' : ''}
           ${vehicles.length > 1 ? `<div class="lv-multi-badge">${vehicles.length} vehicles</div>` : ''}
         </div>
@@ -1347,14 +1453,17 @@ class LogVisualizer {
               <div class="lv-race-number">#${primaryVehicle.raceNumber || '?'}</div>
               <div class="lv-team-name">${primaryVehicle.team || 'Unknown Team'}</div>
               ${primaryVehicle.drivers ? `<div class="lv-drivers">${primaryVehicle.drivers.join(', ')}</div>` : ''}
+              ${needsReview && !isResolved && altCount > 1 ? `
+                <div class="lv-ambiguous-hint">${altCount} candidates — click to choose</div>
+              ` : ''}
             ` : `
               <div class="lv-no-match">No recognition</div>
             `}
           </div>
 
           <div class="lv-card-meta">
-            <div class="lv-confidence confidence-${confidenceClass}">
-              ${Math.round(confidence * 100)}% confidence
+            <div class="lv-confidence confidence-${needsReview && !isResolved ? 'review' : confidenceClass}">
+              ${needsReview && !isResolved ? '⚠️ Needs review' : `${Math.round(confidence * 100)}% confidence`}
             </div>
             ${result.csvMatch && result.csvMatch.entry ? '<div class="lv-csv-matched">📊 CSV matched</div>' : ''}
           </div>
@@ -1431,9 +1540,359 @@ class LogVisualizer {
   }
 
   /**
+   * Build and inject the in-gallery review candidates UI
+   * Called by updateVehicleEditor when the current image has matchStatus === 'needs_review'
+   * Two placements: sidebar (Option A, >= 900px) and horizontal bar (Option B, < 900px)
+   */
+  /**
+   * Build and inject the in-gallery review candidates panel.
+   * ALWAYS shows all candidates — both for unresolved and already-resolved images.
+   * Highlights the AI-suggested or user-chosen candidate.
+   *
+   * @param {object} result - The image result object
+   * @param {number} resultIndex - Index in filteredResults
+   * @param {object} options - { resolved: boolean } — whether this image was already resolved
+   */
+  injectReviewCandidatesUI(result, resultIndex, options = {}) {
+    // Remove any existing review UIs first
+    document.querySelectorAll('.lv-review-panel, .lv-review-bar').forEach(el => el.remove());
+
+    const primaryVehicle = result.analysis?.[0];
+    if (!primaryVehicle) return;
+
+    const candidates = primaryVehicle.alternativeCandidates || [];
+    if (candidates.length === 0) return;
+
+    const isResolved = options.resolved || false;
+
+    // Determine which candidate is currently active by matching the vehicle's
+    // current raceNumber against the candidate list. This works for both:
+    // - AI's initial bestMatch (pre-resolution)
+    // - User's chosen candidate (post-resolution)
+    const currentRaceNumber = String(primaryVehicle.raceNumber || '');
+    const isNoneChosen = isResolved &&
+      (primaryVehicle.matchedBy === 'none' || currentRaceNumber === 'N/A' || !currentRaceNumber);
+
+    // Find the index of the active candidate by matching raceNumber
+    let activeCandidateIndex = -1;
+    if (currentRaceNumber && currentRaceNumber !== 'N/A') {
+      activeCandidateIndex = candidates.findIndex(c =>
+        String(c.participantNumber) === currentRaceNumber
+      );
+    }
+
+    // Header text and style depend on state
+    const headerIcon = isResolved ? '✓' : '⚠️';
+    const headerText = isResolved
+      ? (isNoneChosen ? 'Resolved: None matched' : `Resolved: #${currentRaceNumber}`)
+      : 'Ambiguous Match — Choose the Correct One';
+    const panelStateClass = isResolved
+      ? (isNoneChosen ? 'lv-review-state-none' : 'lv-review-state-resolved')
+      : 'lv-review-state-pending';
+
+    // Build candidate options HTML (shared between both layouts)
+    const buildCandidateHTML = (compact = false) => candidates.map((candidate, i) => {
+      const isActive = i === activeCandidateIndex;
+      const classes = [
+        'lv-candidate-option',
+        compact ? 'lv-candidate-compact' : '',
+        isActive ? 'lv-candidate-active' : ''
+      ].filter(Boolean).join(' ');
+
+      return `
+        <div class="${classes}" data-candidate-index="${i}" data-result-index="${resultIndex}">
+          <div class="lv-candidate-rank">${isActive ? '✓' : (i + 1)}</div>
+          <div class="lv-candidate-info">
+            <div class="lv-candidate-number">#${candidate.participantNumber || '?'}</div>
+            <div class="lv-candidate-name">${candidate.participantName || 'Unknown'}</div>
+            ${candidate.team ? `<div class="lv-candidate-team">${candidate.team}</div>` : ''}
+          </div>
+          <div class="lv-candidate-score">
+            ${candidate.score?.toFixed(1) || '?'}
+            <span class="lv-candidate-conf">${Math.round((candidate.confidence || 0) * 100)}%</span>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    // === Option A: Sidebar panel ===
+    const vehiclesContainer = document.getElementById('lv-vehicles');
+    if (vehiclesContainer) {
+      const sidebarPanel = document.createElement('div');
+      sidebarPanel.className = `lv-review-panel ${panelStateClass}`;
+      sidebarPanel.innerHTML = `
+        <div class="lv-review-panel-header">
+          <span class="lv-review-icon">${headerIcon}</span>
+          <span class="lv-review-title">${headerText}</span>
+        </div>
+        <div class="lv-candidate-list">
+          ${buildCandidateHTML(false)}
+        </div>
+        <div class="lv-review-actions">
+          <button class="lv-candidate-btn-none ${isNoneChosen ? 'lv-btn-none-active' : ''}" data-review-action="none" data-result-index="${resultIndex}">✕ None of these</button>
+        </div>
+      `;
+      vehiclesContainer.parentNode.insertBefore(sidebarPanel, vehiclesContainer);
+    }
+
+    // === Option B: Horizontal bar ===
+    const imageContainer = document.querySelector('.lv-gallery-image-container');
+    if (imageContainer) {
+      const horizontalBar = document.createElement('div');
+      horizontalBar.className = `lv-review-bar ${panelStateClass}`;
+      horizontalBar.innerHTML = `
+        <div class="lv-review-bar-header">
+          <span>${headerIcon} ${isResolved ? headerText : 'Ambiguous Match'}</span>
+          <button class="lv-candidate-btn-none lv-review-bar-none ${isNoneChosen ? 'lv-btn-none-active' : ''}" data-review-action="none" data-result-index="${resultIndex}">✕ None</button>
+        </div>
+        <div class="lv-review-bar-candidates">
+          ${buildCandidateHTML(true)}
+        </div>
+      `;
+      imageContainer.parentNode.insertBefore(horizontalBar, imageContainer.nextSibling);
+    }
+
+    // Wire up click handlers
+    this.setupReviewCandidateListeners(candidates, resultIndex, isResolved);
+  }
+
+  /**
+   * Wire click handlers for in-gallery review candidate selection.
+   * Works both for first-time selection and re-selection on resolved images.
+   */
+  setupReviewCandidateListeners(candidates, resultIndex, isAlreadyResolved) {
+    document.querySelectorAll('.lv-candidate-option[data-result-index]').forEach(option => {
+      option.addEventListener('click', async () => {
+        const candidateIndex = parseInt(option.dataset.candidateIndex);
+        const chosenCandidate = candidates[candidateIndex];
+
+        // Visual feedback: highlight the chosen one across BOTH layouts
+        document.querySelectorAll('.lv-candidate-option').forEach(o => {
+          o.classList.remove('lv-candidate-active');
+          // Update rank display: restore numbers
+          const rank = o.querySelector('.lv-candidate-rank');
+          if (rank) rank.textContent = String(parseInt(o.dataset.candidateIndex) + 1);
+        });
+        // Mark the chosen one
+        document.querySelectorAll(`.lv-candidate-option[data-candidate-index="${candidateIndex}"]`).forEach(el => {
+          el.classList.add('lv-candidate-active');
+          const rank = el.querySelector('.lv-candidate-rank');
+          if (rank) rank.textContent = '✓';
+        });
+
+        // Deactivate "None" button
+        document.querySelectorAll('.lv-candidate-btn-none').forEach(b => b.classList.remove('lv-btn-none-active'));
+
+        // Update header to resolved state
+        document.querySelectorAll('.lv-review-panel, .lv-review-bar').forEach(panel => {
+          panel.classList.remove('lv-review-state-pending', 'lv-review-state-none');
+          panel.classList.add('lv-review-state-resolved');
+        });
+        document.querySelectorAll('.lv-review-title').forEach(t => {
+          t.textContent = `Resolved: #${chosenCandidate.participantNumber || '?'}`;
+        });
+        document.querySelectorAll('.lv-review-icon').forEach(ic => {
+          ic.textContent = '✓';
+        });
+
+        // Resolve and auto-save
+        await this.resolveReview(resultIndex, chosenCandidate);
+
+        // Auto-fill the vehicle editor fields
+        this.autoFillVehicleEditorFromCandidate(chosenCandidate);
+
+        // Navigate to next needs_review (only on first resolution, not re-selections)
+        if (!isAlreadyResolved) {
+          setTimeout(() => {
+            this.navigateToNextReview(resultIndex);
+          }, 600);
+        }
+      });
+    });
+
+    // "None of these" button
+    document.querySelectorAll('[data-review-action="none"]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+
+        // Deselect all candidates
+        document.querySelectorAll('.lv-candidate-option').forEach(o => {
+          o.classList.remove('lv-candidate-active');
+          const rank = o.querySelector('.lv-candidate-rank');
+          if (rank) rank.textContent = String(parseInt(o.dataset.candidateIndex) + 1);
+        });
+        // Highlight "None" button
+        document.querySelectorAll('.lv-candidate-btn-none').forEach(b => b.classList.add('lv-btn-none-active'));
+
+        // Update header
+        document.querySelectorAll('.lv-review-panel, .lv-review-bar').forEach(panel => {
+          panel.classList.remove('lv-review-state-pending', 'lv-review-state-resolved');
+          panel.classList.add('lv-review-state-none');
+        });
+        document.querySelectorAll('.lv-review-title').forEach(t => {
+          t.textContent = 'Resolved: None matched';
+        });
+        document.querySelectorAll('.lv-review-icon').forEach(ic => {
+          ic.textContent = '✕';
+        });
+
+        await this.resolveReview(resultIndex, null);
+
+        if (!isAlreadyResolved) {
+          setTimeout(() => {
+            this.navigateToNextReview(resultIndex);
+          }, 600);
+        }
+      });
+    });
+  }
+
+  /**
+   * Navigate to the next image that still needs review.
+   * Searches forward from the current position, then wraps around.
+   * If no more needs_review images exist, shows a completion notification
+   * and stays on the current (just resolved) image.
+   */
+  async navigateToNextReview(currentResultIndex) {
+    const total = this.filteredResults.length;
+
+    // Search forward from current position
+    for (let offset = 1; offset < total; offset++) {
+      const idx = (currentResultIndex + offset) % total;
+      const r = this.filteredResults[idx];
+      if (r && !r._reviewResolved && r.analysis?.[0]?.matchStatus === 'needs_review') {
+        // Found the next one — navigate
+        this.currentImageIndex = idx;
+        if (this.zoomController) this.zoomController.reset(false);
+        await this.updateGalleryContent();
+        console.log(`[LogVisualizer] Navigated to next needs_review at index ${idx}`);
+        return;
+      }
+    }
+
+    // No more needs_review images — count how many were resolved this session
+    const resolvedCount = this.filteredResults.filter(r => r._reviewResolved).length;
+    this.showNotification(`✅ All done! ${resolvedCount} ambiguous match${resolvedCount !== 1 ? 'es' : ''} resolved.`, 'success');
+
+    // Refresh gallery to show the resolved state on the current image
+    await this.updateGalleryContent();
+    console.log('[LogVisualizer] No more needs_review images — review session complete');
+  }
+
+  /**
+   * Auto-fill vehicle editor fields from a chosen candidate
+   */
+  autoFillVehicleEditorFromCandidate(candidate) {
+    if (!candidate) return;
+
+    const vehiclesContainer = document.getElementById('lv-vehicles');
+    if (!vehiclesContainer) return;
+
+    // Find the first vehicle editor (primary vehicle)
+    const editor = vehiclesContainer.querySelector('.lv-vehicle-editor');
+    if (!editor) return;
+
+    // Fill in the fields
+    const raceNumberInput = editor.querySelector('[data-field="raceNumber"]');
+    const teamInput = editor.querySelector('[data-field="team"]');
+    const driversInput = editor.querySelector('[data-field="drivers"]');
+
+    if (raceNumberInput && candidate.participantNumber) {
+      raceNumberInput.value = String(candidate.participantNumber);
+    }
+    if (teamInput && candidate.team) {
+      teamInput.value = candidate.team;
+    }
+    if (driversInput && candidate.participantName) {
+      driversInput.value = candidate.participantName;
+    }
+
+    // Mark the editor as modified visually
+    editor.classList.add('modified');
+  }
+
+  /**
+   * Resolve an ambiguous review by applying the user's choice
+   */
+  async resolveReview(resultIndex, chosenCandidate) {
+    const result = this.filteredResults[resultIndex];
+    if (!result || !result.analysis || result.analysis.length === 0) return;
+
+    const primaryVehicle = result.analysis[0];
+
+    if (chosenCandidate) {
+      // User chose a candidate — update the vehicle data
+      primaryVehicle.raceNumber = String(chosenCandidate.participantNumber || '');
+      primaryVehicle.matchedBy = 'user_review';
+      primaryVehicle.confidence = chosenCandidate.confidence || primaryVehicle.confidence;
+      if (chosenCandidate.participantName) {
+        primaryVehicle.drivers = [chosenCandidate.participantName];
+      }
+      if (chosenCandidate.team) {
+        primaryVehicle.team = chosenCandidate.team;
+      }
+    } else {
+      // User said "none" — mark as no match
+      primaryVehicle.raceNumber = 'N/A';
+      primaryVehicle.matchedBy = 'none';
+      primaryVehicle.confidence = 0;
+    }
+
+    // Mark status as resolved
+    primaryVehicle.matchStatus = 'matched';
+    result._reviewResolved = true;
+
+    // Track as a manual correction for saving
+    // Include matchStatus and matchedBy so they persist through JSONL refresh
+    if (!this.manualCorrections.has(result.fileName)) {
+      this.manualCorrections.set(result.fileName, {
+        fileName: result.fileName,
+        vehicleIndex: 0,
+        timestamp: new Date().toISOString(),
+        changes: {}
+      });
+    }
+
+    const correction = this.manualCorrections.get(result.fileName);
+    correction.changes.raceNumber = primaryVehicle.raceNumber;
+    correction.changes.matchedBy = primaryVehicle.matchedBy;
+    correction.changes.matchStatus = 'matched';
+    correction.changes.resolvedFromReview = true;
+    correction.changes.chosenCandidate = chosenCandidate;
+    if (chosenCandidate?.participantName) {
+      correction.changes.drivers = [chosenCandidate.participantName];
+    }
+    if (chosenCandidate?.team) {
+      correction.changes.team = chosenCandidate.team;
+    }
+    this.hasUnsavedChanges = true;
+
+    // Update the card visually
+    this.updateResultCard(result.fileName);
+
+    // Refresh statistics
+    this.updateStatistics();
+
+    const chosenLabel = chosenCandidate ? `#${chosenCandidate.participantNumber}` : 'None';
+    console.log(`[LogVisualizer] Review resolved for ${result.fileName}: chose ${chosenLabel}`);
+
+    // Auto-save immediately — review resolution is an explicit user action, persist right away
+    try {
+      await this.saveAllChanges();
+    } catch (error) {
+      console.error('[LogVisualizer] Auto-save after review resolution failed:', error);
+      this.showNotification('⚠️ Review choice applied but auto-save failed. Click Save to persist.', 'warning');
+    }
+  }
+
+  /**
    * Get cached image URL if already loaded
    */
   getCachedImageUrl(result) {
+    // First: check if we have a cached data URL from IPC (survives DOM re-renders)
+    if (this.dataUrlCache && this.dataUrlCache.has(result.fileName)) {
+      return this.dataUrlCache.get(result.fileName);
+    }
     if (this.preloadedImages.has(result.fileName)) {
       // Return the best quality URL we know works - validate paths first
       if (this.isValidPath(result.thumbnailPath)) {
@@ -1479,34 +1938,28 @@ class LogVisualizer {
   }
 
   getGalleryImageUrl(result) {
-    console.log(`[LogVisualizer] getGalleryImageUrl for ${result.fileName}:`, {
-      thumbnailPath: !!result.thumbnailPath,
-      compressedPath: !!result.compressedPath,
-      supabaseUrl: !!result.supabaseUrl,
-      imagePath: !!result.imagePath
-    });
+    // 0. Priorità massima: immagine originale da disco (permette zoom a piena risoluzione)
+    if (this.isValidPath(result.originalPath) && !this.failedPaths.has(result.originalPath)) {
+      return result.originalPath;
+    }
 
-    // 1. Prima: immagine compressa di alta qualità (1080-1920px) - locale o Supabase
-    if (this.isValidPath(result.compressedPath)) {
-      console.log(`[LogVisualizer] Using compressedPath for gallery: ${result.fileName}`);
+    // 1. Immagine compressa di alta qualità (1080-1920px) - locale
+    if (this.isValidPath(result.compressedPath) && !this.failedPaths.has(result.compressedPath)) {
       return result.compressedPath;
     }
 
-    // 2. Seconda: Supabase URL originale (sempre valida se presente)
+    // 2. Supabase URL originale (sempre valida se presente)
     if (this.isValidPath(result.supabaseUrl)) {
-      console.log(`[LogVisualizer] Using supabaseUrl for gallery: ${result.fileName}`);
       return result.supabaseUrl;
     }
 
-    // 3. Terza: imagePath generico
-    if (this.isValidPath(result.imagePath)) {
-      console.log(`[LogVisualizer] Using imagePath for gallery: ${result.fileName}`);
+    // 3. imagePath generico
+    if (this.isValidPath(result.imagePath) && !this.failedPaths.has(result.imagePath)) {
       return result.imagePath;
     }
 
-    // 4. Ultima risorsa: thumbnail (280x280) - solo se nient'altro è disponibile
-    if (this.isValidPath(result.thumbnailPath)) {
-      console.log(`[LogVisualizer] Using thumbnailPath as fallback for gallery: ${result.fileName}`);
+    // 4. Ultima risorsa: thumbnail (280x280)
+    if (this.isValidPath(result.thumbnailPath) && !this.failedPaths.has(result.thumbnailPath)) {
       return result.thumbnailPath;
     }
 
@@ -1518,65 +1971,38 @@ class LogVisualizer {
    * Get thumbnail URL for result image
    */
   getThumbnailUrl(result) {
-    console.log(`[LogVisualizer] getThumbnailUrl for ${result.fileName}:`, {
-      thumbnailPath: !!result.thumbnailPath,
-      microThumbPath: !!result.microThumbPath,
-      compressedPath: !!result.compressedPath,
-      supabaseUrl: !!result.supabaseUrl,
-      imagePath: !!result.imagePath
-    });
-
-    // 1. Prima: thumbnail ad alta qualità (280x280) - locale o Supabase
-    if (result.thumbnailPath) {
-      if (result.thumbnailPath.startsWith('/')) {
-        console.log(`[LogVisualizer] Using local thumbnailPath for ${result.fileName}`);
-        return result.thumbnailPath;
-      } else if (result.thumbnailPath.startsWith('http')) {
-        console.log(`[LogVisualizer] Using Supabase thumbnailPath for ${result.fileName}`);
+    // 1. Thumbnail ad alta qualità (280x280) — skip if known to be missing
+    if (result.thumbnailPath && !this.failedPaths.has(result.thumbnailPath)) {
+      if (result.thumbnailPath.startsWith('/') || result.thumbnailPath.startsWith('http')) {
         return result.thumbnailPath;
       }
     }
 
-    // 2. Seconda: file compresso - locale o Supabase
-    if (result.compressedPath) {
-      if (result.compressedPath.startsWith('/')) {
-        console.log(`[LogVisualizer] Using local compressedPath for ${result.fileName}`);
-        return result.compressedPath;
-      } else if (result.compressedPath.startsWith('http')) {
-        console.log(`[LogVisualizer] Using Supabase compressedPath for ${result.fileName}`);
+    // 2. File compresso — skip if known to be missing
+    if (result.compressedPath && !this.failedPaths.has(result.compressedPath)) {
+      if (result.compressedPath.startsWith('/') || result.compressedPath.startsWith('http')) {
         return result.compressedPath;
       }
     }
 
-    // 3. Terza: Supabase URL originale (fallback)
+    // 3. Supabase URL originale (fallback)
     if (result.supabaseUrl) {
-      console.log(`[LogVisualizer] Using supabaseUrl for ${result.fileName}`);
       return result.supabaseUrl;
     }
 
-    // 4. Quarta: imagePath generico
+    // 4. imagePath generico
     if (result.imagePath) {
-      if (result.imagePath.startsWith('http')) {
-        console.log(`[LogVisualizer] Using imagePath URL for ${result.fileName}`);
-        return result.imagePath;
-      } else {
-        console.log(`[LogVisualizer] Using local imagePath for ${result.fileName}`);
-        return result.imagePath;
-      }
+      return result.imagePath;
     }
 
-    // 5. Ultima opzione: micro-thumbnail (solo se nient'altro è disponibile)
-    if (result.microThumbPath) {
-      if (result.microThumbPath.startsWith('/')) {
-        console.log(`[LogVisualizer] Using local microThumbPath as last resort for ${result.fileName}`);
-        return result.microThumbPath;
-      } else if (result.microThumbPath.startsWith('http')) {
-        console.log(`[LogVisualizer] Using Supabase microThumbPath as last resort for ${result.fileName}`);
+    // 5. Micro-thumbnail come ultima opzione
+    if (result.microThumbPath && !this.failedPaths.has(result.microThumbPath)) {
+      if (result.microThumbPath.startsWith('/') || result.microThumbPath.startsWith('http')) {
         return result.microThumbPath;
       }
     }
 
-    console.warn(`[LogVisualizer] No image source found for ${result.fileName}`, result);
+    console.warn(`[LogVisualizer] No image source found for ${result.fileName}`);
     return 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjE1MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZGRkIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPk5vIEltYWdlPC90ZXh0Pjwvc3ZnPg==';
   }
 
@@ -1612,6 +2038,12 @@ class LogVisualizer {
     this.isGalleryOpen = false;
     if (this.zoomController) this.zoomController.reset(false);
 
+    // Restore body scrolling IMMEDIATELY — before any async work that could fail
+    document.body.style.overflow = '';
+
+    // Remove any lingering review panels
+    document.querySelectorAll('.lv-review-panel, .lv-review-bar').forEach(el => el.remove());
+
     // Handle unsaved changes before closing
     if (this.hasUnsavedChanges) {
       console.log('[LogVisualizer] Triggering final auto-save before closing gallery');
@@ -1628,10 +2060,17 @@ class LogVisualizer {
       }
     }
 
+    // === Strategy G: Check for learned data after gallery closes ===
+    // Don't show modal automatically — just update the badge/button
+    try {
+      this._checkLearnedDataAvailability();
+    } catch (learnError) {
+      console.warn('[LogVisualizer] Learned data check failed (non-critical):', learnError);
+    }
+
     const gallery = document.getElementById('lv-gallery');
     if (gallery) {
       gallery.style.display = 'none';
-      document.body.style.overflow = ''; // Restore scrolling
     }
 
     // Clear vehicle editor content to prevent stale onclick handlers
@@ -1718,12 +2157,43 @@ class LogVisualizer {
       if (imageUrl && imageUrl.startsWith('/') && !imageUrl.startsWith('http')) {
         try {
           const dataUrl = await window.api.invoke('get-local-image', imageUrl);
-          newImg.src = dataUrl || imageUrl;
+          if (dataUrl) {
+            newImg.src = dataUrl;
+          } else {
+            // File doesn't exist on disk — mark as failed and try next fallback
+            this.failedPaths.add(imageUrl);
+            const fallbackUrl = this.getGalleryImageUrl(result);
+            if (fallbackUrl && fallbackUrl !== imageUrl) {
+              // Recursively try next fallback via IPC or direct URL
+              if (fallbackUrl.startsWith('/') && !fallbackUrl.startsWith('http')) {
+                const fallbackData = await window.api.invoke('get-local-image', fallbackUrl);
+                if (fallbackData) {
+                  newImg.src = fallbackData;
+                } else {
+                  this.failedPaths.add(fallbackUrl);
+                  // Last resort: try supabase URL directly
+                  if (result.supabaseUrl) {
+                    newImg.src = result.supabaseUrl;
+                  }
+                }
+              } else {
+                newImg.src = fallbackUrl;
+              }
+            } else if (result.supabaseUrl) {
+              newImg.src = result.supabaseUrl;
+            }
+          }
         } catch (error) {
-          console.warn(`[LogVisualizer] Gallery IPC failed for ${imageUrl}:`, error);
-          newImg.src = imageUrl; // fallback to direct loading
+          this.failedPaths.add(imageUrl);
+          // Try fallback after marking failed
+          const fallbackUrl = this.getGalleryImageUrl(result);
+          if (fallbackUrl && fallbackUrl !== imageUrl) {
+            newImg.src = fallbackUrl;
+          } else if (result.supabaseUrl) {
+            newImg.src = result.supabaseUrl;
+          }
         }
-      } else {
+      } else if (imageUrl) {
         newImg.src = imageUrl;
       }
     }
@@ -1761,19 +2231,19 @@ class LogVisualizer {
       this.imageCache = new Map();
     }
 
-    // Preload previous image
+    // Preload previous image — use gallery-quality URL (same as what gallery displays)
     if (this.currentImageIndex > 0) {
       const prevResult = this.filteredResults[this.currentImageIndex - 1];
       if (prevResult) {
-        await this.preloadImage(this.getThumbnailUrl(prevResult));
+        await this.preloadImage(this.getGalleryImageUrl(prevResult));
       }
     }
 
-    // Preload next image
+    // Preload next image — use gallery-quality URL (same as what gallery displays)
     if (this.currentImageIndex < this.filteredResults.length - 1) {
       const nextResult = this.filteredResults[this.currentImageIndex + 1];
       if (nextResult) {
-        await this.preloadImage(this.getThumbnailUrl(nextResult));
+        await this.preloadImage(this.getGalleryImageUrl(nextResult));
       }
     }
   }
@@ -1782,24 +2252,35 @@ class LogVisualizer {
    * Preload a single image with IPC support
    */
   async preloadImage(url) {
+    if (!url) return;
     if (this.imageCache.has(url)) return;
+    // Skip URLs that already failed — prevents retry flood
+    if (this.failedPaths && this.failedPaths.has(url)) return;
 
     const img = new Image();
     img.onload = () => {
       this.imageCache.set(url, img);
     };
     img.onerror = () => {
-      console.warn(`[LogVisualizer] Failed to preload image: ${url}`);
+      // Track failed URL to prevent future retries
+      if (!this.failedPaths) this.failedPaths = new Set();
+      this.failedPaths.add(url);
     };
 
     // Use IPC for local images
-    if (url && url.startsWith('/') && !url.startsWith('http')) {
+    if (url.startsWith('/') && !url.startsWith('http')) {
       try {
         const dataUrl = await window.api.invoke('get-local-image', url);
-        img.src = dataUrl || url;
+        if (dataUrl) {
+          img.src = dataUrl;
+        } else {
+          // IPC returned null — file doesn't exist, track as failed
+          if (!this.failedPaths) this.failedPaths = new Set();
+          this.failedPaths.add(url);
+        }
       } catch (error) {
-        console.warn(`[LogVisualizer] Preload IPC failed for ${url}:`, error);
-        img.src = url; // fallback to direct loading
+        if (!this.failedPaths) this.failedPaths = new Set();
+        this.failedPaths.add(url);
       }
     } else {
       img.src = url;
@@ -1812,6 +2293,10 @@ class LogVisualizer {
   updateVehicleEditor(result, imageIndex = null) {
     const vehiclesContainer = document.getElementById('lv-vehicles');
     if (!vehiclesContainer || !result) return;
+
+    // Always remove existing review panels before rebuilding — prevents stale panels
+    // from previous images persisting when the new image doesn't need one
+    document.querySelectorAll('.lv-review-panel, .lv-review-bar').forEach(el => el.remove());
 
     // Use provided imageIndex or current gallery index
     const actualImageIndex = (imageIndex !== null && imageIndex !== undefined) ? imageIndex : this.currentImageIndex;
@@ -1840,6 +2325,20 @@ class LogVisualizer {
     if (analysisTimeEl && result.logEvent) {
       const timestamp = new Date(result.logEvent.timestamp);
       analysisTimeEl.textContent = timestamp.toLocaleTimeString();
+    }
+
+    // Show review candidates panel if this image has/had needs_review status
+    const primaryMatchStatus = result.analysis?.[0]?.matchStatus;
+    const wasResolvedFromReview = result._reviewResolved ||
+      (this.manualCorrections.has(result.fileName) &&
+       this.manualCorrections.get(result.fileName)?.changes?.resolvedFromReview);
+    const hasAlternatives = (result.analysis?.[0]?.alternativeCandidates || []).length > 0;
+
+    if (hasAlternatives && (primaryMatchStatus === 'needs_review' || wasResolvedFromReview)) {
+      const actualIndex = this.filteredResults.indexOf(result);
+      if (actualIndex >= 0) {
+        this.injectReviewCandidatesUI(result, actualIndex, { resolved: wasResolvedFromReview });
+      }
     }
 
     // Update visual tags section
@@ -2315,6 +2814,11 @@ class LogVisualizer {
       // Show feedback
       this.showNotification('✅ Changes saved and persisted', 'success');
       console.log(`[LogVisualizer] Saved and persisted manual correction for ${fileName} vehicle ${vehicleIndex}:`, changes);
+
+      // Strategy G: Recheck learned data availability after correction
+      if (changes.raceNumber) {
+        try { this._checkLearnedDataAvailability(); } catch (e) { /* non-critical */ }
+      }
 
     } catch (error) {
       console.error('[LogVisualizer] Error saving vehicle changes by fileName:', error);
@@ -2939,6 +3443,156 @@ class LogVisualizer {
   }
 
   /**
+   * Strategy G: Check if there's learnable data available and show the badge/button.
+   * Called after gallery closes, after corrections are saved, and during initial render.
+   * Does NOT open the modal — just aggregates data and updates the UI badge.
+   */
+  async _checkLearnedDataAvailability() {
+    if (!window.learnedDataModal) return;
+
+    const presetId = this.participantPresetData?.id;
+    if (!presetId) return;
+
+    // If this execution was already processed (user accepted learned data),
+    // don't re-propose the same data — hide the button and exit early.
+    if (window.learnedDataModal.processedExecutions?.has(this.executionId)) {
+      const learnedBtn = document.getElementById('lv-learned-data');
+      if (learnedBtn) learnedBtn.style.display = 'none';
+      return;
+    }
+
+    // Persistent check: query DB to see if ANY participant in this preset
+    // already has this executionId in custom_fields.learned.source_execution_ids.
+    // This survives page reloads (unlike processedExecutions Set) and bypasses cache.
+    try {
+      const checkResult = await window.api.invoke('check-learned-data-exists', {
+        presetId,
+        executionId: this.executionId,
+      });
+      if (checkResult?.success && checkResult.data?.exists) {
+        // At least one participant already has learned data from this execution
+        console.log(`[LogVisualizer] Execution ${this.executionId} already has learned data saved — hiding button`);
+        window.learnedDataModal.processedExecutions.add(this.executionId);
+        const learnedBtn = document.getElementById('lv-learned-data');
+        if (learnedBtn) learnedBtn.style.display = 'none';
+        return;
+      }
+    } catch (dbCheckErr) {
+      // Non-critical, fall through to normal aggregation
+      console.warn('[LogVisualizer] DB check for learned data failed (non-critical):', dbCheckErr);
+    }
+
+    // Strategy G only applies to Gemini executions — ONNX models don't produce
+    // Vehicle DNA (sponsors, team, livery, etc.) so there's nothing to learn from.
+    // Check EXECUTION_COMPLETE.recognitionStats.method or individual vehicle modelSource.
+    if (this.logData) {
+      const completeEvent = this.logData.find(e => e.type === 'EXECUTION_COMPLETE');
+      const method = completeEvent?.recognitionStats?.method;
+      if (method === 'local-onnx' || method === 'rf-detr') {
+        // Pure ONNX/RF-DETR execution — no Vehicle DNA available
+        const learnedBtn = document.getElementById('lv-learned-data');
+        if (learnedBtn) learnedBtn.style.display = 'none';
+        return;
+      }
+    }
+
+    // Reset the modal's aggregated data for fresh calculation
+    window.learnedDataModal.aggregatedData = null;
+
+    // Build corrections map from MANUAL_CORRECTION events in logData
+    const sessionCorrections = new Map();
+    if (this.logData) {
+      const manualEvents = this.logData.filter(e => e.type === 'MANUAL_CORRECTION');
+      for (const event of manualEvents) {
+        const key = `${event.fileName}_${event.vehicleIndex}`;
+        sessionCorrections.set(key, {
+          fileName: event.fileName,
+          vehicleIndex: event.vehicleIndex,
+          changes: event.changes || {},
+          timestamp: event.timestamp,
+        });
+      }
+    }
+
+    // Also include any still-in-memory corrections
+    if (this.manualCorrections && this.manualCorrections.size > 0) {
+      for (const [key, correction] of this.manualCorrections) {
+        if (!sessionCorrections.has(key)) {
+          sessionCorrections.set(key, correction);
+        }
+      }
+    }
+
+    const hasNumberCorrections = Array.from(sessionCorrections.values()).some(c => c.changes?.raceNumber);
+
+    // Aggregate from user corrections
+    if (hasNumberCorrections) {
+      window.learnedDataModal.aggregateLearnedData(
+        this.imageResults,
+        sessionCorrections,
+        this.presetParticipants
+      );
+    }
+
+    // Aggregate from consistent auto-detections
+    window.learnedDataModal.aggregateConsistentDetections(
+      this.imageResults,
+      this.presetParticipants,
+      5
+    );
+
+    const totalProposals = window.learnedDataModal.aggregatedData;
+    const learnedBtn = document.getElementById('lv-learned-data');
+    const learnedCount = document.getElementById('lv-learned-data-count');
+
+    if (totalProposals && totalProposals.size > 0 && learnedBtn) {
+      learnedBtn.style.display = 'inline-flex';
+      if (learnedCount) learnedCount.textContent = totalProposals.size;
+      console.log(`[LogVisualizer] Learned data available for ${totalProposals.size} participants — badge shown`);
+    } else if (learnedBtn) {
+      learnedBtn.style.display = 'none';
+    }
+  }
+
+  /**
+   * Strategy G: Open the learned data modal on user request (button click).
+   */
+  async _openLearnedDataModal() {
+    if (!window.learnedDataModal) return;
+
+    const presetId = this.participantPresetData?.id;
+    if (!presetId) {
+      this.showNotification('No preset loaded', 'warning');
+      return;
+    }
+
+    const totalProposals = window.learnedDataModal.aggregatedData;
+    if (!totalProposals || totalProposals.size === 0) {
+      this.showNotification('No learnable data available', 'info');
+      return;
+    }
+
+    const accepted = await window.learnedDataModal.show(presetId, this.executionId);
+    if (accepted) {
+      console.log('[LogVisualizer] User accepted learned data updates');
+      this.showNotification('✅ Preset updated with learned data', 'success');
+
+      // Hide the button after successful update
+      const learnedBtn = document.getElementById('lv-learned-data');
+      if (learnedBtn) learnedBtn.style.display = 'none';
+
+      // Refresh preset participants so dedup logic sees saved data
+      // (prevents re-proposal if processedExecutions is somehow bypassed)
+      try {
+        await this.loadParticipantPresetData();
+        console.log('[LogVisualizer] Preset participants refreshed after learned data save');
+      } catch (e) {
+        console.warn('[LogVisualizer] Could not refresh preset participants:', e);
+      }
+    }
+  }
+
+  /**
    * Refresh data from updated logs after save
    */
   async refreshDataFromLogs() {
@@ -2985,7 +3639,9 @@ class LogVisualizer {
         team: vehicle.finalResult?.team || null,
         drivers: vehicle.finalResult?.drivers || [],
         confidence: vehicle.confidence || 0,
-        matchedBy: vehicle.finalResult?.matchedBy || 'none'
+        matchedBy: vehicle.finalResult?.matchedBy || 'none',
+        matchStatus: vehicle.finalResult?.matchStatus || 'no_match',
+        alternativeCandidates: vehicle.finalResult?.alternativeCandidates || null
       }));
 
       return {
@@ -3033,10 +3689,16 @@ class LogVisualizer {
 
           // Apply each field change
           Object.entries(changes).forEach(([field, value]) => {
-            if (field !== 'deleted' && field !== 'deletedAt' && field !== 'originalData') {
+            if (field !== 'deleted' && field !== 'deletedAt' && field !== 'originalData' &&
+                field !== 'resolvedFromReview' && field !== 'chosenCandidate') {
               result.analysis[vehicleIndex][field] = value;
             }
           });
+
+          // If this correction was a review resolution, mark the result accordingly
+          if (changes.resolvedFromReview) {
+            result._reviewResolved = true;
+          }
 
           // Set confidence to 100% for manually corrected vehicles
           result.analysis[vehicleIndex].confidence = 1.0;

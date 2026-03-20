@@ -235,7 +235,16 @@
         <a href="#" class="nav-item" data-section="delivery" id="nav-delivery" style="display:none;">
           <div class="nav-icon">📦</div>
           <div class="nav-text">Delivery</div>
+          <div class="nav-upload-badge" id="nav-upload-badge" style="display:none;">☁️</div>
         </a>
+        <!-- Mini upload progress shown below Delivery nav when upload active -->
+        <div class="nav-upload-mini" id="nav-upload-mini" style="display:none;">
+          <div class="nav-upload-mini-title">☁️ HD Upload</div>
+          <div class="nav-upload-mini-track">
+            <div class="nav-upload-mini-fill" id="nav-upload-mini-fill" style="width:0%"></div>
+          </div>
+          <div class="nav-upload-mini-stat" id="nav-upload-mini-stat">0 / 0 files</div>
+        </div>
         <!-- Export Destinations - Hidden for now
         <a href="#" class="nav-item" data-section="destinations">
           <div class="nav-icon">📤</div>
@@ -366,6 +375,9 @@
 
   <!-- Delivery Manager -->
   <script src="js/delivery-manager.js"></script>
+
+  <!-- Upload Monitor (nav badge + mini progress + delivery page history) -->
+  <script src="js/upload-monitor.js"></script>
 
   <!-- Image Modal -->
   <div id="image-modal" class="image-modal">

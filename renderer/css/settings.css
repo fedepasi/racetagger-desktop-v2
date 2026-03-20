@@ -186,3 +186,34 @@
     justify-content: flex-start;
   }
 }
+
+/* ================================
+   IPTC Pro Defaults Card
+   ================================ */
+
+.settings-card-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.6rem;
+  border-radius: 4px;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.2), rgba(99, 102, 241, 0.2));
+  color: #a78bfa;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+}
+
+.settings-section-description {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  margin-bottom: 1rem;
+  line-height: 1.5;
+}
+
+#settings-iptc-pro-card .card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}

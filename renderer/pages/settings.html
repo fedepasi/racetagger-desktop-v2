@@ -78,6 +78,54 @@
       </div>
     </div>
 
+    <!-- IPTC Pro Defaults -->
+    <div class="card mb-lg" id="settings-iptc-pro-card">
+      <div class="card-header">
+        <div class="card-title">IPTC Pro Defaults</div>
+        <span class="settings-card-badge">PRO</span>
+      </div>
+      <div class="card-body">
+        <p class="settings-section-description">
+          Default behavior for IPTC metadata writing. Individual presets can override these settings.
+        </p>
+
+        <!-- Writing Timing -->
+        <div class="toggle-option">
+          <label class="toggle-container" for="settings-iptc-auto-write">
+            <input type="checkbox" id="settings-iptc-auto-write" class="toggle-input">
+            <div class="toggle-content">
+              <div class="toggle-title">Write metadata automatically during analysis</div>
+              <div class="form-text">
+                When enabled, IPTC metadata is written to images as they are analyzed. When disabled, metadata is only written when you use <strong>Export & IPTC</strong>.
+              </div>
+            </div>
+          </label>
+        </div>
+
+        <hr style="border: none; border-top: 1px solid var(--border-color); margin: 16px 0;">
+
+        <!-- Face Recognition Scope -->
+        <div class="toggle-option">
+          <label class="toggle-container" for="settings-iptc-face-only">
+            <input type="checkbox" id="settings-iptc-face-only" class="toggle-input" checked>
+            <div class="toggle-content">
+              <div class="toggle-title">When a face is recognized, write only that person's data</div>
+              <div class="form-text">
+                When enabled, portrait photos with a recognized face will only include the identified person's metadata — not all participants linked to that number. When disabled, all participants for the number are always included.
+              </div>
+            </div>
+          </label>
+        </div>
+
+        <div class="info-box mt-md">
+          <span class="info-icon">💡</span>
+          <div class="info-text text-sm">
+            <strong>Example:</strong> Car #51 has two drivers (Pier Guidi + Calado). With this option enabled, a portrait of Pier Guidi will only include his data, while an action shot of the car will include both drivers.
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- About -->
     <div class="card">
       <div class="card-header">

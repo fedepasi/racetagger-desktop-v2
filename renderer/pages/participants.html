@@ -249,11 +249,11 @@
                     <div class="form-group form-group-inline">
                       <label class="radio-label">
                         <input type="radio" name="iptc-keywords-mode" value="append" checked>
-                        <span>Append to AI keywords</span>
+                        <span>Merge with existing keywords</span>
                       </label>
                       <label class="radio-label">
                         <input type="radio" name="iptc-keywords-mode" value="overwrite">
-                        <span>Overwrite AI keywords</span>
+                        <span>Replace all keywords</span>
                       </label>
                     </div>
                     <div class="iptc-visual-tags-option">
@@ -463,6 +463,37 @@
                 </div>
               </div>
             </div>
+
+            <!-- IPTC Pro Behavior Options -->
+            <div class="iptc-behavior-options">
+              <h4 class="iptc-behavior-title">Writing Behavior</h4>
+
+              <div class="iptc-behavior-row">
+                <div class="iptc-behavior-option">
+                  <label class="iptc-behavior-label">
+                    <span class="iptc-behavior-name">Metadata writing timing</span>
+                    <select id="iptc-writing-timing" class="form-input form-input-iptc iptc-behavior-select">
+                      <option value="default">Use app default</option>
+                      <option value="auto">Automatic during analysis</option>
+                      <option value="manual">Manual only (Export & IPTC)</option>
+                    </select>
+                  </label>
+                  <small class="form-hint">Controls when IPTC metadata is embedded into images for this preset</small>
+                </div>
+
+                <div class="iptc-behavior-option">
+                  <label class="iptc-behavior-label">
+                    <span class="iptc-behavior-name">Face recognition scope</span>
+                    <select id="iptc-face-scope" class="form-input form-input-iptc iptc-behavior-select">
+                      <option value="default">Use app default</option>
+                      <option value="recognized-only">Write only recognized person</option>
+                      <option value="all">Write all participants for number</option>
+                    </select>
+                  </label>
+                  <small class="form-hint">When a face is recognized, choose whether to include only that person or all linked participants</small>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -491,6 +522,7 @@
                   <th>Category</th>
                   <th>Team</th>
                   <th>Plate</th>
+                  <th id="th-delivery-to" style="display: none;">Delivery to</th>
                   <th class="no-sort">Actions</th>
                 </tr>
               </thead>
@@ -581,15 +613,15 @@
         <!-- Three-column layout -->
         <div class="participant-edit-grid">
 
-          <!-- COLUMN 1: IPTC Metadata (Written to file) -->
+          <!-- COLUMN 1: Participant Data -->
           <div class="participant-edit-column">
             <div class="column-header metadata-column">
               <div class="column-badge badge-written">
                 <span class="badge-icon">📝</span>
-                <span class="badge-text">WRITTEN TO FILE</span>
+                <span class="badge-text">PARTICIPANT DATA</span>
               </div>
-              <h3 class="column-title">IPTC Metadata</h3>
-              <p class="column-description">These fields are embedded directly into your image files as IPTC keywords</p>
+              <h3 class="column-title">Participant Data</h3>
+              <p class="column-description">Core participant info used for AI matching and as variables in IPTC Pro templates (<code>{name}</code>, <code>{team}</code>, etc.)</p>
             </div>
 
             <div class="column-content">
@@ -597,7 +629,7 @@
               <div class="form-group">
                 <label>
                   Race Number
-                  <span class="field-destination">→ IPTC:Keywords</span>
+                  <span class="field-destination field-destination-matching">→ AI + {number}</span>
                 </label>
                 <input type="text" id="edit-numero" class="form-input form-input-metadata" placeholder="51">
                 <small class="form-hint">Optional for Team Principal, VIP, mechanics. Required for people.</small>
@@ -607,13 +639,13 @@
               <div class="form-group">
                 <label>
                   People *
-                  <span class="field-destination">→ IPTC:Keywords</span>
+                  <span class="field-destination field-destination-matching">→ AI + {name}</span>
                 </label>
                 <div class="tag-input-container" id="edit-drivers-container">
                   <div class="tag-input-tags" id="edit-drivers-tags"></div>
                   <input type="text" id="edit-drivers-input" class="tag-input-field" placeholder="Type person name and press Enter">
                 </div>
-                <small class="form-hint">Add the people linked to this number — drivers, riders, players, or any notable person. Each name is used as <code>{name}</code> in templates and written as IPTC keyword. Press Enter or comma to add, × to remove.</small>
+                <small class="form-hint">Add the people linked to this number — drivers, riders, players, or any notable person. Each name is used as <code>{name}</code> in IPTC Pro templates and for AI face matching. Press Enter or comma to add, × to remove.</small>
                 <!-- Hidden field to store comma-separated value -->
                 <input type="hidden" id="edit-nome" value="">
               </div>
@@ -622,7 +654,7 @@
               <div class="form-group">
                 <label>
                   Category
-                  <span class="field-destination">→ IPTC:Keywords</span>
+                  <span class="field-destination field-destination-matching">→ AI + {category}</span>
                 </label>
                 <input type="text" id="edit-categoria" class="form-input form-input-metadata" placeholder="GT3, F1, MotoGP...">
               </div>
@@ -631,7 +663,7 @@
               <div class="form-group">
                 <label>
                   Team
-                  <span class="field-destination">→ IPTC:Keywords</span>
+                  <span class="field-destination field-destination-matching">→ AI + {team}</span>
                 </label>
                 <input type="text" id="edit-squadra" class="form-input form-input-metadata" placeholder="Ferrari">
               </div>
@@ -640,20 +672,20 @@
               <div class="form-group">
                 <label>
                   Car / Vehicle Model
-                  <span class="field-destination">→ IPTC:Caption</span>
+                  <span class="field-destination field-destination-matching">→ {car_model}</span>
                 </label>
                 <input type="text" id="edit-car-model" class="form-input form-input-metadata" placeholder="RB20, Ferrari 296 GT3, Ducati V4R...">
-                <small class="form-hint">Used as <code>{car_model}</code> in caption and filename templates</small>
+                <small class="form-hint">Used as <code>{car_model}</code> in IPTC Pro caption and filename templates</small>
               </div>
 
               <!-- Meta Tag -->
               <div class="form-group">
                 <label>
                   Meta Tag
-                  <span class="field-destination">→ IPTC:Keywords</span>
+                  <span class="field-destination">→ IPTC:Caption/Description</span>
                 </label>
                 <input type="text" id="edit-metatag" class="form-input form-input-metadata" placeholder="Pro Driver, Champion 2024...">
-                <small class="form-hint">Custom keywords added to the image</small>
+                <small class="form-hint">Written to Caption/Description during analysis. Also available as <code>{tag}</code> in IPTC Pro templates.</small>
               </div>
             </div>
           </div>
@@ -756,6 +788,31 @@
                 </div>
               </div>
             </div>
+
+            <!-- DELIVERY CARD (feature-gated, stacked below folders in Column 3) -->
+            <div id="delivery-to-group" style="display: none; margin-top: 16px; border-top: 1px solid var(--border-color); padding-top: 16px;">
+              <div class="column-header delivery-column">
+                <div class="column-badge badge-delivery">
+                  <span class="badge-icon">🚀</span>
+                  <span class="badge-text">DELIVERY</span>
+                </div>
+                <h3 class="column-title">Client Delivery</h3>
+                <p class="column-description">Auto-route photos of this participant to a client's galleries after analysis</p>
+              </div>
+              <div class="column-content">
+                <div class="form-group">
+                  <label>
+                    Delivery to
+                    <span class="field-destination field-destination-delivery">→ Auto-route</span>
+                  </label>
+                  <select id="edit-delivery-to" class="form-input form-input-delivery">
+                    <option value="">— No delivery —</option>
+                  </select>
+                  <small class="form-hint">Select a client to auto-deliver photos to their galleries. Manage clients in Delivery &amp; Gallery.</small>
+                </div>
+              </div>
+            </div>
+
           </div>
 
         </div>
@@ -768,7 +825,7 @@
               <span class="badge-text">PER-PERSON DATA</span>
             </div>
             <h3 class="column-title">Per-Person Metadata</h3>
-            <p class="column-description">Nationality and custom metadata for each person in this entry (used in IPTC caption, Person Shown, keywords)</p>
+            <p class="column-description">Nationality and custom metadata for each person — used as <code>{nationality}</code> in IPTC Pro templates and written to Caption/Description during analysis</p>
           </div>
 
           <div class="driver-panels-empty-state" id="driver-panels-empty-state"></div>
@@ -778,7 +835,7 @@
 
       <div class="modal-footer">
         <div class="footer-legend">
-          <span class="legend-item legend-written"><span class="legend-dot"></span> Written to file</span>
+          <span class="legend-item legend-written"><span class="legend-dot"></span> Participant data</span>
           <span class="legend-item legend-matching"><span class="legend-dot"></span> AI matching only</span>
           <span class="legend-item legend-folder"><span class="legend-dot"></span> Export organization</span>
         </div>

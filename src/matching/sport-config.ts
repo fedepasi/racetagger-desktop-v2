@@ -21,6 +21,10 @@ export interface MatchingConfig {
     team: number;
     category: number;       // weight for category matches (GT3, F1, etc.)
     plateNumber: number;    // weight for license plate matches
+    // Visual DNA weights (Vehicle DNA / visual matching)
+    vehicleMake: number;    // weight for manufacturer match (Ferrari, Honda, Pinarello, etc.)
+    vehicleModel: number;   // weight for model match (296 GT3, Dogma F, etc.)
+    liveryColor: number;    // weight for primary livery/jersey color match
   };
   thresholds: {
     minimumScore: number;        // Minimum score to accept a match
@@ -86,7 +90,10 @@ export class SportConfig {
             sponsor: category.matching_config.weights?.sponsor || 40,
             team: category.matching_config.weights?.team || 60,
             category: category.matching_config.weights?.category || 0,
-            plateNumber: category.matching_config.weights?.plateNumber || 0
+            plateNumber: category.matching_config.weights?.plateNumber || 0,
+            vehicleMake: category.matching_config.weights?.vehicleMake || 0,
+            vehicleModel: category.matching_config.weights?.vehicleModel || 0,
+            liveryColor: category.matching_config.weights?.liveryColor || 0
           },
           thresholds: {
             minimumScore: category.matching_config.thresholds?.minimumScore || 50,
@@ -120,6 +127,9 @@ export class SportConfig {
       team?: number;
       category?: number;
       plateNumber?: number;
+      vehicleMake?: number;
+      vehicleModel?: number;
+      liveryColor?: number;
     };
     thresholds?: {
       minimumScore?: number;
@@ -141,7 +151,10 @@ export class SportConfig {
         sponsor: matchingConfig.weights?.sponsor ?? existingConfig.weights.sponsor,
         team: matchingConfig.weights?.team ?? existingConfig.weights.team,
         category: matchingConfig.weights?.category ?? existingConfig.weights.category,
-        plateNumber: matchingConfig.weights?.plateNumber ?? existingConfig.weights.plateNumber
+        plateNumber: matchingConfig.weights?.plateNumber ?? existingConfig.weights.plateNumber,
+        vehicleMake: matchingConfig.weights?.vehicleMake ?? existingConfig.weights.vehicleMake,
+        vehicleModel: matchingConfig.weights?.vehicleModel ?? existingConfig.weights.vehicleModel,
+        liveryColor: matchingConfig.weights?.liveryColor ?? existingConfig.weights.liveryColor
       },
       thresholds: {
         minimumScore: matchingConfig.thresholds?.minimumScore ?? existingConfig.thresholds.minimumScore,
@@ -216,7 +229,10 @@ export class SportConfig {
         sponsor: 40,      // Medium importance - many sponsors visible
         team: 60,         // Medium-high importance - team names visible
         category: 0,      // Disabled by default (configured in Supabase)
-        plateNumber: 0    // Disabled by default (configured in Supabase)
+        plateNumber: 0,   // Disabled by default (configured in Supabase)
+        vehicleMake: 45,  // Significant - Ferrari vs Porsche is strong signal
+        vehicleModel: 35, // Good signal - 296 GT3 narrows candidates substantially
+        liveryColor: 50   // Strong - liveries are unique in GT/endurance (most valuable visual cue)
       },
       thresholds: {
         minimumScore: 50,           // Require substantial evidence
@@ -239,7 +255,10 @@ export class SportConfig {
         sponsor: 20,      // Low importance - fewer visible sponsors
         team: 30,         // Low importance - team less important
         category: 0,      // Disabled by default (configured in Supabase)
-        plateNumber: 0    // Disabled (not applicable for running)
+        plateNumber: 0,   // Disabled (not applicable for running)
+        vehicleMake: 0,   // N/A for running
+        vehicleModel: 0,  // N/A for running
+        liveryColor: 35   // Jersey/kit color can help identify team runners
       },
       thresholds: {
         minimumScore: 60,           // Higher threshold - numbers more reliable
@@ -262,7 +281,10 @@ export class SportConfig {
         sponsor: 60,      // Higher importance - cycling has many sponsors
         team: 70,         // High importance - team jerseys prominent
         category: 0,      // Disabled by default (configured in Supabase)
-        plateNumber: 0    // Disabled (not applicable for cycling)
+        plateNumber: 0,   // Disabled (not applicable for cycling)
+        vehicleMake: 40,  // Bike brand is visible and distinctive (Pinarello, Trek, etc.)
+        vehicleModel: 25, // Bike model less distinguishable at distance
+        liveryColor: 55   // Jersey/kit colors are THE primary visual identifier in cycling
       },
       thresholds: {
         minimumScore: 55,
@@ -285,7 +307,10 @@ export class SportConfig {
         sponsor: 50,      // Medium - gear sponsors visible
         team: 40,         // Lower - teams less prominent
         category: 0,      // Disabled by default (configured in Supabase)
-        plateNumber: 0    // Disabled by default (configured in Supabase)
+        plateNumber: 0,   // Disabled by default (configured in Supabase)
+        vehicleMake: 50,  // Bike brand very visible and distinctive (Honda red, KTM orange, etc.)
+        vehicleModel: 20, // Model harder to distinguish in muddy conditions
+        liveryColor: 45   // Gear/helmet colors help, but mud can obscure
       },
       thresholds: {
         minimumScore: 50,
@@ -308,7 +333,10 @@ export class SportConfig {
         sponsor: 40,      // Medium importance - sponsors visible but secondary
         team: 70,         // Higher importance - team identification crucial
         category: 0,      // Disabled by default (configured in Supabase)
-        plateNumber: 0    // Disabled by default (configured in Supabase)
+        plateNumber: 0,   // Disabled by default (configured in Supabase)
+        vehicleMake: 55,  // Car brand very visible in rally (Hyundai i20, Toyota GR Yaris)
+        vehicleModel: 40, // Model is quite distinctive in rally
+        liveryColor: 50   // Liveries are distinct but can get dirty/muddy
       },
       thresholds: {
         minimumScore: 55,           // Higher threshold - more conservative matching
@@ -331,7 +359,10 @@ export class SportConfig {
         sponsor: 35,
         team: 50,
         category: 0,      // Disabled by default (configured in Supabase)
-        plateNumber: 0    // Disabled by default (configured in Supabase)
+        plateNumber: 0,   // Disabled by default (configured in Supabase)
+        vehicleMake: 30,  // Generic: moderate weight
+        vehicleModel: 20, // Generic: lower weight
+        liveryColor: 30   // Generic: moderate weight
       },
       thresholds: {
         minimumScore: 45,

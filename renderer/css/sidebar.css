@@ -391,6 +391,67 @@
   50% { opacity: 0.8; }
 }
 
+/* ==================== Upload Badge & Mini Progress ==================== */
+
+.nav-upload-badge {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  min-width: 18px;
+  height: 18px;
+  border-radius: 9px;
+  background: var(--accent-primary, #3b82f6);
+  color: white;
+  font-size: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  animation: uploadBadgePulse 1.8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes uploadBadgePulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.5); }
+  50% { box-shadow: 0 0 0 5px rgba(59, 130, 246, 0); }
+}
+
+.nav-upload-mini {
+  margin: 2px 12px 6px;
+  padding: 8px 10px;
+  background: rgba(59, 130, 246, 0.08);
+  border-radius: 8px;
+  border: 1px solid rgba(59, 130, 246, 0.15);
+}
+
+.nav-upload-mini-title {
+  font-size: 10px;
+  color: var(--accent-primary, #60a5fa);
+  font-weight: 600;
+  margin-bottom: 5px;
+}
+
+.nav-upload-mini-track {
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  height: 4px;
+  overflow: hidden;
+}
+
+.nav-upload-mini-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #3b82f6, #60a5fa);
+  transition: width 0.4s ease;
+}
+
+.nav-upload-mini-stat {
+  font-size: 9px;
+  color: var(--text-muted, #888);
+  margin-top: 4px;
+}
+
 /* Modern sidebar separator */
 .nav-separator {
   height: 1px;

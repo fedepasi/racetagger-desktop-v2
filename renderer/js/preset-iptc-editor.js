@@ -328,6 +328,11 @@ function loadIptcDataIntoForm(iptcMetadata) {
   setVal('iptc-digital-source', iptcMetadata.digitalSourceType);
   setVal('iptc-model-release', iptcMetadata.modelReleaseStatus);
 
+  // Writing behavior overrides
+  setVal('iptc-writing-timing', iptcMetadata.writingTiming || 'default');
+  setVal('iptc-face-scope', iptcMetadata.faceScope || 'default');
+  updateBehaviorDefaultHints();
+
   // Update previews
   updateCaptionPreview();
   updatePersonPreview();
@@ -363,6 +368,11 @@ function clearIptcForm() {
   const radio = document.querySelector('input[name="iptc-keywords-mode"][value="append"]');
   if (radio) radio.checked = true;
   setChecked('iptc-include-visual-tags', false);
+
+  // Reset behavior selects to default
+  setVal('iptc-writing-timing', 'default');
+  setVal('iptc-face-scope', 'default');
+  updateBehaviorDefaultHints();
 
   // Reset all section checkboxes to checked
   ['iptc-section-credits', 'iptc-section-creator', 'iptc-section-event',
@@ -444,9 +454,19 @@ function collectIptcDataFromForm() {
   assignIfNotEmpty(data, 'digitalSourceType', getVal('iptc-digital-source'));
   assignIfNotEmpty(data, 'modelReleaseStatus', getVal('iptc-model-release'));
 
+  // Writing behavior overrides (only save non-default values)
+  const writingTiming = getVal('iptc-writing-timing');
+  if (writingTiming && writingTiming !== 'default') {
+    data.writingTiming = writingTiming;
+  }
+  const faceScope = getVal('iptc-face-scope');
+  if (faceScope && faceScope !== 'default') {
+    data.faceScope = faceScope;
+  }
+
   // Check if there's any actual data
   hasAnyValue = Object.keys(data).some(k => {
-    if (k === 'appendKeywords' || k === 'includeVisualTags') return false;
+    if (k === 'appendKeywords' || k === 'includeVisualTags' || k === 'writingTiming' || k === 'faceScope') return false;
     const v = data[k];
     if (Array.isArray(v)) return v.length > 0;
     if (typeof v === 'boolean') return v;
@@ -784,6 +804,46 @@ function initIptcEditor() {
   // Initialize placeholder highlighting on template fields
   if (typeof initTemplateHighlights === 'function') {
     initTemplateHighlights();
+  }
+}
+
+// ============================================================
+// Behavior default hints
+// ============================================================
+
+/**
+ * Update the "Use app default" option text to show current default value.
+ * Reads from SettingsManager if available, otherwise localStorage directly.
+ */
+function updateBehaviorDefaultHints() {
+  let defaults = { autoWrite: false, faceOnly: true };
+  try {
+    if (typeof SettingsManager !== 'undefined' && SettingsManager.getIptcProDefaults) {
+      defaults = SettingsManager.getIptcProDefaults();
+    } else {
+      const stored = localStorage.getItem('iptc-pro-defaults');
+      if (stored) defaults = JSON.parse(stored);
+    }
+  } catch (e) { /* use fallback defaults */ }
+
+  // Update writing timing default option text
+  const timingSelect = document.getElementById('iptc-writing-timing');
+  if (timingSelect) {
+    const defaultOption = timingSelect.querySelector('option[value="default"]');
+    if (defaultOption) {
+      const timingLabel = defaults.autoWrite ? 'Automatic' : 'Manual';
+      defaultOption.textContent = `Use app default (${timingLabel})`;
+    }
+  }
+
+  // Update face scope default option text
+  const faceSelect = document.getElementById('iptc-face-scope');
+  if (faceSelect) {
+    const defaultOption = faceSelect.querySelector('option[value="default"]');
+    if (defaultOption) {
+      const faceLabel = defaults.faceOnly ? 'Recognized only' : 'All participants';
+      defaultOption.textContent = `Use app default (${faceLabel})`;
+    }
   }
 }
 

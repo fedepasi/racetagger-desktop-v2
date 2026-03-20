@@ -21,11 +21,8 @@
         </div>
 
         <div class="results-actions">
-          <button id="btn-send-to-gallery" class="btn-export" style="display: none;" title="Send photos to a gallery for client delivery">
-            🖼️ Send to Gallery
-          </button>
-          <button id="btn-r2-upload" class="btn-export" style="display: none;" title="Upload originals to cloud storage for HD delivery">
-            ☁️ Upload HD
+          <button id="btn-deliver" class="btn-export" style="display: none;" title="Send photos to gallery and upload HD originals">
+            📦 Deliver
           </button>
           <button id="btn-unified-export" class="btn-export" style="display: none;" title="Export files with rename, organize, and IPTC metadata — or write IPTC to originals">
             📤 Export & IPTC
@@ -34,25 +31,29 @@
             ✅ DONE!
           </button>
           <button id="btn-new-analysis" class="btn-new-analysis">
-            ✨ Start New Analysis
+            New Analysis
           </button>
         </div>
       </div>
 
       <div class="results-stats" id="results-stats">
-        <div class="results-stat-item">
+        <div class="results-stat-item" title="Show all images">
           <span class="results-stat-value" id="lv-total">0</span>
           <span class="results-stat-label">Total Images</span>
         </div>
-        <div class="results-stat-item results-stat-item--success">
+        <div class="results-stat-item results-stat-item--success" title="Filter: matched only">
           <span class="results-stat-value" id="lv-matched">0</span>
           <span class="results-stat-label">Matched</span>
         </div>
-        <div class="results-stat-item results-stat-item--warning">
+        <div class="results-stat-item results-stat-item--review" title="Filter: needs review">
+          <span class="results-stat-value" id="lv-needs-review">0</span>
+          <span class="results-stat-label">Needs Review</span>
+        </div>
+        <div class="results-stat-item results-stat-item--warning" title="Filter: no match">
           <span class="results-stat-value" id="lv-no-match">0</span>
           <span class="results-stat-label">No Match</span>
         </div>
-        <div class="results-stat-item results-stat-item--info">
+        <div class="results-stat-item results-stat-item--info" title="Filter: manually corrected">
           <span class="results-stat-value" id="lv-corrections">0</span>
           <span class="results-stat-label">Corrections</span>
         </div>
@@ -91,30 +92,56 @@
     </div>
   </div>
 
-  <!-- Send to Gallery Modal -->
-  <div id="modal-results-gallery" style="display: none; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); align-items: center; justify-content: center;">
-    <div style="background: var(--bg-medium, #1e1e2e); border: 1px solid var(--border-color, #333); border-radius: 12px; padding: 24px; width: 100%; max-width: 460px; margin: auto;">
-      <h3 style="color: var(--text-primary, #fff); margin: 0 0 16px; font-size: 18px;">🖼️ Send Photos to Gallery</h3>
-      <div style="display: flex; flex-direction: column; gap: 12px;">
-        <div>
-          <label style="display: block; color: var(--text-muted, #888); font-size: 12px; margin-bottom: 4px;">Select Gallery</label>
-          <select id="results-gallery-select" style="width: 100%; padding: 8px 12px; background: var(--bg-dark, #1a1a2e); border: 1px solid var(--border-color, #333); border-radius: 8px; color: var(--text-primary, #fff); font-size: 14px;">
-            <option value="">Loading galleries...</option>
-          </select>
+  <!-- Unified Deliver Modal -->
+  <div id="modal-deliver" style="display: none; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); align-items: center; justify-content: center;">
+    <div style="background: var(--bg-medium, #1e1e2e); border: 1px solid var(--border-color, #333); border-radius: 12px; padding: 24px; width: 100%; max-width: 500px; margin: auto;">
+      <h3 style="color: var(--text-primary, #fff); margin: 0 0 6px; font-size: 18px;">📦 Deliver Photos</h3>
+      <p style="color: var(--text-muted, #888); font-size: 12px; margin: 0 0 20px;">Choose how to deliver the photos from this analysis.</p>
+
+      <!-- Section 1: Gallery -->
+      <div id="deliver-gallery-section" style="display: none;">
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+          <span style="font-size: 16px;">🖼️</span>
+          <span style="color: var(--text-primary, #fff); font-size: 14px; font-weight: 600;">Send to Gallery</span>
         </div>
-        <div>
-          <label style="display: block; color: var(--text-muted, #888); font-size: 12px; margin-bottom: 4px;">Or create a new gallery</label>
-          <div style="display: flex; gap: 8px;">
-            <input id="results-new-gallery-name" type="text" placeholder="Gallery name (e.g., IMSA Daytona 2026)" style="flex: 1; padding: 8px 12px; background: var(--bg-dark, #1a1a2e); border: 1px solid var(--border-color, #333); border-radius: 8px; color: var(--text-primary, #fff); font-size: 13px; outline: none;">
-            <button id="btn-results-create-gallery" style="padding: 8px 12px; background: var(--bg-light, #2a2a3e); border: 1px solid var(--border-color, #333); border-radius: 8px; color: var(--text-primary, #fff); cursor: pointer; font-size: 12px; white-space: nowrap;">+ Create</button>
+        <p style="color: var(--text-muted, #888); font-size: 11px; margin: 0 0 10px;">Preview images (already uploaded during analysis) will appear in the gallery immediately.</p>
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          <div>
+            <label style="display: block; color: var(--text-muted, #888); font-size: 12px; margin-bottom: 4px;">Select Gallery</label>
+            <select id="results-gallery-select" style="width: 100%; padding: 8px 12px; background: var(--bg-dark, #1a1a2e); border: 1px solid var(--border-color, #333); border-radius: 8px; color: var(--text-primary, #fff); font-size: 14px;">
+              <option value="">-- Select a gallery --</option>
+            </select>
           </div>
-        </div>
-        <div id="results-gallery-info" style="display: none; padding: 10px; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 8px; font-size: 12px; color: var(--text-muted, #888);">
+          <div>
+            <label style="display: block; color: var(--text-muted, #888); font-size: 12px; margin-bottom: 4px;">Or create a new gallery</label>
+            <div style="display: flex; gap: 8px;">
+              <input id="results-new-gallery-name" type="text" placeholder="Gallery name (e.g., IMSA Daytona 2026)" style="flex: 1; padding: 8px 12px; background: var(--bg-dark, #1a1a2e); border: 1px solid var(--border-color, #333); border-radius: 8px; color: var(--text-primary, #fff); font-size: 13px; outline: none;">
+              <button id="btn-results-create-gallery" style="padding: 8px 12px; background: transparent; border: 1px solid var(--border-color, #ccc); border-radius: 8px; color: inherit; cursor: pointer; font-size: 12px; white-space: nowrap;">+ Create</button>
+            </div>
+          </div>
+          <div id="results-gallery-info" style="display: none; padding: 10px; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 8px; font-size: 12px; color: var(--text-muted, #888);"></div>
         </div>
       </div>
-      <div style="display: flex; gap: 8px; margin-top: 20px; justify-content: flex-end;">
-        <button id="btn-results-gallery-cancel" style="padding: 8px 16px; background: var(--bg-light, #2a2a3e); border: 1px solid var(--border-color, #333); border-radius: 8px; color: var(--text-primary, #fff); cursor: pointer; font-size: 13px;">Cancel</button>
-        <button id="btn-results-gallery-send" style="padding: 8px 16px; background: var(--accent-primary, #3b82f6); border: none; border-radius: 8px; color: white; cursor: pointer; font-size: 13px; font-weight: 600;">Send All Photos</button>
+
+      <!-- Divider (shown only when both sections visible) -->
+      <div id="deliver-divider" style="display: none; border-top: 1px solid var(--border-color, #333); margin: 18px 0;"></div>
+
+      <!-- Section 2: HD Upload -->
+      <div id="deliver-hd-section" style="display: none;">
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+          <span style="font-size: 16px;">☁️</span>
+          <span style="color: var(--text-primary, #fff); font-size: 14px; font-weight: 600;">Upload HD Originals</span>
+          <label style="margin-left: auto; display: flex; align-items: center; gap: 6px; cursor: pointer;">
+            <input id="deliver-hd-toggle" type="checkbox" style="width: 16px; height: 16px; accent-color: #3b82f6; cursor: pointer;">
+          </label>
+        </div>
+        <p style="color: var(--text-muted, #888); font-size: 11px; margin: 0;">Upload full-resolution originals to cloud storage (Cloudflare R2). This enables HD viewing and downloads in the gallery. Runs in background — you can continue working.</p>
+      </div>
+
+      <!-- Actions -->
+      <div style="display: flex; gap: 8px; margin-top: 22px; justify-content: flex-end;">
+        <button id="btn-deliver-cancel" style="padding: 8px 16px; background: transparent; border: 1px solid var(--border-color, #ccc); border-radius: 8px; color: inherit; cursor: pointer; font-size: 13px;">Cancel</button>
+        <button id="btn-deliver-confirm" style="padding: 8px 16px; background: var(--accent-primary, #3b82f6); border: none; border-radius: 8px; color: white; cursor: pointer; font-size: 13px; font-weight: 600;">Deliver</button>
       </div>
     </div>
   </div>
@@ -133,6 +160,7 @@
 
   <script src="js/gallery-zoom.js"></script>
   <script src="js/log-visualizer.js"></script>
+  <script src="js/learned-data-modal.js"></script>
   <script src="js/results-page.js"></script>
   <script src="js/unified-export-iptc-modal.js"></script>
   <script src="js/results-delivery.js"></script>
@@ -164,6 +192,19 @@
             }
           }
 
+          // Strategy G: Show learned data modal before leaving if data is available
+          if (window.learnedDataModal && window.learnedDataModal.aggregatedData && window.learnedDataModal.aggregatedData.size > 0) {
+            try {
+              const presetId = window.logVisualizer?.participantPresetData?.id;
+              const executionId = window.logVisualizer?.executionId;
+              if (presetId) {
+                await window.learnedDataModal.show(presetId, executionId);
+              }
+            } catch (e) {
+              console.warn('[Results] Learned data modal error (non-critical):', e);
+            }
+          }
+
           console.log('[Results] Navigating to home...');
           window.location.href = 'index.html';
         });
@@ -184,6 +225,19 @@
                 const proceed = confirm('Error saving changes. Continue anyway?');
                 if (!proceed) return;
               }
+            }
+          }
+
+          // Strategy G: Show learned data modal before leaving if data is available
+          if (window.learnedDataModal && window.learnedDataModal.aggregatedData && window.learnedDataModal.aggregatedData.size > 0) {
+            try {
+              const presetId = window.logVisualizer?.participantPresetData?.id;
+              const executionId = window.logVisualizer?.executionId;
+              if (presetId) {
+                await window.learnedDataModal.show(presetId, executionId);
+              }
+            } catch (e) {
+              console.warn('[Results] Learned data modal error (non-critical):', e);
             }
           }
 
