@@ -206,6 +206,54 @@ const KEYWORDS = [
 
 let selectedKeywordIndex = -1;
 
+// ============================================================================
+// Template Placeholder Utilities
+// ============================================================================
+
+/** Valid placeholders recognized in IPTC templates */
+const VALID_PLACEHOLDERS = ['{name}', '{surname}', '{number}', '{team}', '{car_model}', '{nationality}', '{category}', '{tag}', '{persons}', '{event}', '{date}'];
+
+/**
+ * Renders a template string as HTML with valid placeholders highlighted
+ * using the same purple code style as the info banner.
+ * Plain text is escaped; only valid {placeholder} tokens get styled.
+ */
+function renderTemplateWithHighlights(template) {
+  if (!template) return '';
+
+  const regex = /(\{[a-z_]+\})/g;
+  let html = '';
+  let lastIndex = 0;
+  let match;
+
+  while ((match = regex.exec(template)) !== null) {
+    if (match.index > lastIndex) {
+      html += escapeHtmlForTemplate(template.slice(lastIndex, match.index));
+    }
+    const token = match[1];
+    if (VALID_PLACEHOLDERS.includes(token)) {
+      html += `<span class="placeholder-token">${escapeHtmlForTemplate(token)}</span>`;
+    } else {
+      html += escapeHtmlForTemplate(token);
+    }
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < template.length) {
+    html += escapeHtmlForTemplate(template.slice(lastIndex));
+  }
+
+  return html;
+}
+
+function escapeHtmlForTemplate(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Stub for backward compatibility — no longer wraps inputs
+function initTemplateHighlights() {
+  // Previews are now handled entirely by updateCaptionPreview / updatePersonPreview
+}
+
 /**
  * Setup keyword autocomplete for folder name input
  */
@@ -543,9 +591,6 @@ function createPresetCard(preset) {
         ${isOfficial ? '<span class="official-badge" title="Official RT Preset">RT</span>' : ''}
         ${escapeHtml(preset.name)}
       </div>
-      <div class="preset-actions">
-        ${actionsHtml}
-      </div>
     </div>
     <div class="preset-info">
       <div class="preset-description">${preset.description || 'No description'}</div>
@@ -563,7 +608,7 @@ function createPresetCard(preset) {
       ` : ''}
     </div>
     <div class="preset-actions-bottom">
-      <!-- Use in Analysis button removed - preset selection handled in Analysis tab -->
+      ${actionsHtml}
     </div>
   `;
 
@@ -1208,8 +1253,12 @@ async function saveParticipantAndStay() {
       }
     }
 
-    // Refresh table with new IDs
+    // Refresh table with new IDs, preserving sort
+    const sortState = getCurrentSortState();
     loadParticipantsIntoTable(participantsData);
+    if (sortState) {
+      applySortState(sortState);
+    }
 
   } catch (error) {
     console.error('[Participants] Error saving participant for face photos:', error);
@@ -1218,15 +1267,25 @@ async function saveParticipantAndStay() {
 }
 
 /**
- * Get current sort state from table headers
- * @returns {Object|null} Sort state with columnIndex and direction
+ * Get current sort state from table headers.
+ * Checks both custom classes (asc/desc) and sortable.js classes (dir-u/dir-d).
+ * @returns {Object} Sort state with columnIndex and direction
  */
 function getCurrentSortState() {
-  const sortedHeader = document.querySelector('#participants-table th.asc, #participants-table th.desc');
-  if (sortedHeader) {
+  // Check sortable.js classes first (set by user clicking headers)
+  const sortableHeader = document.querySelector('#participants-table th.dir-u, #participants-table th.dir-d');
+  if (sortableHeader) {
     return {
-      columnIndex: sortedHeader.cellIndex,
-      direction: sortedHeader.classList.contains('asc') ? 'asc' : 'desc'
+      columnIndex: sortableHeader.cellIndex,
+      direction: sortableHeader.classList.contains('dir-u') ? 'asc' : 'desc'
+    };
+  }
+  // Then check custom classes (set by applySortState)
+  const customHeader = document.querySelector('#participants-table th.asc, #participants-table th.desc');
+  if (customHeader) {
+    return {
+      columnIndex: customHeader.cellIndex,
+      direction: customHeader.classList.contains('asc') ? 'asc' : 'desc'
     };
   }
   // Default: ordina per numero (prima colonna) in ordine crescente
@@ -1234,7 +1293,9 @@ function getCurrentSortState() {
 }
 
 /**
- * Apply saved sort state to table
+ * Apply saved sort state to table.
+ * Sets both sortable.js classes (dir-u/dir-d) and custom classes (asc/desc)
+ * so that both systems stay in sync.
  * @param {Object} state - Sort state with columnIndex and direction
  */
 function applySortState(state) {
@@ -1247,9 +1308,9 @@ function applySortState(state) {
   const header = headers[state.columnIndex];
   if (!header) return;
 
-  // Prima rimuovi le classi di ordinamento da tutti gli header
+  // Rimuovi tutte le classi di ordinamento da tutti gli header
   headers.forEach(h => {
-    h.classList.remove('asc', 'desc');
+    h.classList.remove('asc', 'desc', 'dir-u', 'dir-d');
   });
 
   // Ordina i dati manualmente
@@ -1284,9 +1345,53 @@ function applySortState(state) {
   // Ricostruisci il tbody con le righe ordinate
   rows.forEach(row => tbody.appendChild(row));
 
-  // Aggiungi la classe di ordinamento all'header
-  header.classList.add(state.direction);
+  // Aggiungi le classi di ordinamento (entrambi i formati)
+  header.classList.add(state.direction); // asc/desc per il nostro codice
+  header.classList.add(state.direction === 'asc' ? 'dir-u' : 'dir-d'); // dir-u/dir-d per sortable.js
 }
+
+/**
+ * Save sort preference to localStorage for the current preset.
+ * Uses preset ID as key so each preset remembers its own sort order.
+ */
+function saveSortPreference() {
+  if (!currentPreset?.id) return;
+  const state = getCurrentSortState();
+  try {
+    localStorage.setItem(`preset-sort-${currentPreset.id}`, JSON.stringify(state));
+  } catch (e) {
+    // Silently ignore storage errors
+  }
+}
+
+/**
+ * Load sort preference from localStorage for a given preset.
+ * @param {string} presetId - The preset ID
+ * @returns {Object} Sort state with columnIndex and direction (defaults to col 0 asc)
+ */
+function loadSortPreference(presetId) {
+  try {
+    const saved = localStorage.getItem(`preset-sort-${presetId}`);
+    if (saved) {
+      const state = JSON.parse(saved);
+      if (typeof state.columnIndex === 'number' && (state.direction === 'asc' || state.direction === 'desc')) {
+        return state;
+      }
+    }
+  } catch (e) {
+    // Silently ignore parse errors
+  }
+  return { columnIndex: 0, direction: 'asc' };
+}
+
+// Listen for sortable.js header clicks to persist sort preference.
+// Uses event delegation so it works with dynamically loaded pages.
+document.addEventListener('click', function(e) {
+  const th = e.target.closest('#participants-table th');
+  if (!th || th.classList.contains('no-sort')) return;
+  // sortable.js runs synchronously on the same click, so defer to next tick
+  setTimeout(saveSortPreference, 0);
+});
 
 /**
  * Scroll to a participant row and highlight it
@@ -1592,10 +1697,14 @@ function saveEditedFolderName() {
     }
   });
 
-  // Re-render everything
+  // Re-render everything, preserving sort
+  const sortState = getCurrentSortState();
   renderCustomFolders();
   updateFolderSelects();
   loadParticipantsIntoTable(participantsData);
+  if (sortState) {
+    applySortState(sortState);
+  }
 
   // Close modal
   closeEditFolderModal();
@@ -1729,6 +1838,9 @@ async function editPreset(presetId) {
     // Load participants into table
     loadParticipantsIntoTable(participantsData);
 
+    // Apply saved sort preference (or default: number ascending)
+    applySortState(loadSortPreference(currentPreset.id));
+
     // Load IPTC metadata into form (if preset-iptc-editor.js is loaded)
     if (typeof loadIptcDataIntoForm === 'function') {
       loadIptcDataIntoForm(currentPreset.iptc_metadata || null);
@@ -1787,6 +1899,9 @@ async function viewOfficialPreset(presetId) {
 
     // Load participants into table
     loadParticipantsIntoTable(participantsData);
+
+    // Apply saved sort preference (or default: number ascending)
+    applySortState(loadSortPreference(currentPreset.id));
 
     // Apply read-only state to the modal
     setPresetEditorReadOnly(true);
@@ -2346,8 +2461,12 @@ function duplicateParticipant(rowIndex) {
  */
 function removeParticipant(rowIndex) {
   if (confirm('Remove this participant?')) {
+    const sortState = getCurrentSortState();
     participantsData.splice(rowIndex, 1);
     loadParticipantsIntoTable(participantsData);
+    if (sortState) {
+      applySortState(sortState);
+    }
   }
 }
 

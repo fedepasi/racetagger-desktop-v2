@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as fsPromises from 'fs/promises';
 import { EventEmitter } from 'events';
 import { createClient } from '@supabase/supabase-js';
-import { SUPABASE_CONFIG, APP_CONFIG, RESIZE_PRESETS, ResizePreset, DEBUG_MODE } from './config';
+import { SUPABASE_CONFIG, APP_CONFIG, RESIZE_PRESETS, ResizePreset, DEBUG_MODE, SEND_PRESET_TO_AI } from './config';
 import { getSupabaseClient, getSportCategories } from './database-service';
 import { authService } from './auth-service';
 import { getSharp, createImageProcessor } from './utils/native-modules';
@@ -1929,7 +1929,7 @@ class UnifiedImageWorker extends EventEmitter {
             storagePath,
             mimeType,
             sizeBytes: compressedBuffer.length,
-            participantPreset: this.participantsData.length > 0 ? {
+            participantPreset: (SEND_PRESET_TO_AI && this.participantsData.length > 0) ? {
               name: 'Preset Dynamic',
               participants: this.participantsData
             } : undefined,
@@ -2022,7 +2022,9 @@ class UnifiedImageWorker extends EventEmitter {
           } : undefined,
           modelName: APP_CONFIG.defaultModel,
           // V6 Baseline 2026: Track detection source for all crops
-          bboxSources: cropsPayload.map(() => detectionSource)
+          bboxSources: cropsPayload.map(() => detectionSource),
+          // V6 2026: Opt-in to labeled images for reliable imageIndex mapping
+          labelImages: true
         };
 
         // Retry logic for transient errors: network failures + capacity errors (429/503)
@@ -3093,6 +3095,11 @@ class UnifiedImageWorker extends EventEmitter {
           // storagePath available from upload above (or emergency upload)
           if (storagePath) {
             analysisResult = await this.analyzeImage(imageFile.fileName, storagePath, buffer.length, mimeType);
+            // V6 COMPATIBILITY: analyzeImage() with V6 returns cropAnalysis, not analysis
+            if (analysisResult && !analysisResult.analysis && analysisResult.cropAnalysis) {
+              analysisResult.analysis = analysisResult.cropAnalysis;
+              log.info(`[V6-Compat] CropContext fallback: Mapped cropAnalysis (${analysisResult.cropAnalysis.length} items) → analysis`);
+            }
           } else {
             log.error(`[CropContext] Cannot fall back to standard analysis — no storagePath available`);
             processingErrors.push({ phase: 'standard-fallback', message: 'No storagePath available for standard analysis fallback', recoverable: false, timestamp: new Date().toISOString() });
@@ -3128,6 +3135,16 @@ class UnifiedImageWorker extends EventEmitter {
         ]);
 
         analysisResult = onnxResult;
+
+        // V6 COMPATIBILITY: When local ONNX falls back to Gemini V6 via analyzeImage(),
+        // the V6 edge function returns { cropAnalysis: [...] } instead of { analysis: [...] }.
+        // Without this mapping, processAnalysisResults() sees analysis=undefined → vehicles=[] in JSONL,
+        // even though V6 found results (which are saved to DB by the edge function internally).
+        // BUG FIX: This mapping was only in the standard cloud API path (line ~3186), not here.
+        if (analysisResult && !analysisResult.analysis && analysisResult.cropAnalysis) {
+          analysisResult.analysis = analysisResult.cropAnalysis;
+          log.info(`[V6-Compat] Local ONNX fallback: Mapped cropAnalysis (${analysisResult.cropAnalysis.length} items) → analysis`);
+        }
 
         // Update storagePath from local ONNX result (may differ if fallback to Gemini occurred)
         if (analysisResult.storagePath && analysisResult.storagePath !== storagePath) {
@@ -3405,6 +3422,13 @@ class UnifiedImageWorker extends EventEmitter {
       console.log(`[DBUpdate] Check: dbImageId=${dbImageId}, vehicles.length=${vehicles.length}`);
 
       if (dbImageId && vehicles.length > 0) {
+        // ── Compute training_flags for YOLO-seg retraining pipeline ──
+        const trainingFlags = computeTrainingFlags(
+          analysisResult.segmentationPreprocessing,
+          analysisResult.recognitionMethod,
+          filteredAnalysis.length
+        );
+
         pendingUpdateData = {
           imageId: dbImageId,
           updateData: {
@@ -3419,11 +3443,16 @@ class UnifiedImageWorker extends EventEmitter {
               temporalContext: temporalContextLog,
               enrichedByDesktop: true,
               enrichedAt: new Date().toISOString()
-            }
+            },
+            // Training flags for YOLO-seg retraining (null if no flags)
+            ...(trainingFlags ? { training_flags: trainingFlags } : {})
           },
           timestamp: Date.now()
         };
 
+        if (trainingFlags) {
+          console.log(`[TrainingFlags] ${imageFile.fileName}: ${JSON.stringify(trainingFlags)}`);
+        }
         console.log(`[DBUpdate] Prepared update for ${dbImageId} (will be queued by processor)`);
       }
 
@@ -4296,8 +4325,8 @@ class UnifiedImageWorker extends EventEmitter {
       invokeBody.executionId = this.config.executionId;
     }
 
-    // Add participant preset data if available
-    if (this.participantsData.length > 0) {
+    // Add participant preset data if available (controlled by SEND_PRESET_TO_AI flag)
+    if (SEND_PRESET_TO_AI && this.participantsData.length > 0) {
       invokeBody.participantPreset = {
         name: `Preset Dynamic`,
         participants: this.participantsData
@@ -7996,6 +8025,99 @@ export class UnifiedImageProcessor extends EventEmitter {
       maxWorkers: this.config.maxConcurrentWorkers
     };
   }
+}
+
+// ========================================
+// Training Flags for YOLO-Seg Retraining
+// ========================================
+
+/**
+ * Computes training_flags JSONB for an analysis result.
+ * These flags enable instant queries in the management portal's
+ * Training Data page, avoiding expensive post-hoc JSONB scans.
+ *
+ * Returns null if no flags apply (image is not problematic).
+ */
+function computeTrainingFlags(
+  segmentationPreprocessing: any,
+  recognitionMethod: string | undefined,
+  totalVehiclesFound: number
+): Record<string, any> | null {
+  const flags: Record<string, any> = {};
+
+  const segPre = segmentationPreprocessing;
+  const detections = segPre?.detections || [];
+  const detectionsCount = segPre?.detectionsCount ?? detections.length;
+
+  // ── Flag: no_yolo ──
+  // YOLO was not used or recognition fell back to full-image
+  if (recognitionMethod === 'gemini-v6-full-image') {
+    flags.no_yolo = true;
+  }
+
+  // ── Flag: seg_fallback ──
+  // Segmentation ran but produced 0 usable crops, yet Gemini found vehicles
+  if (segPre?.used) {
+    const noDetections = detectionsCount === 0;
+    const allCropsFiltered = (
+      segPre.sharpnessFilter?.cropsAfterFilter === 0 &&
+      segPre.sharpnessFilter?.cropsBeforeFilter > 0
+    );
+
+    if ((noDetections || allCropsFiltered) && totalVehiclesFound > 0) {
+      flags.seg_fallback = true;
+    }
+  }
+
+  // ── Flag: low_confidence ──
+  // Any YOLO detection with confidence below 0.5
+  if (detections.length > 0) {
+    const minConf = Math.min(...detections.map((d: any) => d.confidence || 1));
+    if (minConf < 0.5) {
+      flags.low_confidence = true;
+    }
+  }
+
+  // ── Flag: split_bbox ──
+  // 2+ YOLO detections with significant bbox overlap (IoU > 0.15)
+  if (detections.length >= 2) {
+    let maxIou = 0;
+    for (let i = 0; i < detections.length; i++) {
+      for (let j = i + 1; j < detections.length; j++) {
+        const b1 = detections[i].bbox;
+        const b2 = detections[j].bbox;
+        if (!b1 || !b2) continue;
+
+        // IoU calculation (bbox format: { x, y, width, height } normalized 0-1)
+        const interX = Math.max(0, Math.min(b1.x + b1.width, b2.x + b2.width) - Math.max(b1.x, b2.x));
+        const interY = Math.max(0, Math.min(b1.y + b1.height, b2.y + b2.height) - Math.max(b1.y, b2.y));
+        const inter = interX * interY;
+        const union = b1.width * b1.height + b2.width * b2.height - inter;
+        const iou = union > 0 ? inter / union : 0;
+        if (iou > maxIou) maxIou = iou;
+      }
+    }
+    if (maxIou > 0.15) {
+      flags.split_bbox = true;
+      flags.iou_max = Math.round(maxIou * 1000) / 1000;
+    }
+  }
+
+  // ── Numeric metadata (always included when segmentation was used) ──
+  if (segPre?.used) {
+    flags.yolo_detections = detectionsCount;
+    if (detections.length > 0) {
+      flags.max_yolo_confidence = Math.round(
+        Math.max(...detections.map((d: any) => d.confidence || 0)) * 1000
+      ) / 1000;
+    }
+  }
+
+  // Return null if no actual problem flags were set (only metadata)
+  const hasProblems = flags.no_yolo || flags.seg_fallback || flags.low_confidence || flags.split_bbox;
+  if (!hasProblems) return null;
+
+  return flags;
 }
 
 // Esporta un'istanza singleton

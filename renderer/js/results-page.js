@@ -78,48 +78,50 @@ class ResultsPageManager {
    * Aggiorna l'header con le informazioni dell'execution
    */
   updateHeader(execution) {
-    const badge = document.getElementById('execution-badge');
-    const title = document.getElementById('results-title');
     const subtitle = document.getElementById('results-subtitle');
 
-    if (badge && execution.id) {
-      badge.textContent = `#${execution.id.slice(-8)}`;
-      badge.style.cssText = `
-        background: var(--accent-primary);
-        color: white;
-        padding: 2px 8px;
-        border-radius: 12px;
-        font-size: 12px;
-        font-weight: 500;
-      `;
-    }
-
-    // Keep the title as "Analysis Complete!" - don't override it
-    // Title is set in HTML and should remain static
-
     if (subtitle) {
-      // Show project name, total images, and date
-      const projectName = execution.project_name || execution.folder_name || 'Unnamed Project';
-      const totalImages = execution.total_images || 0;
-      const photosText = totalImages === 1 ? 'photo' : 'photos';
+      const projectName = execution.project_name || execution.folder_name || null;
 
-      subtitle.textContent = `${projectName} • ${totalImages} ${photosText} analyzed`;
+      if (projectName) {
+        subtitle.textContent = projectName;
+      } else {
+        // No project name — hide the subtitle entirely
+        subtitle.style.display = 'none';
+      }
     }
 
-    // Add sport category tag immediately (data is available on execution)
+    // Add sport category and preset tags with prominent styling
     const category = execution.category ||
                      execution.execution_settings?.sport_category;
-    if (category) {
-      const tagsContainer = document.getElementById('results-info-tags');
-      if (tagsContainer) {
+    const tagsContainer = document.getElementById('results-info-tags');
+    if (tagsContainer) {
+      let tagsHtml = '';
+
+      if (category) {
         const categoryLabel = category.charAt(0).toUpperCase() + category.slice(1);
-        tagsContainer.innerHTML = `
+        tagsHtml += `
           <span class="results-info-tag results-info-tag--category">
+            <span class="results-info-tag__icon">${this.getCategoryEmoji(category)}</span>
             <span class="results-info-tag__label">Category</span>
             <span class="results-info-tag__value">${categoryLabel}</span>
           </span>
         `;
       }
+
+      // Try to add preset tag immediately from execution_settings (before logVisualizer loads)
+      const presetName = execution.execution_settings?.participantPreset?.name;
+      if (presetName) {
+        tagsHtml += `
+          <span class="results-info-tag results-info-tag--preset" id="results-preset-tag">
+            <span class="results-info-tag__icon">&#x1F4CB;</span>
+            <span class="results-info-tag__label">Preset</span>
+            <span class="results-info-tag__value">${presetName}</span>
+          </span>
+        `;
+      }
+
+      tagsContainer.innerHTML = tagsHtml;
     }
   }
 
@@ -130,13 +132,42 @@ class ResultsPageManager {
     const tagsContainer = document.getElementById('results-info-tags');
     if (!tagsContainer || !presetName) return;
 
+    // Check if preset tag was already added from execution_settings
+    const existingTag = document.getElementById('results-preset-tag');
+    if (existingTag) {
+      // Update the value in case the DB-loaded name is more accurate
+      const valueEl = existingTag.querySelector('.results-info-tag__value');
+      if (valueEl) valueEl.textContent = presetName;
+      return;
+    }
+
     const presetTag = document.createElement('span');
     presetTag.className = 'results-info-tag results-info-tag--preset';
+    presetTag.id = 'results-preset-tag';
     presetTag.innerHTML = `
+      <span class="results-info-tag__icon">&#x1F4CB;</span>
       <span class="results-info-tag__label">Preset</span>
       <span class="results-info-tag__value">${presetName}</span>
     `;
     tagsContainer.appendChild(presetTag);
+  }
+
+  /**
+   * Get emoji for a sport category code
+   */
+  getCategoryEmoji(category) {
+    const emojiMap = {
+      'motorsport': '\u{1F3CE}\u{FE0F}',
+      'running': '\u{1F3C3}',
+      'cycling': '\u{1F6B4}',
+      'triathlon': '\u{1F3CA}',
+      'skiing': '\u{26F7}\u{FE0F}',
+      'equestrian': '\u{1F40E}',
+      'sailing': '\u{26F5}',
+      'aviation': '\u{2708}\u{FE0F}',
+      'other': '\u{1F4F7}'
+    };
+    return emojiMap[category?.toLowerCase()] || '\u{1F3C6}';
   }
 
   /**

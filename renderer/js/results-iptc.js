@@ -473,7 +473,8 @@ function buildResultsForFinalization() {
         isRaw: isRawFileClient(filePath),
         matchedParticipant: allMatchedParticipants.length > 0 ? allMatchedParticipants[0] : null,
         allMatchedParticipants: allMatchedParticipants.length > 0 ? allMatchedParticipants : undefined,
-        aiKeywords: r.logEvent?.keywords || []
+        aiKeywords: r.logEvent?.keywords || [],
+        visualTags: r.logEvent?.visualTags || r.visualTags || undefined
       };
     })
     .filter(r => r.imagePath); // Skip entries without a file path

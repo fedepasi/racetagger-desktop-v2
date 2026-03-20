@@ -120,7 +120,7 @@ function buildMetadataForResult(
   if (allParticipants.length <= 1) {
     // Single match or no match — standard path
     const participant = allParticipants[0];
-    return buildMetadataFromPresetIptc(
+    const metadata = buildMetadataFromPresetIptc(
       iptcMetadata,
       participant ? {
         name: participant.name,
@@ -133,6 +133,11 @@ function buildMetadataForResult(
       result.aiKeywords,
       keywordsMode
     );
+
+    // Include visual tags in keywords if enabled in IPTC profile
+    appendVisualTagsToKeywords(metadata, result.visualTags, iptcMetadata.includeVisualTags);
+
+    return metadata;
   }
 
   // ===== MULTI-MATCH: Aggregate participants for templates =====
@@ -225,7 +230,45 @@ function buildMetadataForResult(
     }
   }
 
+  // Include visual tags in keywords if enabled in IPTC profile
+  appendVisualTagsToKeywords(metadata, result.visualTags, iptcMetadata.includeVisualTags);
+
   return metadata;
+}
+
+/**
+ * Append flattened visual tags to metadata keywords if the flag is enabled.
+ * Avoids duplicates (case-insensitive).
+ */
+function appendVisualTagsToKeywords(
+  metadata: ExportDestinationMetadata,
+  visualTags: Record<string, string[]> | undefined,
+  includeVisualTags: boolean | undefined
+): void {
+  if (!includeVisualTags || !visualTags) return;
+
+  const flatTags = [
+    ...(visualTags.location || []),
+    ...(visualTags.weather || []),
+    ...(visualTags.sceneType || []),
+    ...(visualTags.subjects || []),
+    ...(visualTags.visualStyle || []),
+    ...(visualTags.emotion || []),
+  ];
+
+  if (flatTags.length === 0) return;
+
+  if (!metadata.keywords) {
+    metadata.keywords = [];
+  }
+
+  const existingLower = new Set(metadata.keywords.map(k => k.toLowerCase()));
+  for (const tag of flatTags) {
+    if (tag && !existingLower.has(tag.toLowerCase())) {
+      metadata.keywords.push(tag);
+      existingLower.add(tag.toLowerCase());
+    }
+  }
 }
 
 /**

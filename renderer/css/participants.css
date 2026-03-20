@@ -154,8 +154,10 @@
   padding: 1rem;
   transition: all 0.2s ease;
   position: relative;
-  overflow: visible; /* Allow dropdown to overflow */
-  isolation: isolate; /* Create new stacking context to prevent overlap issues */
+  overflow: visible;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
 }
 
 .preset-card:hover {
@@ -169,7 +171,6 @@
   justify-content: space-between;
   align-items: flex-start;
   margin-bottom: 0.75rem;
-  overflow: visible; /* Allow dropdown to overflow */
 }
 
 .preset-title {
@@ -190,6 +191,7 @@
 
 .preset-info {
   margin-bottom: 0.75rem;
+  flex: 1;
 }
 
 .preset-category {
@@ -213,8 +215,8 @@
 .preset-stats {
   display: flex;
   gap: 1rem;
-  margin-bottom: 0.75rem;
-  padding-top: 0.75rem;
+  margin-bottom: 0;
+  padding: 0.75rem 0;
   border-top: 1px solid var(--border-color-light);
 }
 
@@ -240,7 +242,12 @@
 
 .preset-actions-bottom {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.25rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-color-light);
+  justify-content: flex-end;
+  overflow: visible;
+  position: relative;
 }
 
 /* Export Dropdown */
@@ -264,17 +271,17 @@
 .dropdown-menu {
   display: none;
   position: absolute;
-  right: 0;
-  top: calc(100% + 0.5rem);
+  left: 0;
+  bottom: calc(100% + 0.5rem);
   background: var(--surface-color);
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.3);
   min-width: 280px;
-  z-index: 9999; /* Very high to ensure it's above everything */
-  overflow: hidden; /* Only for rounded corners on items */
+  z-index: 9999;
+  overflow: hidden;
   opacity: 0;
-  transform: translateY(-10px);
+  transform: translateY(10px);
   transition: opacity 0.2s ease, transform 0.2s ease;
   pointer-events: none;
 }
@@ -3536,6 +3543,10 @@
   line-height: 1.5;
 }
 
+.iptc-info-banner .info-text {
+  color: #cbd5e1;
+}
+
 .iptc-info-banner code {
   background: rgba(168, 85, 247, 0.15);
   padding: 0.125rem 0.375rem;
@@ -3553,8 +3564,19 @@
   margin-bottom: 1rem;
 }
 
+.iptc-editor-grid-top {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
 .iptc-editor-grid-bottom {
-  grid-template-columns: 2fr 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
+}
+
+/* Stacked column: two boxes vertically in one grid cell */
+.iptc-stacked-column {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
 }
 
 .iptc-editor-column {
@@ -3597,10 +3619,26 @@
 }
 
 .iptc-column-body .form-group {
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.875rem;
+  padding-left: 0.625rem;
+  border-left: 2px solid rgba(168, 85, 247, 0.25);
 }
 
 .iptc-column-body .form-group:last-child {
+  margin-bottom: 0;
+}
+
+/* Inline groups (radio buttons, checkboxes) and visual-tags don't need the left border */
+.iptc-column-body .form-group.form-group-inline,
+.iptc-column-body .iptc-visual-tags-option {
+  border-left: none;
+  padding-left: 0;
+}
+
+/* Nested form-groups inside row/half/third wrappers: only the parent row gets the border */
+.iptc-column-body .form-group .form-group {
+  border-left: none;
+  padding-left: 0;
   margin-bottom: 0;
 }
 
@@ -3608,10 +3646,12 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 0.25rem;
-  font-weight: 500;
-  color: var(--text-primary);
-  font-size: 0.8125rem;
+  margin-bottom: 0.375rem;
+  font-weight: 700;
+  color: #94a3b8;
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 /* IPTC inputs */
@@ -3643,6 +3683,55 @@
   font-family: inherit;
 }
 
+/* Contenteditable template fields with inline placeholder highlighting */
+.iptc-editable-template {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-y: auto;
+  cursor: text;
+  min-height: 4.5rem;
+  line-height: 1.5;
+}
+
+.iptc-editable-template:empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-secondary);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.iptc-editable-template:focus {
+  border-color: #a855f7;
+  box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.15);
+  outline: none;
+}
+
+.iptc-editable-template .placeholder-token {
+  color: #c084fc;
+  background: rgba(168, 85, 247, 0.18);
+  padding: 0.05rem 0.25rem;
+  border-radius: 3px;
+  font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+  font-size: 0.8em;
+}
+
+/* Single-line variant (Person Shown) */
+.iptc-editable-single {
+  min-height: unset;
+  white-space: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.iptc-editable-single br {
+  display: none;
+}
+
+.iptc-editable-single * {
+  display: inline;
+}
+
+
 /* Inline form groups */
 .form-group-inline {
   display: flex;
@@ -3671,8 +3760,11 @@
   align-items: center;
   gap: 0.375rem;
   font-size: 0.8125rem;
+  font-weight: 500;
   color: var(--text-primary);
   cursor: pointer;
+  text-transform: none;
+  letter-spacing: normal;
 }
 
 .checkbox-label input,
@@ -3680,14 +3772,52 @@
   accent-color: #a855f7;
 }
 
-/* Caption preview */
+/* Caption / Person Shown template preview */
 .iptc-caption-preview,
 .iptc-person-preview {
   display: none;
-  margin-top: 0.25rem;
+  margin-top: 0.5rem;
+  font-size: 0.8125rem;
+  color: #cbd5e1;
+  line-height: 1.6;
+}
+
+.iptc-caption-preview .preview-template,
+.iptc-person-preview .preview-template {
+  margin-bottom: 0.25rem;
+}
+
+.iptc-caption-preview .preview-example,
+.iptc-person-preview .preview-example {
+  color: #94a3b8;
   font-size: 0.75rem;
+}
+
+.iptc-caption-preview .preview-label,
+.iptc-person-preview .preview-label {
+  color: #64748b;
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-right: 0.375rem;
+}
+
+/* Placeholder tokens highlighted in previews — same style as banner codes */
+.iptc-caption-preview .placeholder-token,
+.iptc-person-preview .placeholder-token {
+  background: rgba(168, 85, 247, 0.15);
+  padding: 0.125rem 0.375rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
   color: #a855f7;
+}
+
+.iptc-caption-preview .preview-hint,
+.iptc-person-preview .preview-hint {
+  color: #64748b;
   font-style: italic;
+  font-size: 0.75rem;
 }
 
 /* Tag input for keywords */
@@ -3759,6 +3889,110 @@
   opacity: 0.5;
 }
 
+/* Keyword placeholder shortcut buttons */
+.iptc-keyword-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  margin-bottom: 0.375rem;
+}
+
+.iptc-keyword-shortcuts .shortcuts-label {
+  font-size: 0.6875rem;
+  color: #64748b;
+  margin-right: 0.125rem;
+}
+
+/* Template placeholder shortcuts (insert at cursor in text fields) */
+.iptc-template-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  margin-bottom: 0.375rem;
+}
+
+.template-shortcut-btn,
+.keyword-shortcut-btn {
+  background: rgba(168, 85, 247, 0.12);
+  color: #a855f7;
+  border: 1px solid rgba(168, 85, 247, 0.25);
+  border-radius: 4px;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.75rem;
+  font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.template-shortcut-btn:hover,
+.keyword-shortcut-btn:hover {
+  background: rgba(168, 85, 247, 0.25);
+  border-color: #a855f7;
+}
+
+.template-shortcut-btn:active,
+.keyword-shortcut-btn:active {
+  transform: scale(0.95);
+}
+
+.keyword-shortcut-btn.shortcut-added {
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+  border-color: rgba(34, 197, 94, 0.3);
+}
+
+/* Visual tags feature card in Keywords section */
+.iptc-visual-tags-option {
+  margin-top: 0.75rem;
+  padding: 0.625rem 0.75rem;
+  border-radius: 0.5rem;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.08) 0%, rgba(168, 85, 247, 0.1) 100%);
+  border: 1px solid rgba(139, 92, 246, 0.25);
+}
+
+.visual-tags-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.visual-tags-toggle input[type="checkbox"] {
+  accent-color: #8b5cf6;
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+}
+
+.visual-tags-label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: #c4b5fd;
+  letter-spacing: 0.01em;
+}
+
+.visual-tags-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.5rem;
+  margin-left: 1.5rem;
+}
+
+.visual-tag-badge {
+  font-size: 0.625rem;
+  font-weight: 500;
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  background: rgba(139, 92, 246, 0.15);
+  color: #a78bfa;
+  border: 1px solid rgba(139, 92, 246, 0.2);
+  letter-spacing: 0.03em;
+  text-transform: lowercase;
+}
+
 /* Field destination labels in IPTC — reuse existing but purple theme */
 .iptc-column-body .field-destination {
   font-size: 0.625rem;
@@ -3768,6 +4002,8 @@
   padding: 0.0625rem 0.375rem;
   border-radius: 8px;
   font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+  text-transform: none;
+  letter-spacing: normal;
 }
 
 /* Responsive */
@@ -3775,13 +4011,17 @@
   .iptc-editor-grid {
     grid-template-columns: repeat(2, 1fr);
   }
-  .iptc-editor-grid-bottom {
+  .iptc-editor-grid-top {
     grid-template-columns: 1fr 1fr;
+  }
+  .iptc-editor-grid-bottom {
+    grid-template-columns: repeat(2, 1fr);
   }
 }
 
 @media (max-width: 768px) {
   .iptc-editor-grid,
+  .iptc-editor-grid-top,
   .iptc-editor-grid-bottom {
     grid-template-columns: 1fr;
   }

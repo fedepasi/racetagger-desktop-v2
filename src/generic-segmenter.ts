@@ -2,7 +2,7 @@
  * Generic Segmenter Service
  *
  * Local inference using ONNX Runtime for generic object segmentation.
- * Supports both YOLOv8-seg (COCO) and custom YOLOv11 models.
+ * Supports YOLOv8-seg (COCO), custom YOLOv11, and YOLO26 end2end models.
  *
  * This is a SEPARATE model from RF-DETR - it runs BEFORE recognition
  * to isolate subjects and create clean crops without overlaps.
@@ -12,6 +12,7 @@
  * - Instance segmentation with mask output
  * - Per-category class filtering via sport_categories.segmentation_config
  * - Memory-efficient buffer handling
+ * - Auto-detects raw vs end2end (NMS built-in) output format
  */
 
 import * as path from 'path';
@@ -86,7 +87,7 @@ export const DEFAULT_SEGMENTER_CONFIG: GenericSegmenterConfig = {
   iouThreshold: 0.45,
   maskThreshold: 0.5,
   relevantClassIds: [],                   // Computed from relevantClassNames
-  relevantClassNames: ['vehicle', 'rider', 'runner'],  // Default relevant classes
+  relevantClassNames: ['vehicle', 'rider', 'runner', 'Cyclist'],  // Default relevant classes
   maxDetections: 5,
 };
 
@@ -390,27 +391,39 @@ export class GenericSegmenter {
 
       const results = await this.session.run(feeds);
 
-      // Parse detections with masks
-      const detections = await this.parseDetectionsWithMasks(
-        results,
-        originalWidth,
-        originalHeight,
-        scale,
-        padX,
-        padY
-      );
+      // Parse detections with masks (auto-detects raw vs end2end format)
+      const isEnd2End = this.currentModelConfig?.outputFormat === 'end2end';
+      const detections = isEnd2End
+        ? await this.parseEnd2EndDetectionsWithMasks(
+            results, originalWidth, originalHeight, scale, padX, padY
+          )
+        : await this.parseRawDetectionsWithMasks(
+            results, originalWidth, originalHeight, scale, padX, padY
+          );
 
-      // Apply NMS
-      const filteredDetections = this.applyNMS(detections, this.config.iouThreshold);
+      // Apply NMS only for raw format (end2end models have NMS built-in)
+      const filteredDetections = isEnd2End
+        ? detections
+        : this.applyNMS(detections, this.config.iouThreshold);
 
-      // Filter by confidence and relevant classes, then limit by maxDetections
+      // Filter by confidence and relevant classes, then sort by area (largest first)
+      // so the most prominent/foreground subject becomes seg_0.
+      // This ensures consistent detection ordering for downstream pipeline
+      // (sharpness filter, crop-to-result mapping, dedup priority).
+      const ts = Date.now();
       const finalDetections = filteredDetections
         .filter(d => d.confidence >= this.config.confidenceThreshold)
         .filter(d => this.config.relevantClassIds.length === 0 || this.config.relevantClassIds.includes(d.classId))
+        .sort((a, b) => {
+          // Sort by bbox area descending — larger subjects (foreground) first
+          const areaA = a.bbox.width * a.bbox.height;
+          const areaB = b.bbox.width * b.bbox.height;
+          return areaB - areaA;
+        })
         .slice(0, this.config.maxDetections)
         .map((d, idx) => ({
           ...d,
-          detectionId: `seg_${idx}_${Date.now()}`,
+          detectionId: `seg_${idx}_${ts}`,
         }));
 
       const inferenceTimeMs = Date.now() - startTime;
@@ -427,14 +440,14 @@ export class GenericSegmenter {
   }
 
   /**
-   * Parse YOLO-seg output (supports both YOLOv8 and YOLOv11)
+   * Parse raw YOLO-seg output (YOLOv8 and YOLOv11 — no built-in NMS)
    * Output format:
    * - output0: [1, N, 8400] - detections where N = 4 (bbox) + NUM_CLASSES + 32 (mask coeffs)
    *   - YOLOv8 COCO: N = 4 + 80 + 32 = 116
    *   - YOLOv11 Custom: N = 4 + 6 + 32 = 42
    * - output1: [1, 32, 160, 160] - mask prototypes
    */
-  private async parseDetectionsWithMasks(
+  private async parseRawDetectionsWithMasks(
     results: import('onnxruntime-node').InferenceSession.OnnxValueMapType,
     originalWidth: number,
     originalHeight: number,
@@ -555,6 +568,135 @@ export class GenericSegmenter {
         classId: bestClassId,
         className: getClassName(this.config.modelId, bestClassId),
         confidence: maxClassScore,
+        bbox,
+        mask,
+        maskDims,
+        detectionId: '',
+      });
+    }
+
+    return detections;
+  }
+
+  /**
+   * Parse end2end YOLO-seg output (YOLO26 — NMS built into the model)
+   * Output format:
+   * - output0: [1, maxDet, F] - detections where F = 4 (bbox x1y1x2y2) + 1 (conf) + 1 (class_id) + 32 (mask coeffs) = 38
+   *   - maxDet is typically 300 (max detections from built-in NMS)
+   *   - bbox is in pixel coordinates (input space), x1y1x2y2 format
+   * - output1: [1, 32, 160, 160] - mask prototypes
+   */
+  private async parseEnd2EndDetectionsWithMasks(
+    results: import('onnxruntime-node').InferenceSession.OnnxValueMapType,
+    originalWidth: number,
+    originalHeight: number,
+    scale: number,
+    padX: number,
+    padY: number
+  ): Promise<SegmentationResult[]> {
+    const detections: SegmentationResult[] = [];
+
+    // Expected features per detection: 4 bbox + 1 conf + 1 class_id + 32 mask_coeffs
+    const expectedFeatures = 4 + 1 + 1 + this.NUM_MASK_COEFFS;
+
+    // Get output tensors
+    const outputNames = Object.keys(results);
+
+    let detectionsOutput: Float32Array | null = null;
+    let prototypesOutput: Float32Array | null = null;
+    let detectionsShape: readonly number[] = [];
+
+    for (const name of outputNames) {
+      const tensor = results[name];
+      const dims = tensor.dims;
+
+      // Detection output: [1, maxDet, F] where F matches expected features
+      // end2end: dims[2] = features (row-major), NOT dims[1] like raw format
+      if (dims.length === 3 && dims[2] === expectedFeatures) {
+        detectionsOutput = tensor.data as Float32Array;
+        detectionsShape = dims;
+      }
+      // Prototype output: [1, 32, 160, 160]
+      else if (dims.length === 4 && dims[1] === this.NUM_MASK_COEFFS) {
+        prototypesOutput = tensor.data as Float32Array;
+      }
+    }
+
+    if (!detectionsOutput) {
+      console.warn(`[GenericSegmenter] End2end detection output not found. Expected feature count: ${expectedFeatures}, got shapes: ${outputNames.map(n => `${n}=${JSON.stringify(results[n].dims)}`).join(', ')}`);
+      return detections;
+    }
+
+    const maxDetections = Number(detectionsShape[1]); // typically 300
+    const numFeatures = Number(detectionsShape[2]);
+
+    for (let d = 0; d < maxDetections; d++) {
+      const baseIdx = d * numFeatures;
+
+      // Read confidence (index 4)
+      const confidence = detectionsOutput[baseIdx + 4];
+
+      // Skip low confidence (early filter — end2end already did NMS but may include low-conf padding)
+      if (confidence < 0.1) continue;
+
+      // Read class ID (index 5)
+      const classId = Math.round(detectionsOutput[baseIdx + 5]);
+
+      // Skip irrelevant classes if filter is set
+      if (this.config.relevantClassIds.length > 0 && !this.config.relevantClassIds.includes(classId)) continue;
+
+      // Read bbox — x1, y1, x2, y2 in input pixel coordinates
+      const x1_input = detectionsOutput[baseIdx + 0];
+      const y1_input = detectionsOutput[baseIdx + 1];
+      const x2_input = detectionsOutput[baseIdx + 2];
+      const y2_input = detectionsOutput[baseIdx + 3];
+
+      // Remove letterbox padding and scale back to original image
+      const x1 = (x1_input - padX) / scale;
+      const y1 = (y1_input - padY) / scale;
+      const x2 = (x2_input - padX) / scale;
+      const y2 = (y2_input - padY) / scale;
+
+      // Normalize to 0-1 relative to original image
+      const bbox: BoundingBox = {
+        x: Math.max(0, x1 / originalWidth),
+        y: Math.max(0, y1 / originalHeight),
+        width: Math.min(1, Math.max(0, (x2 - x1) / originalWidth)),
+        height: Math.min(1, Math.max(0, (y2 - y1) / originalHeight)),
+      };
+
+      // Read mask coefficients (indices 6..37)
+      const maskCoeffs = new Float32Array(this.NUM_MASK_COEFFS);
+      for (let m = 0; m < this.NUM_MASK_COEFFS; m++) {
+        maskCoeffs[m] = detectionsOutput[baseIdx + 6 + m];
+      }
+
+      // Generate mask from coefficients and prototypes
+      let mask: Uint8Array;
+      let maskDims: [number, number];
+
+      if (prototypesOutput) {
+        mask = this.decodeMask(
+          maskCoeffs,
+          prototypesOutput,
+          bbox,
+          originalWidth,
+          originalHeight,
+          scale,
+          padX,
+          padY
+        );
+        maskDims = [originalHeight, originalWidth];
+      } else {
+        // Fallback: create rectangular mask from bbox
+        mask = this.createRectangularMask(bbox, originalWidth, originalHeight);
+        maskDims = [originalHeight, originalWidth];
+      }
+
+      detections.push({
+        classId,
+        className: getClassName(this.config.modelId, classId),
+        confidence,
         bbox,
         mask,
         maskDims,

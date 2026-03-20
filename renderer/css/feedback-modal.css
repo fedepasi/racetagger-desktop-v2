@@ -12,38 +12,46 @@
 }
 
 .feedback-fab {
-  width: 52px;
-  height: 52px;
-  border-radius: 50%;
+  height: 44px;
+  border-radius: 22px;
   border: none;
-  background: var(--accent-primary, #3b82f6);
-  color: #ffffff;
+  background: linear-gradient(135deg, #f59e0b, #eab308);
+  color: #1a1a2e;
   cursor: pointer;
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 8px;
+  padding: 0 18px;
   box-shadow:
-    0 4px 12px rgba(59, 130, 246, 0.35),
-    0 2px 4px rgba(0, 0, 0, 0.1);
-  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+    0 4px 14px rgba(245, 158, 11, 0.35),
+    0 2px 4px rgba(0, 0, 0, 0.15);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
   flex-shrink: 0;
+  font-family: inherit;
 }
 
 .feedback-fab:hover {
-  transform: scale(1.08);
-  background: var(--primary-hover, #2563eb);
+  transform: translateY(-2px);
   box-shadow:
-    0 6px 20px rgba(59, 130, 246, 0.45),
-    0 3px 6px rgba(0, 0, 0, 0.12);
+    0 6px 22px rgba(245, 158, 11, 0.5),
+    0 3px 6px rgba(0, 0, 0, 0.15);
 }
 
 .feedback-fab:active {
-  transform: scale(0.95);
+  transform: translateY(0) scale(0.97);
 }
 
 .feedback-fab-icon {
-  width: 22px;
-  height: 22px;
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
+  flex-shrink: 0;
+}
+
+.feedback-fab-label {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
   pointer-events: none;
 }
 
@@ -54,12 +62,12 @@
   align-items: center;
   gap: 8px;
   background: var(--bg-primary, #1e1e2e);
-  border: 1px solid var(--accent-primary, #3b82f6);
+  border: 1px solid rgba(245, 158, 11, 0.5);
   border-radius: 10px;
   padding: 10px 14px;
   max-width: 260px;
   box-shadow:
-    0 4px 16px rgba(59, 130, 246, 0.25),
+    0 4px 16px rgba(245, 158, 11, 0.2),
     0 2px 6px rgba(0, 0, 0, 0.2);
   animation: fabTooltipIn 0.4s ease-out;
 }

@@ -559,32 +559,194 @@ export const DEFAULT_SHARPNESS_FILTER_CONFIG: SharpnessFilterConfig = {
 
 /**
  * Sharpness score result for a single crop
+ *
+ * Uses Gradient Decay Ratio: content-independent metric that measures
+ * how much edge energy is lost when a known Gaussian blur is applied.
+ * Sharp images lose more (high score), blurry images lose little (low score).
  */
 export interface SharpnessScore {
   detectionId: string;
+  /**
+   * Gradient Decay Ratio (0-100 scale).
+   * Named 'laplacianVariance' for backward compatibility with existing
+   * JSONL logs and management portal modal.
+   */
   laplacianVariance: number;
   /** Normalized score 0-1 relative to other crops in the same image */
   normalizedScore: number;
+  /** Edge-only gradient ratio (0-100). Content-independent sharpness. */
+  edgeOnlyDecay?: number;
+  /** Bbox area (0-1 normalized to largest in image). */
+  bboxArea?: number;
+  /** ONNX detection confidence (0-1). */
+  onnxConfidence?: number;
+  /**
+   * Composite Subject Score (0-100).
+   * Weighted combination: 40% edgeOnly + 25% bboxArea + 20% onnxConf + 15% globalDecay
+   * Higher = more likely primary subject. Ratio-based filtering on this score.
+   */
+  compositeScore?: number;
 }
 
 /**
- * Calculate sharpness score for a crop buffer using Laplacian variance
- * on a center-weighted ROI at a standardized resolution.
+ * Calculate sharpness score using the GRADIENT DECAY RATIO method.
  *
- * IMPORTANT: Crops arrive already resized (maxDimension=1024px). Larger subjects
- * in the original image get downscaled more aggressively, which artificially smooths
- * them. We normalize by resizing ALL crops to the SAME fixed resolution before
- * computing the Laplacian, ensuring a fair comparison across different subject sizes.
+ * The previous Laplacian Variance approach measured edge/texture DENSITY,
+ * not optical sharpness. A smooth car body in perfect focus could score
+ * lower than a textured background car slightly out of focus.
  *
- * Additionally, we sample only the CENTER 60% of the crop to focus on the actual
- * subject rather than padding, background, or track elements at the edges.
+ * The Gradient Decay Ratio is CONTENT-INDEPENDENT:
+ * 1. Compute Laplacian variance of the ORIGINAL crop (edge energy)
+ * 2. Apply a known Gaussian blur to the crop
+ * 3. Compute Laplacian variance of the BLURRED version
+ * 4. Score = 1 - (blurred_variance / original_variance)
  *
- * Pipeline: crop → center 60% ROI → resize to 512px → grayscale → Laplacian → stdev²
+ * Why this works: A SHARP image has well-defined edges that degrade
+ * significantly when blurred → high decay ratio (0.7-0.9).
+ * A BLURRY image already lacks high-frequency content, so additional
+ * blur barely changes it → low decay ratio (0.1-0.4).
  *
- * Typically ~3-8ms per crop.
+ * The division normalizes out absolute edge density — the score depends
+ * only on how "crisp" the edges are, not how many there are.
+ *
+ * Reference: arxiv.org/abs/2410.10488 (Normalized Gradient Decay metric)
+ *
+ * Pipeline: crop → center 60% ROI → resize to 512px → grayscale →
+ *           {Laplacian variance of original} vs {Laplacian variance of blurred}
+ *
+ * Typically ~5-12ms per crop (two Laplacian passes).
  */
 const SHARPNESS_ANALYSIS_SIZE = 512;  // Fixed size for fair comparison
 const SHARPNESS_CENTER_RATIO = 0.6;   // Use center 60% of the crop
+const DECAY_BLUR_SIGMA = 2.0;         // Gaussian blur sigma for decay measurement
+
+// Temporary cache to pass edgeOnly scores from calculateSharpnessScore to filterCropsBySharpness
+// WeakMap keyed by crop buffer — auto-cleaned when buffer is GC'd
+const lastEdgeOnlyScores = new WeakMap<Buffer, number>();
+
+/**
+ * Compute Laplacian variance directly from raw pixel buffer.
+ *
+ * WHY NOT Sharp's .convolve().stats()?
+ * Sharp operates on uint8 (0-255) images. The Laplacian kernel [0,1,0,-4,1,0,1,0]
+ * produces values from -1020 to +1020. Even with offset=128, extreme values get
+ * clamped to [0, 255], DESTROYING the variance calculation. This caused negative
+ * decay ratios (blurred variance > original) and incorrect filtering.
+ *
+ * This function computes the Laplacian using int32 arithmetic — no clamping possible.
+ * For a 512x512 image, this is ~260K iterations (~2-4ms on Apple M1).
+ *
+ * @param pixels Raw grayscale pixel buffer (1 byte per pixel)
+ * @param width Image width
+ * @param height Image height
+ * @returns Laplacian variance (higher = more edges = sharper)
+ */
+function computeLaplacianVariance(pixels: Buffer, width: number, height: number): number {
+  let sum = 0;
+  let sumSq = 0;
+  let count = 0;
+
+  // Apply Laplacian kernel [0,1,0,1,-4,1,0,1,0] — skip 1px border
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const idx = y * width + x;
+      // Laplacian = top + left + right + bottom - 4*center
+      const lap = pixels[idx - width]       // top
+               + pixels[idx - 1]            // left
+               + pixels[idx + 1]            // right
+               + pixels[idx + width]        // bottom
+               - 4 * pixels[idx];           // center (int32, no clamping)
+
+      sum += lap;
+      sumSq += lap * lap;
+      count++;
+    }
+  }
+
+  // Variance = E[X²] - E[X]²
+  const mean = sum / count;
+  return (sumSq / count) - (mean * mean);
+}
+
+/**
+ * Compute gradient magnitude for each pixel using Sobel operator.
+ * Returns a Float64 array of gradient magnitudes: sqrt(Gx² + Gy²)
+ */
+function computeGradientMagnitude(pixels: Buffer, width: number, height: number): Float64Array {
+  const grad = new Float64Array(width * height);
+
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const idx = y * width + x;
+      // Sobel X: [-1,0,1; -2,0,2; -1,0,1]
+      const gx = -pixels[idx - width - 1] + pixels[idx - width + 1]
+               - 2 * pixels[idx - 1]       + 2 * pixels[idx + 1]
+               - pixels[idx + width - 1]   + pixels[idx + width + 1];
+      // Sobel Y: [-1,-2,-1; 0,0,0; 1,2,1]
+      const gy = -pixels[idx - width - 1] - 2 * pixels[idx - width] - pixels[idx - width + 1]
+               + pixels[idx + width - 1]  + 2 * pixels[idx + width]  + pixels[idx + width + 1];
+
+      grad[idx] = Math.sqrt(gx * gx + gy * gy);
+    }
+  }
+  return grad;
+}
+
+/**
+ * Edge-only gradient ratio: simplified Zhuo-Sim defocus estimator.
+ *
+ * Instead of computing decay globally (which dilutes the signal on smooth surfaces),
+ * this method:
+ * 1. Computes Sobel gradient magnitude for original and blurred images
+ * 2. Identifies "edge pixels" (top percentile of gradient magnitude)
+ * 3. Computes the gradient ratio (blurred/original) ONLY at those edge locations
+ * 4. Returns median ratio inverted as a score: lower ratio = sharper = higher score
+ *
+ * This is content-independent: a smooth car body has fewer edges, but each
+ * measurable edge reflects the TRUE optical blur. A textured but blurry car
+ * will have wide edges (high ratio) regardless of how many edges it has.
+ *
+ * ~5-8ms per crop on Apple M1 for 512x512.
+ */
+function computeEdgeOnlyGradientRatio(
+  originalPixels: Buffer,
+  blurredPixels: Buffer,
+  width: number,
+  height: number
+): number {
+  const gradOrig = computeGradientMagnitude(originalPixels, width, height);
+  const gradBlur = computeGradientMagnitude(blurredPixels, width, height);
+
+  // Find edge threshold: top 15% of gradient values
+  // Using a quick partial sort approach for performance
+  const nonZeroGrads: number[] = [];
+  for (let i = 0; i < gradOrig.length; i++) {
+    if (gradOrig[i] > 5) nonZeroGrads.push(gradOrig[i]); // Skip near-zero (flat areas)
+  }
+  if (nonZeroGrads.length < 20) return 0; // Not enough edges
+
+  nonZeroGrads.sort((a, b) => b - a);
+  const edgeThreshold = nonZeroGrads[Math.floor(nonZeroGrads.length * 0.15)] || 10;
+
+  // Collect gradient ratios at edge locations
+  const ratios: number[] = [];
+  for (let i = 0; i < gradOrig.length; i++) {
+    if (gradOrig[i] >= edgeThreshold) {
+      const ratio = gradBlur[i] / (gradOrig[i] + 1e-6);
+      ratios.push(ratio);
+    }
+  }
+
+  if (ratios.length < 10) return 0;
+
+  // Median of ratios (sort and take middle)
+  ratios.sort((a, b) => a - b);
+  const medianRatio = ratios[Math.floor(ratios.length / 2)];
+
+  // Invert and scale: ratio close to 0 = very sharp, ratio close to 1 = very blurry
+  // Score = (1 - medianRatio) * 100 → higher = sharper
+  return (1 - medianRatio) * 100;
+}
 
 export async function calculateSharpnessScore(cropBuffer: Buffer): Promise<number> {
   try {
@@ -599,24 +761,54 @@ export async function calculateSharpnessScore(cropBuffer: Buffer): Promise<numbe
     const roiX = Math.round((w - roiW) / 2);
     const roiY = Math.round((h - roiH) / 2);
 
-    // Extract center ROI → resize to fixed size → grayscale → Laplacian
-    const stats = await sharp(cropBuffer)
-      .extract({ left: roiX, top: roiY, width: roiW, height: roiH })
-      .resize(SHARPNESS_ANALYSIS_SIZE, SHARPNESS_ANALYSIS_SIZE, { fit: 'fill' })
-      .grayscale()
-      .convolve({
-        width: 3,
-        height: 3,
-        kernel: [0, 1, 0, 1, -4, 1, 0, 1, 0],  // Laplacian kernel
-      })
-      .stats();
+    const extractOpts = { left: roiX, top: roiY, width: roiW, height: roiH };
+    const SIZE = SHARPNESS_ANALYSIS_SIZE;
 
-    // Variance of Laplacian = stdev² of the convolved image
-    // Higher = sharper/more in-focus
-    const stdev = stats.channels[0]?.stdev || 0;
-    return stdev * stdev;  // Laplacian variance
-  } catch (error) {
-    log.warn(`Sharpness calculation failed, returning 0:`, error);
+    // Get raw grayscale pixels of the ORIGINAL crop
+    const originalRaw = await sharp(cropBuffer)
+      .extract(extractOpts)
+      .resize(SIZE, SIZE, { fit: 'fill' })
+      .grayscale()
+      .raw()
+      .toBuffer();
+
+    // Get raw grayscale pixels of the BLURRED crop
+    const blurredRaw = await sharp(cropBuffer)
+      .extract(extractOpts)
+      .resize(SIZE, SIZE, { fit: 'fill' })
+      .grayscale()
+      .blur(DECAY_BLUR_SIGMA)
+      .raw()
+      .toBuffer();
+
+    // Compute Laplacian variance in JavaScript (int32, NO uint8 clamping!)
+    const originalVariance = computeLaplacianVariance(originalRaw, SIZE, SIZE);
+    const blurredVariance = computeLaplacianVariance(blurredRaw, SIZE, SIZE);
+
+    // Guard: essentially flat crop (no edges at all)
+    if (originalVariance < 1) {
+      log.debug(`Sharpness: originalVariance=${originalVariance.toFixed(3)} < 1, returning 0 (flat crop)`);
+      return 0;
+    }
+
+    // Gradient Decay Ratio: how much edge energy is lost by blurring
+    // Sharp image: high decay (0.5-0.8) → edges are crisp, blur destroys them
+    // Blurry image: low decay (0.05-0.3) → edges already spread, blur changes little
+    const decayRatio = 1 - (blurredVariance / originalVariance);
+    const globalDecay = decayRatio * 100;
+
+    // EXPERIMENTAL: Edge-only gradient ratio (Zhuo-Sim simplified)
+    const edgeOnlyDecay = computeEdgeOnlyGradientRatio(originalRaw, blurredRaw, SIZE, SIZE);
+
+    log.debug(`Sharpness: globalDecay=${globalDecay.toFixed(1)}%, edgeOnly=${edgeOnlyDecay.toFixed(1)}% (origVar=${originalVariance.toFixed(1)}, blurVar=${blurredVariance.toFixed(1)})`);
+
+    // Return global decay as the active score (edgeOnly is logged for comparison)
+    // Store edgeOnlyDecay in a module-level cache so filterCropsBySharpness can include it
+    lastEdgeOnlyScores.set(cropBuffer, edgeOnlyDecay);
+
+    return globalDecay;
+  } catch (error: any) {
+    log.warn(`Sharpness calculation failed, returning 0. Error: ${error?.message || error}`, error?.stack ? `\nStack: ${error.stack}` : '');
     return 0;
   }
 }
@@ -658,39 +850,85 @@ export async function filterCropsBySharpness<T extends CropResult>(
   // Calculate sharpness for all crops in parallel
   const startTime = Date.now();
   const rawScores = await Promise.all(
-    crops.map(async (crop) => ({
-      detectionId: crop.detectionId,
-      laplacianVariance: await calculateSharpnessScore(crop.buffer),
-      normalizedScore: 0,  // Filled below
-    }))
+    crops.map(async (crop) => {
+      const globalDecay = await calculateSharpnessScore(crop.buffer);
+      const edgeOnly = lastEdgeOnlyScores.get(crop.buffer) ?? undefined;
+      // Extract ONNX confidence from MaskedCropResult if available
+      const onnxConf = (crop as any).segmentationMask?.confidence as number | undefined;
+      // Bbox area (normalized 0-1 product of width*height)
+      const bboxArea = crop.originalBbox.width * crop.originalBbox.height;
+      return {
+        detectionId: crop.detectionId,
+        laplacianVariance: globalDecay,
+        normalizedScore: 0,  // Filled below
+        edgeOnlyDecay: edgeOnly,
+        bboxArea,
+        onnxConfidence: onnxConf,
+      };
+    })
   );
 
-  // Find max sharpness for normalization
-  const maxSharpness = Math.max(...rawScores.map(s => s.laplacianVariance), 1);
+  // ── Compute Composite Subject Score ──
+  // Normalize each signal to 0-1 within this image, then weighted average.
+  // This makes the composite purely relative — works for both "single dominant subject"
+  // and "starting grid with many equal cars" scenarios.
+  const maxEdge = Math.max(...rawScores.map(s => s.edgeOnlyDecay ?? 0), 1);
+  const maxArea = Math.max(...rawScores.map(s => s.bboxArea), 0.001);
+  const maxGlobal = Math.max(...rawScores.map(s => s.laplacianVariance), 1);
 
-  // Normalize scores relative to the best
-  const sharpnessScores: SharpnessScore[] = rawScores.map(s => ({
-    ...s,
-    normalizedScore: maxSharpness > 0 ? s.laplacianVariance / maxSharpness : 0,
-  }));
+  // Check if ONNX confidence is available for ANY crop
+  const hasOnnx = rawScores.some(s => typeof s.onnxConfidence === 'number');
+  const maxOnnx = hasOnnx ? Math.max(...rawScores.map(s => s.onnxConfidence ?? 0), 0.01) : 1;
 
-  // Sort scores to find the sharpest
+  // Weights — dynamically adjusted when ONNX is not available
+  // With ONNX:    40% edge + 25% area + 20% onnx + 15% global = 100%
+  // Without ONNX: 50% edge + 30% area + 20% global = 100%
+  const W_EDGE   = hasOnnx ? 0.40 : 0.50;
+  const W_AREA   = hasOnnx ? 0.25 : 0.30;
+  const W_ONNX   = hasOnnx ? 0.20 : 0.00;
+  const W_GLOBAL = hasOnnx ? 0.15 : 0.20;
+
+  const sharpnessScores: SharpnessScore[] = rawScores.map(s => {
+    const normEdge = (s.edgeOnlyDecay ?? 0) / maxEdge;
+    const normArea = s.bboxArea / maxArea;
+    const normOnnx = hasOnnx ? (s.onnxConfidence ?? 0) / maxOnnx : 0;
+    const normGlobal = s.laplacianVariance / maxGlobal;
+
+    const composite = (W_EDGE * normEdge + W_AREA * normArea + W_ONNX * normOnnx + W_GLOBAL * normGlobal) * 100;
+
+    return {
+      ...s,
+      compositeScore: composite,
+      normalizedScore: 0, // Filled below after we know the max composite
+    };
+  });
+
+  // Normalize scores relative to the best composite
+  const maxComposite = Math.max(...sharpnessScores.map(s => s.compositeScore ?? 0), 1);
+  for (const s of sharpnessScores) {
+    s.normalizedScore = (s.compositeScore ?? 0) / maxComposite;
+    // Keep laplacianVariance as composite for the ratio-based filter logic
+    // (backward compat: the ratio filter reads laplacianVariance)
+    s.laplacianVariance = s.compositeScore ?? 0;
+  }
+
+  // Sort by composite score
   const sortedBySharpness = [...sharpnessScores].sort(
-    (a, b) => b.laplacianVariance - a.laplacianVariance
+    (a, b) => (b.compositeScore ?? 0) - (a.compositeScore ?? 0)
   );
 
   const bestScore = sortedBySharpness[0];
   const elapsedMs = Date.now() - startTime;
 
   if (config.debug) {
-    log.info(`[Sharpness] Scores (${elapsedMs}ms): ${
+    log.info(`[Sharpness] Composite scores (${elapsedMs}ms): ${
       sharpnessScores.map(s =>
-        `${s.detectionId}: ${s.laplacianVariance.toFixed(1)} (${(s.normalizedScore * 100).toFixed(0)}%)`
+        `${s.detectionId}: composite=${s.compositeScore?.toFixed(1)} (edge=${s.edgeOnlyDecay?.toFixed(1)}% area=${((s.bboxArea ?? 0) * 100).toFixed(0)}% onnx=${((s.onnxConfidence ?? 0) * 100).toFixed(0)}% global=${s.laplacianVariance.toFixed(1)})`
       ).join(', ')
     }`);
   }
 
-  // Check if any crop is significantly blurrier than the best
+  // Filter using composite score ratios
   const cropsToKeep: T[] = [];
   const cropsFiltered: string[] = [];
 
@@ -701,10 +939,9 @@ export async function filterCropsBySharpness<T extends CropResult>(
       continue;
     }
 
-    const ratio = bestScore.laplacianVariance / Math.max(score.laplacianVariance, 0.001);
+    const ratio = (bestScore.compositeScore ?? 1) / Math.max(score.compositeScore ?? 0, 0.001);
 
     if (ratio >= config.dominanceRatio && score.detectionId !== bestScore.detectionId) {
-      // This crop is significantly blurrier than the best — filter it
       cropsFiltered.push(`${score.detectionId} (ratio: ${ratio.toFixed(1)}x)`);
     } else {
       cropsToKeep.push(crops[i]);

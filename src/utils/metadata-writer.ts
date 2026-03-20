@@ -1042,6 +1042,12 @@ export function buildMetadataFromPresetIptc(
     return result || undefined;
   };
 
+  // Build extended name for {persons} placeholder in descriptions/headlines
+  // MUST be before keywords block so resolveTemplate can use it for {persons}
+  const personsExtended = participant?.name
+    ? buildExtendedName(participant)
+    : '';
+
   // Build person shown string using the format setting
   let personShown: string | undefined;
   if (participant?.name) {
@@ -1052,15 +1058,14 @@ export function buildMetadataFromPresetIptc(
     );
   }
 
-  // Build extended name for {persons} placeholder in descriptions/headlines
-  const personsExtended = participant?.name
-    ? buildExtendedName(participant)
-    : '';
-
   // Build keywords: merge base + AI keywords based on mode
+  // Resolve template placeholders in base keywords (e.g. {name} → "Lando Norris")
   let keywords: string[] = [];
   if (iptcProfile.baseKeywords && iptcProfile.baseKeywords.length > 0) {
-    keywords.push(...iptcProfile.baseKeywords);
+    for (const kw of iptcProfile.baseKeywords) {
+      const resolved = resolveTemplate(kw);
+      if (resolved) keywords.push(resolved);
+    }
   }
   if (keywordsMode === 'append' && aiKeywords && aiKeywords.length > 0) {
     // Merge AI keywords, avoiding duplicates (case-insensitive)

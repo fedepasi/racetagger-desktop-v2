@@ -38,15 +38,6 @@
   padding: var(--spacing-xl);
 }
 
-.results-breadcrumb {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
-  color: var(--text-secondary);
-  font-size: 14px;
-  font-weight: 500;
-}
-
 .results-title {
   display: flex;
   flex-direction: column;
@@ -71,39 +62,56 @@
 /* ===== INFO TAGS (Category + Preset) ===== */
 .results-info-tags {
   display: flex;
-  gap: var(--spacing-sm);
+  gap: var(--spacing-md, 12px);
   flex-wrap: wrap;
+  margin-top: var(--spacing-sm, 6px);
 }
 
 .results-info-tag {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 12px;
-  border-radius: 14px;
-  font-size: 12px;
-  line-height: 1.5;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.4;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.results-info-tag:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.results-info-tag__icon {
+  font-size: 16px;
+  line-height: 1;
+  flex-shrink: 0;
 }
 
 .results-info-tag__label {
   font-weight: 500;
-  opacity: 0.7;
+  opacity: 0.65;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .results-info-tag__value {
-  font-weight: 600;
+  font-weight: 700;
+  font-size: 13px;
 }
 
 .results-info-tag--category {
-  background: rgba(59, 130, 246, 0.12);
+  background: rgba(59, 130, 246, 0.15);
   color: var(--accent-primary);
-  border: 1px solid rgba(59, 130, 246, 0.2);
+  border: 1px solid rgba(59, 130, 246, 0.25);
 }
 
 .results-info-tag--preset {
-  background: rgba(16, 185, 129, 0.12);
+  background: rgba(16, 185, 129, 0.15);
   color: #10b981;
-  border: 1px solid rgba(16, 185, 129, 0.2);
+  border: 1px solid rgba(16, 185, 129, 0.25);
 }
 
 /* ===== STATS BAR ===== */
@@ -486,18 +494,6 @@
 .results-empty:hover {
   box-shadow: var(--shadow-lg);
   transform: translateY(-1px);
-}
-
-/* ===== BADGE EXECUTION ===== */
-#execution-badge {
-  background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
-  color: white;
-  padding: var(--spacing-xs) var(--spacing-sm);
-  border-radius: var(--radius-sm);
-  font-size: 12px;
-  font-weight: 600;
-  margin-left: var(--spacing-sm);
-  box-shadow: var(--shadow-sm);
 }
 
 /* ===== VISIBILITY MANAGEMENT ===== */

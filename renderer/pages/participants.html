@@ -146,13 +146,160 @@
             <div class="iptc-info-banner">
               <span class="info-icon">💡</span>
               <div class="info-text">
-                Configure professional IPTC/XMP metadata that will be written to all photos during finalization. Use <code>{name}</code>, <code>{number}</code>, <code>{team}</code> as placeholders in templates.
+                Configure IPTC/XMP metadata to embed into your photos when you use the <strong>Export & IPTC</strong> button in the results page. Use placeholders like <code>{name}</code>, <code>{number}</code>, <code>{team}</code>, <code>{car_model}</code>, <code>{nationality}</code>, <code>{category}</code> in <strong>Caption Template</strong>, <strong>Base Keywords</strong>, and <strong>Person Shown</strong> — they will be replaced with each participant's actual data from the table below.
               </div>
             </div>
 
-            <!-- IPTC 4-column grid layout -->
-            <div class="iptc-editor-grid">
-              <!-- Column 1: Credits & Copyright -->
+            <!-- First row: Event & Caption, Base Keywords, Person Shown -->
+            <div class="iptc-editor-grid iptc-editor-grid-top">
+              <!-- Event & Caption -->
+              <div class="iptc-editor-column">
+                <div class="iptc-column-header">
+                  <label class="iptc-column-checkbox">
+                    <input type="checkbox" id="iptc-section-event" checked>
+                    <span>Event & Caption</span>
+                  </label>
+                </div>
+                <div class="iptc-column-body">
+                  <div class="form-group">
+                    <label>Headline <span class="field-destination">→ IPTC:Headline</span></label>
+                    <input type="text" id="iptc-headline" class="form-input form-input-iptc" placeholder="F1 GP Sao Paulo 2025">
+                  </div>
+                  <div class="form-group">
+                    <label>Caption Template <span class="field-destination">→ IPTC:Caption</span></label>
+                    <div class="iptc-template-shortcuts">
+                      <span class="shortcuts-label">Quick add:</span>
+                      <button type="button" class="template-shortcut-btn" data-target="iptc-description" data-placeholder="{name}">{name}</button>
+                      <button type="button" class="template-shortcut-btn" data-target="iptc-description" data-placeholder="{number}">{number}</button>
+                      <button type="button" class="template-shortcut-btn" data-target="iptc-description" data-placeholder="{team}">{team}</button>
+                      <button type="button" class="template-shortcut-btn" data-target="iptc-description" data-placeholder="{car_model}">{car_model}</button>
+                      <button type="button" class="template-shortcut-btn" data-target="iptc-description" data-placeholder="{nationality}">{nationality}</button>
+                      <button type="button" class="template-shortcut-btn" data-target="iptc-description" data-placeholder="{category}">{category}</button>
+                    </div>
+                    <input type="hidden" id="iptc-description">
+                    <div id="iptc-description-editor" class="form-input form-input-iptc iptc-textarea iptc-editable-template" contenteditable="true" data-target="iptc-description" data-placeholder="{name} during the Formula 1 Grande Premio..." role="textbox" aria-multiline="true"></div>
+                    <small class="form-hint iptc-caption-preview" id="iptc-caption-preview"></small>
+                  </div>
+                  <div class="form-group">
+                    <label>Event <span class="field-destination">→ XMP-iptcExt:Event</span></label>
+                    <input type="text" id="iptc-event" class="form-input form-input-iptc" placeholder="F1 GP Brasil 2025">
+                  </div>
+                  <div class="form-group">
+                    <label>Caption Writer <span class="field-destination">→ Writer-Editor</span></label>
+                    <input type="text" id="iptc-caption-writer" class="form-input form-input-iptc" placeholder="Caption writer name">
+                  </div>
+                  <div class="form-group form-group-row">
+                    <div class="form-group form-group-third">
+                      <label>Category</label>
+                      <input type="text" id="iptc-category" class="form-input form-input-iptc" placeholder="SPO">
+                    </div>
+                    <div class="form-group form-group-third">
+                      <label>Urgency</label>
+                      <select id="iptc-urgency" class="form-input form-input-iptc">
+                        <option value="">-</option>
+                        <option value="1">1 (Highest)</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                        <option value="4">4</option>
+                        <option value="5">5 (Normal)</option>
+                        <option value="6">6</option>
+                        <option value="7">7</option>
+                        <option value="8">8 (Lowest)</option>
+                      </select>
+                    </div>
+                    <div class="form-group form-group-third">
+                      <label>Genre</label>
+                      <input type="text" id="iptc-genre" class="form-input form-input-iptc" placeholder="SPO">
+                    </div>
+                  </div>
+                  <div class="form-group">
+                    <label>Date Created</label>
+                    <input type="date" id="iptc-date-created" class="form-input form-input-iptc">
+                  </div>
+                </div>
+              </div>
+
+              <!-- Base Keywords + Person Shown (stacked) -->
+              <div class="iptc-stacked-column">
+                <!-- Base Keywords -->
+                <div class="iptc-editor-column">
+                  <div class="iptc-column-header">
+                    <label class="iptc-column-checkbox">
+                      <input type="checkbox" id="iptc-section-keywords" checked>
+                      <span>Base Keywords</span>
+                    </label>
+                  </div>
+                  <div class="iptc-column-body">
+                    <div class="form-group">
+                      <div class="iptc-keyword-shortcuts">
+                        <span class="shortcuts-label">Quick add:</span>
+                        <button type="button" class="keyword-shortcut-btn" data-keyword="{name}">{name}</button>
+                        <button type="button" class="keyword-shortcut-btn" data-keyword="{number}">{number}</button>
+                        <button type="button" class="keyword-shortcut-btn" data-keyword="{team}">{team}</button>
+                        <button type="button" class="keyword-shortcut-btn" data-keyword="{car_model}">{car_model}</button>
+                        <button type="button" class="keyword-shortcut-btn" data-keyword="{nationality}">{nationality}</button>
+                        <button type="button" class="keyword-shortcut-btn" data-keyword="{category}">{category}</button>
+                      </div>
+                      <div class="iptc-tags-container" id="iptc-keywords-container">
+                        <div class="iptc-tags-list" id="iptc-keywords-tags"></div>
+                        <input type="text" id="iptc-keywords-input" class="iptc-tag-input" placeholder="Type keyword and press Enter">
+                      </div>
+                      <small class="form-hint">Press Enter or comma to add. These keywords are added to every photo. Placeholders are resolved per participant.</small>
+                    </div>
+                    <div class="form-group form-group-inline">
+                      <label class="radio-label">
+                        <input type="radio" name="iptc-keywords-mode" value="append" checked>
+                        <span>Append to AI keywords</span>
+                      </label>
+                      <label class="radio-label">
+                        <input type="radio" name="iptc-keywords-mode" value="overwrite">
+                        <span>Overwrite AI keywords</span>
+                      </label>
+                    </div>
+                    <div class="iptc-visual-tags-option">
+                      <label class="visual-tags-toggle">
+                        <input type="checkbox" id="iptc-include-visual-tags">
+                        <span class="visual-tags-label">Include AI visual tags in keywords</span>
+                      </label>
+                      <div class="visual-tags-badges">
+                        <span class="visual-tag-badge">location</span>
+                        <span class="visual-tag-badge">weather</span>
+                        <span class="visual-tag-badge">scene</span>
+                        <span class="visual-tag-badge">subjects</span>
+                        <span class="visual-tag-badge">style</span>
+                        <span class="visual-tag-badge">emotion</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Person Shown -->
+                <div class="iptc-editor-column">
+                  <div class="iptc-column-header">
+                    <label class="iptc-column-checkbox">
+                      <input type="checkbox" id="iptc-section-person" checked>
+                      <span>Person Shown</span>
+                    </label>
+                  </div>
+                  <div class="iptc-column-body">
+                    <div class="form-group">
+                      <label>Template <span class="field-destination">→ PersonInImage</span></label>
+                      <div class="iptc-template-shortcuts">
+                        <span class="shortcuts-label">Quick add:</span>
+                        <button type="button" class="template-shortcut-btn" data-target="iptc-person-shown" data-placeholder="{name}">{name}</button>
+                        <button type="button" class="template-shortcut-btn" data-target="iptc-person-shown" data-placeholder="{number}">{number}</button>
+                        <button type="button" class="template-shortcut-btn" data-target="iptc-person-shown" data-placeholder="{team}">{team}</button>
+                        <button type="button" class="template-shortcut-btn" data-target="iptc-person-shown" data-placeholder="{nationality}">{nationality}</button>
+                      </div>
+                      <input type="hidden" id="iptc-person-shown">
+                      <div id="iptc-person-shown-editor" class="form-input form-input-iptc iptc-editable-template iptc-editable-single" contenteditable="true" data-target="iptc-person-shown" data-placeholder="{name}" role="textbox"></div>
+                      <small class="form-hint iptc-person-preview" id="iptc-person-preview"></small>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Credits & Copyright -->
               <div class="iptc-editor-column">
                 <div class="iptc-column-header">
                   <label class="iptc-column-checkbox">
@@ -189,8 +336,11 @@
                   </div>
                 </div>
               </div>
+            </div>
 
-              <!-- Column 2: Creator & Contact -->
+            <!-- Second row: Creator & Contact, Location, Rights & Licensing -->
+            <div class="iptc-editor-grid iptc-editor-grid-bottom">
+              <!-- Creator & Contact -->
               <div class="iptc-editor-column">
                 <div class="iptc-column-header">
                   <label class="iptc-column-checkbox">
@@ -246,64 +396,7 @@
                 </div>
               </div>
 
-              <!-- Column 3: Event & Caption -->
-              <div class="iptc-editor-column">
-                <div class="iptc-column-header">
-                  <label class="iptc-column-checkbox">
-                    <input type="checkbox" id="iptc-section-event" checked>
-                    <span>Event & Caption</span>
-                  </label>
-                </div>
-                <div class="iptc-column-body">
-                  <div class="form-group">
-                    <label>Headline <span class="field-destination">→ IPTC:Headline</span></label>
-                    <input type="text" id="iptc-headline" class="form-input form-input-iptc" placeholder="F1 GP Sao Paulo 2025">
-                  </div>
-                  <div class="form-group">
-                    <label>Caption Template <span class="field-destination">→ IPTC:Caption</span></label>
-                    <textarea id="iptc-description" class="form-input form-input-iptc iptc-textarea" rows="3" placeholder="{name} during the Formula 1 Grande Premio..."></textarea>
-                    <small class="form-hint iptc-caption-preview" id="iptc-caption-preview"></small>
-                  </div>
-                  <div class="form-group">
-                    <label>Event <span class="field-destination">→ XMP-iptcExt:Event</span></label>
-                    <input type="text" id="iptc-event" class="form-input form-input-iptc" placeholder="F1 GP Brasil 2025">
-                  </div>
-                  <div class="form-group">
-                    <label>Caption Writer <span class="field-destination">→ Writer-Editor</span></label>
-                    <input type="text" id="iptc-caption-writer" class="form-input form-input-iptc" placeholder="Caption writer name">
-                  </div>
-                  <div class="form-group form-group-row">
-                    <div class="form-group form-group-third">
-                      <label>Category</label>
-                      <input type="text" id="iptc-category" class="form-input form-input-iptc" placeholder="SPO">
-                    </div>
-                    <div class="form-group form-group-third">
-                      <label>Urgency</label>
-                      <select id="iptc-urgency" class="form-input form-input-iptc">
-                        <option value="">-</option>
-                        <option value="1">1 (Highest)</option>
-                        <option value="2">2</option>
-                        <option value="3">3</option>
-                        <option value="4">4</option>
-                        <option value="5">5 (Normal)</option>
-                        <option value="6">6</option>
-                        <option value="7">7</option>
-                        <option value="8">8 (Lowest)</option>
-                      </select>
-                    </div>
-                    <div class="form-group form-group-third">
-                      <label>Genre</label>
-                      <input type="text" id="iptc-genre" class="form-input form-input-iptc" placeholder="SPO">
-                    </div>
-                  </div>
-                  <div class="form-group">
-                    <label>Date Created</label>
-                    <input type="date" id="iptc-date-created" class="form-input form-input-iptc">
-                  </div>
-                </div>
-              </div>
-
-              <!-- Column 4: Location -->
+              <!-- Location -->
               <div class="iptc-editor-column">
                 <div class="iptc-column-header">
                   <label class="iptc-column-checkbox">
@@ -335,55 +428,6 @@
                   <div class="form-group">
                     <label>World Region</label>
                     <input type="text" id="iptc-world-region" class="form-input form-input-iptc" placeholder="America">
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Second row: Keywords, Person Shown, Rights -->
-            <div class="iptc-editor-grid iptc-editor-grid-bottom">
-              <!-- Keywords -->
-              <div class="iptc-editor-column iptc-column-wide">
-                <div class="iptc-column-header">
-                  <label class="iptc-column-checkbox">
-                    <input type="checkbox" id="iptc-section-keywords" checked>
-                    <span>Base Keywords</span>
-                  </label>
-                </div>
-                <div class="iptc-column-body">
-                  <div class="form-group">
-                    <div class="iptc-tags-container" id="iptc-keywords-container">
-                      <div class="iptc-tags-list" id="iptc-keywords-tags"></div>
-                      <input type="text" id="iptc-keywords-input" class="iptc-tag-input" placeholder="Type keyword and press Enter">
-                    </div>
-                    <small class="form-hint">Press Enter or comma to add. These keywords are added to every photo.</small>
-                  </div>
-                  <div class="form-group form-group-inline">
-                    <label class="radio-label">
-                      <input type="radio" name="iptc-keywords-mode" value="append" checked>
-                      <span>Append to AI keywords</span>
-                    </label>
-                    <label class="radio-label">
-                      <input type="radio" name="iptc-keywords-mode" value="overwrite">
-                      <span>Overwrite AI keywords</span>
-                    </label>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Person Shown -->
-              <div class="iptc-editor-column">
-                <div class="iptc-column-header">
-                  <label class="iptc-column-checkbox">
-                    <input type="checkbox" id="iptc-section-person" checked>
-                    <span>Person Shown</span>
-                  </label>
-                </div>
-                <div class="iptc-column-body">
-                  <div class="form-group">
-                    <label>Template <span class="field-destination">→ PersonInImage</span></label>
-                    <input type="text" id="iptc-person-shown" class="form-input form-input-iptc" placeholder="{name}">
-                    <small class="form-hint iptc-person-preview" id="iptc-person-preview"></small>
                   </div>
                 </div>
               </div>

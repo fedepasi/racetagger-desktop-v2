@@ -14,6 +14,14 @@ const isPackaged = app?.isPackaged || false;
 // =============================================================================
 export const DEBUG_MODE = !isPackaged && process.env.DEBUG_MODE === 'true';
 
+// =============================================================================
+// SEND PRESET TO GEMINI - When false, the participant preset is NOT sent to
+// the Edge Function. Gemini will do pure OCR without knowledge of participants.
+// The SmartMatcher will still do matching on the desktop side.
+// Set RACETAGGER_SEND_PRESET_TO_AI=false in .env to disable (default: true)
+// =============================================================================
+export const SEND_PRESET_TO_AI = process.env.RACETAGGER_SEND_PRESET_TO_AI !== 'false';
+
 // Function to get configuration values
 function getConfigValue(envVar: string, productionKey: keyof typeof PRODUCTION_CONFIG): string {
   if (isPackaged) {
