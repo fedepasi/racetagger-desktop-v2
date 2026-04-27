@@ -211,10 +211,25 @@ class ResultsPageManager {
   }
 
   /**
-   * Estrae i risultati dai log JSONL
+   * Estrae i risultati dai log JSONL.
+   *
+   * B1/B5 fix: pre-scan the log to build a Set of fileNames that have at
+   * least one MANUAL_CORRECTION event. The IMAGE_ANALYSIS pass then attaches
+   * `hasCorrection` to each result. This is the single source of truth used
+   * by the home/results filters and counters — no in-memory tracking, no
+   * sync drift between Map keys.
    */
   async extractResultsFromLogs(logData) {
     const results = [];
+
+    // Pre-scan for manual corrections. We do this once up-front so the
+    // per-result loop is O(1) per entry rather than O(N).
+    const correctedFileNames = new Set();
+    for (const entry of logData) {
+      if (entry?.type === 'MANUAL_CORRECTION' && typeof entry.fileName === 'string') {
+        correctedFileNames.add(entry.fileName);
+      }
+    }
 
     for (const entry of logData) {
       if (entry.type === 'IMAGE_ANALYSIS' && entry.fileName) {
@@ -276,7 +291,12 @@ class ResultsPageManager {
           microThumbPath: (localPaths.microThumbPath && localPaths.microThumbPath !== 'null') ? localPaths.microThumbPath : entry.supabaseUrl,
           metadataWritten: entry.metadataWritten !== undefined ? entry.metadataWritten : true,
           metadataSkipReason: entry.metadataSkipReason || null,
-          timestamp: entry.timestamp
+          timestamp: entry.timestamp,
+          // B1/B5 — derived from the JSONL itself, not from in-memory state.
+          // True iff at least one MANUAL_CORRECTION event exists for this
+          // fileName. Filters and counters use this to route the photo to
+          // the "Corrections" view and out of "No Match".
+          hasCorrection: correctedFileNames.has(entry.fileName)
         });
       }
     }

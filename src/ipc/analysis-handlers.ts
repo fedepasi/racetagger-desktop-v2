@@ -182,11 +182,20 @@ export function registerAnalysisHandlers(): void {
     try {
       const analysisLogsPath = path.join(app.getPath('userData'), '.analysis-logs');
 
+      // B13 — account-aware filter: only show executions owned by the current
+      // user. Without this, after a logout+login the home page surfaces the
+      // previous account's analyses (since they share the local logs folder).
+      // The scanner already supports `ownerUserId`; legacy logs without a
+      // recorded userId remain visible by design (we don't want to hide
+      // pre-fix analyses on upgrade).
+      const currentUserId = authService.getAuthState().user?.id ?? undefined;
+
       // Delegate the parsing + self-healing logic to a pure module so it can be
       // unit-tested without pulling Electron + native Sharp into the test graph.
       // See src/utils/local-executions-scanner.ts.
       const { scanLocalExecutions } = require('../utils/local-executions-scanner');
       const executions: any[] = scanLocalExecutions(analysisLogsPath, {
+        ownerUserId: currentUserId,
         debug: DEBUG_MODE
           ? (msg: string, ctx: any) => console.warn(`[Analysis] ${msg}`, ctx)
           : undefined,

@@ -1199,18 +1199,32 @@ class LogVisualizer {
 
       if (!matchesSearch) return false;
 
-      // Type filter
+      // Type filter.
+      //
+      // B1/B5 — `hasCorrection` is set by extractResultsFromLogs based on
+      // MANUAL_CORRECTION events in the JSONL (single source of truth). A
+      // photo with a manual correction:
+      //   * is a "Correction" (always visible in the corrections filter)
+      //   * is NOT a "No Match" (its raceNumber was set by the user)
+      //   * IS a "Matched" (manual matches count as matches)
+      // Treating in-memory `manualCorrections` as the gate misclassified
+      // no-match-corrected and matched-edited photos.
+      const hasCorrection = result.hasCorrection === true ||
+                            this.manualCorrections.has(result.fileName);
+
       switch (filterType) {
         case 'matched':
+          if (hasCorrection) return true;
           return result.analysis && result.analysis.length > 0 &&
                  !result.analysis.some(v => v.matchStatus === 'needs_review' && !result._reviewResolved);
         case 'no-match':
+          if (hasCorrection) return false; // user touched it → no longer no-match
           return !result.analysis || result.analysis.length === 0;
         case 'needs-review':
           return result.analysis && result.analysis.length > 0 &&
                  result.analysis.some(v => v.matchStatus === 'needs_review') && !result._reviewResolved;
         case 'corrected':
-          return this.manualCorrections.has(result.fileName);
+          return hasCorrection;
         case 'high-confidence':
           return this.getAverageConfidence(result) >= 0.9;
         case 'low-confidence':
@@ -1303,6 +1317,11 @@ class LogVisualizer {
     const allResults = this.imageResults || [];
     const total = allResults.length;
 
+    // Per-result helper — same semantics as the filter switch above. Kept
+    // local so it stays in lockstep when either side changes.
+    const isCorrected = (r) =>
+      r.hasCorrection === true || this.manualCorrections.has(r.fileName);
+
     // Count needs_review: has a match but ambiguous (not yet resolved by user)
     const needsReview = allResults.filter(r => {
       return r.analysis && r.analysis.length > 0 &&
@@ -1311,6 +1330,8 @@ class LogVisualizer {
     }).length;
 
     const matched = allResults.filter(r => {
+      // Manual correction always counts as matched, regardless of original AI state.
+      if (isCorrected(r)) return true;
       if (!r.analysis || r.analysis.length === 0) return false;
       const hasRaceNumber = r.analysis.some(vehicle => vehicle.raceNumber && vehicle.raceNumber !== 'N/A');
       if (!hasRaceNumber) return false;
@@ -1320,7 +1341,9 @@ class LogVisualizer {
     }).length;
 
     const noMatch = total - matched - needsReview;
-    const corrections = this.manualCorrections.size;
+    // B1/B5 — corrections count derives from the JSONL via `hasCorrection`,
+    // with a fallback to the in-session Map for changes not yet flushed.
+    const corrections = allResults.filter(isCorrected).length;
 
     if (totalEl) totalEl.textContent = total.toLocaleString();
     if (matchedEl) matchedEl.textContent = matched.toLocaleString();
@@ -1763,35 +1786,64 @@ class LogVisualizer {
   }
 
   /**
-   * Navigate to the next image that still needs review.
-   * Searches forward from the current position, then wraps around.
-   * If no more needs_review images exist, shows a completion notification
-   * and stays on the current (just resolved) image.
+   * B4 — auto-advance to the next image in the active filter context.
+   *
+   * Strategy: respect the user's current filter and find the next "actionable"
+   * photo starting from `currentResultIndex + 1`. Definition of actionable:
+   *  - In the "needs-review" filter: a photo that is still un-resolved.
+   *  - In any other filter: simply the next photo in `filteredResults`.
+   *
+   * This is the single source of truth for advance-after-confirmation. Both
+   * the candidate picker (`resolveReview`) and the race-number Enter handler
+   * (`_handleRaceNumberEnter`) call this so the user has a consistent
+   * "confirm → next" cadence regardless of which input triggered the save.
+   *
+   * When the list is exhausted (no more actionable photos forward of the
+   * current one), the modal CLOSES so the user can re-filter or move on,
+   * accompanied by a completion toast. This replaces the old behaviour of
+   * silently staying on the just-resolved image, which the user reported as
+   * "the modal exits by itself" because nothing happened on subsequent
+   * keystrokes.
+   *
+   * @param {number} currentResultIndex Index in filteredResults that we just
+   *        acted on — search starts at currentResultIndex + 1, no wrap.
    */
   async navigateToNextReview(currentResultIndex) {
     const total = this.filteredResults.length;
+    const filterType = document.getElementById('lv-filter-type')?.value || 'all';
+    const wantsUnresolvedReview = filterType === 'needs-review';
 
-    // Search forward from current position
-    for (let offset = 1; offset < total; offset++) {
-      const idx = (currentResultIndex + offset) % total;
+    // Search forward only — no wrap-around. Wrapping causes the modal to
+    // bounce back to a photo the user already touched in this session, which
+    // is confusing.
+    for (let idx = currentResultIndex + 1; idx < total; idx++) {
       const r = this.filteredResults[idx];
-      if (r && !r._reviewResolved && r.analysis?.[0]?.matchStatus === 'needs_review') {
-        // Found the next one — navigate
-        this.currentImageIndex = idx;
-        if (this.zoomController) this.zoomController.reset(false);
-        await this.updateGalleryContent();
-        console.log(`[LogVisualizer] Navigated to next needs_review at index ${idx}`);
-        return;
+      if (!r) continue;
+      if (wantsUnresolvedReview) {
+        if (r._reviewResolved) continue;
+        if (r.analysis?.[0]?.matchStatus !== 'needs_review') continue;
       }
+      // Found the next actionable photo.
+      this.currentImageIndex = idx;
+      if (this.zoomController) this.zoomController.reset(false);
+      await this.updateGalleryContent();
+      console.log(`[LogVisualizer] Auto-advance: filter=${filterType}, index=${idx}`);
+      return;
     }
 
-    // No more needs_review images — count how many were resolved this session
-    const resolvedCount = this.filteredResults.filter(r => r._reviewResolved).length;
-    this.showNotification(`✅ All done! ${resolvedCount} ambiguous match${resolvedCount !== 1 ? 'es' : ''} resolved.`, 'success');
-
-    // Refresh gallery to show the resolved state on the current image
-    await this.updateGalleryContent();
-    console.log('[LogVisualizer] No more needs_review images — review session complete');
+    // Exhausted: nothing more to do in this filter's forward direction.
+    if (wantsUnresolvedReview) {
+      const resolvedCount = this.filteredResults.filter(r => r._reviewResolved).length;
+      this.showNotification(
+        `✅ All done! ${resolvedCount} ambiguous match${resolvedCount !== 1 ? 'es' : ''} resolved.`,
+        'success'
+      );
+    } else {
+      this.showNotification('✅ Reached the end of the current view', 'info');
+    }
+    // Close modal — user is done with this batch in this filter.
+    await this.closeGallery();
+    console.log('[LogVisualizer] No more actionable photos forward — modal closed');
   }
 
   /**
@@ -2553,14 +2605,12 @@ class LogVisualizer {
       }
     }
 
-    // 3) Move to the next image right away (or close gallery if it was the last one)
-    if (this.currentImageIndex < this.filteredResults.length - 1) {
-      this.navigateGallery(1);
-    } else {
-      // Last image: just blur so user knows the save was triggered
-      input.blur();
-      this.showNotification('✅ Last image — changes saved in background', 'info');
-    }
+    // 3) Auto-advance using the unified logic. This respects the active
+    //    filter (needs-review skips already-resolved photos; other filters
+    //    just walk forward) and closes the modal when the list is exhausted
+    //    so the user gets explicit completion feedback instead of a silent
+    //    stuck-on-the-last-image state.
+    this.navigateToNextReview(this.currentImageIndex);
   }
 
   /**

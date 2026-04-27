@@ -3902,49 +3902,94 @@ app.whenReady().then(async () => { // Added async here
           event.type === 'IMAGE_ANALYSIS' && event.fileName === correction.fileName
         );
 
-        if (imageAnalysisEvent && imageAnalysisEvent.aiResponse?.vehicles?.[correction.vehicleIndex]) {
-          const vehicle = imageAnalysisEvent.aiResponse.vehicles[correction.vehicleIndex];
+        // B1 fix — TWO scenarios for the IMAGE_ANALYSIS update:
+        //
+        //  1. The vehicle the user corrected already exists in
+        //     `aiResponse.vehicles[index]`. We mutate it in place AND force
+        //     `matchStatus='matched'` + `matchedBy='user_manual'` so the home
+        //     page filters classify the photo correctly.
+        //
+        //  2. There IS NO vehicle at the corrected index — typical for a
+        //     true "no match" photo where the AI emitted an empty `vehicles`
+        //     array. Without this branch the correction was silently dropped
+        //     for these cases (the original code had a guard that just
+        //     skipped the update). We now CREATE a vehicle entry so the
+        //     correction lands in the JSONL and the photo can leave the
+        //     "no match" filter view.
+        //
+        // Either branch additionally writes `matchStatus`/`matchedBy` so the
+        // renderer can transition the photo to "matched" + "corrections"
+        // bucket without re-deriving anything.
+        if (imageAnalysisEvent) {
+          imageAnalysisEvent.aiResponse = imageAnalysisEvent.aiResponse || {};
+          imageAnalysisEvent.aiResponse.vehicles = imageAnalysisEvent.aiResponse.vehicles || [];
+          const vehicles = imageAnalysisEvent.aiResponse.vehicles;
 
-          // Store only the specific fields we need to track, not the entire vehicle object
-          // This prevents circular references when the vehicle object contains corrections array
+          // Pad the array with empty placeholders if the index is past the
+          // current end. This handles the (rare) case of a correction
+          // targeting vehicleIndex=2 on a photo that originally had only
+          // vehicle[0]. Each placeholder gets a `finalResult` so subsequent
+          // mutation has a stable structure.
+          while (vehicles.length <= correction.vehicleIndex) {
+            vehicles.push({ raceNumber: null, confidence: 0, finalResult: {} });
+          }
+
+          const vehicle = vehicles[correction.vehicleIndex];
+          if (!vehicle.finalResult) vehicle.finalResult = {};
+
+          // Snapshot original values for `originalValues` — only the keys we
+          // are about to overwrite, to keep the correction record compact.
           const originalValues: any = {};
-          for (const [key, value] of Object.entries(correction.changes)) {
+          for (const [key] of Object.entries(correction.changes)) {
             if (vehicle[key] !== undefined) {
               originalValues[key] = vehicle[key];
             }
           }
 
-          // Update with new values
+          // Apply user changes to BOTH the vehicle root and finalResult.
+          // Vehicle root is what older code paths read; finalResult is what
+          // the home page renderer + results-page extractor read.
           Object.assign(vehicle, correction.changes);
+          Object.assign(vehicle.finalResult, correction.changes);
 
-          // Update also the finalResult which is what's actually displayed
-          if (vehicle.finalResult) {
-            Object.assign(vehicle.finalResult, correction.changes);
-          }
+          // ---- THE B1 FIX ----
+          // Force the matched state so the photo:
+          //   * leaves the "no match" filter
+          //   * shows up correctly in the matched counters
+          //   * is flagged as a manual correction in raw_response.lastManualCorrection
+          // We always set these even if `correction.changes` already contained
+          // them — defensive against renderers that send only `raceNumber`.
+          vehicle.matchStatus = 'matched';
+          vehicle.matchedBy = 'user_manual';
+          vehicle.finalResult.matchStatus = 'matched';
+          vehicle.finalResult.matchedBy = 'user_manual';
 
-          // If this is the first vehicle, also update primaryVehicle
-          if (correction.vehicleIndex === 0 && imageAnalysisEvent.primaryVehicle) {
+          // primaryVehicle mirror — same treatment for the legacy field that
+          // some downstream code still reads.
+          if (correction.vehicleIndex === 0) {
+            imageAnalysisEvent.primaryVehicle = imageAnalysisEvent.primaryVehicle || {};
+            imageAnalysisEvent.primaryVehicle.finalResult = imageAnalysisEvent.primaryVehicle.finalResult || {};
             Object.assign(imageAnalysisEvent.primaryVehicle, correction.changes);
-            if (imageAnalysisEvent.primaryVehicle.finalResult) {
-              Object.assign(imageAnalysisEvent.primaryVehicle.finalResult, correction.changes);
-            }
+            Object.assign(imageAnalysisEvent.primaryVehicle.finalResult, correction.changes);
+            imageAnalysisEvent.primaryVehicle.matchStatus = 'matched';
+            imageAnalysisEvent.primaryVehicle.matchedBy = 'user_manual';
+            imageAnalysisEvent.primaryVehicle.finalResult.matchStatus = 'matched';
+            imageAnalysisEvent.primaryVehicle.finalResult.matchedBy = 'user_manual';
           }
 
-          // Set confidence to 100% for manual corrections
+          // Manual correction confidence is 100%.
           vehicle.confidence = 1.0;
 
-          // Add correction metadata
+          // Append correction metadata for audit trail / training data.
           if (!vehicle.corrections) {
             vehicle.corrections = [];
           }
-
           vehicle.corrections.push({
             type: 'USER_MANUAL',
             timestamp: correction.timestamp,
             originalValues,
-            newValues: correction.changes
+            newValues: correction.changes,
           });
-
         }
 
         // Update image metadata using exiftool
@@ -4118,6 +4163,166 @@ app.whenReady().then(async () => { // Added async here
           // Non-critical: JSONL update already succeeded
         }
       }
+
+      // ====================================================================
+      // B3 + B6 — Folder reorganization on manual correction
+      // ====================================================================
+      // Without this block, the JSONL/DB/XMP have the corrected race number
+      // but the file ITSELF stays in the wrong folder (e.g. Unknown_Numbers
+      // or the old number). Photographers reported corrected photos getting
+      // delivered from the wrong category folder and surplus "N" /
+      // "No number" folders left behind.
+      //
+      // We pull the original folder organization config from the
+      // `executions` row (saved by the analysis pipeline as
+      // execution_settings.folderOrganizationConfig) and re-run
+      // FolderOrganizer.organizeImage for each correction whose changes
+      // include a raceNumber. Best-effort: any failure is logged but
+      // doesn't abort the rest of the correction flow.
+      try {
+        const correctionsTouchingRaceNumber = corrections.filter(
+          (c: any) => c?.changes && typeof c.changes.raceNumber === 'string' && c.changes.raceNumber.trim() !== ''
+        );
+
+        if (correctionsTouchingRaceNumber.length > 0) {
+          // Read the run's folder-org config from Supabase (authoritative).
+          let folderOrgConfig: any = null;
+          let resolvedDestinationPath: string | undefined;
+          try {
+            const { getSupabaseClient } = await import('./database-service');
+            const supabase = getSupabaseClient();
+            const { data: execRow } = await supabase
+              .from('executions')
+              .select('execution_settings, source_folder')
+              .eq('id', executionId)
+              .maybeSingle();
+            if (execRow?.execution_settings) {
+              folderOrgConfig =
+                execRow.execution_settings.folderOrganizationConfig ||
+                execRow.execution_settings.folderOrganization ||
+                null;
+              // destinationPath was either the user's explicit choice or the source folder.
+              resolvedDestinationPath =
+                folderOrgConfig?.destinationPath ||
+                execRow.execution_settings.destinationPath ||
+                execRow.source_folder ||
+                undefined;
+            }
+          } catch (cfgErr) {
+            if (DEBUG_MODE) console.warn('[Main Process] [B3] Failed to load folder-org config from executions:', cfgErr);
+          }
+
+          // Bail silently when:
+          //  - the user never enabled folder org for this run
+          //  - we don't know where to put the files (no destinationPath)
+          // Both cases are by-design no-ops, not errors.
+          const folderOrgEnabled =
+            folderOrgConfig?.enabled === true ||
+            folderOrgConfig?.folderOrganizationEnabled === true;
+
+          if (folderOrgEnabled && resolvedDestinationPath) {
+            const { FolderOrganizer } = await import('./utils/folder-organizer');
+            const organizer = new FolderOrganizer({
+              enabled: true,
+              mode: folderOrgConfig.mode || 'copy',
+              pattern: folderOrgConfig.pattern || 'number',
+              customPattern: folderOrgConfig.customPattern,
+              createUnknownFolder: folderOrgConfig.createUnknownFolder !== false,
+              unknownFolderName: folderOrgConfig.unknownFolderName || 'Unknown_Numbers',
+              includeXmpFiles: folderOrgConfig.includeXmpFiles !== false,
+              destinationPath: resolvedDestinationPath,
+              conflictStrategy: folderOrgConfig.conflictStrategy || 'rename',
+              renamePattern: folderOrgConfig.renamePattern || undefined,
+              // No restriction on allowed numbers for re-org of a manual correction —
+              // the user is the source of truth here.
+            });
+
+            for (const correction of correctionsTouchingRaceNumber) {
+              try {
+                const ev = logEvents.find(
+                  (e: any) => e.type === 'IMAGE_ANALYSIS' && e.fileName === correction.fileName
+                );
+                // Source path priority:
+                //   1. organizedPath — where the file ended up after the original analysis
+                //   2. originalPath — where the user dropped it (works when org=copy)
+                const sourcePath = ev?.organizedPath || ev?.originalPath;
+                if (!sourcePath) {
+                  if (DEBUG_MODE) console.warn(`[Main Process] [B3] No source path for ${correction.fileName} — skipping reorg`);
+                  continue;
+                }
+                if (!fs.existsSync(sourcePath)) {
+                  if (DEBUG_MODE) console.warn(`[Main Process] [B3] Source path no longer exists for ${correction.fileName}: ${sourcePath}`);
+                  continue;
+                }
+
+                const newRaceNumber = String(correction.changes.raceNumber).trim();
+                const sourceDir = require('path').dirname(ev?.originalPath || sourcePath);
+
+                // organizeImage handles the move/copy semantics, conflict
+                // resolution, and the optional XMP sidecar move based on
+                // the mode the user originally chose for this run.
+                const orgResult = await organizer.organizeImage(
+                  sourcePath,
+                  [newRaceNumber],
+                  undefined, // CSV data not needed for re-org of a single file
+                  sourceDir
+                );
+
+                if (orgResult?.success && orgResult.organizedPath) {
+                  // Update organizedPath in the JSONL so subsequent corrections
+                  // and re-renders see the new location.
+                  if (ev) ev.organizedPath = orgResult.organizedPath;
+                  console.log(
+                    `[Main Process] [B3] Reorganized ${correction.fileName} → ${orgResult.folderName || orgResult.organizedPath}`
+                  );
+
+                  // Best-effort cleanup: remove the OLD folder if it's now empty
+                  // (e.g. Unknown_Numbers/ after the only file in it was moved).
+                  // We only attempt this when mode='move' — in copy mode the
+                  // original folder structure is intentional.
+                  if (folderOrgConfig.mode === 'move' && sourcePath !== orgResult.organizedPath) {
+                    try {
+                      const oldDir = require('path').dirname(sourcePath);
+                      const remaining = fs.readdirSync(oldDir);
+                      // Only sweep folders that are truly empty (no hidden files
+                      // either) AND that look like organizer-created (rough heuristic
+                      // — they live under destinationPath).
+                      if (
+                        remaining.length === 0 &&
+                        oldDir.startsWith(resolvedDestinationPath) &&
+                        oldDir !== resolvedDestinationPath
+                      ) {
+                        fs.rmdirSync(oldDir);
+                        if (DEBUG_MODE) console.log(`[Main Process] [B3] Cleaned up empty folder: ${oldDir}`);
+                      }
+                    } catch (cleanupErr) {
+                      // Cleanup is opportunistic — never fatal.
+                      if (DEBUG_MODE) console.warn('[Main Process] [B3] Cleanup error:', cleanupErr);
+                    }
+                  }
+                } else {
+                  console.warn(
+                    `[Main Process] [B3] Reorg returned no destination for ${correction.fileName}: ${orgResult?.error || 'unknown'}`
+                  );
+                }
+              } catch (perCorrectionErr) {
+                console.warn(`[Main Process] [B3] Failed to reorg ${correction.fileName}:`, perCorrectionErr);
+                // Continue with the other corrections — one bad file shouldn't poison the rest.
+              }
+            }
+          } else {
+            if (DEBUG_MODE) {
+              console.log(
+                `[Main Process] [B3] Folder reorg skipped: enabled=${folderOrgEnabled}, destPath=${resolvedDestinationPath ?? 'undefined'}`
+              );
+            }
+          }
+        }
+      } catch (reorgErr) {
+        // Defensive — folder reorg must never abort the correction flow.
+        console.warn('[Main Process] [B3] Folder reorganization block failed (non-critical):', reorgErr);
+      }
+      // ====================================================================
 
       // Update EXECUTION_COMPLETE event with manual correction stats (if it exists)
       if (executionCompleteEvent) {

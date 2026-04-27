@@ -364,6 +364,87 @@ describe('get-local-executions self-healing', () => {
     expect(r.data[1].id).toBe(EXEC_1); // 10:00 second
   });
 
+  // B13 — account-aware filter on the home page
+  describe('ownerUserId filter (B13)', () => {
+    const USER_B = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+
+    function execStartLineWithUser(executionId: string, userId: string, timestamp: string): string {
+      return JSON.stringify({
+        type: 'EXECUTION_START',
+        timestamp,
+        executionId,
+        userId,
+        totalImages: 50,
+        category: 'motorsport_v2',
+      });
+    }
+
+    test('filters out executions owned by other users (sidecar source)', async () => {
+      writeSummary(tmpDir, EXEC_1, makeSummary({
+        id: EXEC_1,
+        userId: USER_A,
+        createdAt: '2026-04-25T10:00:00.000Z',
+      }));
+      writeSummary(tmpDir, EXEC_2, makeSummary({
+        id: EXEC_2,
+        userId: USER_B,
+        createdAt: '2026-04-25T11:00:00.000Z',
+      }));
+
+      const r = scanLocalExecutions(path.join(tmpDir, '.analysis-logs'), {
+        ownerUserId: USER_A,
+      });
+      expect(r).toHaveLength(1);
+      expect(r[0].id).toBe(EXEC_1);
+    });
+
+    test('filters out executions owned by other users (JSONL source)', async () => {
+      writeJsonl(tmpDir, EXEC_1, [
+        execStartLineWithUser(EXEC_1, USER_A, '2026-04-25T10:00:00.000Z'),
+        JSON.stringify({ type: 'EXECUTION_COMPLETE' }),
+      ]);
+      writeJsonl(tmpDir, EXEC_2, [
+        execStartLineWithUser(EXEC_2, USER_B, '2026-04-25T11:00:00.000Z'),
+        JSON.stringify({ type: 'EXECUTION_COMPLETE' }),
+      ]);
+
+      const r = scanLocalExecutions(path.join(tmpDir, '.analysis-logs'), {
+        ownerUserId: USER_B,
+      });
+      expect(r).toHaveLength(1);
+      expect(r[0].id).toBe(EXEC_2);
+    });
+
+    test('legacy executions without userId remain visible (no regression on upgrade)', async () => {
+      // EXECUTION_START without userId field — represents pre-fix JSONL logs
+      writeJsonl(tmpDir, EXEC_1, [
+        JSON.stringify({
+          type: 'EXECUTION_START',
+          timestamp: '2026-04-25T10:00:00.000Z',
+          executionId: EXEC_1,
+          totalImages: 50,
+          category: 'motorsport_v2',
+          // intentionally NO userId
+        }),
+        JSON.stringify({ type: 'EXECUTION_COMPLETE' }),
+      ]);
+
+      const r = scanLocalExecutions(path.join(tmpDir, '.analysis-logs'), {
+        ownerUserId: USER_A,
+      });
+      expect(r).toHaveLength(1);
+      expect(r[0].id).toBe(EXEC_1);
+    });
+
+    test('no ownerUserId means no filtering (current behaviour, regression guard)', async () => {
+      writeSummary(tmpDir, EXEC_1, makeSummary({ id: EXEC_1, userId: USER_A, createdAt: '2026-04-25T10:00:00.000Z' }));
+      writeSummary(tmpDir, EXEC_2, makeSummary({ id: EXEC_2, userId: USER_B, createdAt: '2026-04-25T11:00:00.000Z' }));
+
+      const r = scanLocalExecutions(path.join(tmpDir, '.analysis-logs'));
+      expect(r).toHaveLength(2);
+    });
+  });
+
   test('summary with corrupt schemaVersion is ignored — falls through to JSONL only', async () => {
     writeJsonl(tmpDir, EXEC_1, [
       execStartLine({ executionId: EXEC_1 }),
