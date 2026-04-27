@@ -107,7 +107,7 @@ export const SUPABASE_CONFIG = {
 // Version history:
 // - V2: Basic analysis (app 1.0.0 - 1.0.7)
 // - V3: Advanced annotations (app 1.0.8+)
-// - V4: RF-DETR support (app 1.0.9+)
+// - V4: RF-DETR support (app 1.0.9+) [deprecated path, kept for history]
 // - V5: Vehicle recognition, face recognition (app 1.0.11+)
 // - V6: Crop + Context multi-image analysis (app 1.0.12+)
 export const MAX_SUPPORTED_EDGE_FUNCTION_VERSION = 6;
@@ -358,48 +358,6 @@ export const APP_CONFIG = {
     enableEventLoopYields: true         // Add yields to prevent UI freeze
   }
 };
-
-// Roboflow RF-DETR Configuration
-export interface RoboflowConfig {
-  defaultApiKey: string;               // Default Roboflow API key
-  overlapThreshold: number;            // IoU threshold for filtering overlapping detections (0.0-1.0)
-  minConfidence: number;               // Minimum confidence score for detections (0.0-1.0)
-  estimatedCostPerImage: number;       // Estimated cost per image in USD
-  timeout: number;                     // API request timeout in milliseconds
-}
-
-export const ROBOFLOW_CONFIG: RoboflowConfig = {
-  defaultApiKey: getConfigValue('ROBOFLOW_DEFAULT_API_KEY', 'ROBOFLOW_DEFAULT_API_KEY'),
-  overlapThreshold: 0.5,               // 50% IoU threshold
-  minConfidence: 0.7,                  // 70% minimum confidence
-  estimatedCostPerImage: 0.0045,       // ~$0.0045 per image
-  timeout: 30000                       // 30 seconds timeout
-};
-
-// Validate Roboflow configuration
-export function validateRoboflowConfig(): { valid: boolean; warnings: string[] } {
-  const warnings: string[] = [];
-
-  if (!ROBOFLOW_CONFIG.defaultApiKey || ROBOFLOW_CONFIG.defaultApiKey === '') {
-    warnings.push('ROBOFLOW_DEFAULT_API_KEY is not set. RF-DETR recognition will fail. Please set this environment variable.');
-  }
-
-  if (ROBOFLOW_CONFIG.overlapThreshold < 0 || ROBOFLOW_CONFIG.overlapThreshold > 1) {
-    warnings.push(`Invalid overlapThreshold: ${ROBOFLOW_CONFIG.overlapThreshold}. Must be between 0 and 1.`);
-  }
-
-  if (ROBOFLOW_CONFIG.minConfidence < 0 || ROBOFLOW_CONFIG.minConfidence > 1) {
-    warnings.push(`Invalid minConfidence: ${ROBOFLOW_CONFIG.minConfidence}. Must be between 0 and 1.`);
-  }
-
-  return {
-    valid: warnings.length === 0,
-    warnings
-  };
-}
-
-// Validate Roboflow config on load (warnings suppressed)
-const roboflowValidation = validateRoboflowConfig();
 
 // ============================================================================
 // CROP-CONTEXT CONFIGURATION (V6 Edge Function)

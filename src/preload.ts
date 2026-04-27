@@ -197,6 +197,7 @@ const validInvokeChannels: string[] = [
   'save-learned-participant-data',
   'check-learned-data-exists',
   'get-local-executions',
+  'rename-execution',
 
   // Local Thumbnail Operations
   'find-local-thumbnails',
@@ -216,6 +217,9 @@ const validInvokeChannels: string[] = [
   'preset-face-set-primary',
   'preset-face-update-descriptor',
   'preset-face-load-for-preset',
+  'preset-face-status-batch',
+  'face-rec-submit-survey',
+  'face-rec-check-survey',
 
   // Preset Participant Drivers Operations
   'preset-driver-get-all',
@@ -226,6 +230,12 @@ const validInvokeChannels: string[] = [
   'preset-driver-migrate-orphaned-photos',
   'preset-get-drivers-for-participant',   // FIX #79: Missing from whitelist — needed for JSON preset export
   'preset-create-drivers-batch',          // FIX #79: Missing from whitelist — needed for JSON preset import
+
+  // v1.1.4 — Preset Participant Toggle (soft-disable)
+  'preset:toggleParticipantActive',
+  'preset:toggleDriverActive',
+  'preset:bulkSetActive',
+  'preset:resetActiveStates',
 
   'get-app-path',
 
@@ -290,6 +300,10 @@ const validInvokeChannels: string[] = [
   'delivery-r2-upload-progress',
   'delivery-r2-upload-cancel',
   'delivery-get-upload-history',
+  'delivery-r2-upload-status',
+  'delivery-r2-reset-status',
+  'delivery-update-source-folder',
+  'delivery-browse-source-folder',
   'delivery-sync-rules-from-preset',
   'delivery-create-client-user',
   'delivery-get-client-users',

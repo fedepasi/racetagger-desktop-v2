@@ -38,6 +38,11 @@ export interface ParticipantDriver {
   driver_name: string;
   driver_metatag?: string | null;
   driver_order: number;
+  // v1.1.4 — Preset Participant Toggle: when false this driver is soft-disabled
+  // and must be skipped by matching (face recognition, name matching). Loaded
+  // from preset_participant_drivers.is_active. Undefined is treated as TRUE for
+  // backward compatibility with payloads that predate the migration.
+  is_active?: boolean;
 }
 
 export interface Participant {
@@ -69,6 +74,12 @@ export interface Participant {
     };
     [key: string]: any;
   };
+  // v1.1.4 — Preset Participant Toggle: when false the entire participant
+  // (car/crew) is soft-disabled. Upstream code (database-service.loadParticipants
+  // + edge-function preset-loader) MUST filter is_active !== false before
+  // handing the list to the matcher; this field is mirrored here for any
+  // defence-in-depth check or UI passthrough. Undefined treated as TRUE.
+  is_active?: boolean;
 }
 
 /**
@@ -79,6 +90,11 @@ export interface Participant {
 export function getParticipantDriverNames(participant: Participant): string[] {
   if (participant.preset_participant_drivers && participant.preset_participant_drivers.length > 0) {
     return participant.preset_participant_drivers
+      // v1.1.4 — Preset Participant Toggle: skip soft-disabled drivers so their
+      // names never enter the allowed-name set used by fast-track name match
+      // or by the filterDriversAgainstPreset safety net. `is_active === false`
+      // is the only truthy-negative; `undefined` or `true` both count as active.
+      .filter(d => d.is_active !== false)
       .sort((a, b) => a.driver_order - b.driver_order)
       .map(d => d.driver_name)
       .filter(Boolean);
@@ -704,6 +720,19 @@ export class SmartMatcher {
     vehicleIndex?: number
   ): Promise<MatchResult> {
     const startTime = Date.now();
+
+    // v1.1.4 — Preset Participant Toggle (defence-in-depth).
+    // Callers (database-service, preset-loader) already filter soft-disabled
+    // rows at the DB layer, but this matcher is the final gate before AI
+    // matching logic runs. Filter again here so a caller that forgot — or a
+    // cached list loaded before the toggle was flipped — cannot leak disabled
+    // participants into the candidate pool. Undefined is_active is treated as
+    // active for backward compatibility with legacy payloads.
+    const disabledCount = participants.filter(p => p.is_active === false).length;
+    if (disabledCount > 0) {
+      console.log(`[SmartMatcher] Filtering ${disabledCount} soft-disabled participants from candidate pool (defence-in-depth)`);
+      participants = participants.filter(p => p.is_active !== false);
+    }
 
     // Step -1: Analyze preset for uniqueness (cached for performance)
     this.analyzePresetUniqueness(participants);
@@ -2395,6 +2424,17 @@ export class SmartMatcher {
    * Evaluate fuzzy matching for race numbers to handle OCR errors
    * Common OCR errors: 0↔O, 1↔l, 6↔G, 8↔B, 5↔S, digit transposition (45↔54)
    * Enhanced with driver name validation to prevent false corrections
+   *
+   * Issue #105 Point 3 — Confidence floor:
+   *   Previously, a single-character OCR confusion (e.g. "3" vs "8") could force a
+   *   non-preset detected number onto a preset participant at confidence as low as
+   *   ~0.75 — which then surfaced as a phantom folder during export. We now:
+   *     1) Require EXACT match for single-character race numbers (length ≤ 1) —
+   *        too short for a 1-char OCR confusion to be recoverable.
+   *     2) Require a tighter OCR similarity for 2-character numbers (≥ 0.95), since
+   *        a single-char confusion in a 2-char number still changes identity by 50%.
+   *     3) Apply a global MIN_FUZZY_CONFIDENCE floor on the final fuzzy confidence.
+   *        Anything below is considered too weak to override the preset restriction.
    */
   private evaluateFuzzyNumberMatch(
     participantNumber: string,
@@ -2403,6 +2443,12 @@ export class SmartMatcher {
     participant?: Participant,
     allEvidence?: Evidence[]
   ): { score: number; reason: string; confidence: number } {
+    // Issue #105 Point 3: minimum fuzzy-match confidence floor.
+    // Tuned to 0.85 — above most single-character OCR confusion scores
+    // (which land around 0.75–0.80) but below legitimate multi-char corrections
+    // with high character overlap (which typically score ≥ 0.90).
+    const MIN_FUZZY_CONFIDENCE = 0.85;
+
     // Check for driver name contradictions before applying fuzzy number matching
     if (participant && allEvidence) {
       const driverEvidence = allEvidence.filter(e => e.type === EvidenceType.DRIVER_NAME);
@@ -2426,6 +2472,18 @@ export class SmartMatcher {
       return { score: 0, reason: 'Length difference too large', confidence: 0 };
     }
 
+    // Issue #105 Point 3: single-char race numbers are too short for safe fuzzy
+    // matching — a single OCR character confusion (3↔8, 5↔S, 6↔G, 0↔O, 1↔l, etc.)
+    // completely changes the identity and silently forces a non-preset number onto
+    // a preset participant. Require EXACT match for 1-char numbers on either side.
+    if (participantNumber.length <= 1 || evidenceNumber.length <= 1) {
+      return {
+        score: 0,
+        reason: `Fuzzy match disabled for single-character numbers (participant="${participantNumber}", evidence="${evidenceNumber}")`,
+        confidence: 0
+      };
+    }
+
     // Calculate edit distance
     const editDistance = this.calculateLevenshteinDistance(participantNumber, evidenceNumber);
 
@@ -2437,7 +2495,13 @@ export class SmartMatcher {
     // Check for common OCR character confusions
     const ocrSimilarity = this.calculateOCRSimilarity(participantNumber, evidenceNumber);
 
-    if (ocrSimilarity > sportThreshold) {
+    // Issue #105 Point 3: tighter OCR similarity threshold for short (2-char) numbers
+    // where a single-char confusion still changes identity by 50%. A legitimate OCR
+    // error on a 2-char number should still produce ≥ 0.95 similarity.
+    const isShortNumber = participantNumber.length <= 2 || evidenceNumber.length <= 2;
+    const effectiveOcrThreshold = isShortNumber ? Math.max(sportThreshold, 0.95) : sportThreshold;
+
+    if (ocrSimilarity > effectiveOcrThreshold) {
       // Apply reduced score for fuzzy match
       let fuzzyWeight = 0.7; // 70% of exact match score
 
@@ -2459,11 +2523,23 @@ export class SmartMatcher {
       const baseScore = this.config.weights.raceNumber * fuzzyWeight;
       const confidenceAdjustment = confidence * baseScore;
       const finalScore = confidenceAdjustment * ocrSimilarity;
+      const finalConfidence = ocrSimilarity * confidence;
+
+      // Issue #105 Point 3: confidence floor. Reject fuzzy matches whose combined
+      // OCR-similarity × input-confidence product falls below MIN_FUZZY_CONFIDENCE.
+      // This filters out the "3"→#8 class of phantom matches seen in issue #105.
+      if (finalConfidence < MIN_FUZZY_CONFIDENCE) {
+        return {
+          score: 0,
+          reason: `Fuzzy number match rejected: confidence ${finalConfidence.toFixed(2)} below floor ${MIN_FUZZY_CONFIDENCE} (${evidenceNumber} → ${participantNumber}, OCR similarity ${(ocrSimilarity * 100).toFixed(1)}%, input conf ${(confidence * 100).toFixed(1)}%)`,
+          confidence: 0
+        };
+      }
 
       return {
         score: finalScore,
-        reason: `Fuzzy number match: ${evidenceNumber} → ${participantNumber} (OCR similarity: ${(ocrSimilarity * 100).toFixed(1)}%, edit distance: ${editDistance})`,
-        confidence: ocrSimilarity * confidence
+        reason: `Fuzzy number match: ${evidenceNumber} → ${participantNumber} (OCR similarity: ${(ocrSimilarity * 100).toFixed(1)}%, edit distance: ${editDistance}, confidence: ${(finalConfidence * 100).toFixed(1)}%)`,
+        confidence: finalConfidence
       };
     }
 
@@ -2471,11 +2547,23 @@ export class SmartMatcher {
     if (this.isDigitTransposition(participantNumber, evidenceNumber)) {
       const baseScore = this.config.weights.raceNumber * 0.6; // 60% of exact match score
       const confidenceAdjustment = confidence * baseScore;
+      const transpositionConfidence = 0.8 * confidence;
+
+      // Issue #105 Point 3: the confidence floor also applies to digit-transposition
+      // matches — 2-char transpositions with low input OCR confidence would otherwise
+      // force an unrelated preset number.
+      if (transpositionConfidence < MIN_FUZZY_CONFIDENCE) {
+        return {
+          score: 0,
+          reason: `Digit transposition rejected: confidence ${transpositionConfidence.toFixed(2)} below floor ${MIN_FUZZY_CONFIDENCE}`,
+          confidence: 0
+        };
+      }
 
       return {
         score: confidenceAdjustment,
-        reason: `Digit transposition detected: ${evidenceNumber} → ${participantNumber}`,
-        confidence: 0.8 * confidence
+        reason: `Digit transposition detected: ${evidenceNumber} → ${participantNumber} (confidence: ${(transpositionConfidence * 100).toFixed(1)}%)`,
+        confidence: transpositionConfidence
       };
     }
 

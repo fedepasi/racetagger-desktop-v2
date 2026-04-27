@@ -165,6 +165,25 @@ const SettingsManager = {
       });
     }
 
+    // External links (open in default browser)
+    const externalLinks = {
+      'settings-privacy-policy-link': 'https://www.racetagger.cloud/privacy-policy',
+      'about-privacy-policy-link': 'https://www.racetagger.cloud/privacy-policy',
+      'settings-terms-link': 'https://www.racetagger.cloud/terms-of-service',
+      'about-terms-link': 'https://www.racetagger.cloud/terms-of-service',
+      'settings-website-link': 'https://www.racetagger.cloud',
+      'about-support-link': 'mailto:info@racetagger.cloud',
+    };
+    Object.entries(externalLinks).forEach(([id, url]) => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.addEventListener('click', (e) => {
+          e.preventDefault();
+          window.api.send('open-external-url', url);
+        });
+      }
+    });
+
     // IPTC Pro: auto-write toggle
     const autoWriteToggle = document.getElementById('settings-iptc-auto-write');
     if (autoWriteToggle) {

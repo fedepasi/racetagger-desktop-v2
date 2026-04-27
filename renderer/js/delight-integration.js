@@ -304,14 +304,19 @@ class RacetaggerDelightIntegration {
           setTimeout(() => {
             this.isProcessing = false;
             window.delightSystem.hideEnhancedLoading();
-            
+
             const stats = {
-              'Images Processed': files.length,
-              'Drop Method': 'Direct Drop',
-              'Processing Mode': 'Batch'
+              'Images': files.length,
+              'Mode': 'Batch'
             };
-            
-            window.delightSystem.showSuccess('batch_complete', stats, 6000);
+
+            // Demo / drop-simulator path: no executionId here, so the completion card
+            // still shows but with a no-op save (nothing to rename).
+            if (window.delightSystem.showAnalysisCompletionCard) {
+              window.delightSystem.showAnalysisCompletionCard({ stats });
+            } else {
+              window.delightSystem.showSuccess('batch_complete', stats, 6000);
+            }
           }, 500);
         }
       }, (index + 1) * 800 + Math.random() * 400);
@@ -713,14 +718,29 @@ class RacetaggerDelightIntegration {
       }, 0);
       
       const stats = {
-        'Images Processed': results.length,
-        'Objects Detected': totalDetections,
-        'Processing Time': processingTime ? `${(processingTime / 1000).toFixed(1)}s` : 'N/A',
-        'Avg per Image': processingTime ? `${(processingTime / results.length / 1000).toFixed(1)}s` : 'N/A'
+        'Images': results.length,
+        'Detected': totalDetections,
+        'Total': processingTime ? `${(processingTime / 1000).toFixed(1)}s` : 'N/A',
+        'Avg': processingTime ? `${(processingTime / results.length / 1000).toFixed(1)}s` : 'N/A'
       };
-      
-      // Show celebratory success for batch completion  
-      window.delightSystem.showSuccess('batch_complete', stats, 6000);
+
+      // New inline completion card (replaces the big celebratory overlay).
+      // Pulls executionId from sessionStorage, where renderer.js stashes it on
+      // `batch-complete` — so the Save button can rename the execution via IPC.
+      const executionId = (typeof sessionStorage !== 'undefined')
+        ? sessionStorage.getItem('currentExecutionId')
+        : null;
+
+      if (window.delightSystem.showAnalysisCompletionCard) {
+        window.delightSystem.showAnalysisCompletionCard({
+          executionId: executionId || undefined,
+          stats,
+          durationSec: processingTime ? processingTime / 1000 : undefined
+        });
+      } else {
+        // Fallback for older builds without the new method.
+        window.delightSystem.showSuccess('batch_complete', stats, 6000);
+      }
       
       // Calculate and show quick wins for the batch
       const batchDetectionResults = {

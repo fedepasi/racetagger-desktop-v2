@@ -4,7 +4,7 @@
  * Local inference using ONNX Runtime for generic object segmentation.
  * Supports YOLOv8-seg (COCO), custom YOLOv11, and YOLO26 end2end models.
  *
- * This is a SEPARATE model from RF-DETR - it runs BEFORE recognition
+ * This is a SEPARATE model from recognition - it runs BEFORE recognition
  * to isolate subjects and create clean crops without overlaps.
  *
  * Features:

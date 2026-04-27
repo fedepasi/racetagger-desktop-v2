@@ -87,6 +87,22 @@ function initializeAuth() {
     });
   }
 
+  // Registration form: Privacy Policy and Terms of Service links → open in browser
+  const registerPrivacyLink = document.getElementById('register-privacy-link');
+  const registerTermsLink = document.getElementById('register-terms-link');
+  if (registerPrivacyLink) {
+    registerPrivacyLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (window.api) window.api.send('open-external-url', 'https://www.racetagger.cloud/privacy-policy');
+    });
+  }
+  if (registerTermsLink) {
+    registerTermsLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (window.api) window.api.send('open-external-url', 'https://www.racetagger.cloud/terms-of-service');
+    });
+  }
+
   // Set up password validation for registration form
   setupPasswordValidation();
   
@@ -277,12 +293,26 @@ function handleRegister(event) {
   const confirmPassword = document.getElementById('register-confirm-password').value;
   const referralCode = document.getElementById('register-referral-code').value.trim() || null;
 
+  // GDPR Art. 7: Validate consent checkboxes
+  const acceptPrivacy = document.getElementById('register-accept-privacy')?.checked;
+  const acceptTerms = document.getElementById('register-accept-terms')?.checked;
+
   // Clear previous messages
   showAuthError('register', '');
   hideAuthSuccess('register');
 
   if (!email || !password || !confirmPassword) {
     showAuthError('register', 'All fields are required');
+    return;
+  }
+
+  if (!acceptPrivacy) {
+    showAuthError('register', 'You must accept the Privacy Policy to create an account.');
+    return;
+  }
+
+  if (!acceptTerms) {
+    showAuthError('register', 'You must accept the Terms of Service to create an account.');
     return;
   }
 
@@ -305,9 +335,17 @@ function handleRegister(event) {
   submitBtn.textContent = 'Creating account...';
   submitBtn.disabled = true;
 
-  // Send register request to main process
+  // Send register request to main process (GDPR Art. 7: include consent proof)
   if (window.api) {
-    window.api.send('register', { email, password, referralCode });
+    window.api.send('register', {
+      email,
+      password,
+      referralCode,
+      acceptedPrivacyPolicy: true,
+      acceptedTermsOfService: true,
+      privacyPolicyVersion: '2026-03-27',
+      termsOfServiceVersion: '2026-03-27'
+    });
   }
 
   // Reset form state after timeout (in case of no response)
@@ -863,6 +901,9 @@ function updateUIForAuthState() {
     // Load and setup training consent toggle
     loadTrainingConsentStatus();
 
+    // Show privacy consent dialog on first launch
+    showPrivacyConsentIfNeeded();
+
     // Gestisci la visibilità delle sezioni sidebar in base al ruolo utente
     updateSidebarVisibility();
   } else {
@@ -1069,6 +1110,42 @@ window.recheckAuthStatus = recheckAuthStatus;
 // ============================================
 // Training Consent Management
 // ============================================
+
+// Show privacy/terms consent dialog on first launch
+function showPrivacyConsentIfNeeded() {
+  const CONSENT_KEY = 'racetagger_privacy_consent_accepted';
+  if (localStorage.getItem(CONSENT_KEY)) return;
+
+  const modal = document.getElementById('privacy-consent-modal');
+  if (!modal) return;
+
+  modal.style.display = 'flex';
+
+  // External link handlers
+  const privacyLink = document.getElementById('consent-privacy-link');
+  if (privacyLink) {
+    privacyLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      window.api.send('open-external-url', 'https://www.racetagger.cloud/privacy-policy');
+    });
+  }
+  const termsLink = document.getElementById('consent-terms-link');
+  if (termsLink) {
+    termsLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      window.api.send('open-external-url', 'https://www.racetagger.cloud/terms-of-service');
+    });
+  }
+
+  // Accept button
+  const acceptBtn = document.getElementById('privacy-consent-accept');
+  if (acceptBtn) {
+    acceptBtn.addEventListener('click', () => {
+      localStorage.setItem(CONSENT_KEY, new Date().toISOString());
+      modal.style.display = 'none';
+    });
+  }
+}
 
 // Load and display training consent status
 // Note: The header toggle has been moved to Settings page.

@@ -368,46 +368,65 @@ export async function generateNegativeWithMask(
     };
   }
 
-  // Get image dimensions
-  const metadata = await sharp(imageBuffer).metadata();
-  const imageWidth = metadata.width!;
-  const imageHeight = metadata.height!;
-
   // Parse mask color
   const maskColorHex = cfg.maskColor.replace('#', '');
   const r = parseInt(maskColorHex.substring(0, 2), 16);
   const g = parseInt(maskColorHex.substring(2, 4), 16);
   const b = parseInt(maskColorHex.substring(4, 6), 16);
 
-  // Create SVG with black rectangles for each bbox
+  // IMPORTANT: Sharp internally reorders the pipeline and applies resize BEFORE
+  // composite, so building an SVG at the original size and chaining .resize()
+  // after .composite() fails with "Image to composite must have same dimensions
+  // or smaller" whenever the original exceeds cfg.maxDimension.
+  //
+  // Fix: resize first, then build the SVG at the final canvas dimensions (bboxes
+  // are normalized 0..1, so coordinates map cleanly), then composite.
+  let resizedBuffer: Buffer;
+  let finalWidth: number;
+  let finalHeight: number;
+  try {
+    resizedBuffer = await sharp(imageBuffer)
+      .resize(cfg.maxDimension, cfg.maxDimension, { fit: 'inside', withoutEnlargement: true })
+      .toBuffer();
+    const resizedMeta = await sharp(resizedBuffer).metadata();
+    finalWidth = resizedMeta.width!;
+    finalHeight = resizedMeta.height!;
+  } catch (err) {
+    log.error(`generateNegativeWithMask: pre-composite resize failed: ${err instanceof Error ? err.message : String(err)}`);
+    throw err;
+  }
+
+  // Create SVG with mask rectangles sized to the FINAL canvas
   const rectsSvg = bboxes.map(bbox => {
-    const x = Math.round(bbox.x * imageWidth);
-    const y = Math.round(bbox.y * imageHeight);
-    const w = Math.round(bbox.width * imageWidth);
-    const h = Math.round(bbox.height * imageHeight);
+    const x = Math.round(bbox.x * finalWidth);
+    const y = Math.round(bbox.y * finalHeight);
+    const w = Math.round(bbox.width * finalWidth);
+    const h = Math.round(bbox.height * finalHeight);
     return `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="rgb(${r},${g},${b})"/>`;
   }).join('');
 
   const svgMask = Buffer.from(
-    `<svg width="${imageWidth}" height="${imageHeight}" xmlns="http://www.w3.org/2000/svg">${rectsSvg}</svg>`
+    `<svg width="${finalWidth}" height="${finalHeight}" xmlns="http://www.w3.org/2000/svg">${rectsSvg}</svg>`
   );
 
-  // Composite mask over image, then resize
-  const masked = await sharp(imageBuffer)
-    .composite([{ input: svgMask, top: 0, left: 0, blend: 'over' }])
-    .resize(cfg.maxDimension, cfg.maxDimension, { fit: 'inside', withoutEnlargement: true })
-    .jpeg({ quality: cfg.jpegQuality })
-    .toBuffer();
-
-  // Get final dimensions
-  const finalMetadata = await sharp(masked).metadata();
+  // Composite mask over the already-resized canvas (dimensions now match)
+  let masked: Buffer;
+  try {
+    masked = await sharp(resizedBuffer)
+      .composite([{ input: svgMask, top: 0, left: 0, blend: 'over' }])
+      .jpeg({ quality: cfg.jpegQuality })
+      .toBuffer();
+  } catch (err) {
+    log.error(`generateNegativeWithMask: composite failed (canvas ${finalWidth}x${finalHeight}, ${bboxes.length} bboxes): ${err instanceof Error ? err.message : String(err)}`);
+    throw err;
+  }
 
   log.info(`Negative generated in ${Date.now() - startTime}ms, masked ${bboxes.length} regions, size: ${(masked.length / 1024).toFixed(1)}KB`);
 
   return {
     buffer: masked,
     maskedRegions: bboxes,
-    resolution: { width: finalMetadata.width || 0, height: finalMetadata.height || 0 },
+    resolution: { width: finalWidth, height: finalHeight },
     sizeBytes: masked.length,
   };
 }

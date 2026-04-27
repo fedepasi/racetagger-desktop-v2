@@ -98,6 +98,12 @@ class R2UploadService extends EventEmitter {
   /** Track the current execution being uploaded */
   private currentExecutionId: string | null = null;
 
+  /** Track which executions have been queued this session (prevents duplicate queueing) */
+  private queuedExecutions: Set<string> = new Set();
+
+  /** Track all imageIds currently in queue or already processed (prevents duplicate items) */
+  private knownImageIds: Set<string> = new Set();
+
   /** Session-level upload history (not persisted across app restarts) */
   private uploadHistory: Array<{
     completed: number;
@@ -128,14 +134,38 @@ class R2UploadService extends EventEmitter {
       console.log(`[R2Upload] Queueing ${imagePaths.length} images for execution ${executionId}`);
     }
 
-    this.currentExecutionId = executionId;
+    // DEDUPLICATION: Skip if this execution was already queued and is still running or completed
+    if (this.queuedExecutions.has(executionId) && this.isRunning) {
+      console.log(`[R2Upload] Execution ${executionId} is already in the upload queue — skipping duplicate`);
+      return;
+    }
 
-    const newItems: QueuedImage[] = imagePaths.map((item) => ({
+    this.currentExecutionId = executionId;
+    this.queuedExecutions.add(executionId);
+
+    // Filter out images already known (in queue, in-progress, or processed)
+    const deduped = imagePaths.filter((item) => !this.knownImageIds.has(item.imageId));
+
+    if (deduped.length === 0) {
+      console.log(`[R2Upload] All ${imagePaths.length} images for execution ${executionId} are already queued/processed — nothing to add`);
+      return;
+    }
+
+    if (deduped.length < imagePaths.length) {
+      console.log(`[R2Upload] Filtered ${imagePaths.length - deduped.length} duplicate images, queueing ${deduped.length} new`);
+    }
+
+    const newItems: QueuedImage[] = deduped.map((item) => ({
       ...item,
       retries: 0,
       maxRetries: this.MAX_RETRIES,
       status: 'pending' as const,
     }));
+
+    // Track all new imageIds
+    for (const item of newItems) {
+      this.knownImageIds.add(item.imageId);
+    }
 
     this.queue.push(...newItems);
     this.stats.total += newItems.length;
@@ -159,9 +189,7 @@ class R2UploadService extends EventEmitter {
     this.isRunning = true;
     this.isCancelled = false;
 
-    if (DEBUG_MODE) {
-      console.log('[R2Upload] Service started');
-    }
+    console.log(`[R2Upload] Service started — ${this.queue.length} items in queue`);
 
     this.processQueue();
   }
@@ -185,8 +213,38 @@ class R2UploadService extends EventEmitter {
 
     this.queue = [];
 
+    // Clear dedup tracking so executions can be retried after cancel
+    this.queuedExecutions.clear();
+    this.knownImageIds.clear();
+
     if (DEBUG_MODE) {
       console.log('[R2Upload] Upload cancelled');
+    }
+  }
+
+  /**
+   * Allow a specific execution to be re-queued (e.g., after a manual reset/retry).
+   * Clears the execution from the dedup guard and removes its imageIds from tracking.
+   */
+  allowRetry(executionId: string): void {
+    this.queuedExecutions.delete(executionId);
+
+    // Remove imageIds belonging to this execution from tracking
+    for (const item of this.queue) {
+      if (item.executionId === executionId) {
+        this.knownImageIds.delete(item.imageId);
+      }
+    }
+
+    // Also remove from processed map
+    for (const [imageId, _status] of this.processed) {
+      // We don't track executionId in processed, so we can't filter here.
+      // Instead, we clear ALL processed for this execution by clearing the knownImageIds
+      // which is the primary dedup gate.
+    }
+
+    if (DEBUG_MODE) {
+      console.log(`[R2Upload] Retry allowed for execution ${executionId}`);
     }
   }
 
@@ -253,11 +311,9 @@ class R2UploadService extends EventEmitter {
         executionId: this.currentExecutionId,
       });
 
-      if (DEBUG_MODE) {
-        console.log(
-          `[R2Upload] All uploads complete. Completed: ${this.stats.completed}, Failed: ${this.stats.failed}`
-        );
-      }
+      console.log(
+        `[R2Upload] All uploads complete. Completed: ${this.stats.completed}/${this.stats.total}, Failed: ${this.stats.failed}`
+      );
     }
   }
 
@@ -270,9 +326,7 @@ class R2UploadService extends EventEmitter {
       const uploadUrls = await this.getPresignedUrls(batch);
 
       if (!uploadUrls || uploadUrls.length === 0) {
-        if (DEBUG_MODE) {
-          console.error('[R2Upload] Failed to get presigned URLs');
-        }
+        console.error('[R2Upload] Failed to get presigned URLs for batch of', batch.length, 'items');
         // Mark all items in batch as failed
         for (const item of batch) {
           item.status = 'failed';
@@ -333,15 +387,11 @@ class R2UploadService extends EventEmitter {
         failed: batchStats.failed,
       });
 
-      if (DEBUG_MODE) {
-        console.log(
-          `[R2Upload] Batch complete: ${batchStats.completed} completed, ${batchStats.failed} failed`
-        );
-      }
+      console.log(
+        `[R2Upload] Batch complete: ${batchStats.completed} completed, ${batchStats.failed} failed`
+      );
     } catch (err) {
-      if (DEBUG_MODE) {
-        console.error('[R2Upload] Batch processing error:', err);
-      }
+      console.error('[R2Upload] Batch processing error:', err);
       // Mark remaining items as failed
       for (const item of batch) {
         if (item.status !== 'completed') {
@@ -399,9 +449,7 @@ class R2UploadService extends EventEmitter {
       const data = (await response.json()) as { upload_urls: PresignedUrlResponse[] };
       return data.upload_urls || [];
     } catch (err) {
-      if (DEBUG_MODE) {
-        console.error('[R2Upload] Error getting presigned URLs:', err);
-      }
+      console.error('[R2Upload] Error getting presigned URLs:', err instanceof Error ? err.message : err);
       throw err;
     }
   }

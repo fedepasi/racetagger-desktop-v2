@@ -17,7 +17,26 @@ import type { PhaseTimings } from './performance-timer';
 import type { ErrorEvent as TrackedError, ErrorSummary } from './error-tracker';
 
 export interface LogEvent {
-  type: 'EXECUTION_START' | 'IMAGE_ANALYSIS' | 'CORRECTION' | 'TEMPORAL_CLUSTER' | 'PARTICIPANT_MATCH' | 'UNKNOWN_NUMBER' | 'RF_DETR_TIMING' | 'EXECUTION_COMPLETE' | 'ERROR';
+  type:
+    | 'EXECUTION_START'
+    | 'IMAGE_ANALYSIS'
+    | 'CORRECTION'
+    | 'TEMPORAL_CLUSTER'
+    | 'PARTICIPANT_MATCH'
+    | 'UNKNOWN_NUMBER'
+    | 'EXECUTION_COMPLETE'
+    | 'EXECUTION_META_UPDATE'
+    | 'ERROR'
+    // v1.2.0+ — edge-function persistence channel (persistOnnxAnalysis):
+    //   PERSIST_FAILED    — a local-ONNX analysis row did NOT land in analysis_results
+    //                       (edge function returned it in failures[] or a batch failed
+    //                       after retries). JSONL is still the durable record.
+    //   PERSIST_RECOVERED — the reconciliation pass successfully retried a row that
+    //                       was previously PERSIST_FAILED. Lets the support digest
+    //                       show "N failed, M recovered" instead of just counting
+    //                       failures.
+    | 'PERSIST_FAILED'
+    | 'PERSIST_RECOVERED';
   timestamp: string;
   executionId: string;
 }
@@ -32,6 +51,8 @@ export interface ExecutionStartEvent extends LogEvent {
     name: string;
     participantCount: number;
   };
+  /** Source folder path the user selected for this execution (used for at-a-glance identification on the Home page) */
+  folderPath?: string;
   userId: string;
   appVersion: string;
   // Optional enhanced telemetry (backward compatible)
@@ -62,10 +83,10 @@ export interface VehicleAnalysisData {
   box_2d?: [number, number, number, number];  // [y1, x1, y2, x2] normalized 0-1000
   // Converted bounding box format for compatibility
   boundingBox?: {
-    x: number;      // Percentage 0-100 from left edge (or pixels for RF-DETR)
-    y: number;      // Percentage 0-100 from top edge (or pixels for RF-DETR)
-    width: number;  // Percentage 0-100 of image width (or pixels for RF-DETR)
-    height: number; // Percentage 0-100 of image height (or pixels for RF-DETR)
+    x: number;      // Percentage 0-100 from left edge (or pixels for non-normalized sources)
+    y: number;      // Percentage 0-100 from top edge (or pixels for non-normalized sources)
+    width: number;  // Percentage 0-100 of image width (or pixels for non-normalized sources)
+    height: number; // Percentage 0-100 of image height (or pixels for non-normalized sources)
   };
   // Segmentation mask info (YOLOv8-seg) - full mask data NOT stored (too large)
   segmentation?: {
@@ -75,7 +96,7 @@ export interface VehicleAnalysisData {
     maskConfidence: number;  // Segmentation confidence (0-1)
     maskedOthers: number;    // Number of other subjects masked out in this crop
   };
-  modelSource?: 'gemini' | 'rf-detr' | 'local-onnx' | 'gemini-v6-seg';  // Recognition method used for this vehicle
+  modelSource?: 'gemini' | 'local-onnx' | 'gemini-v6-seg';  // Recognition method used for this vehicle
   corrections: CorrectionData[];
   participantMatch?: any;
   finalResult: {
@@ -98,6 +119,10 @@ export interface VisualTagsData {
 export interface ImageAnalysisEvent extends LogEvent {
   type: 'IMAGE_ANALYSIS';
   imageId: string;
+  // Supabase analysis_results.image_id (UUID). Separate from the legacy client-side imageId
+  // (format: `img_{index}_{timestamp}`) to allow DB updates for user corrections.
+  // Optional for backward compatibility with older JSONL logs.
+  dbImageId?: string;
   fileName: string;
   originalFileName?: string;
   originalPath?: string;
@@ -124,7 +149,7 @@ export interface ImageAnalysisEvent extends LogEvent {
   // Path after folder organization (move/copy)
   organizedPath?: string;
   // Recognition method tracking
-  recognitionMethod?: 'gemini' | 'rf-detr' | 'local-onnx' | 'gemini-v6-seg' | 'face_recognition';
+  recognitionMethod?: 'gemini' | 'local-onnx' | 'gemini-v6-seg' | 'face_recognition';
   // Original image dimensions for bbox mapping (especially useful for local-onnx)
   imageSize?: { width: number; height: number };
   // ONNX preprocessing method used (determines bbox coordinate space)
@@ -151,8 +176,11 @@ export interface ImageAnalysisEvent extends LogEvent {
   visualTags?: VisualTagsData;
   // Backward compatibility fields (uses first vehicle data)
   primaryVehicle?: VehicleAnalysisData;
-  // Scene classification for post-analysis folder organization
+  // Scene classification (ONNX) — populated when sport_categories.scene_classifier_enabled = true
+  // sceneCategory: 'crowd_scene' | 'garage_pitlane' | 'podium_celebration' | 'portrait_paddock' | 'racing_action'
   sceneCategory?: string;
+  sceneConfidence?: number;
+  // True when AI analysis was skipped (e.g. crowd_scene above threshold). Undefined/false means the image went through AI normally.
   sceneSkipped?: boolean;
   // Per-image error/warning tracking for debugging processing issues
   processingErrors?: Array<{
@@ -235,18 +263,6 @@ export interface ParticipantMatchEvent extends LogEvent {
   reasoning: string[];
 }
 
-export interface RfDetrTimingEvent extends LogEvent {
-  type: 'RF_DETR_TIMING';
-  imageId: string;
-  fileName: string;
-  inferenceTimeMs: number;
-  inferenceTimeSec: number;
-  estimatedCostUSD: number;    // Baseline estimate ($0.0045)
-  actualCostUSD: number;        // Actual cost based on time (V2 API: $0.008/sec)
-  detectionsCount: number;
-  modelUrl: string;
-}
-
 export interface ExecutionCompleteEvent extends LogEvent {
   type: 'EXECUTION_COMPLETE';
   totalProcessed: number;
@@ -277,17 +293,233 @@ export interface ExecutionCompleteEvent extends LogEvent {
   errorSummary?: ErrorSummary;
   // Recognition method statistics
   recognitionStats?: {
-    method: 'gemini' | 'rf-detr' | 'local-onnx' | 'mixed';
-    rfDetrDetections?: number;
-    rfDetrCost?: number;
-    rfDetrTotalInferenceTimeMs?: number;  // Total inference time across all images
-    rfDetrAverageInferenceTimeMs?: number; // Average inference time per image
-    rfDetrActualCost?: number;             // Actual cost based on timing (V2 API)
-    rfDetrEstimatedCost?: number;          // Estimated cost baseline
+    method: 'gemini' | 'local-onnx' | 'mixed';
     // Local ONNX metrics
     localOnnxInferenceMs?: number;         // Total local inference time
     localOnnxDetections?: number;          // Total local detections
   };
+}
+
+/**
+ * Lightweight metadata update event – written AFTER the run (e.g. user renames the
+ * execution from the completion screen or the Home page). Appended to the JSONL file
+ * so the log remains the single source of truth for local executions.
+ *
+ * Multiple updates are allowed; readers should use the MOST RECENT update.
+ */
+export interface ExecutionMetaUpdateEvent extends LogEvent {
+  type: 'EXECUTION_META_UPDATE';
+  /** Custom display name chosen by the user ("Giro di Lombardia 2026", etc.) */
+  executionName?: string;
+}
+
+/**
+ * Emitted when a local-ONNX analysis row failed to reach `analysis_results`.
+ *
+ * The edge function `persistOnnxAnalysis` reports per-row failures either
+ * inline in its 207 Multi-Status response (code comes from Postgres, e.g.
+ * '57014' / '23503' / 'image_not_found'), or the client may emit one per
+ * row when a whole batch errors out (code = 'retries_exhausted',
+ * 'invoke_500', 'no_auth', etc.).
+ *
+ * The reconciliation pass (and the external backfill script) reads these
+ * events at finalize-time to rebuild the retry queue. Crucially, the FULL
+ * `analysis_results` row payload is carried in `rowData` so reconciliation
+ * can retry the INSERT verbatim — no need to reconstruct it from the lossy
+ * IMAGE_ANALYSIS translation. This makes the JSONL the true durable source
+ * of truth: even if the app crashes mid-execution, the on-disk PERSIST_FAILED
+ * events are self-contained for retry on next launch.
+ *
+ * The extra bytes are only paid on rows that actually failed (rare in normal
+ * operation) — successful rows carry no payload duplication.
+ */
+export interface PersistFailedEvent extends LogEvent {
+  type: 'PERSIST_FAILED';
+  imageId: string;
+  /** Postgres code (57014, 23503, …) or client-side marker (retries_exhausted, invoke_500, …) */
+  code: string;
+  message: string;
+  /**
+   * Where the failure was observed:
+   *   'chunk'     — edge function reported it in the pre-insert phase
+   *                 (e.g. image row missing) or whole-batch failed
+   *   'row'       — edge function's per-row fallback rejected this specific row
+   *   'batch'     — client-side whole-batch failure (invoke error, retries exhausted)
+   *   'reconcile' — reconciliation pass re-attempted the row and it failed again
+   */
+  stage: string;
+  /**
+   * Full analysis_results row payload — same object passed to `persistOnnxAnalysis`.
+   * Present for failures originating client-side (batch/row/chunk/reconcile).
+   * Optional for backward compatibility with older JSONL files (< v1.2.0) and
+   * for pathological cases where the payload was unavailable at emit time.
+   */
+  rowData?: Record<string, any>;
+}
+
+/**
+ * Emitted when the reconciliation pass successfully persists a row that
+ * was previously reported as PERSIST_FAILED. Pairs 1:1 with an earlier
+ * PERSIST_FAILED event for the same imageId.
+ */
+export interface PersistRecoveredEvent extends LogEvent {
+  type: 'PERSIST_RECOVERED';
+  imageId: string;
+  /** How many attempts it took (client-side retries during reconciliation, 1-based) */
+  attempts: number;
+  /** Source of the recovery — mirrors the persistOnnxAnalysis `source` field */
+  source: 'reconcile' | 'backfill';
+}
+
+/**
+ * Suffix appended to the JSONL filename to mark a successful upload.
+ * Used by both AnalysisLogger.finalize() and the JSONL upload reconciler.
+ *
+ * The marker's presence is a fast-path local cache: it lets the reconciler
+ * skip a Supabase round-trip for files we already know are uploaded.
+ * Authoritative truth remains the analysis_log_metadata row on the server.
+ */
+export const UPLOAD_MARKER_SUFFIX = '.uploaded';
+
+/**
+ * Atomically write the upload marker for a JSONL file. Fsync'd so the marker
+ * survives a crash immediately after.
+ *
+ * Best-effort: any failure is logged and swallowed. The reconciler will
+ * recover by querying the metadata table.
+ */
+export function writeUploadedMarker(jsonlPath: string): void {
+  const markerPath = jsonlPath + UPLOAD_MARKER_SUFFIX;
+  try {
+    // Open + write empty + fsync + close. We don't use writeFileSync alone
+    // because we want fsync durability — losing the marker on a power cut
+    // wastes a Supabase query but is still correct.
+    const fd = fs.openSync(markerPath, 'w');
+    try {
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch (err) {
+    // Defensive: never throw from a marker write. The metadata row is the
+    // ground truth; the marker is just an optimisation.
+    if (DEBUG_MODE) {
+      console.warn('[AnalysisLogger] Failed to write upload marker:', markerPath, err);
+    }
+  }
+}
+
+/**
+ * @returns true if the marker file exists, false otherwise (incl. on stat errors).
+ */
+export function hasUploadedMarker(jsonlPath: string): boolean {
+  try {
+    return fs.existsSync(jsonlPath + UPLOAD_MARKER_SUFFIX);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Filename suffix for the sidecar JSON describing a finished execution.
+ * The home page (`get-local-executions`) uses this as a fallback when the
+ * primary JSONL is missing or has a corrupt EXECUTION_START line. Without
+ * the sidecar, an analysis whose JSONL gets corrupted (truncated header,
+ * partial flush before crash, etc.) disappears from the home view even
+ * though the work was paid for and the data is in the cloud DB.
+ *
+ * Filename pattern: `exec_{id}.jsonl.summary.json` (sits next to the JSONL
+ * for easy correlation; survives independently if the JSONL is deleted).
+ */
+export const SUMMARY_SIDECAR_SUFFIX = '.summary.json';
+
+/**
+ * Shape of the sidecar — intentionally a STRICT subset of the fields the
+ * home page renderer needs (`get-local-executions`), so we never carry
+ * invalidated state. Versioned so future schema changes can be detected.
+ */
+export interface ExecutionSummary {
+  schemaVersion: 1;
+  id: string;
+  createdAt: string; // ISO
+  completedAt: string; // ISO
+  status: 'processing' | 'completed' | 'completed_with_errors' | 'failed' | 'cancelled';
+  sportCategory: string;
+  totalImages: number;
+  imagesWithNumbers: number;
+  folderPath: string;
+  executionName: string | null;
+  participantPreset: {
+    id: string;
+    name: string;
+    participantCount: number;
+  } | null;
+  /** UserId at the time of writing — lets the home page filter on shared machines. */
+  userId: string | null;
+  /** App version that wrote the sidecar — useful for back-compat triage. */
+  appVersion: string | null;
+}
+
+/**
+ * Atomically write the execution summary sidecar.
+ *
+ * Strategy: write to `<path>.summary.json.tmp`, fsync, rename. The rename is
+ * atomic on the same filesystem, so a reader can never see a partial JSON.
+ *
+ * Best-effort: any failure is swallowed and logged in DEBUG_MODE only. The
+ * sidecar is a recovery aid; absence of it is not fatal.
+ */
+export function writeExecutionSummary(
+  jsonlPath: string,
+  summary: Omit<ExecutionSummary, 'schemaVersion'>
+): void {
+  const finalPath = jsonlPath + SUMMARY_SIDECAR_SUFFIX;
+  const tmpPath = finalPath + '.tmp';
+  const payload: ExecutionSummary = { schemaVersion: 1, ...summary };
+  let tmpFd: number | null = null;
+  try {
+    const json = JSON.stringify(payload);
+    tmpFd = fs.openSync(tmpPath, 'w');
+    fs.writeSync(tmpFd, json);
+    try {
+      fs.fsyncSync(tmpFd);
+    } catch {
+      // fsync may fail on some FS (e.g. SMB shares); proceed anyway.
+    }
+    fs.closeSync(tmpFd);
+    tmpFd = null;
+    fs.renameSync(tmpPath, finalPath);
+  } catch (err) {
+    if (DEBUG_MODE) {
+      console.warn('[AnalysisLogger] Failed to write summary sidecar:', finalPath, err);
+    }
+    // Cleanup leftover tmp on failure — best-effort.
+    try {
+      if (tmpFd !== null) fs.closeSync(tmpFd);
+    } catch {}
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch {}
+  }
+}
+
+/**
+ * Read and validate an execution summary sidecar. Returns null on missing,
+ * parse error, or schema mismatch. NEVER throws.
+ */
+export function readExecutionSummary(jsonlPath: string): ExecutionSummary | null {
+  const summaryPath = jsonlPath + SUMMARY_SIDECAR_SUFFIX;
+  try {
+    if (!fs.existsSync(summaryPath)) return null;
+    const raw = fs.readFileSync(summaryPath, 'utf-8');
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj !== 'object') return null;
+    if (obj.schemaVersion !== 1) return null;
+    if (typeof obj.id !== 'string' || !obj.id) return null;
+    return obj as ExecutionSummary;
+  } catch {
+    return null;
+  }
 }
 
 export class AnalysisLogger {
@@ -373,7 +605,8 @@ export class AnalysisLogger {
     totalImages: number,
     participantPresetId?: string,
     systemEnvironment?: ExecutionStartEvent['systemEnvironment'],
-    participantPreset?: ExecutionStartEvent['participantPreset']
+    participantPreset?: ExecutionStartEvent['participantPreset'],
+    folderPath?: string
   ): void {
     const event: ExecutionStartEvent = {
       type: 'EXECUTION_START',
@@ -383,6 +616,7 @@ export class AnalysisLogger {
       category: this.category,
       participantPresetId,
       participantPreset,
+      folderPath,
       userId: this.userId,
       appVersion: app.getVersion(),
       systemEnvironment // Optional enhanced telemetry
@@ -390,6 +624,44 @@ export class AnalysisLogger {
 
     this.stats.totalImages = totalImages;
     this.writeLine(event);
+  }
+
+  /**
+   * Append an EXECUTION_META_UPDATE event to the JSONL log.
+   *
+   * Used when the user renames an execution from the completion screen or the
+   * Home page. Because this may run AFTER {@link finalize}, we open the file in
+   * append mode on demand rather than relying on the persistent fileStream.
+   *
+   * Safe to call on a finalized logger or a read-only logger — the write
+   * happens against the file on disk, not the (possibly closed) stream.
+   */
+  static async appendExecutionMetaUpdate(
+    executionId: string,
+    executionName: string
+  ): Promise<boolean> {
+    try {
+      const logsDir = path.join(app.getPath('userData'), '.analysis-logs');
+      const filePath = path.join(logsDir, `exec_${executionId}.jsonl`);
+
+      // If the file doesn't exist we cannot rename a non-existing execution.
+      if (!fs.existsSync(filePath)) {
+        return false;
+      }
+
+      const event: ExecutionMetaUpdateEvent = {
+        type: 'EXECUTION_META_UPDATE',
+        timestamp: new Date().toISOString(),
+        executionId,
+        executionName
+      };
+
+      await fs.promises.appendFile(filePath, JSON.stringify(event) + '\n', 'utf-8');
+      return true;
+    } catch (error) {
+      console.error('[AnalysisLogger] Failed to append EXECUTION_META_UPDATE:', error);
+      return false;
+    }
   }
 
   /**
@@ -555,17 +827,51 @@ export class AnalysisLogger {
   }
 
   /**
-   * Log RF-DETR timing and cost information
+   * Log that a local-ONNX analysis row did NOT reach `analysis_results`.
+   *
+   * The JSONL is the authoritative source of truth — every IMAGE_ANALYSIS
+   * event is preserved regardless — but PERSIST_FAILED gives the
+   * reconciliation pass a precise list of which rows need to be retried.
+   *
+   * Best-effort: failures to emit this event must never block the processor.
    */
-  logRfDetrTiming(data: Omit<RfDetrTimingEvent, 'type' | 'timestamp' | 'executionId'>): void {
-    const event: RfDetrTimingEvent = {
-      type: 'RF_DETR_TIMING',
-      timestamp: new Date().toISOString(),
-      executionId: this.executionId,
-      ...data
-    };
+  logPersistFailed(data: Omit<PersistFailedEvent, 'type' | 'timestamp' | 'executionId'>): void {
+    try {
+      const event: PersistFailedEvent = {
+        type: 'PERSIST_FAILED',
+        timestamp: new Date().toISOString(),
+        executionId: this.executionId,
+        ...data,
+      };
+      this.writeLine(event);
+    } catch (error) {
+      // Never throw out of logging — writeLine already queues asynchronously
+      // and swallows its own errors, so this catch is belt-and-braces.
+      console.error('[AnalysisLogger] Failed to log PERSIST_FAILED:', error);
+    }
+  }
 
-    this.writeLine(event);
+  /**
+   * Log that a previously-failed persist has now succeeded. Emitted by the
+   * finalize-time reconciliation pass (and the one-shot backfill script).
+   *
+   * Pair with the earlier PERSIST_FAILED event for the same imageId — a
+   * reader of the JSONL can compute "net failures" as
+   *   count(PERSIST_FAILED) - count(PERSIST_RECOVERED)
+   * grouped by imageId.
+   */
+  logPersistRecovered(data: Omit<PersistRecoveredEvent, 'type' | 'timestamp' | 'executionId'>): void {
+    try {
+      const event: PersistRecoveredEvent = {
+        type: 'PERSIST_RECOVERED',
+        timestamp: new Date().toISOString(),
+        executionId: this.executionId,
+        ...data,
+      };
+      this.writeLine(event);
+    } catch (error) {
+      console.error('[AnalysisLogger] Failed to log PERSIST_RECOVERED:', error);
+    }
   }
 
   /**
@@ -993,8 +1299,20 @@ export class AnalysisLogger {
       const uploadSuccess = await this.uploadToSupabase(true);
 
       if (!uploadSuccess) {
+        // Upload failed — leave the local file in place WITHOUT a marker so the
+        // reconciliation job (jsonl-upload-reconciler) can retry on next boot
+        // or login. This is the entry point that protects users from losing
+        // their analysis when the 15s upload-side timeout in
+        // unified-image-processor.ts fires before storage finishes accepting
+        // the file (typical for 2k+ image batches on slow uplinks).
         return null;
       }
+
+      // Write the local sentinel so the reconciler can fast-path skip this
+      // execution without a Supabase round-trip. Best-effort: a marker write
+      // failure does NOT invalidate the upload — the reconciler still has the
+      // analysis_log_metadata row as authoritative truth.
+      writeUploadedMarker(this.localFilePath);
 
       const publicUrl = this.getPublicUrl();
 

@@ -49,6 +49,19 @@ export interface FolderOrganizerConfig {
   destinationPath?: string; // If not provided, uses source directory
   conflictStrategy?: 'rename' | 'skip' | 'overwrite'; // How to handle file conflicts
   renamePattern?: string; // Optional filename pattern (e.g. "{number}_{name}_{team}-{seq:2}")
+
+  // --- Issue #105 hardening (defense-in-depth) ---
+  // When a participant preset is active, caller SHOULD pass the list of legitimate
+  // race numbers so that organizeImage can detect (and reject) any phantom number
+  // that leaked through upstream matching. See buildAllowedNumbersSet in unified-image-processor.
+  allowedNumbers?: string[];
+  // Default behaviour when `allowedNumbers` is set:
+  //   - true (default)  → numbers not in the set are logged as a
+  //                       `[FolderOrg] phantom number detected` warning and FILTERED OUT
+  //                       (routed to Unknown_Numbers if no legitimate number remains).
+  //   - false           → telemetry-only: log the warning but still create the folder.
+  // Leave undefined to get the safer default (true).
+  restrictToAllowedNumbers?: boolean;
 }
 
 // Operation result for tracking
@@ -103,6 +116,12 @@ export class FolderOrganizer {
   private createdFolders: Set<string> = new Set();
   private operationLog: FolderOrganizationResult[] = [];
 
+  // Pre-computed allowed-numbers Set for O(1) lookup during organizeImage.
+  // null = no restriction configured (legacy behaviour / no preset active).
+  private allowedNumbersSet: Set<string> | null = null;
+  // Counter of phantom events detected (exposed via getPhantomNumberCount for telemetry).
+  private phantomNumberEvents: Array<{ fileName: string; number: string }> = [];
+
   constructor(config: FolderOrganizerConfig) {
     this.config = config;
 
@@ -110,6 +129,69 @@ export class FolderOrganizer {
     if (!this.config.unknownFolderName) {
       this.config.unknownFolderName = 'Non_Riconosciuti';
     }
+
+    // Pre-compute allowed-numbers lookup set (issue #105 hardening)
+    if (Array.isArray(config.allowedNumbers) && config.allowedNumbers.length > 0) {
+      this.allowedNumbersSet = new Set(
+        config.allowedNumbers
+          .map(n => (typeof n === 'string' ? n.trim() : String(n)))
+          .filter(n => n.length > 0)
+      );
+    }
+  }
+
+  /**
+   * Issue #105 hardening: validate a list of race numbers against the preset's allowed set.
+   * - Returns the filtered list of numbers that are legitimate (or the original list unchanged
+   *   when no preset restriction is configured).
+   * - Logs `[FolderOrg] phantom number detected` warnings for any rejected number.
+   * - Records each phantom event in `phantomNumberEvents` for later telemetry retrieval.
+   *
+   * This is a defense-in-depth safety net: in the normal flow the upstream matcher
+   * (`extractNumbersWithMatches` in unified-image-processor) should already have
+   * filtered to preset-only numbers. If a non-preset number ever reaches here, either
+   * (a) a future regression re-introduced the bug described in issue #105, or
+   * (b) the caller forgot to filter — in both cases we want loud logs + safe behaviour.
+   */
+  private validateAgainstAllowedNumbers(numbers: string[], fileName: string): string[] {
+    if (!this.allowedNumbersSet) {
+      return numbers; // No restriction → no-op
+    }
+
+    const restrict = this.config.restrictToAllowedNumbers !== false; // default true
+    const kept: string[] = [];
+
+    for (const num of numbers) {
+      // "unknown" is a valid sentinel used by organizeUnknownImage → always pass through
+      if (num === 'unknown') {
+        kept.push(num);
+        continue;
+      }
+      if (this.allowedNumbersSet.has(num)) {
+        kept.push(num);
+      } else {
+        this.phantomNumberEvents.push({ fileName, number: num });
+        console.warn(
+          `[FolderOrg] phantom number detected: "${num}" not in preset (file: ${fileName}). ` +
+          `${restrict ? 'Number will be filtered out.' : 'Telemetry-only mode: folder will still be created.'}`
+        );
+        if (!restrict) {
+          // Telemetry-only: keep the number in the output despite the warning
+          kept.push(num);
+        }
+      }
+    }
+
+    return kept;
+  }
+
+  /**
+   * Issue #105 telemetry accessor — returns the list of phantom-number events detected
+   * during this organizer's lifetime. Callers (e.g. unified-image-processor) can forward
+   * these to their analysis logger for observability.
+   */
+  public getPhantomNumberEvents(): Array<{ fileName: string; number: string }> {
+    return [...this.phantomNumberEvents];
   }
 
   /**
@@ -205,7 +287,37 @@ export class FolderOrganizer {
     try {
       // Deduplicate race numbers to avoid copying the same file multiple times
       // to the same folder (e.g., when crop+context detects 2 subjects both with number "5")
-      const numbers = [...new Set(Array.isArray(raceNumbers) ? raceNumbers : [raceNumbers])];
+      const originalNumbers = [...new Set(Array.isArray(raceNumbers) ? raceNumbers : [raceNumbers])];
+
+      // Issue #105 hardening: sanity check against preset allow-list (if configured).
+      // When all numbers are phantom AND restriction is active → route to Unknown_Numbers
+      // instead of creating a phantom folder. This is defense-in-depth: the upstream
+      // matcher should already have filtered, but a regression here would otherwise
+      // surface as "folders with numbers not in the preset" (see issue #105).
+      const numbers = this.validateAgainstAllowedNumbers(originalNumbers, fileName);
+      const allPhantom =
+        this.allowedNumbersSet !== null &&
+        this.config.restrictToAllowedNumbers !== false &&
+        originalNumbers.length > 0 &&
+        numbers.length === 0;
+
+      if (allPhantom) {
+        console.warn(
+          `[FolderOrg] all detected numbers for ${fileName} are phantom (${originalNumbers.join(', ')}) — routing to Unknown_Numbers`
+        );
+        // Short-circuit to the Unknown_Numbers fallback.
+        // Use originalPath if caller passed one via imagePath (it already is imagePath).
+        const unknownResult = await this.organizeToUnknownNumbers(
+          imagePath,
+          sourceDir
+        );
+        // Mirror the shape expected by the caller, keeping the phantom note in folderName for visibility.
+        return {
+          ...unknownResult,
+          folderName: unknownResult.folderName + ' (phantom-filtered)',
+          timeMs: Date.now() - startTime,
+        };
+      }
 
       // NEW LOGIC: Collect custom folders from ALL csvData entries
       const customFolderTargets: FolderTarget[] = [];

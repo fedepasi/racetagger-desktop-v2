@@ -41,7 +41,13 @@ const mockApp = {
   whenReady: jest.fn().mockResolvedValue(undefined),
   quit: jest.fn(),
   setName: jest.fn(),
-  ready: true
+  // getPath is overridable per-test by reassigning mockApp.getPath = jest.fn(...).
+  // Default returns a deterministic temp-shaped string; tests that touch the
+  // filesystem should pass an explicit getLogsDir override anyway.
+  getPath: jest.fn().mockReturnValue('/tmp/racetagger-mock-userdata'),
+  getVersion: jest.fn().mockReturnValue('test-1.0.0'),
+  ready: true,
+  isPackaged: false
 };
 
 // Mock ipcMain

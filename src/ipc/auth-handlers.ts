@@ -86,9 +86,22 @@ export function registerAuthHandlers(): void {
 
   // ==================== Register ====================
 
-  ipcMain.on('register', async (event: IpcMainEvent, data: { email: string; password: string; referralCode?: string | null }) => {
+  ipcMain.on('register', async (event: IpcMainEvent, data: {
+    email: string;
+    password: string;
+    referralCode?: string | null;
+    acceptedPrivacyPolicy?: boolean;
+    acceptedTermsOfService?: boolean;
+    privacyPolicyVersion?: string;
+    termsOfServiceVersion?: string;
+  }) => {
     try {
-      const result = await authService.register(data.email, data.password, undefined, data.referralCode || undefined);
+      const result = await authService.register(data.email, data.password, undefined, data.referralCode || undefined, {
+        acceptedPrivacyPolicy: data.acceptedPrivacyPolicy,
+        acceptedTermsOfService: data.acceptedTermsOfService,
+        privacyPolicyVersion: data.privacyPolicyVersion,
+        termsOfServiceVersion: data.termsOfServiceVersion,
+      });
       event.sender.send('register-result', result);
     } catch (error: any) {
       event.sender.send('register-result', { success: false, error: error.message || 'Registration error' });

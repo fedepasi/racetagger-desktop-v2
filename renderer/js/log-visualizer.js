@@ -1426,6 +1426,19 @@ class LogVisualizer {
     // Count alternative candidates for needs_review badge
     const altCount = primaryVehicle.alternativeCandidates ? primaryVehicle.alternativeCandidates.length : 0;
 
+    // Issue #104 — aggregate otherPeople across all vehicles (usually empty, unless preset opted in)
+    const otherPeople = [];
+    for (const v of vehicles) {
+      if (Array.isArray(v.otherPeople)) {
+        for (const p of v.otherPeople) {
+          if (p && p.name) otherPeople.push(p);
+        }
+      }
+    }
+    const otherPeopleLabel = otherPeople
+      .map(p => p.role ? `${this.escapeHtml(p.name)} (${this.escapeHtml(p.role)})` : this.escapeHtml(p.name))
+      .join(', ');
+
     return `
       <div class="lv-result-card ${isModified ? 'modified' : ''} ${needsReview && !isResolved ? 'needs-review' : ''} ${isResolved ? 'review-resolved' : ''}" data-index="${index}">
         <div class="lv-card-image">
@@ -1443,6 +1456,7 @@ class LogVisualizer {
           ${isResolved ? '<div class="lv-resolved-badge">✅ Resolved</div>' : ''}
           ${result.metadataWritten === false ? '<div class="lv-no-metadata-badge">No metadata</div>' : ''}
           ${vehicles.length > 1 ? `<div class="lv-multi-badge">${vehicles.length} vehicles</div>` : ''}
+          ${otherPeople.length > 0 ? `<div class="lv-other-people-badge" title="${otherPeopleLabel}">★ ${otherPeople.length} VIP</div>` : ''}
         </div>
 
         <div class="lv-card-content">
@@ -1453,6 +1467,7 @@ class LogVisualizer {
               <div class="lv-race-number">#${primaryVehicle.raceNumber || '?'}</div>
               <div class="lv-team-name">${primaryVehicle.team || 'Unknown Team'}</div>
               ${primaryVehicle.drivers ? `<div class="lv-drivers">${primaryVehicle.drivers.join(', ')}</div>` : ''}
+              ${otherPeople.length > 0 ? `<div class="lv-other-people" title="People outside the preset (VIPs/guests)">★ ${otherPeopleLabel}</div>` : ''}
               ${needsReview && !isResolved && altCount > 1 ? `
                 <div class="lv-ambiguous-hint">${altCount} candidates — click to choose</div>
               ` : ''}
@@ -2216,6 +2231,9 @@ class LogVisualizer {
     // Update vehicle information
     this.updateVehicleEditor(result, this.currentImageIndex);
 
+    // Auto-focus the Race Number field so the user can immediately type a number
+    this._focusFirstRaceNumberInput();
+
     // Update navigation buttons
     const prevBtn = document.getElementById('lv-gallery-prev');
     const nextBtn = document.getElementById('lv-gallery-next');
@@ -2475,6 +2493,91 @@ class LogVisualizer {
         }
       });
     }
+
+    // Keyboard shortcuts on the Race Number input:
+    //   Enter → apply best match (exact or prefix), save async, navigate to next image
+    //   Empty Enter → save async, navigate to next image
+    newContainer.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      const input = event.target;
+      if (input.tagName !== 'INPUT' || input.dataset.field !== 'raceNumber') return;
+
+      event.preventDefault();
+      this._handleRaceNumberEnter(input);
+    });
+  }
+
+  /**
+   * Find best participant match: exact match first, then prefix match.
+   */
+  findBestMatchByNumberPrefix(value) {
+    if (!this.presetParticipants || !value) return null;
+    const needle = String(value).trim();
+    if (!needle) return null;
+
+    const exact = this.findParticipantByNumber(needle);
+    if (exact) return exact;
+
+    return this.presetParticipants.find(p =>
+      p.numero && String(p.numero).trim().startsWith(needle)
+    ) || null;
+  }
+
+  /**
+   * Handle Enter pressed inside a Race Number input.
+   * Applies the first useful suggestion (if any), kicks off an async save and
+   * advances to the next image so the user keeps moving without waiting.
+   */
+  _handleRaceNumberEnter(input) {
+    const vehicleEditor = input.closest('.lv-vehicle-editor');
+    const value = input.value.trim();
+
+    // 1) If the user typed something, apply the first useful match
+    if (value && this.presetParticipants && this.presetParticipants.length > 0 && vehicleEditor) {
+      const participant = this.findBestMatchByNumberPrefix(value);
+      if (participant) {
+        if (participant.numero) {
+          input.value = String(participant.numero);
+        }
+        this.autoFillFromParticipant(vehicleEditor, participant, 'raceNumber');
+      }
+    }
+
+    // 2) Fire-and-forget save for the current vehicle (do not block navigation)
+    if (vehicleEditor) {
+      const vehicleIndex = parseInt(vehicleEditor.dataset.vehicleIndex, 10);
+      const fileName = vehicleEditor.dataset.fileName;
+      if (!Number.isNaN(vehicleIndex) && fileName) {
+        Promise.resolve(this.saveVehicleChangesByFileName(fileName, vehicleIndex))
+          .catch(err => console.error('[LogVisualizer] Async save on Enter failed:', err));
+      }
+    }
+
+    // 3) Move to the next image right away (or close gallery if it was the last one)
+    if (this.currentImageIndex < this.filteredResults.length - 1) {
+      this.navigateGallery(1);
+    } else {
+      // Last image: just blur so user knows the save was triggered
+      input.blur();
+      this.showNotification('✅ Last image — changes saved in background', 'info');
+    }
+  }
+
+  /**
+   * Auto-focus the first Race Number input in the gallery so the user can type
+   * a number immediately without clicking. Runs after the editor is rebuilt.
+   */
+  _focusFirstRaceNumberInput() {
+    // Defer so the just-rebuilt DOM is fully attached and visible
+    setTimeout(() => {
+      if (!this.isGalleryOpen) return;
+      const firstInput = document.querySelector('#lv-vehicles [data-field="raceNumber"]');
+      if (firstInput) {
+        firstInput.focus();
+        // Select existing value so typing replaces it
+        if (typeof firstInput.select === 'function') firstInput.select();
+      }
+    }, 50);
   }
 
   /**
@@ -3485,11 +3588,13 @@ class LogVisualizer {
     // Strategy G only applies to Gemini executions — ONNX models don't produce
     // Vehicle DNA (sponsors, team, livery, etc.) so there's nothing to learn from.
     // Check EXECUTION_COMPLETE.recognitionStats.method or individual vehicle modelSource.
+    // NOTE: historical 'rf-detr' executions (pre-2026-04-22 cleanup) are also covered
+    // so the learned-data button hides for archival ONNX/RF-DETR logs too.
     if (this.logData) {
       const completeEvent = this.logData.find(e => e.type === 'EXECUTION_COMPLETE');
       const method = completeEvent?.recognitionStats?.method;
       if (method === 'local-onnx' || method === 'rf-detr') {
-        // Pure ONNX/RF-DETR execution — no Vehicle DNA available
+        // Pure local execution (ONNX today, historical RF-DETR logs) — no Vehicle DNA
         const learnedBtn = document.getElementById('lv-learned-data');
         if (learnedBtn) learnedBtn.style.display = 'none';
         return;
@@ -3641,7 +3746,10 @@ class LogVisualizer {
         confidence: vehicle.confidence || 0,
         matchedBy: vehicle.finalResult?.matchedBy || 'none',
         matchStatus: vehicle.finalResult?.matchStatus || 'no_match',
-        alternativeCandidates: vehicle.finalResult?.alternativeCandidates || null
+        alternativeCandidates: vehicle.finalResult?.alternativeCandidates || null,
+        // Issue #104 — extra-preset people (VIPs, team principals, etc.), only populated
+        // when the preset has allow_external_person_recognition = true.
+        otherPeople: Array.isArray(vehicle.otherPeople) ? vehicle.otherPeople : []
       }));
 
       return {

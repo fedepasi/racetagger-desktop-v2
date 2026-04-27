@@ -616,129 +616,284 @@
   margin-bottom: var(--spacing-lg);
 }
 
+/*
+ * New compact-row layout (.card-b) — replaces the old three-column card grid.
+ *
+ * Structure rendered by home.js:
+ *   .card-b
+ *     .card-b-main
+ *       .title-row      (execution name + inline rename pencil)
+ *       .meta-line      (date · sport · preset)
+ *       .folder-line    (📂 path, truncated from LEFT + delivery badges)
+ *     .card-b-side
+ *       .mini-stats     (photos / detected / success %)
+ *       .status-pill
+ */
+
 .executions-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: var(--spacing-lg);
+  /* Single column of compact rows */
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm, 8px);
 }
 
-.execution-card {
+.card-b {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--spacing-md, 12px);
+  align-items: center;
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: var(--border-radius-md);
-  padding: var(--spacing-lg);
+  padding: 12px 16px;
   cursor: pointer;
-  transition: var(--transition-normal);
-  position: relative;
+  transition: var(--transition-fast, background 0.15s ease, border-color 0.15s ease);
+  min-width: 0; /* allow children to shrink below content width (for ellipsis) */
 }
 
-.execution-card:hover {
+.card-b:hover {
   border-color: var(--accent-primary);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-md);
+  background: var(--bg-card-hover, rgba(59, 130, 246, 0.04));
 }
 
-.execution-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: var(--spacing-md);
-}
-
-.execution-category {
-  font-weight: 600;
-  font-size: 1.1rem;
-  color: var(--text-primary);
-}
-
-.execution-status {
-  padding: var(--spacing-xs) var(--spacing-sm);
-  border-radius: var(--border-radius-sm);
-  font-size: 0.75rem;
-  font-weight: 600;
-  text-transform: uppercase;
-}
-
-.execution-status.completed {
-  background: rgba(16, 185, 129, 0.15);
-  color: #10b981;
-}
-
-.execution-status.processing {
-  background: rgba(59, 130, 246, 0.15);
-  color: #3b82f6;
-}
-
-.execution-status.failed {
-  background: rgba(239, 68, 68, 0.15);
-  color: #ef4444;
-}
-
-.execution-status.pending {
-  background: rgba(245, 158, 11, 0.15);
-  color: #f59e0b;
-}
-
-.execution-date {
-  color: var(--text-muted);
-  font-size: 0.85rem;
-  margin-bottom: var(--spacing-md);
-}
-
-.execution-stats {
-  display: flex;
-  gap: var(--spacing-lg);
-  padding-top: var(--spacing-md);
-  border-top: 1px solid var(--border-color);
-}
-
-.execution-stat {
+.card-b-main {
+  min-width: 0; /* critical for text-overflow in children */
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 
-.execution-stat-value {
-  font-size: 1.25rem;
+/* ---- Title row (name + rename pencil) ---- */
+.card-b .title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.card-b .title {
+  font-weight: 600;
+  font-size: 1rem;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.card-b .title.is-default {
+  /* Auto-generated names get a slightly softer tone so the custom ones pop */
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.card-b .rename-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  line-height: 1;
+  opacity: 0; /* only show on row hover */
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.card-b:hover .rename-btn { opacity: 1; }
+.card-b .rename-btn:hover {
+  background: var(--bg-medium, rgba(148, 163, 184, 0.12));
+  color: var(--text-primary);
+}
+
+.card-b .rename-input {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  font-size: 1rem;
+  color: var(--text-primary);
+  background: var(--bg-dark, #0f172a);
+  border: 1px solid var(--accent-primary);
+  border-radius: 6px;
+  padding: 4px 8px;
+  outline: none;
+}
+
+/* ---- Meta line (date · sport · preset) ---- */
+.card-b .meta-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  min-width: 0;
+}
+
+.card-b .meta-line .sep {
+  color: var(--border-color);
+}
+
+.card-b .meta-line .preset-chip {
+  color: var(--accent-turquoise, #14b8a6);
+}
+
+/* ---- Folder line (path truncated from LEFT + delivery badges) ---- */
+.card-b .folder-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.card-b .folder-icon { flex-shrink: 0; }
+
+.card-b .folder-path {
+  flex: 1;
+  min-width: 0;
+  /* Truncate from the LEFT so the most informative suffix stays visible ("… / 2026-04-17") */
+  direction: rtl;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+/* ---- Delivery badges (gallery / HD) ---- */
+.delivery-badges {
+  display: inline-flex;
+  gap: 4px;
+  flex-shrink: 0;
+  align-items: center;
+}
+
+.badge-delivery {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: transform 0.15s ease, background 0.15s ease;
+  white-space: nowrap;
+}
+
+.badge-delivery:hover { transform: translateY(-1px); }
+
+.badge-delivery.ok {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--accent-success, #10b981);
+}
+.badge-delivery.progress {
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--accent-primary, #3b82f6);
+}
+.badge-delivery.failed {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--accent-danger, #ef4444);
+}
+.badge-delivery.partial {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--accent-warning, #f59e0b);
+}
+.badge-delivery.none {
+  background: rgba(148, 163, 184, 0.12);
+  color: var(--text-muted);
+}
+
+/* Animated dot for "uploading" state */
+.spin-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: spin-dot-pulse 1.2s ease-in-out infinite;
+}
+@keyframes spin-dot-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.8); }
+  50%      { opacity: 1;    transform: scale(1); }
+}
+
+/* ---- Right-side cluster: mini-stats + status pill ---- */
+.card-b-side {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-shrink: 0;
+}
+
+.card-b .mini-stats {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.card-b .mini-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0;
+  line-height: 1.1;
+}
+
+.card-b .mini-stat-value {
+  font-size: 0.95rem;
   font-weight: 600;
   color: var(--text-primary);
 }
 
-.execution-stat-label {
-  font-size: 0.75rem;
-  color: var(--text-muted);
+.card-b .mini-stat-value.success-rate {
+  color: var(--accent-success, #10b981);
+}
+
+.card-b .mini-stat-label {
+  font-size: 0.68rem;
   text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
 }
 
-.execution-view-btn {
-  position: absolute;
-  bottom: var(--spacing-lg);
-  right: var(--spacing-lg);
-  background: var(--accent-primary);
-  color: white;
-  border: none;
-  padding: var(--spacing-xs) var(--spacing-md);
-  border-radius: var(--border-radius-sm);
-  font-size: 0.85rem;
-  font-weight: 500;
-  cursor: pointer;
-  opacity: 0;
-  transition: var(--transition-fast);
+.card-b .status-pill {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
 }
-
-.execution-card:hover .execution-view-btn {
-  opacity: 1;
+.card-b .status-pill.completed {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--accent-success, #10b981);
+}
+.card-b .status-pill.processing {
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--accent-primary, #3b82f6);
+}
+.card-b .status-pill.failed {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--accent-danger, #ef4444);
+}
+.card-b .status-pill.pending {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--accent-warning, #f59e0b);
 }
 
 .loading-placeholder {
-  grid-column: 1 / -1;
   text-align: center;
   padding: var(--spacing-2xl);
   color: var(--text-muted);
 }
 
 .empty-executions {
-  grid-column: 1 / -1;
   text-align: center;
   padding: var(--spacing-2xl);
   background: var(--bg-card);
@@ -760,20 +915,17 @@
   color: var(--text-muted);
 }
 
-/* Responsive for executions */
+/* ---- Responsive: below 768px we stack the right side under the main area ---- */
 @media (max-width: 768px) {
-  .executions-grid {
+  .card-b {
     grid-template-columns: 1fr;
+    gap: 8px;
   }
-
-  .execution-stats {
-    flex-wrap: wrap;
+  .card-b-side {
+    justify-content: space-between;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-color);
   }
-
-  .execution-view-btn {
-    opacity: 1;
-    position: static;
-    margin-top: var(--spacing-md);
-    width: 100%;
-  }
+  .card-b .rename-btn { opacity: 1; }
+  .card-b .folder-path { font-size: 0.75rem; }
 }

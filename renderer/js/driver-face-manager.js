@@ -12,11 +12,35 @@
  * - Each driver gets their own PresetFaceManager instance (when face rec enabled)
  */
 
-// Feature flag: set to true to re-enable face recognition
-const FACE_RECOGNITION_ENABLED = false;
+// Feature flag: loaded from DB via feature_flags table (default: false)
+// Enabled per-user by admin via PUT /api/admin/feature-flags/[userId]
+// with feature_name: 'face_recognition_enabled'
+var FACE_RECOGNITION_ENABLED = false;
 
 // Per-person metadata is always enabled (nationality, metatag)
 const PERSON_METADATA_ENABLED = true;
+
+/**
+ * Load face recognition feature flag from DB (same pattern as delivery)
+ * Uses the existing delivery-get-plan-limits IPC channel which returns getUserPlanLimits()
+ */
+async function loadFaceRecognitionFlag() {
+  try {
+    const planLimits = await window.api.invoke('delivery-get-plan-limits');
+    if (planLimits.success && planLimits.data) {
+      FACE_RECOGNITION_ENABLED = planLimits.data.face_recognition_enabled === true;
+      console.log(`[DriverFaceManager] Face recognition feature flag: ${FACE_RECOGNITION_ENABLED}`);
+    }
+  } catch (error) {
+    console.warn('[DriverFaceManager] Could not load face recognition flag:', error.message || error);
+    // Default remains false
+  }
+
+  // Initialize face detector now that the flag is known
+  if (FACE_RECOGNITION_ENABLED && typeof window.initFaceDetector === 'function') {
+    window.initFaceDetector();
+  }
+}
 
 class DriverFaceManagerMulti {
   constructor() {
@@ -33,13 +57,16 @@ class DriverFaceManagerMulti {
   }
 
   /**
-   * Initialize the manager with DOM elements
+   * Initialize the manager with DOM elements and load feature flag from DB
    */
-  initialize() {
+  async initialize() {
     this.containerElement = document.getElementById('driver-panels-container');
     this.emptyStateElement = document.getElementById('driver-panels-empty-state');
 
-    console.log('[DriverFaceManagerMulti] Initialized');
+    // Load face recognition flag from DB (non-blocking, same as delivery pattern)
+    await loadFaceRecognitionFlag();
+
+    console.log('[DriverFaceManagerMulti] Initialized (face_recognition_enabled:', FACE_RECOGNITION_ENABLED, ')');
   }
 
   /**
@@ -79,6 +106,8 @@ class DriverFaceManagerMulti {
         metatag: dbDriver.driver_metatag || '',
         nationality: dbDriver.driver_nationality || '',
         order: dbDriver.driver_order,
+        // v1.1.4 — soft-disable flag. Undefined/null treated as active.
+        is_active: dbDriver.is_active !== false,
         faceManager: null
       }));
 
@@ -138,6 +167,8 @@ class DriverFaceManagerMulti {
             existing.metatag = driver.driver_metatag || '';
             existing.nationality = driver.driver_nationality || '';
             existing.order = driver.driver_order;
+            // v1.1.4 — carry the soft-disable flag through the sync.
+            existing.is_active = driver.is_active !== false;
 
             // Update the face manager's driver ID if it exists
             if (existing.faceManager && driver.id) {
@@ -156,6 +187,8 @@ class DriverFaceManagerMulti {
             metatag: driver.driver_metatag || '',
             nationality: driver.driver_nationality || '',
             order: driver.driver_order,
+            // v1.1.4 — soft-disable flag (sync returns DEFAULT TRUE for new rows).
+            is_active: driver.is_active !== false,
             faceManager: null
           };
         });
@@ -325,14 +358,82 @@ class DriverFaceManagerMulti {
     panel.className = 'driver-panel';
     panel.dataset.driverId = driver.id || `temp-${index}`;
 
-    // Header with driver name
+    // v1.1.4 — soft-disable: dim the panel when the driver is inactive
+    const driverIsActive = driver.is_active !== false;
+    if (!driverIsActive) panel.classList.add('driver-panel-inactive');
+
+    // Header with driver name + per-driver Active toggle (v1.1.4)
+    // The toggle is hidden for official presets (read-only) and for drivers
+    // that haven't been persisted yet (no id → nothing to toggle in DB).
     const header = document.createElement('div');
     header.className = 'driver-panel-header';
+    const canToggleDriver = !this.isOfficial && !!driver.id;
+    const driverToggleTitle = this.isOfficial
+      ? 'Official preset: duplicate to customize'
+      : (driverIsActive
+          ? 'Disable this driver from AI matching (face recognition, names)'
+          : 'Re-enable this driver for AI matching');
     header.innerHTML = `
       <h4 class="driver-panel-title">${this.escapeHtml(driver.name)}</h4>
       <span class="driver-panel-order">Person ${index + 1}</span>
+      ${canToggleDriver ? `
+        <label class="active-toggle driver-active-toggle" title="${driverToggleTitle}">
+          <input type="checkbox" class="active-toggle-input driver-active-toggle-input"
+                 ${driverIsActive ? 'checked' : ''}
+                 data-driver-id="${this.escapeHtml(driver.id)}">
+          <span class="active-toggle-slider"></span>
+        </label>
+      ` : ''}
     `;
     panel.appendChild(header);
+
+    // v1.1.4 — wire up the driver toggle (optimistic UI with revert on error)
+    if (canToggleDriver) {
+      const toggleInput = header.querySelector('.driver-active-toggle-input');
+      if (toggleInput) {
+        toggleInput.addEventListener('change', async (e) => {
+          const newState = !!e.target.checked;
+          toggleInput.disabled = true;
+          if (newState) {
+            panel.classList.remove('driver-panel-inactive');
+          } else {
+            panel.classList.add('driver-panel-inactive');
+          }
+          try {
+            const res = await window.api.invoke('preset:toggleDriverActive', {
+              driverId: driver.id,
+              isActive: newState
+            });
+            if (!res || !res.success) throw new Error(res?.error || 'Error');
+            driver.is_active = newState;
+            // Nudge the participants table summary in case it's open
+            if (typeof updateActiveParticipantsSummary === 'function') {
+              updateActiveParticipantsSummary();
+            }
+            if (typeof showNotification === 'function') {
+              showNotification(
+                newState ? 'Driver re-enabled' : 'Driver disabled from AI matching',
+                'success'
+              );
+            }
+          } catch (err) {
+            // Revert
+            toggleInput.checked = !newState;
+            if (!newState) {
+              panel.classList.remove('driver-panel-inactive');
+            } else {
+              panel.classList.add('driver-panel-inactive');
+            }
+            console.error('[DriverToggle] failed:', err);
+            if (typeof showNotification === 'function') {
+              showNotification(`Update failed: ${err.message}`, 'error');
+            }
+          } finally {
+            toggleInput.disabled = false;
+          }
+        });
+      }
+    }
 
     // Nationality input (always visible)
     const nationalityGroup = document.createElement('div');

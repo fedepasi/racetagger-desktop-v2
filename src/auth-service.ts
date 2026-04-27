@@ -783,6 +783,23 @@ export class AuthService {
         // Ripristina i dati dell'utente da Supabase
         await this.restoreUserDataOnLogin();
 
+        // Trigger JSONL upload reconciliation now that we have an
+        // authenticated session — recovers any local JSONLs that failed to
+        // upload at finalize() time. Best-effort, never blocks login.
+        try {
+          const { scheduleBackgroundReconciliation } = require('./utils/jsonl-upload-reconciler');
+          const { getSupabaseClient } = require('./database-service');
+          scheduleBackgroundReconciliation(
+            {
+              getSupabase: getSupabaseClient,
+              getCurrentUserId: () => this.authState.user?.id ?? null,
+            },
+            { reason: 'login', force: true }
+          );
+        } catch (reconErr: any) {
+          console.warn('[Auth] Failed to schedule JSONL reconciliation (non-critical):', reconErr?.message ?? reconErr);
+        }
+
         return {
           success: true,
           user: data.user,
@@ -798,7 +815,12 @@ export class AuthService {
   }
 
   // Gestisci la registrazione usando edge function unificata
-  async register(email: string, password: string, name?: string, referralCode?: string): Promise<{ success: boolean; error?: string; tokensGranted?: number }> {
+  async register(email: string, password: string, name?: string, referralCode?: string, consentData?: {
+    acceptedPrivacyPolicy?: boolean;
+    acceptedTermsOfService?: boolean;
+    privacyPolicyVersion?: string;
+    termsOfServiceVersion?: string;
+  }): Promise<{ success: boolean; error?: string; tokensGranted?: number }> {
     try {
       // Validate password strength
       if (password.length < 8) {
@@ -817,8 +839,8 @@ export class AuthService {
       // Normalize email to ensure consistent registration (lowercase + trim)
       const normalizedEmail = email.toLowerCase().trim();
 
-      // Use unified registration edge function
-      const body: Record<string, string> = {
+      // Use unified registration edge function (GDPR Art. 7: include consent proof)
+      const body: Record<string, any> = {
         email: normalizedEmail,
         password,
         name: name || normalizedEmail.split('@')[0], // Extract name from email if not provided
@@ -826,6 +848,12 @@ export class AuthService {
       };
       if (referralCode) {
         body.referralCode = referralCode;
+      }
+      if (consentData) {
+        if (consentData.acceptedPrivacyPolicy) body.acceptedPrivacyPolicy = true;
+        if (consentData.acceptedTermsOfService) body.acceptedTermsOfService = true;
+        if (consentData.privacyPolicyVersion) body.privacyPolicyVersion = consentData.privacyPolicyVersion;
+        if (consentData.termsOfServiceVersion) body.termsOfServiceVersion = consentData.termsOfServiceVersion;
       }
 
       const { data, error } = await this.supabase.functions.invoke('register-user-unified', {

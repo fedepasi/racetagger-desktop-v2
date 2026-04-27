@@ -88,6 +88,23 @@
                 This preset will only appear when this sport category is selected
               </div>
             </div>
+            <!-- Issue #104 — preset-scope driver filter opt-in -->
+            <div class="form-group">
+              <label class="checkbox-inline" style="display: flex; align-items: flex-start; gap: 0.5rem; cursor: pointer;">
+                <input
+                  type="checkbox"
+                  id="preset-allow-external-persons"
+                  style="margin-top: 0.25rem;"
+                />
+                <span>
+                  Allow recognition of people outside this preset
+                  <span class="label-hint" title="When OFF (default), face recognition only reports people listed in this preset. Turn this ON only if you want the AI to also flag notable non-participants (e.g. VIP guests) under a separate 'otherPeople' list.">ℹ️</span>
+                </span>
+              </label>
+              <div class="form-hint">
+                Default OFF — strongly recommended. Only enable if you specifically want to capture VIPs / celebrities who are not participants.
+              </div>
+            </div>
           </div>
 
           <!-- Folder Organization Section -->
@@ -115,8 +132,8 @@
                 • <strong>No folders assigned:</strong> Photos organized by race number (e.g., "50/")<br>
                 • <strong>One or more folders assigned:</strong> Photos <strong>copied to ALL</strong> assigned folders<br>
                 <br>
-                <strong>Example:</strong> Number 50 with Folder 1 = "Ferrari" and Folder 2 = "50-Pilota"<br>
-                → Photos copied to <strong>BOTH</strong> "Ferrari/" AND "50-Pilota/" folders for easy client delivery.
+                <strong>Example:</strong> Number 50 with Folder 1 = "Ferrari" and Folder 2 = "50-Driver"<br>
+                → Photos copied to <strong>BOTH</strong> "Ferrari/" AND "50-Driver/" folders for easy client delivery.
               </div>
             </div>
           </div>
@@ -501,6 +518,16 @@
         <div class="participants-table-section">
           <div class="table-header">
             <h3>Participants</h3>
+            <!-- v1.1.4: Active counter (X/Y active) + Reset-all control -->
+            <div id="active-participants-summary" class="active-participants-summary" style="display: none;">
+              <span id="active-count-pill" class="active-count-pill" title="Active participants in this preset">
+                <span class="dot active"></span>
+                <span id="active-count-text">0 / 0 active</span>
+              </span>
+              <button id="reset-active-btn" class="btn btn-link btn-sm" onclick="confirmResetActiveStates()" style="display: none;" title="Re-enable all disabled participants and drivers">
+                Reset all
+              </button>
+            </div>
             <div class="table-actions">
               <button class="btn btn-secondary btn-sm" onclick="openParticipantEditModal(-1)">
                 <span class="btn-icon">+</span>
@@ -517,12 +544,15 @@
             <table id="participants-table" class="participants-table sortable asc">
               <thead>
                 <tr>
+                  <!-- v1.1.4: soft-disable toggle column -->
+                  <th id="th-active" class="no-sort" title="Disable/Re-enable participant for AI matching" style="width: 60px;">Active</th>
                   <th>Num</th>
                   <th>Person</th>
                   <th>Category</th>
                   <th>Team</th>
                   <th>Plate</th>
                   <th id="th-delivery-to" style="display: none;">Delivery to</th>
+                  <th id="th-face-status" class="no-sort" style="display: none;" title="Face Recognition Status">Face</th>
                   <th class="no-sort">Actions</th>
                 </tr>
               </thead>
@@ -531,6 +561,52 @@
               </tbody>
             </table>
           </div>
+
+          <!-- Face Recognition Interest Survey (shown when feature NOT enabled) -->
+          <div id="face-rec-survey" style="display: none; margin-top: 16px;">
+            <!-- Already submitted state -->
+            <div id="face-rec-survey-submitted" style="display: none; background: var(--bg-card, #1e293b); border: 1px solid var(--border-color, #334155); border-radius: 12px; padding: 16px; text-align: center;">
+              <span style="font-size: 20px;">🙏</span>
+              <p style="color: var(--text-muted); font-size: 12px; margin: 4px 0 0;">Thanks! We'll notify you when Face Recognition is available.</p>
+            </div>
+            <!-- Survey form -->
+            <div id="face-rec-survey-form" style="background: var(--bg-card, #1e293b); border: 1px solid var(--border-color, #334155); border-radius: 12px; padding: 20px;">
+              <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
+                <span style="font-size: 24px;">🧑‍🤝‍🧑</span>
+                <div>
+                  <h4 style="color: var(--text-primary); margin: 0; font-size: 14px;">Face Recognition <span style="font-size: 10px; padding: 2px 8px; border-radius: 8px; background: rgba(99, 102, 241, 0.15); color: #818cf8; font-weight: 600;">Coming Soon</span></h4>
+                  <p style="color: var(--text-muted); font-size: 12px; margin: 2px 0 0;">Auto-identify drivers by face. Help us prioritize — what would you use it for?</p>
+                </div>
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px;">
+                <label style="display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12px; cursor: pointer;">
+                  <input type="checkbox" id="face-interest-podium" style="accent-color: var(--accent-primary, #3b82f6); width: 14px; height: 14px;">
+                  <span><strong style="color: var(--text-primary);">Podium/portrait shots</strong> — match faces in non-racing scenes</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12px; cursor: pointer;">
+                  <input type="checkbox" id="face-interest-helmet-off" style="accent-color: var(--accent-primary, #3b82f6); width: 14px; height: 14px;">
+                  <span><strong style="color: var(--text-primary);">Helmet-off moments</strong> — detect driver faces during pit walks, grid</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12px; cursor: pointer;">
+                  <input type="checkbox" id="face-interest-multi-driver" style="accent-color: var(--accent-primary, #3b82f6); width: 14px; height: 14px;">
+                  <span><strong style="color: var(--text-primary);">Multi-driver matching</strong> — identify which driver is in the car (WEC, IMSA)</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12px; cursor: pointer;">
+                  <input type="checkbox" id="face-interest-running-cycling" style="accent-color: var(--accent-primary, #3b82f6); width: 14px; height: 14px;">
+                  <span><strong style="color: var(--text-primary);">Running/cycling</strong> — recognize athletes without helmets</span>
+                </label>
+              </div>
+              <div style="margin-bottom: 12px;">
+                <textarea id="face-rec-comment" rows="2" placeholder="Any specific use case or sport? (optional)" style="width: 100%; padding: 8px 10px; background: var(--bg-dark, #0f172a); border: 1px solid var(--border-color, #334155); border-radius: 8px; color: var(--text-primary); font-size: 12px; resize: vertical; box-sizing: border-box; outline: none; font-family: inherit;" onfocus="this.style.borderColor='var(--accent-primary)'" onblur="this.style.borderColor='var(--border-color)'"></textarea>
+              </div>
+              <div style="text-align: right;">
+                <button id="btn-face-rec-survey" onclick="submitFaceRecSurvey()" style="padding: 8px 20px; background: linear-gradient(135deg, #3b82f6, #6366f1); border: none; border-radius: 8px; color: white; font-size: 12px; font-weight: 600; cursor: pointer; transition: opacity 0.2s;" onmouseenter="this.style.opacity='0.9'" onmouseleave="this.style.opacity='1'">
+                  Submit Feedback
+                </button>
+              </div>
+            </div>
+          </div>
+
         </div>
       </div>
       <div class="modal-footer">

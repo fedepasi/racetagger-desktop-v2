@@ -303,7 +303,7 @@ The image processing flows through a multi-stage pipeline orchestrated by `unifi
 3. Scene Classif.     → Local ONNX model classifies scene type (track/paddock/podium/portrait)
 4. Segmentation       → YOLOv8-seg isolates subjects (generic-segmenter.ts)
 5. Crop Extraction    → Extract crops per subject + negative/context image
-6. AI Analysis        → Edge Function V6 (Gemini Vision or RF-DETR)
+6. AI Analysis        → Edge Function V6 (Gemini Vision) or local-onnx
 7. Smart Matching     → Match numbers to CSV participants (smart-matcher.ts)
 8. Face Recognition   → [DISABLED] face-api.js matching
 9. Metadata Writing   → EXIF/XMP/sidecar with matched data
@@ -314,7 +314,7 @@ The image processing flows through a multi-stage pipeline orchestrated by `unifi
 ### Smart Routing (`smart-routing-processor.ts`)
 
 Routes images through different pipelines based on `sport_categories` database config:
-- **recognition_method**: `gemini` | `rf-detr` | `local-onnx`
+- **recognition_method**: `gemini` | `local-onnx` (rf-detr deprecated and removed 2026-04-22)
 - **edge_function_version**: 2-6 (determines which Edge Function to call)
 - **scene_classifier_enabled**: Skip non-relevant scenes
 - **crop_config**: Enable crop+context multi-image analysis (V6)
@@ -464,12 +464,11 @@ Default: **QUALITA**
 - Configurable per sport category via `ai_prompt` field
 - 30s timeout per request
 
-### RF-DETR Object Detection
+### RF-DETR Object Detection (DEPRECATED, removed 2026-04-22)
 
-- Roboflow serverless workflows
-- Cost: ~$0.0045/image
-- Label format: `"MODEL_NUMBER"` (e.g., `"SF-25_16"`)
-- Configured per category: `sport_categories.recognition_method = 'rf-detr'`
+- The cloud Roboflow serverless workflow path has been removed from the code.
+- Historical context only: the recognition pipeline previously supported `sport_categories.recognition_method = 'rf-detr'` (Label format `"MODEL_NUMBER"`, e.g. `"SF-25_16"`, ~$0.0045/image).
+- NOTE: `onnx-detector.ts` and `model-manager.ts` still accept `output_format: 'rf-detr'` as an ONNX parsing hint for RT-DETR-style models (`boxes` + `scores` output tensors). This is a local-onnx feature, independent of the removed cloud path.
 
 ### Local ONNX Inference
 
@@ -602,7 +601,6 @@ SUPABASE_KEY=your-anon-key
 
 **Optional:**
 ```bash
-ROBOFLOW_DEFAULT_API_KEY=your-roboflow-key   # For RF-DETR recognition
 DEBUG_MODE=true                               # Verbose logging
 RACETAGGER_OPTIMIZATION_LEVEL=balanced        # disabled|conservative|balanced|aggressive
 ENABLE_STREAMING_PIPELINE=true                # Force streaming mode
@@ -802,7 +800,7 @@ Development decisions should always be guided by these three target user profile
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| AI number recognition | ✅ Live | Edge Function V6, Gemini + RF-DETR |
+| AI number recognition | ✅ Live | Edge Function V6 (Gemini) + local-onnx (triple-zone cascade) |
 | Participant matching | ✅ Live | SmartMatcher with fuzzy matching |
 | IPTC Pro metadata | ✅ Built | Preset IPTC profile → batch write (JPEG + RAW sidecar) |
 | Folder organization | ✅ Live | Admin-only, by number/team |

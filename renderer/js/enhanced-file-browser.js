@@ -265,8 +265,9 @@ class EnhancedFileBrowser {
       for (let i = 0; i < items.length; i++) {
         const entry = items[i].webkitGetAsEntry?.();
         if (entry && entry.isDirectory) {
-          // In Electron, File objects from drag & drop expose the real filesystem path
-          folderPath = files[i]?.path || null;
+          // In Electron 32+ File.path is undefined under contextIsolation —
+          // use webUtils.getPathForFile() exposed via preload as window.api.getPathForFile.
+          folderPath = this.resolveFilePath(files[i]);
           break;
         }
       }
@@ -277,6 +278,22 @@ class EnhancedFileBrowser {
         this.handleFilesDrop(dt.files);
       }
     }, false);
+  }
+
+  // Resolve the absolute filesystem path of a dropped/selected File object.
+  // Electron 32+ requires webUtils.getPathForFile() under contextIsolation;
+  // File.path is kept as a fallback in case isolation is ever disabled.
+  resolveFilePath(file) {
+    if (!file) return null;
+    if (window.api?.getPathForFile) {
+      try {
+        const p = window.api.getPathForFile(file);
+        if (p) return p;
+      } catch (err) {
+        console.warn('[EnhancedFileBrowser] getPathForFile failed:', err);
+      }
+    }
+    return file.path || null;
   }
 
   async handleFolderDrop(folderPath) {
@@ -499,21 +516,32 @@ class EnhancedFileBrowser {
     if (fileArray.length === 0) return;
     
     this.showLoading();
-    
+
     try {
       const processedFiles = [];
-      
+      let unresolvedCount = 0;
+
       for (const file of fileArray) {
         if (file.type.startsWith('image/') || this.isValidImageExtension(file.name)) {
           const fileObj = await this.createFileObjectFromFile(file);
-          if (fileObj) {
-            processedFiles.push(fileObj);
+          if (!fileObj) continue;
+
+          // Skip files whose absolute path couldn't be resolved — without a
+          // real path, downstream IPC (get-file-stats, analysis) will fail.
+          // This typically happens when File.path is undefined and
+          // webUtils.getPathForFile() returns an empty string.
+          const hasRealPath = fileObj.path && fileObj.path !== fileObj.name;
+          if (!hasRealPath) {
+            unresolvedCount++;
+            continue;
           }
+
+          processedFiles.push(fileObj);
         }
       }
-      
+
       this.hideLoading();
-      
+
       if (processedFiles.length > 0) {
         if (this.selectedFiles.length > 0) {
           // Add to existing selection
@@ -522,7 +550,10 @@ class EnhancedFileBrowser {
           // New selection
           this.setSelectedFiles(processedFiles);
         }
-        this.showNotification(`Added ${processedFiles.length} files`, 'success');
+        const skippedNote = unresolvedCount > 0 ? ` (${unresolvedCount} skipped: path unavailable)` : '';
+        this.showNotification(`Added ${processedFiles.length} files${skippedNote}`, 'success');
+      } else if (unresolvedCount > 0) {
+        this.showNotification('Could not resolve file paths from this drop. Try dragging from Finder/Explorer or Photo Mechanic directly.', 'warning');
       } else {
         this.showNotification('No valid image files found', 'warning');
       }
@@ -565,10 +596,16 @@ class EnhancedFileBrowser {
   
   async createFileObjectFromFile(file) {
     const extension = file.name.split('.').pop()?.toLowerCase() || '';
-    
+
+    // Resolve real filesystem path via webUtils.getPathForFile() (Electron 32+).
+    // Falls back to file.name (display-only) if resolution fails — downstream
+    // code that depends on a real path (thumbnails, IPC, analysis) will then
+    // fail gracefully on the missing path rather than silently using a name.
+    const resolvedPath = this.resolveFilePath(file);
+
     return {
       name: file.name,
-      path: file.path || file.name,
+      path: resolvedPath || file.name,
       size: file.size,
       extension,
       type: this.getFileType(extension),
@@ -1032,7 +1069,33 @@ class EnhancedFileBrowser {
     }
 
     try {
-      
+
+      // Issue #104 — race-condition guard: if a preset is being loaded, wait for
+      // it to complete before building the config. Otherwise we'd dispatch an
+      // analysis with an empty participants list, which defeats preset-scoped
+      // driver filtering entirely.
+      if (this.presetLoadingPromise) {
+        try {
+          console.log('[EnhancedFileBrowser] Awaiting in-flight preset load before starting analysis...');
+          await this.presetLoadingPromise;
+        } catch (presetErr) {
+          console.warn('[EnhancedFileBrowser] Preset load error (continuing):', presetErr);
+        }
+      }
+
+      // Sanity check: if a preset is selected it MUST have at least one participant.
+      // An empty participants array means the preset hasn't finished loading
+      // (or failed to load) — sending the analysis now would bypass preset-scope
+      // driver filtering on the server.
+      if (this.selectedPreset && (!this.selectedPreset.participants || this.selectedPreset.participants.length === 0)) {
+        this.showNotification(
+          'Preset selezionato ma lista partecipanti vuota — attendi che il preset finisca di caricare e riprova.',
+          'warning'
+        );
+        console.warn('[EnhancedFileBrowser] Refusing to start analysis: preset selected but participants empty', this.selectedPreset);
+        return;
+      }
+
       // Build configuration for processing
       const config = {
         folderPath: this.selectedFiles[0].path ? this.selectedFiles[0].path.split('/').slice(0, -1).join('/') : 'selected-files',
@@ -1048,7 +1111,9 @@ class EnhancedFileBrowser {
         participantPreset: this.selectedPreset ? {
           id: this.selectedPreset.presetId || this.selectedPreset.id,
           name: this.selectedPreset.presetName || this.selectedPreset.name,
-          participants: this.selectedPreset.participants || []
+          participants: this.selectedPreset.participants || [],
+          // Issue #104 — preset-scope driver filter flag
+          allow_external_person_recognition: this.selectedPreset.allow_external_person_recognition === true
         } : null
       };
       
@@ -1235,9 +1300,12 @@ class EnhancedFileBrowser {
           id: response.data.id,
           name: response.data.name,
           description: response.data.description,
-          participants: response.data.participants || []
+          participants: response.data.participants || [],
+          // Issue #104 — preset-scope driver filter (opt-in per preset)
+          allow_external_person_recognition: response.data.allow_external_person_recognition === true
         };
-        console.log('[EnhancedFileBrowser] selectedPreset set:', this.selectedPreset.id, this.selectedPreset.name);
+        console.log('[EnhancedFileBrowser] selectedPreset set:', this.selectedPreset.id, this.selectedPreset.name,
+          '| allowExternal:', this.selectedPreset.allow_external_person_recognition);
 
         // Note: localStorage persistence removed - presets are selected fresh each time
 

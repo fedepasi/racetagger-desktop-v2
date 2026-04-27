@@ -202,6 +202,18 @@
                 </ul>
               </div>
 
+              <!-- GDPR Consent Checkboxes -->
+              <div class="consent-checkboxes" style="margin: 16px 0; display: flex; flex-direction: column; gap: 10px;">
+                <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; font-size: 13px; color: #94a3b8;">
+                  <input type="checkbox" id="register-accept-privacy" required style="margin-top: 2px; min-width: 16px; min-height: 16px;">
+                  <span>I accept the <a href="#" id="register-privacy-link" style="color: #38bdf8; text-decoration: underline;">Privacy Policy</a> *</span>
+                </label>
+                <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; font-size: 13px; color: #94a3b8;">
+                  <input type="checkbox" id="register-accept-terms" required style="margin-top: 2px; min-width: 16px; min-height: 16px;">
+                  <span>I accept the <a href="#" id="register-terms-link" style="color: #38bdf8; text-decoration: underline;">Terms of Service</a> *</span>
+                </label>
+              </div>
+
               <div class="form-actions">
                 <button type="submit" class="btn primary">Create Account</button>
                 <button type="button" id="back-to-login" class="btn secondary">Back to Login</button>
@@ -607,6 +619,36 @@
           &#x1F3CE;&#xFE0F; "Like downloading the latest telemetry data..."
         </p>
       </div>
+    </div>
+  </div>
+
+  <!-- Privacy & Terms Consent Dialog (First Launch) -->
+  <div id="privacy-consent-modal" class="modal-overlay" style="display:none; z-index: 10000;">
+    <div class="modal-content consent-modal">
+      <div class="consent-icon">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+        </svg>
+      </div>
+      <h2 class="consent-title">Welcome to RaceTagger</h2>
+      <p class="consent-subtitle">
+        Before you get started, please review our policies.
+      </p>
+
+      <div class="consent-info-box">
+        <p style="margin: 0 0 10px 0;">By using RaceTagger, you agree to our <a href="#" id="consent-privacy-link" class="consent-link">Privacy Policy</a> and <a href="#" id="consent-terms-link" class="consent-link">Terms of Service</a>.</p>
+        <p style="margin: 0 0 10px 0;"><strong>Data we collect:</strong> Email, app usage analytics, anonymized device ID, and error reports to improve the service. Image crops are sent to Google AI for analysis.</p>
+        <p style="margin: 0;">You can manage your privacy preferences at any time in <strong>Settings &gt; Privacy &amp; AI</strong>.</p>
+      </div>
+
+      <div class="consent-actions">
+        <button id="privacy-consent-accept" class="btn btn-primary consent-accept-btn">
+          I Agree &amp; Continue
+        </button>
+      </div>
+      <p class="consent-footer">
+        You can review these policies anytime in Settings &gt; About.
+      </p>
     </div>
   </div>
 

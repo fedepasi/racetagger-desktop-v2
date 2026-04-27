@@ -357,8 +357,56 @@ async function collectAndUploadDiagnostics(
     }));
   } catch { /* ok */ }
 
-  // Main process logs (1000 lines)
-  const mainProcessLogs = diagnosticLogger.getRecentLogs(1000);
+  // Main process logs — filtered to the CURRENT session (since last
+  // [SESSION START] marker) with a safety cap. A naive tail buries the
+  // relevant portion when the session has been running for hours.
+  const mainProcessLogs = diagnosticLogger.getCurrentSessionLogs(10000);
+
+  // DB-insert digest: aggregate stats across flushes this session so the
+  // support team can immediately see "85 persisted, 31 lost, code 57014".
+  let dbDigestLines: string[] = [];
+  try {
+    const { dbInsertDiagnostics } = await import('../unified-image-processor');
+    const snap = dbInsertDiagnostics.snapshot();
+    if (snap.totalAttempted > 0 || snap.flushCount > 0) {
+      const lossPct = snap.totalAttempted > 0
+        ? ((snap.totalLost / snap.totalAttempted) * 100).toFixed(1)
+        : '0.0';
+      dbDigestLines.push('--- DIGEST: BATCH INSERT (current session) ---');
+      dbDigestLines.push(`Session start:    ${snap.sessionStart}`);
+      dbDigestLines.push(`Rows attempted:   ${snap.totalAttempted}`);
+      dbDigestLines.push(`Rows inserted:    ${snap.totalInserted}`);
+      dbDigestLines.push(`Rows lost:        ${snap.totalLost} (${lossPct}%)`);
+      dbDigestLines.push(`Flushes total:    ${snap.flushCount} (${snap.flushesWithFailures} with failures)`);
+      if (snap.totalLost === 0 && snap.totalAttempted > 0) {
+        dbDigestLines.push('Status:           All rows persisted OK — no DB gap.');
+      } else if (snap.totalLost > 0) {
+        const codeEntries = Object.entries(snap.errorsByCode)
+          .sort((a, b) => b[1] - a[1]);
+        if (codeEntries.length > 0) {
+          dbDigestLines.push('Errors by code:');
+          for (const [code, count] of codeEntries) {
+            dbDigestLines.push(`  ${code}: ${count}`);
+          }
+        }
+        const shown = snap.lostImageIds.slice(0, 30);
+        const extra = snap.lostImageIds.length - shown.length;
+        dbDigestLines.push(`Lost image_ids (first ${shown.length}):`);
+        for (const row of shown) {
+          dbDigestLines.push(`  ${row.imageId}  code=${row.code}`);
+        }
+        if (extra > 0) {
+          dbDigestLines.push(`  ... + ${extra} more tracked`);
+        }
+        if (snap.lostImageIdsTruncated) {
+          dbDigestLines.push(`  (lost-rows buffer reached tracking cap — not all ids recorded)`);
+        }
+      }
+      dbDigestLines.push('');
+    }
+  } catch (digestError: any) {
+    console.warn('[Support] DB digest collection failed (non-blocking):', digestError.message);
+  }
 
   // Build report text
   const reportId = `support_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
@@ -402,6 +450,13 @@ async function collectAndUploadDiagnostics(
   }
   lines.push('');
 
+  // DB insert digest (Intervento 1): aggregate analysis_results flush stats
+  // Placed before RECENT ERRORS so the support team sees the "how many rows
+  // actually landed vs. how many are only in JSONL" story up front.
+  if (dbDigestLines.length > 0) {
+    for (const digestLine of dbDigestLines) lines.push(digestLine);
+  }
+
   // Errors
   if (recentErrors.length > 0) {
     lines.push('--- RECENT ERRORS ---');
@@ -413,7 +468,7 @@ async function collectAndUploadDiagnostics(
 
   // Main Process Logs
   lines.push(thin);
-  lines.push('--- MAIN PROCESS LOGS (recent 1000 lines) ---');
+  lines.push('--- MAIN PROCESS LOGS (current session, cap 10000 lines) ---');
   lines.push(thin);
   lines.push(mainProcessLogs || '(no logs captured)');
   lines.push('');

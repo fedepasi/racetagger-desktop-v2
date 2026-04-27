@@ -12,6 +12,9 @@ import * as path from 'path';
 import { setBatchProcessingCancelled } from './context';
 import { DEBUG_MODE } from '../config';
 import { unifiedImageProcessor } from '../unified-image-processor';
+import { AnalysisLogger } from '../utils/analysis-logger';
+import { getSupabaseClient, getUserPlanLimits } from '../database-service';
+import { authService } from '../auth-service';
 
 // ==================== Log Reading Utilities ====================
 
@@ -165,89 +168,190 @@ export function registerAnalysisHandlers(): void {
   ipcMain.on('stop-processing', handleCancelBatchProcessing);
 
   // Get recent executions from local JSONL files
+  //
+  // Enriches each execution row with:
+  //   - executionName  (last EXECUTION_META_UPDATE the user typed)
+  //   - participantPreset { name, participantCount }  (from EXECUTION_START)
+  //   - folderPath      (from EXECUTION_START, best-effort)
+  //   - delivery        { galleries: [{id, title, count}], hd: 'none'|'pending'|'uploading'|'uploaded'|'failed'|'partial', hdCount, hdTotal }
+  //
+  // Delivery enrichment is batched (two Supabase queries total, not per-execution)
+  // and gated on the user's feature flags — users without gallery/r2 access never
+  // pay for these queries, and the UI never renders badges it can't act on.
   ipcMain.handle('get-local-executions', async () => {
     try {
       const analysisLogsPath = path.join(app.getPath('userData'), '.analysis-logs');
 
-      // Check if analysis logs directory exists
-      if (!fs.existsSync(analysisLogsPath)) {
-        return { success: true, data: [] };
-      }
+      // Delegate the parsing + self-healing logic to a pure module so it can be
+      // unit-tested without pulling Electron + native Sharp into the test graph.
+      // See src/utils/local-executions-scanner.ts.
+      const { scanLocalExecutions } = require('../utils/local-executions-scanner');
+      const executions: any[] = scanLocalExecutions(analysisLogsPath, {
+        debug: DEBUG_MODE
+          ? (msg: string, ctx: any) => console.warn(`[Analysis] ${msg}`, ctx)
+          : undefined,
+      });
 
-      const files = fs.readdirSync(analysisLogsPath);
-      const executionFiles = files.filter(file => file.startsWith('exec_') && file.endsWith('.jsonl'));
+      // Sort by timestamp descending (most recent first) and cap at 10 BEFORE hitting Supabase —
+      // the delivery enrichment only needs to cover what we're actually going to show.
+      executions.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      const top = executions.slice(0, 10);
 
-      const executions: any[] = [];
-
-      for (const file of executionFiles) {
-        try {
-          const filePath = path.join(analysisLogsPath, file);
-          const content = fs.readFileSync(filePath, 'utf-8');
-          const lines = content.trim().split('\n').filter(line => line.trim());
-
-          if (lines.length === 0) continue;
-
-          // Parse first line (EXECUTION_START)
-          let startLine;
+      // ---- Delivery enrichment (feature-flagged, batched) ----
+      try {
+        const authState = authService.getAuthState();
+        if (authState.isAuthenticated && top.length > 0) {
+          // Pull feature flags once. If the call errors we just skip enrichment —
+          // the home page falls back to a "no badges" render which is still correct.
+          let planLimits: { gallery_enabled?: boolean; r2_storage_enabled?: boolean } = {};
           try {
-            startLine = JSON.parse(lines[0]);
-          } catch (parseError) {
-            continue;
+            planLimits = await getUserPlanLimits();
+          } catch {
+            planLimits = {};
           }
 
-          if (startLine.type !== 'EXECUTION_START') continue;
+          const needGallery = !!planLimits.gallery_enabled;
+          const needR2 = !!planLimits.r2_storage_enabled;
 
-          // Parse last line to get completion status
-          let status = 'processing';
-          let totalProcessed = 0;
-          let imagesWithNumbers = 0;
+          if (needGallery || needR2) {
+            const supabase = getSupabaseClient();
+            const executionIds = top.map(e => e.id);
 
-          // Count IMAGE_ANALYSIS events with recognized numbers
-          for (const line of lines) {
-            try {
-              const event = JSON.parse(line);
-              if (event.type === 'IMAGE_ANALYSIS') {
-                totalProcessed++;
-                // Check if any vehicle was detected with a race number
-                // V6 format: aiResponse.vehicles[]
-                const vehicles = event.aiResponse?.vehicles || event.vehicles || [];
-                if (vehicles.length > 0) {
-                  const hasNumber = vehicles.some((v: any) => v.raceNumber);
-                  if (hasNumber) imagesWithNumbers++;
-                } else if (event.primaryVehicle?.raceNumber) {
-                  // Fallback for backward compatibility
-                  imagesWithNumbers++;
+            // Build empty per-execution delivery records up front.
+            const deliveryByExec: Record<string, { galleries: any[]; hd: string; hdCount: number; hdTotal: number }> =
+              Object.fromEntries(top.map(e => [e.id, { galleries: [], hd: 'none', hdCount: 0, hdTotal: 0 }]));
+
+            const tasks: Promise<void>[] = [];
+
+            // Gallery delivery: fetch gallery_images rows for these executions, then
+            // resolve titles in a second batched query so we don't need a JOIN.
+            if (needGallery) {
+              tasks.push((async () => {
+                const { data: links, error } = await supabase
+                  .from('gallery_images')
+                  .select('execution_id, gallery_id')
+                  .in('execution_id', executionIds);
+                if (error || !links || links.length === 0) return;
+
+                // exec_id -> gallery_id -> count
+                const buckets: Record<string, Record<string, number>> = {};
+                const galleryIds = new Set<string>();
+                for (const row of links as any[]) {
+                  if (!row.execution_id || !row.gallery_id) continue;
+                  galleryIds.add(row.gallery_id);
+                  const b = buckets[row.execution_id] || (buckets[row.execution_id] = {});
+                  b[row.gallery_id] = (b[row.gallery_id] || 0) + 1;
                 }
-              } else if (event.type === 'EXECUTION_COMPLETE') {
-                status = 'completed';
-              }
-            } catch (e) {
-              continue;
+
+                if (galleryIds.size === 0) return;
+
+                const { data: galleryRows, error: gerr } = await supabase
+                  .from('galleries')
+                  .select('id, title')
+                  .in('id', Array.from(galleryIds));
+                if (gerr) return;
+
+                const titleById: Record<string, string> = {};
+                for (const g of (galleryRows || []) as any[]) {
+                  titleById[g.id] = g.title || 'Untitled gallery';
+                }
+
+                for (const execId of Object.keys(buckets)) {
+                  const b = buckets[execId];
+                  const list = Object.keys(b).map(gid => ({
+                    id: gid,
+                    title: titleById[gid] || 'Untitled gallery',
+                    count: b[gid]
+                  }));
+                  if (deliveryByExec[execId]) deliveryByExec[execId].galleries = list;
+                }
+              })().catch(() => { /* swallow — fall back to no gallery info */ }));
+            }
+
+            // R2 HD upload: aggregate `images.original_upload_status` per execution.
+            if (needR2) {
+              tasks.push((async () => {
+                const { data: imgs, error } = await supabase
+                  .from('images')
+                  .select('execution_id, original_upload_status')
+                  .in('execution_id', executionIds);
+                if (error || !imgs) return;
+
+                // Aggregate per execution
+                const agg: Record<string, Record<string, number>> = {};
+                for (const row of imgs as any[]) {
+                  if (!row.execution_id) continue;
+                  const status = (row.original_upload_status || 'none').toString();
+                  const a = agg[row.execution_id] || (agg[row.execution_id] = {});
+                  a[status] = (a[status] || 0) + 1;
+                }
+
+                for (const execId of Object.keys(agg)) {
+                  const counts = agg[execId];
+                  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+                  const uploaded = counts['uploaded'] || 0;
+                  const failed = counts['failed'] || 0;
+                  const uploading = counts['uploading'] || 0;
+                  const queued = counts['queued'] || 0;
+                  const pending = counts['pending'] || 0;
+
+                  // Derive a single bucket for the UI pill.
+                  let hd = 'none';
+                  if (failed > 0 && uploaded + uploading + queued + pending === 0) hd = 'failed';
+                  else if (failed > 0) hd = 'partial';
+                  else if (uploading + queued > 0) hd = 'uploading';
+                  else if (uploaded > 0 && uploaded === total) hd = 'uploaded';
+                  else if (uploaded > 0) hd = 'partial';
+                  else if (pending > 0) hd = 'pending';
+
+                  if (deliveryByExec[execId]) {
+                    deliveryByExec[execId].hd = hd;
+                    deliveryByExec[execId].hdCount = uploaded;
+                    deliveryByExec[execId].hdTotal = total;
+                  }
+                }
+              })().catch(() => { /* swallow — fall back to no HD info */ }));
+            }
+
+            await Promise.allSettled(tasks);
+
+            // Attach enriched delivery info + feature-flag hint so the renderer
+            // knows whether badges should be rendered at all.
+            for (const exec of top) {
+              exec.delivery = {
+                featureFlags: {
+                  gallery_enabled: needGallery,
+                  r2_storage_enabled: needR2
+                },
+                ...deliveryByExec[exec.id]
+              };
             }
           }
+        }
+      } catch (enrichError) {
+        if (DEBUG_MODE) console.warn('[Analysis] Delivery enrichment failed (non-fatal):', enrichError);
+        // Non-fatal: executions still render without badges.
+      }
 
-          const execution = {
-            id: startLine.executionId,
-            createdAt: startLine.timestamp,
-            status: status,
-            sportCategory: startLine.category || 'motorsport',
-            totalImages: startLine.totalImages || totalProcessed,
-            imagesWithNumbers: imagesWithNumbers,
-            folderPath: startLine.folderPath || ''
-          };
-
-          executions.push(execution);
-
-        } catch (error) {
-          if (DEBUG_MODE) console.warn(`[Analysis] Failed to parse ${file}:`, error);
-          continue;
+      // Opportunistic: trigger a JSONL upload reconciliation pass while the
+      // user looks at the home page. Debounced to 30s in the reconciler, so
+      // rapid navigation doesn't hammer Supabase. Fire-and-forget.
+      try {
+        const { scheduleBackgroundReconciliation } = require('../utils/jsonl-upload-reconciler');
+        scheduleBackgroundReconciliation(
+          {
+            getSupabase: getSupabaseClient,
+            getCurrentUserId: () => authService.getAuthState().user?.id ?? null,
+          },
+          { reason: 'home-open' }
+        );
+      } catch (reconErr: any) {
+        if (DEBUG_MODE) {
+          console.warn('[Analysis] Failed to schedule JSONL reconciliation (non-critical):', reconErr?.message ?? reconErr);
         }
       }
 
-      // Sort by timestamp descending (most recent first)
-      executions.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
-      return { success: true, data: executions.slice(0, 10) }; // Return only 10 most recent
+      return { success: true, data: top };
 
     } catch (error) {
       console.error('[Analysis] Error reading local executions:', error);
@@ -255,5 +359,46 @@ export function registerAnalysisHandlers(): void {
     }
   });
 
-  if (DEBUG_MODE) console.log('[IPC] Analysis handlers registered (5 handlers)');
+  // Rename an execution: appends an EXECUTION_META_UPDATE event to the JSONL
+  // (local source of truth) and best-effort syncs the name column on the
+  // `executions` row in Supabase. Safe to call for finalized executions.
+  ipcMain.handle('rename-execution', async (_, executionId: string, newName: string) => {
+    try {
+      if (!executionId || typeof executionId !== 'string') {
+        return { success: false, error: 'Invalid execution id' };
+      }
+      const trimmed = (newName || '').trim().slice(0, 120); // reasonable cap
+      if (!trimmed) {
+        return { success: false, error: 'Name cannot be empty' };
+      }
+
+      // 1. Local: append to JSONL (primary source for Home page).
+      const ok = await AnalysisLogger.appendExecutionMetaUpdate(executionId, trimmed);
+      if (!ok) {
+        return { success: false, error: 'Execution log not found' };
+      }
+
+      // 2. Supabase: best-effort sync of the `name` column. We swallow failures —
+      //    the JSONL is authoritative and the Home page reads from it.
+      try {
+        const authState = authService.getAuthState();
+        if (authState.isAuthenticated) {
+          const supabase = getSupabaseClient();
+          await supabase
+            .from('executions')
+            .update({ name: trimmed })
+            .eq('id', executionId);
+        }
+      } catch (dbError) {
+        if (DEBUG_MODE) console.warn('[Analysis] Supabase rename sync failed (non-fatal):', dbError);
+      }
+
+      return { success: true, data: { executionId, executionName: trimmed } };
+    } catch (error) {
+      console.error('[Analysis] Error renaming execution:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  if (DEBUG_MODE) console.log('[IPC] Analysis handlers registered (6 handlers)');
 }

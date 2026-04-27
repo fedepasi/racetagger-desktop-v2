@@ -1159,6 +1159,31 @@
   text-overflow: ellipsis;
 }
 
+/* Issue #104 — extra-preset people (VIPs, team principals, etc.) */
+.lv-other-people {
+  font-size: 11px;
+  color: #d4a84f;
+  margin-top: var(--spacing-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-style: italic;
+}
+
+.lv-other-people-badge {
+  position: absolute;
+  top: var(--spacing-xs);
+  right: var(--spacing-xs);
+  background: rgba(212, 168, 79, 0.85);
+  color: #1b1b1b;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  border-radius: var(--border-radius-sm);
+  text-transform: uppercase;
+}
+
 .lv-no-match {
   font-size: 14px;
   color: var(--text-muted);
@@ -1671,6 +1696,8 @@
   min-height: 400px;
   background: var(--bg-dark);
   overflow: hidden;
+  /* Reserve space at the bottom for zoom controls so the image doesn't get covered */
+  padding-bottom: 56px;
 }
 
 .lv-gallery-image {
@@ -1707,7 +1734,8 @@
 
 .lv-gallery-nav {
   position: absolute;
-  top: 50%;
+  /* Center vertically over the image area only, compensating for padding-bottom (56px) reserved for zoom controls */
+  top: calc(50% - 28px);
   transform: translateY(-50%);
   background: rgba(0, 0, 0, 0.8);
   color: white;
@@ -1721,6 +1749,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  z-index: 20;
 }
 
 .lv-gallery-nav:hover {
@@ -2048,7 +2077,7 @@
 
 .lv-zoom-controls {
   position: absolute;
-  bottom: 16px;
+  bottom: 12px;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -2060,15 +2089,9 @@
   -webkit-backdrop-filter: blur(8px);
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.1);
-  opacity: 0;
+  opacity: 1;
   transition: opacity 0.2s ease;
   z-index: 10;
-  pointer-events: none;
-}
-
-.lv-gallery-image-container:hover .lv-zoom-controls,
-.lv-gallery-image-container.lv-zoomed .lv-zoom-controls {
-  opacity: 1;
   pointer-events: auto;
 }
 
@@ -2125,6 +2148,14 @@
 }
 
 @media (max-width: 768px) {
+  .lv-gallery-image-container {
+    padding-bottom: 48px;
+  }
+
+  .lv-gallery-nav {
+    top: calc(50% - 24px);
+  }
+
   .lv-zoom-controls {
     bottom: 8px;
     padding: 2px 6px;

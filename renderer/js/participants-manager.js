@@ -9,6 +9,8 @@ var isEditingPreset = false;
 var customFolders = []; // Array of {name, path?} objects for custom folders
 var deliveryClientsCache = []; // Cached list of clients (projects) for "Delivery to" dropdown
 var deliveryFeatureEnabled = false; // Feature gate for delivery_enabled
+var faceRecFeatureEnabled = false; // Feature gate for face_recognition_enabled
+var faceStatusCache = {}; // participantId → { totalDrivers, driversWithPhotos }
 
 /**
  * Detect if an error is a network connectivity issue and return a user-friendly message.
@@ -89,9 +91,9 @@ async function initParticipantsManager() {
     presetFaceManager.initialize();
   }
 
-  // Initialize driver face manager if available
+  // Initialize driver face manager if available (await to load face_recognition_enabled flag from DB)
   if (typeof driverFaceManagerMulti !== 'undefined' && driverFaceManagerMulti.initialize) {
-    driverFaceManagerMulti.initialize();
+    await driverFaceManagerMulti.initialize();
   }
 
   // Load sport categories for dropdown
@@ -99,6 +101,16 @@ async function initParticipantsManager() {
 
   // Load delivery feature status and clients (non-blocking)
   loadDeliveryClientsIfEnabled();
+
+  // Sync face recognition flag from driver-face-manager (loaded in driverFaceManagerMulti.initialize())
+  faceRecFeatureEnabled = (typeof FACE_RECOGNITION_ENABLED !== 'undefined') ? FACE_RECOGNITION_ENABLED : false;
+  if (faceRecFeatureEnabled) {
+    const thFace = document.getElementById('th-face-status');
+    if (thFace) thFace.style.display = '';
+  }
+
+  // Initialize face recognition survey for non-enabled users (non-blocking)
+  initFaceRecSurvey();
 
   // Load existing presets
   await loadParticipantPresets();
@@ -170,6 +182,150 @@ async function loadDeliveryClientsIfEnabled() {
     if (deliveryGroup) deliveryGroup.style.display = '';
   } catch (error) {
     console.warn('[Participants] Could not load delivery clients:', error.message || error);
+  }
+}
+
+/**
+ * Load face recognition status for the current preset (non-blocking).
+ * Shows the "Face" column header and populates faceStatusCache.
+ * Called after preset participants are loaded into the table.
+ */
+async function loadFaceStatusIfEnabled() {
+  // Check if face recognition is enabled (reuse the same plan limits call)
+  try {
+    const planLimits = await window.api.invoke('delivery-get-plan-limits');
+    if (!planLimits.success || !planLimits.data) return;
+
+    faceRecFeatureEnabled = planLimits.data.face_recognition_enabled === true;
+
+    if (!faceRecFeatureEnabled || !currentPreset?.id) return;
+
+    // Show the Face column header
+    const thFace = document.getElementById('th-face-status');
+    if (thFace) thFace.style.display = '';
+
+    // Load face photo status for all participants in this preset
+    const result = await window.api.invoke('preset-face-status-batch', currentPreset.id);
+    if (result.success && result.data) {
+      faceStatusCache = result.data;
+      console.log('[Participants] Face status loaded for', Object.keys(faceStatusCache).length, 'participants');
+
+      // Update existing rows with face status dots
+      updateFaceStatusDots();
+    }
+  } catch (error) {
+    console.warn('[Participants] Could not load face status:', error.message || error);
+  }
+}
+
+/**
+ * Update face status dots in all participant rows.
+ * Called after faceStatusCache is populated.
+ */
+function updateFaceStatusDots() {
+  const rows = document.querySelectorAll('#participants-tbody tr');
+  rows.forEach(row => {
+    const dot = row.querySelector('.face-status-dot');
+    if (!dot) return;
+    const participantId = dot.getAttribute('data-participant-id');
+    if (!participantId) return;
+
+    const status = faceStatusCache[participantId];
+    dot.className = 'face-status-dot ' + getFaceStatusClass(status);
+    dot.title = getFaceStatusTitle(status);
+  });
+}
+
+/**
+ * Get CSS class for face status dot
+ */
+function getFaceStatusClass(status) {
+  if (!status || status.totalDrivers === 0) return 'status-grey';
+  if (status.driversWithPhotos === 0) return 'status-grey';
+  if (status.driversWithPhotos >= status.totalDrivers) return 'status-green';
+  return 'status-yellow';
+}
+
+/**
+ * Get tooltip text for face status dot
+ */
+function getFaceStatusTitle(status) {
+  if (!status || status.totalDrivers === 0) return 'No drivers configured';
+  if (status.driversWithPhotos === 0) return 'No face photos uploaded';
+  if (status.driversWithPhotos >= status.totalDrivers) return `All ${status.totalDrivers} driver(s) have face photos`;
+  return `${status.driversWithPhotos} of ${status.totalDrivers} driver(s) have face photos`;
+}
+
+// ==================== FACE RECOGNITION INTEREST SURVEY ====================
+
+/**
+ * Show or hide the face recognition survey based on feature status.
+ * For non-enabled users: show survey. For enabled users: hide it.
+ */
+async function initFaceRecSurvey() {
+  const surveyDiv = document.getElementById('face-rec-survey');
+  if (!surveyDiv) return;
+
+  // Only show for users who DON'T have face recognition enabled
+  if (faceRecFeatureEnabled) {
+    surveyDiv.style.display = 'none';
+    return;
+  }
+
+  surveyDiv.style.display = 'block';
+
+  // Check if already submitted
+  try {
+    const result = await window.api.invoke('face-rec-check-survey');
+    if (result.success && result.submitted) {
+      document.getElementById('face-rec-survey-form').style.display = 'none';
+      document.getElementById('face-rec-survey-submitted').style.display = 'block';
+    }
+  } catch (e) {
+    console.warn('[Participants] Could not check face rec survey status:', e);
+  }
+}
+
+/**
+ * Submit face recognition interest survey
+ */
+async function submitFaceRecSurvey() {
+  var interests = {
+    podium: document.getElementById('face-interest-podium').checked,
+    helmet_off: document.getElementById('face-interest-helmet-off').checked,
+    multi_driver: document.getElementById('face-interest-multi-driver').checked,
+    running_cycling: document.getElementById('face-interest-running-cycling').checked,
+  };
+  var comment = document.getElementById('face-rec-comment').value.trim() || null;
+
+  var hasAny = Object.values(interests).some(function(v) { return v; });
+  if (!hasAny && !comment) {
+    alert('Please select at least one option or leave a comment.');
+    return;
+  }
+
+  var btn = document.getElementById('btn-face-rec-survey');
+  btn.disabled = true;
+  btn.textContent = 'Submitting...';
+
+  try {
+    var result = await window.api.invoke('face-rec-submit-survey', {
+      responses: { interests: interests },
+      comment: comment
+    });
+
+    if (result.success) {
+      document.getElementById('face-rec-survey-form').style.display = 'none';
+      document.getElementById('face-rec-survey-submitted').style.display = 'block';
+    } else {
+      btn.disabled = false;
+      btn.textContent = 'Submit Feedback';
+      alert('Failed to submit: ' + (result.error || 'Unknown error'));
+    }
+  } catch (e) {
+    console.error('[Participants] Survey submission error:', e);
+    btn.disabled = false;
+    btn.textContent = 'Submit Feedback';
   }
 }
 
@@ -768,6 +924,13 @@ function createNewPreset() {
   document.getElementById('preset-description').value = '';
   document.getElementById('preset-editor-title').textContent = 'New Participant Preset';
 
+  // Issue #104 — preset-scope driver filter default OFF
+  const allowExternalEl = document.getElementById('preset-allow-external-persons');
+  if (allowExternalEl) {
+    allowExternalEl.checked = false;
+    allowExternalEl.disabled = false;
+  }
+
   // Populate sport category dropdown (no selection)
   populateSportCategoryDropdown(null);
 
@@ -1148,7 +1311,12 @@ function populateFolderSelects() {
     if (!select) return;
 
     select.innerHTML = `<option value="">Folder ${index + 1}: None</option>`;
-    customFolders.forEach(folder => {
+    const sortedFolders = [...customFolders].sort((a, b) => {
+      const nameA = getFolderDisplayName(a).toLowerCase();
+      const nameB = getFolderDisplayName(b).toLowerCase();
+      return nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
+    });
+    sortedFolders.forEach(folder => {
       const folderName = getFolderDisplayName(folder);
       const folderPath = typeof folder === 'string' ? '' : (folder.path || '');
       const option = document.createElement('option');
@@ -1910,6 +2078,13 @@ async function editPreset(presetId) {
     document.getElementById('preset-description').value = currentPreset.description || '';
     document.getElementById('preset-editor-title').textContent = 'Edit Participant Preset';
 
+    // Issue #104 — preset-scope driver filter (opt-in, editable)
+    const allowExternalElEdit = document.getElementById('preset-allow-external-persons');
+    if (allowExternalElEdit) {
+      allowExternalElEdit.checked = currentPreset.allow_external_person_recognition === true;
+      allowExternalElEdit.disabled = false;
+    }
+
     // Populate sport category dropdown with current preset's category
     populateSportCategoryDropdown(currentPreset.category_id);
 
@@ -1971,6 +2146,13 @@ async function viewOfficialPreset(presetId) {
     document.getElementById('preset-name').value = currentPreset.name || '';
     document.getElementById('preset-description').value = currentPreset.description || '';
     document.getElementById('preset-editor-title').textContent = 'Official Preset (Read Only)';
+
+    // Issue #104 — preset-scope driver filter (read-only in official view)
+    const allowExternalElView = document.getElementById('preset-allow-external-persons');
+    if (allowExternalElView) {
+      allowExternalElView.checked = currentPreset.allow_external_person_recognition === true;
+      allowExternalElView.disabled = true;
+    }
 
     // Populate sport category dropdown
     populateSportCategoryDropdown(currentPreset.category_id);
@@ -2362,6 +2544,8 @@ function loadParticipantsIntoTable(participants) {
   clearParticipantsTable();
 
   if (!participants || participants.length === 0) {
+    // v1.1.4 — still refresh the counter so it hides itself on empty presets.
+    updateActiveParticipantsSummary();
     return; // Empty table
   }
 
@@ -2371,6 +2555,14 @@ function loadParticipantsIntoTable(participants) {
   participantsData.forEach((participant, index) => {
     addParticipantRow(participant, index);
   });
+
+  // Load face status indicators (non-blocking, will update dots when ready)
+  if (faceRecFeatureEnabled && currentPreset?.id) {
+    loadFaceStatusIfEnabled();
+  }
+
+  // v1.1.4 — refresh the "X/Y active" counter whenever the table rerenders.
+  updateActiveParticipantsSummary();
 
   // Note: Initial sort is handled by sortable.js with the 'asc' class on the table
   // The table will automatically sort by the first column (Num) in ascending order
@@ -2436,17 +2628,56 @@ function addParticipantRow(participant, rowIndex) {
     if (thDelivery) thDelivery.style.display = '';
   }
 
+  // Create face status indicator (feature-gated)
+  let faceTd = '';
+  if (faceRecFeatureEnabled) {
+    const participantId = participant?.id || '';
+    const status = faceStatusCache[participantId];
+    const statusClass = getFaceStatusClass(status);
+    const statusTitle = getFaceStatusTitle(status);
+    faceTd = `<td class="text-center"><span class="face-status-dot ${statusClass}" data-participant-id="${participantId}" title="${statusTitle}"></span></td>`;
+  }
+
   // Store original index as data attribute for stable indexing during sorting
   row.setAttribute('data-original-index', rowIndex);
 
+  // v1.1.4 — soft-disable toggle. `is_active` undefined is treated as TRUE
+  // (migration gives DEFAULT TRUE, so this is just a safety net).
+  const isActive = participant?.is_active !== false;
+  const participantIdAttr = escapeHtml(participant?.id || '');
+  const isOfficial = currentPreset?.is_official === true;
+  const isPublic = currentPreset?.is_public === true && !currentPreset?.user_id;
+  const isReadOnly = isOfficial || isPublic;
+  const toggleDisabledAttr = (isReadOnly || !participant?.id) ? 'disabled' : '';
+  const toggleTitle = isReadOnly
+    ? 'Official or public preset: duplicate it to customize'
+    : (isActive ? 'Disable from AI matching (you can re-enable at any time)' : 'Re-enable for AI matching');
+  const toggleTd = `
+    <td class="text-center no-sort" data-sort="${isActive ? '1' : '0'}">
+      <label class="active-toggle" title="${toggleTitle}">
+        <input type="checkbox" class="active-toggle-input"
+               ${isActive ? 'checked' : ''}
+               ${toggleDisabledAttr}
+               data-participant-id="${participantIdAttr}"
+               onchange="onParticipantActiveToggle(this)">
+        <span class="active-toggle-slider"></span>
+      </label>
+    </td>`;
+
+  // Mark row inactive (CSS greys out + strikes through). Applied as class so
+  // all cells can be styled in one rule.
+  if (!isActive) row.classList.add('participant-row-inactive');
+
   // Add data-sort attributes for proper sorting by sortable.js
   row.innerHTML = `
+    ${toggleTd}
     <td data-sort="${numero}"><strong>${numero}</strong></td>
     <td data-sort="${nome}">${nome}</td>
     <td data-sort="${categoria}">${categoryDisplay}</td>
     <td data-sort="${squadra}">${squadra || '<span class="text-muted">-</span>'}</td>
     <td data-sort="${plateNumber}">${plateDisplay}</td>
     ${deliveryTd}
+    ${faceTd}
     <td class="no-sort">
       <button class="btn btn-sm btn-secondary" onclick="duplicateParticipantFromRow(this)" title="Duplicate participant">
         <span class="btn-icon">📋</span>
@@ -2462,6 +2693,184 @@ function addParticipantRow(participant, rowIndex) {
 
   tbody.appendChild(row);
 }
+
+// ================================================================
+// v1.1.4 — Preset Participant Toggle (soft-disable)
+// ----------------------------------------------------------------
+// These handlers drive the "Active" column in the participants table
+// plus the "X/Y active" counter and the "Reset all" action.
+//
+// Architecture: optimistic UI. Flip the checkbox + CSS class first,
+// then call IPC. On failure, revert the UI and surface a toast.
+// ================================================================
+
+/**
+ * Handler bound to each row's Active toggle. Calls the IPC, updates the
+ * in-memory participant, toggles the inactive CSS class, and refreshes
+ * the counter.
+ */
+async function onParticipantActiveToggle(inputEl) {
+  if (!inputEl) return;
+  const participantId = inputEl.getAttribute('data-participant-id');
+  if (!participantId) {
+    // Participant was just added in the UI and hasn't been saved — revert.
+    inputEl.checked = !inputEl.checked;
+    showNotification('Save the participant first, then you can disable it.', 'warning');
+    return;
+  }
+  const newState = !!inputEl.checked;
+  const row = inputEl.closest('tr');
+
+  // Optimistic UI
+  inputEl.disabled = true;
+  if (newState) {
+    row?.classList.remove('participant-row-inactive');
+  } else {
+    row?.classList.add('participant-row-inactive');
+  }
+
+  try {
+    const res = await window.api.invoke('preset:toggleParticipantActive', {
+      participantId,
+      isActive: newState
+    });
+    if (!res || !res.success) {
+      throw new Error(res?.error || 'Update error');
+    }
+
+    // Update in-memory model so a subsequent sort/rerender is consistent.
+    const idx = Array.isArray(participantsData)
+      ? participantsData.findIndex(p => p?.id === participantId)
+      : -1;
+    if (idx >= 0) participantsData[idx].is_active = newState;
+
+    updateActiveParticipantsSummary();
+
+    // Let face-status dots update (disabled faces no longer count).
+    if (faceRecFeatureEnabled && currentPreset?.id) {
+      loadFaceStatusIfEnabled();
+    }
+
+    showNotification(
+      newState ? 'Participant re-enabled' : 'Participant disabled (excluded from AI matching)',
+      'success'
+    );
+  } catch (err) {
+    // Revert UI on failure
+    inputEl.checked = !newState;
+    if (!newState) {
+      row?.classList.remove('participant-row-inactive');
+    } else {
+      row?.classList.add('participant-row-inactive');
+    }
+    console.error('[PresetToggle] toggle failed:', err);
+    showNotification(
+      `Update failed: ${getErrorMessage(err)}`,
+      'error'
+    );
+  } finally {
+    inputEl.disabled = false;
+  }
+}
+
+/**
+ * Update the "X / Y active" counter in the editor header and show/hide
+ * the "Reset all" link depending on whether any participant or
+ * driver is disabled.
+ */
+function updateActiveParticipantsSummary() {
+  const summary = document.getElementById('active-participants-summary');
+  if (!summary) return;
+
+  const total = Array.isArray(participantsData) ? participantsData.length : 0;
+  if (total === 0) {
+    summary.style.display = 'none';
+    return;
+  }
+
+  let activeParticipants = 0;
+  let inactiveDrivers = 0;
+  let totalDrivers = 0;
+
+  for (const p of participantsData) {
+    if (p?.is_active !== false) activeParticipants += 1;
+    const drivers = Array.isArray(p?.preset_participant_drivers) ? p.preset_participant_drivers : [];
+    for (const d of drivers) {
+      totalDrivers += 1;
+      if (d?.is_active === false) inactiveDrivers += 1;
+    }
+  }
+
+  const inactiveParticipants = total - activeParticipants;
+  const anyDisabled = inactiveParticipants > 0 || inactiveDrivers > 0;
+
+  const text = document.getElementById('active-count-text');
+  if (text) {
+    if (totalDrivers > 0) {
+      text.textContent = `${activeParticipants} / ${total} active · ${totalDrivers - inactiveDrivers}/${totalDrivers} drivers`;
+    } else {
+      text.textContent = `${activeParticipants} / ${total} active`;
+    }
+  }
+
+  const pill = document.getElementById('active-count-pill');
+  if (pill) pill.classList.toggle('has-disabled', anyDisabled);
+
+  const resetBtn = document.getElementById('reset-active-btn');
+  if (resetBtn) {
+    // Hide for read-only (official/public) presets.
+    const isOfficial = currentPreset?.is_official === true;
+    const isPublic = currentPreset?.is_public === true && !currentPreset?.user_id;
+    const isReadOnly = isOfficial || isPublic;
+    resetBtn.style.display = (anyDisabled && !isReadOnly) ? '' : 'none';
+  }
+
+  summary.style.display = '';
+}
+
+/**
+ * "Reset all" — reset every participant and driver back to is_active=true.
+ * Two-step confirmation protects against accidental clicks.
+ */
+async function confirmResetActiveStates() {
+  if (!currentPreset?.id) return;
+  const ok = window.confirm(
+    'Are you sure you want to re-enable all disabled participants and drivers?\n\nThis action is reversible: you can disable them again individually at any time.'
+  );
+  if (!ok) return;
+
+  try {
+    const res = await window.api.invoke('preset:resetActiveStates', { presetId: currentPreset.id });
+    if (!res || !res.success) {
+      throw new Error(res?.error || 'Reset failed');
+    }
+    const { participantsReset = 0, driversReset = 0 } = res.data || {};
+
+    // Update in-memory state and re-render the table
+    if (Array.isArray(participantsData)) {
+      for (const p of participantsData) {
+        if (p) p.is_active = true;
+        const drivers = Array.isArray(p?.preset_participant_drivers) ? p.preset_participant_drivers : [];
+        for (const d of drivers) {
+          if (d) d.is_active = true;
+        }
+      }
+    }
+    loadParticipantsIntoTable(participantsData);
+    updateActiveParticipantsSummary();
+    showNotification(
+      `Re-enabled: ${participantsReset} participants, ${driversReset} drivers`,
+      'success'
+    );
+  } catch (err) {
+    console.error('[PresetToggle] reset failed:', err);
+    showNotification(`Reset failed: ${getErrorMessage(err)}`, 'error');
+  }
+}
+
+// Expose to window for inline HTML onclick handlers
+window.onParticipantActiveToggle = onParticipantActiveToggle;
+window.confirmResetActiveStates = confirmResetActiveStates;
 
 /**
  * Open edit modal from row button (gets index from data attribute)
@@ -2594,6 +3003,8 @@ async function savePreset() {
     const presetName = document.getElementById('preset-name').value.trim();
     const presetDescription = document.getElementById('preset-description').value.trim();
     const sportCategoryId = document.getElementById('preset-sport-category')?.value || null;
+    // Issue #104 — preset-scope driver filter flag
+    const allowExternalPersons = document.getElementById('preset-allow-external-persons')?.checked === true;
 
     // Validation
     if (!presetName) {
@@ -2639,7 +3050,9 @@ async function savePreset() {
         name: presetName,
         description: presetDescription,
         category_id: sportCategoryId,
-        custom_folders: customFolders
+        custom_folders: customFolders,
+        // Issue #104 — preset-scope driver filter flag
+        allow_external_person_recognition: allowExternalPersons
       };
 
       const updateResponse = await window.api.invoke('supabase-update-participant-preset', {
@@ -2656,7 +3069,9 @@ async function savePreset() {
         name: presetName,
         description: presetDescription,
         category_id: sportCategoryId,
-        custom_folders: customFolders
+        custom_folders: customFolders,
+        // Issue #104 — preset-scope driver filter flag
+        allow_external_person_recognition: allowExternalPersons
       };
 
       const createResponse = await window.api.invoke('supabase-create-participant-preset', presetData);

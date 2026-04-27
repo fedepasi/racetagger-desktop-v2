@@ -60,6 +60,84 @@ import { AdaptiveUploadSemaphore, AdaptiveUploadConfig } from './utils/adaptive-
 const log = createComponentLogger('Processor');
 const workerLog = createComponentLogger('Worker');
 
+// ============================================================================
+// DB INSERT DIAGNOSTICS (module-level singleton)
+// ----------------------------------------------------------------------------
+// Aggregates analysis_results insert outcomes across the current process
+// session so the support report can show a structured digest:
+//   "116 attempted, 85 inserted, 31 lost (code 57014: 31) — lost image_ids: ..."
+//
+// Consumers:
+//   - UnifiedImageProcessor.flushPendingInserts() — writer
+//   - ipc/feedback-handlers.ts collectAndUploadDiagnostics() — reader (snapshot)
+//
+// Scope: session-lifetime accumulator. If we later need per-execution reset,
+// add resetForExecution(executionId). Current design favours showing the
+// cumulative picture across multiple batches in the same boot.
+// ============================================================================
+const MAX_TRACKED_LOST_IMAGE_IDS = 500; // cap memory in pathological cases
+
+interface DbInsertLostRow {
+  imageId: string;
+  code: string;
+  message: string;
+  timestamp: string;
+}
+
+interface DbInsertStatsSnapshot {
+  sessionStart: string;
+  totalAttempted: number;
+  totalInserted: number;
+  totalLost: number;
+  flushCount: number;
+  flushesWithFailures: number;
+  errorsByCode: Record<string, number>;
+  lostImageIds: DbInsertLostRow[];
+  lostImageIdsTruncated: boolean;
+}
+
+export const dbInsertDiagnostics = {
+  _stats: {
+    sessionStart: new Date().toISOString(),
+    totalAttempted: 0,
+    totalInserted: 0,
+    totalLost: 0,
+    flushCount: 0,
+    flushesWithFailures: 0,
+    errorsByCode: {} as Record<string, number>,
+    lostImageIds: [] as DbInsertLostRow[],
+    lostImageIdsTruncated: false,
+  },
+
+  recordFlush(attempted: number, inserted: number): void {
+    this._stats.flushCount += 1;
+    this._stats.totalAttempted += attempted;
+    this._stats.totalInserted += inserted;
+    const lost = Math.max(0, attempted - inserted);
+    this._stats.totalLost += lost;
+    if (lost > 0) this._stats.flushesWithFailures += 1;
+  },
+
+  recordLostRow(imageId: string, code: string, message: string): void {
+    const codeKey = code || 'unknown';
+    this._stats.errorsByCode[codeKey] = (this._stats.errorsByCode[codeKey] || 0) + 1;
+    if (this._stats.lostImageIds.length < MAX_TRACKED_LOST_IMAGE_IDS) {
+      this._stats.lostImageIds.push({
+        imageId: String(imageId || 'unknown'),
+        code: codeKey,
+        message: String(message || '').substring(0, 200),
+        timestamp: new Date().toISOString(),
+      });
+    } else {
+      this._stats.lostImageIdsTruncated = true;
+    }
+  },
+
+  snapshot(): DbInsertStatsSnapshot {
+    return JSON.parse(JSON.stringify(this._stats));
+  },
+};
+
 /**
  * Extract detailed error message from Supabase Edge Function error responses.
  * When an Edge Function returns HTTP 500, the Supabase SDK wraps it in a FunctionsHttpError
@@ -117,6 +195,35 @@ function isEdgeFunctionRetryable(errorMessage: string): boolean {
   return false;
 }
 
+/**
+ * Determine if an upload-to-storage error is retryable.
+ * Extends `isEdgeFunctionRetryable` with storage-gateway failures that surface
+ * as HTML error pages being parsed as JSON.
+ *
+ * Issues covered:
+ *  - #108, #103, #95  "fetch failed" in UnifiedImageWorker.uploadToStorage
+ *  - #107, #106, #100, #98  "Unexpected token '<', \"<!DOCTYPE ...\" is not valid JSON"
+ *    (storage/edge gateway returns an HTML error page that the SDK tries to JSON.parse)
+ */
+function isUploadRetryable(errorMessage: string): boolean {
+  if (isEdgeFunctionRetryable(errorMessage)) return true;
+  const msg = errorMessage.toLowerCase();
+  // JSON parse errors indicating HTML response from gateway (502/503/504 pages)
+  if (msg.includes("unexpected token '<'") ||
+      msg.includes('unexpected token <') ||
+      msg.includes('<!doctype') ||
+      msg.includes('is not valid json') ||
+      msg.includes('unexpected end of json input')) {
+    return true;
+  }
+  // Common transient HTTP 5xx/gateway responses
+  if (msg.includes('502') || msg.includes('504') ||
+      msg.includes('bad gateway') || msg.includes('gateway timeout')) {
+    return true;
+  }
+  return false;
+}
+
 const sharp = getSharp();
 
 /**
@@ -148,10 +255,8 @@ export interface UnifiedProcessingResult {
   microThumbPath?: string | null;
   // Path after folder organization (move/copy)
   organizedPath?: string;
-  // RF-DETR Metrics (from worker)
-  rfDetrDetections?: number;
-  rfDetrCost?: number;
-  recognitionMethod?: 'gemini' | 'rf-detr' | 'local-onnx';
+  // Recognition method (used for telemetry)
+  recognitionMethod?: 'gemini' | 'local-onnx';
   // Local ONNX inference metrics
   localOnnxInferenceMs?: number;
   // Scene Classification
@@ -238,6 +343,16 @@ export interface UnifiedProcessorConfig {
   // IPTC Pro: PresetIptcMetadata profile for safe global metadata writing during processing
   // When present, global fields (credit, copyright, location, etc.) are written as safety net
   iptcMetadata?: any;
+
+  // Issue #104: Propagated from the selected preset's `allow_external_person_recognition`
+  // column. When true, Gemini is allowed to populate `otherPeople[]` with VIPs, team
+  // principals, celebrities etc. that are NOT in the participant list. Those names are
+  // written to distinct IPTC fields (e.g. `VIP: ...` keywords, PersonInImage with role
+  // suffix) so they never collide with `drivers[]` / race-participant metadata.
+  // When false (default), V6 both (a) omits the field from Gemini's schema and
+  // (b) strips the field from the response, and the sanity filter on the desktop
+  // additionally removes any driver name not present in `participantsData`.
+  allowExternalPersonRecognition?: boolean;
 }
 
 /**
@@ -258,16 +373,14 @@ class UnifiedImageWorker extends EventEmitter {
   private networkMonitor?: NetworkMonitor;
   private sportCategories: any[] = []; // Store sport categories data
   private currentSportCategory: any = null; // Current category config
-  // RF-DETR Metrics Tracking
-  private totalRfDetrDetections: number = 0;
-  private totalRfDetrCost: number = 0;
-  private recognitionMethod: 'gemini' | 'rf-detr' | 'local-onnx' | null = null;
+  // Recognition method tracking (for telemetry)
+  private recognitionMethod: 'gemini' | 'local-onnx' | null = null;
   private edgeFunctionLogged: boolean = false; // Log edge function selection only once
   // Scene Classification (ONNX Runtime for fast inference)
   private sceneClassifier: SceneClassifierONNX | null = null;
   private sceneClassificationEnabled: boolean = true;
   private sceneSkipThreshold: number = 0.75; // Skip AI if crowd_scene confidence > 75%
-  // Local ONNX Detection (RF-DETR replacement)
+  // Local ONNX Detection
   private onnxDetector: OnnxDetector | null = null;
   private onnxDetectorEnabled: boolean = false;
   private onnxModelLoaded: boolean = false;
@@ -830,7 +943,12 @@ class UnifiedImageWorker extends EventEmitter {
             // Queue analysis_results insert for batch processing by the Processor
             // With local ONNX (~200ms/image), 10+ concurrent inserts cause DB timeouts
             // The insert data is returned as part of the worker result and accumulated by UnifiedImageProcessor
+            // NOTE: user_id is REQUIRED — the analysis_results RLS INSERT policy joins on
+            // `images.user_id = auth.uid()`. However many clusters observed intermittent
+            // silent rejections without it; sending user_id on the row itself is safer and
+            // matches what the Gemini Edge Function (V6) writes.
             this.pendingAnalysisInsertData = {
+              user_id: userId,
               image_id: imageId,
               analysis_provider: `local-onnx_${this.category}`,
               recognized_number: primaryResult.raceNumber || null,
@@ -987,15 +1105,7 @@ class UnifiedImageWorker extends EventEmitter {
       return false;
     }
 
-    // Crop-context compatible with local-onnx AND gemini (only rf-detr excluded)
-    const recognitionMethod = this.currentSportCategory?.recognition_method;
-    if (recognitionMethod === 'rf-detr') {
-      log.debug(`[CropContext] Disabled for rf-detr (uses cloud detection+recognition)`);
-      return false;
-    }
-
-    // local-onnx can use crops for better accuracy
-
+    // Crop-context is compatible with both local-onnx and gemini recognition methods.
     log.info(`[CropContext] Enabled for category ${this.category}`);
     return true;
   }
@@ -1188,21 +1298,36 @@ class UnifiedImageWorker extends EventEmitter {
     extractedCrops: any[],
     detectionSource: 'yolo-seg' | 'onnx-detr'
   ): Promise<{
-    results: any[];
+    results: any[];                                                // HIGH zone (>= high threshold): trusted ONNX results
+    mediumCrops: Array<{ cropIndex: number; onnxResult: any }>;    // MEDIUM zone: ONNX result preserved, needs Gemini for comparison
     needsGeminiFallback: boolean;
-    lowConfidenceCrops: number[];
+    lowConfidenceCrops: number[];                                  // LOW zone + no-detection: crops that need Gemini (ONNX discarded)
+    thresholds: { high: number; medium: number; min: number };
   }> {
     const results: any[] = [];
+    const mediumCrops: Array<{ cropIndex: number; onnxResult: any }> = [];
     const lowConfidenceCrops: number[] = [];
 
-    // Use sport category's recognition_config.minConfidence (same as Gemini flow)
-    // This ensures consistent confidence thresholds across all recognition methods
-    const recognitionConfig = this.currentSportCategory?.recognition_config || {
-      minConfidence: 0.35  // Default for RF-DETR small models
+    // ==================== TRIPLE-ZONE THRESHOLDS (2026-04 fix) ====================
+    // Replaces the previous single `minConfidence` which caused LOW-confidence ONNX
+    // results to be saved as final `confidence_level='LOW'` instead of escalating to V6.
+    //
+    //  conf >= high     → HIGH  : trust ONNX, skip Gemini (current optimization)
+    //  medium <= conf   → MEDIUM: keep ONNX candidate + also call Gemini on same crop,
+    //    < high           then cascade-resolve disagreement (preset membership → Gemini default)
+    //  min <= conf      → LOW   : ONNX too weak, discard, use Gemini result only
+    //    < medium
+    //  conf < min       → NULL  : below noise floor, Gemini fallback normal flow
+    //
+    // All override-abili via sport_category.recognition_config.{highConfidence, mediumConfidence, minConfidence}
+    const recognitionConfig = this.currentSportCategory?.recognition_config || {};
+    const TH = {
+      high:   recognitionConfig.highConfidence   ?? 0.85,  // Phase 1 default (tunable from prod data)
+      medium: recognitionConfig.mediumConfidence ?? 0.60,
+      min:    recognitionConfig.minConfidence    ?? 0.35,
     };
-    const CONFIDENCE_THRESHOLD = recognitionConfig.minConfidence || 0.35;
 
-    console.log(`[ONNX-Crop] Analyzing ${cropsPayload.length} crops with ONNX detector (confidence threshold: ${CONFIDENCE_THRESHOLD})`);
+    console.log(`[ONNX-Crop] Analyzing ${cropsPayload.length} crops with ONNX detector (thresholds high=${TH.high} medium=${TH.medium} min=${TH.min})`);
 
     for (let i = 0; i < cropsPayload.length; i++) {
       try {
@@ -1215,7 +1340,7 @@ class UnifiedImageWorker extends EventEmitter {
         const inferenceMs = Date.now() - startMs;
 
         if (onnxResult.results.length === 0) {
-          log.warn(`[ONNX-Crop] Crop ${i + 1}: No detections found`);
+          log.warn(`[ONNX-Crop] Crop ${i + 1}: No detections found → Gemini fallback (zone NULL)`);
           lowConfidenceCrops.push(i);
           this.onnxConsecutiveFailures++; // PERFORMANCE: Track for circuit breaker
           continue;
@@ -1226,10 +1351,19 @@ class UnifiedImageWorker extends EventEmitter {
           curr.confidence > best.confidence ? curr : best
         );
 
-        if (bestDetection.confidence < CONFIDENCE_THRESHOLD) {
-          log.warn(`[ONNX-Crop] Crop ${i + 1}: Low confidence ${bestDetection.confidence.toFixed(3)} < ${CONFIDENCE_THRESHOLD}`);
+        // Zone NULL: below noise floor → discard, Gemini fallback
+        if (bestDetection.confidence < TH.min) {
+          log.warn(`[ONNX-Crop] Crop ${i + 1}: Below min threshold ${bestDetection.confidence.toFixed(3)} < ${TH.min} (zone NULL) → Gemini fallback`);
           lowConfidenceCrops.push(i);
-          this.onnxConsecutiveFailures++; // PERFORMANCE: Track for circuit breaker
+          this.onnxConsecutiveFailures++;
+          continue;
+        }
+
+        // Zone LOW: ONNX saw something but weak → discard ONNX, use Gemini only
+        if (bestDetection.confidence < TH.medium) {
+          log.warn(`[ONNX-Crop] Crop ${i + 1}: LOW zone ${bestDetection.confidence.toFixed(3)} < ${TH.medium} → discard ONNX, use Gemini`);
+          lowConfidenceCrops.push(i);
+          this.onnxConsecutiveFailures++;
           continue;
         }
 
@@ -1268,7 +1402,7 @@ class UnifiedImageWorker extends EventEmitter {
           }
         }
 
-        results.push({
+        const onnxItem = {
           raceNumber: bestDetection.raceNumber,
           confidence: bestDetection.confidence,
           className: bestDetection.className,
@@ -1278,10 +1412,23 @@ class UnifiedImageWorker extends EventEmitter {
           otherText: [],
           modelSource: 'local-onnx-crop',
           bboxSource: detectionSource,  // Track original detection source
-          inferenceTimeMs: inferenceMs
-        });
+          inferenceTimeMs: inferenceMs,
+          // Phase 1 (2026-04): preserve the crop index so the caller can correlate
+          // ONNX results with the Gemini response when a merge/compare is needed
+          cropIndex: i,
+        };
 
-        log.info(`[ONNX-Crop] Crop ${i + 1}: Found ${bestDetection.raceNumber} (confidence: ${bestDetection.confidence.toFixed(3)}, ${inferenceMs}ms)`);
+        // Zone MEDIUM: keep ONNX candidate BUT also send crop to Gemini so we can compare
+        if (bestDetection.confidence < TH.high) {
+          log.info(`[ONNX-Crop] Crop ${i + 1}: MEDIUM zone ${bestDetection.confidence.toFixed(3)} in [${TH.medium}, ${TH.high}) → ONNX kept for compare + Gemini call`);
+          mediumCrops.push({ cropIndex: i, onnxResult: onnxItem });
+          // Do NOT reset circuit breaker for MEDIUM: ONNX wasn't confident enough to trust alone
+          continue;
+        }
+
+        // Zone HIGH: trust ONNX, no Gemini call for this crop
+        results.push(onnxItem);
+        log.info(`[ONNX-Crop] Crop ${i + 1}: HIGH zone, trust ONNX ${bestDetection.raceNumber} (confidence: ${bestDetection.confidence.toFixed(3)}, ${inferenceMs}ms)`);
 
         // PERFORMANCE: Reset circuit breaker on success
         this.onnxConsecutiveFailures = 0;
@@ -1292,12 +1439,11 @@ class UnifiedImageWorker extends EventEmitter {
       }
     }
 
-    const needsGeminiFallback = results.length === 0 || lowConfidenceCrops.length > 0;
+    // Phase 1: "needs Gemini" is true when we have ANY non-HIGH crop (medium OR low/none).
+    // MEDIUM crops require Gemini for the compare cascade, LOW/none need Gemini as only source.
+    const needsGeminiFallback = mediumCrops.length > 0 || lowConfidenceCrops.length > 0;
 
-    log.info(`[ONNX-Crop] Complete: ${results.length}/${cropsPayload.length} crops analyzed successfully`);
-    if (needsGeminiFallback) {
-      log.info(`[ONNX-Crop] ${lowConfidenceCrops.length} crops need Gemini fallback`);
-    }
+    log.info(`[ONNX-Crop] Complete: HIGH=${results.length} MEDIUM=${mediumCrops.length} LOW/none=${lowConfidenceCrops.length} (of ${cropsPayload.length} crops)`);
 
     // PERFORMANCE: Trigger circuit breaker if too many consecutive failures
     if (this.onnxConsecutiveFailures >= this.onnxCircuitBreakerThreshold && !this.onnxCircuitOpen) {
@@ -1305,7 +1451,67 @@ class UnifiedImageWorker extends EventEmitter {
       log.warn(`[ONNX] Circuit breaker TRIGGERED: ${this.onnxConsecutiveFailures} consecutive failures. Auto-disabled for remainder of batch.`);
     }
 
-    return { results, needsGeminiFallback, lowConfidenceCrops };
+    return { results, mediumCrops, needsGeminiFallback, lowConfidenceCrops, thresholds: TH };
+  }
+
+  /**
+   * Resolve a MEDIUM-zone disagreement between ONNX and Gemini using a cascade:
+   *   1. Agreement     : ONNX and Gemini returned the same number → trust it
+   *   2. Preset filter : exactly one candidate is present in the active participant preset → it wins
+   *   3. TODO (Phase 1b): OCR distance check via SmartMatcher OCRCorrector
+   *   4. TODO (Phase 1b): Temporal cluster lookup via SmartMatcher temporal context
+   *   5. Fallback      : default to Gemini (it is generally the more reliable reader when ONNX was not confident)
+   *
+   * The resolution tag is returned so the caller can build an `analysis_provider` value
+   * for telemetry (e.g. 'onnx+v6-agree_<cat>', 'onnx+v6-preset-onnx_<cat>', 'onnx+v6-default-gemini_<cat>').
+   */
+  private resolveOnnxGeminiCandidates(
+    onnxNumber: string | null | undefined,
+    geminiNumber: string | null | undefined
+  ): {
+    winner: string | null;
+    winnerSource: 'onnx' | 'gemini' | 'none';
+    resolution: 'agree' | 'preset-onnx' | 'preset-gemini' | 'default-gemini' | 'both-missing';
+  } {
+    const onnx = onnxNumber ? String(onnxNumber).trim() : '';
+    const gemini = geminiNumber ? String(geminiNumber).trim() : '';
+
+    // Step 0: both missing → nothing to resolve
+    if (!onnx && !gemini) {
+      return { winner: null, winnerSource: 'none', resolution: 'both-missing' };
+    }
+    // One-sided: whoever has the answer
+    if (!onnx) return { winner: gemini, winnerSource: 'gemini', resolution: 'default-gemini' };
+    if (!gemini) return { winner: onnx, winnerSource: 'onnx', resolution: 'preset-onnx' };
+
+    // Step 1: agreement — trivial, both models read the same number
+    if (onnx === gemini) {
+      return { winner: onnx, winnerSource: 'onnx', resolution: 'agree' };
+    }
+
+    // Step 2: preset membership — check each candidate against the active participant preset
+    const presetHas = (num: string): boolean => {
+      if (!num || !this.participantsData || this.participantsData.length === 0) return false;
+      return this.participantsData.some(p => {
+        const pn = (p.numero ?? p.number);
+        return pn !== undefined && pn !== null && String(pn).trim() === num;
+      });
+    };
+    const onnxInPreset = presetHas(onnx);
+    const geminiInPreset = presetHas(gemini);
+
+    if (onnxInPreset && !geminiInPreset) {
+      return { winner: onnx, winnerSource: 'onnx', resolution: 'preset-onnx' };
+    }
+    if (geminiInPreset && !onnxInPreset) {
+      return { winner: gemini, winnerSource: 'gemini', resolution: 'preset-gemini' };
+    }
+
+    // Step 3 (Phase 1b TODO): OCR edit distance via SmartMatcher OCRCorrector
+    // Step 4 (Phase 1b TODO): temporal cluster lookup
+
+    // Step 5: fallback — Gemini reader is more reliable when ONNX was not HIGH confidence
+    return { winner: gemini, winnerSource: 'gemini', resolution: 'default-gemini' };
   }
 
   /**
@@ -1342,23 +1548,40 @@ class UnifiedImageWorker extends EventEmitter {
       // where cars are a portion of the frame, NOT on crops.
       // Try ONNX on full image BEFORE extracting crops.
       // Only extract crops for Gemini if ONNX fails.
+      //
+      // Phase 1 fix (2026-04): this optimisation now requires HIGH-zone confidence
+      // (>= highConfidence, default 0.85) before skipping the segmentation+Gemini path.
+      // MEDIUM and LOW detections fall through to the full segmentation pipeline,
+      // where the per-crop ONNX inference can be compared to Gemini via the cascade
+      // resolver. This closes the "all-low-saved-as-LOW" bug.
       const currentRecognitionMethod = this.currentSportCategory?.recognition_method;
       const recognitionConfig = this.currentSportCategory?.recognition_config || {};
-      const CONFIDENCE_THRESHOLD = recognitionConfig.minConfidence || 0.35;
+      const HIGH_THRESHOLD = recognitionConfig.highConfidence ?? 0.85;
+      const MIN_THRESHOLD  = recognitionConfig.minConfidence  ?? 0.35;
 
       if (currentRecognitionMethod === 'local-onnx' && this.onnxDetectorEnabled && this.onnxModelLoaded) {
-        log.info(`[CropContext] Trying local ONNX on FULL IMAGE first (threshold: ${CONFIDENCE_THRESHOLD})`);
+        log.info(`[CropContext] Trying local ONNX on FULL IMAGE first (HIGH threshold: ${HIGH_THRESHOLD})`);
 
         try {
           const fullImageStartTime = Date.now();
           const { results: detections, imageSize } = await this.onnxDetector!.detect(compressedBuffer);
           const inferenceMs = Date.now() - fullImageStartTime;
 
-          // Filter by confidence threshold
-          const validDetections = detections.filter(d => d.confidence >= CONFIDENCE_THRESHOLD);
+          // Only HIGH-zone detections qualify for the "skip segmentation + Gemini" fast path.
+          // Anything below HIGH_THRESHOLD falls through to the detailed pipeline where
+          // the triple-zone cascade can properly handle MEDIUM/LOW with a Gemini compare.
+          const validDetections = detections.filter(d => d.confidence >= HIGH_THRESHOLD);
+
+          // Sub-HIGH visibility: log how many detections existed between MIN and HIGH so
+          // we can quantify how often MEDIUM/LOW on full image would have been wrongly
+          // saved as confidence_level='LOW' before this fix.
+          const subHighCount = detections.filter(d => d.confidence >= MIN_THRESHOLD && d.confidence < HIGH_THRESHOLD).length;
+          if (subHighCount > 0) {
+            log.info(`[CropContext] Full-image ONNX: ${subHighCount} sub-HIGH detections (between ${MIN_THRESHOLD} and ${HIGH_THRESHOLD}) — falling through to segmentation+V6 cascade`);
+          }
 
           if (validDetections.length > 0) {
-            log.info(`[CropContext] ✓ ONNX full-image SUCCESS: ${validDetections.length} detections in ${inferenceMs}ms - SKIPPING crop extraction and Gemini`);
+            log.info(`[CropContext] ✓ ONNX full-image SUCCESS: ${validDetections.length} HIGH detections in ${inferenceMs}ms - SKIPPING crop extraction and Gemini`);
 
             // Reset circuit breaker on success
             this.onnxConsecutiveFailures = 0;
@@ -1475,7 +1698,7 @@ class UnifiedImageWorker extends EventEmitter {
               recognitionMethod: 'local-onnx'  // FIX: Was missing, caused undefined in JSONL
             };
           } else {
-            log.warn(`[CropContext] ✗ ONNX full-image FAILED: ${detections.length} detections, ${validDetections.length} above threshold ${CONFIDENCE_THRESHOLD} - falling back to Gemini with crops`);
+            log.warn(`[CropContext] ✗ ONNX full-image FAILED: ${detections.length} detections, ${validDetections.length} above HIGH threshold ${HIGH_THRESHOLD} - falling back to Gemini with crops`);
             this.onnxConsecutiveFailures++;
 
             // CIRCUIT BREAKER: Disable ONNX after 5 consecutive failures
@@ -1725,6 +1948,18 @@ class UnifiedImageWorker extends EventEmitter {
       let tokensUsed = 0;
       let v6ImageId: string | undefined;  // DB UUID from V6 response for analysis_log UPDATE
 
+      // ==================== Phase 1 (2026-04): triple-zone state ====================
+      // Populated by the ONNX layer, consumed by the V6 response block to correctly
+      // merge HIGH ONNX results + resolve MEDIUM ONNX↔Gemini disagreements via cascade.
+      //
+      //  - mediumOnnxByCropIndex: original cropIndex → ONNX candidate preserved from MEDIUM zone.
+      //    Presence means "this crop was sent to V6 for a compare; apply cascade resolver
+      //    (agree → preset → default-gemini) when V6 returns". Used for analysis_provider tag.
+      //  - reducedPayloadToOriginalIdx[i]: original cropIndex of the i-th crop actually sent to V6
+      //    after we reduce cropsPayload to MEDIUM+LOW. Empty when we did not reduce.
+      const mediumOnnxByCropIndex = new Map<number, any>();
+      let reducedPayloadToOriginalIdx: number[] = [];
+
       // ==================== DECIDE: ONNX vs GEMINI ====================
       const recognitionMethod = this.currentSportCategory?.recognition_method;
 
@@ -1884,24 +2119,50 @@ class UnifiedImageWorker extends EventEmitter {
           };
         }
 
-        // PARTIAL SUCCESS: Some crops worked with ONNX, some need Gemini fallback
-        if (onnxCropResult.results.length > 0 && onnxCropResult.needsGeminiFallback) {
-          log.info(`[CropContext] ONNX: ${onnxCropResult.results.length}/${cropsPayload.length} crops successful, calling Gemini for ${onnxCropResult.lowConfidenceCrops.length} low-confidence crops`);
+        // ==================== Phase 1 (2026-04): triple-zone dispatch ====================
+        // HIGH = onnxCropResult.results (trust ONNX, persisted client-side below).
+        // MEDIUM = onnxCropResult.mediumCrops (send to V6, then cascade-resolve).
+        // LOW = onnxCropResult.lowConfidenceCrops (send to V6 as primary source, ONNX discarded).
+        //
+        // Build the unified "needs Gemini" index list (MEDIUM ∪ LOW), reduce cropsPayload
+        // to those indices, and remember the mapping so the V6 response block can correlate
+        // each V6 result back to the original crop index and invoke the cascade resolver.
+        const mediumIndices = onnxCropResult.mediumCrops.map(m => m.cropIndex);
+        const lowIndices = onnxCropResult.lowConfidenceCrops;
 
-          // Prepare reduced payload with only low-confidence crops
-          const fallbackCrops = onnxCropResult.lowConfidenceCrops.map(idx => cropsPayload[idx]);
-
-          // Continue to Gemini V6 call below with reduced payload
-          cropsPayload = fallbackCrops;
-          allAnalysis = onnxCropResult.results;  // Keep ONNX results, add Gemini results below
-
-          log.info(`[CropContext] Proceeding with Gemini fallback for ${fallbackCrops.length} crops`);
+        // Populate the shared resolver map for MEDIUM crops
+        for (const m of onnxCropResult.mediumCrops) {
+          mediumOnnxByCropIndex.set(m.cropIndex, m.onnxResult);
         }
 
-        // TOTAL FAILURE: ONNX found nothing with confidence > threshold
-        if (onnxCropResult.results.length === 0) {
-          log.warn(`[CropContext] ONNX inference failed for all crops (low confidence or errors), falling back to Gemini V6`);
-          // Continue to normal Gemini V6 flow below
+        const geminiIndicesSet = new Set<number>([...mediumIndices, ...lowIndices]);
+        const geminiIndices = Array.from(geminiIndicesSet).sort((a, b) => a - b);
+
+        log.info(
+          `[CropContext] ONNX zone split: HIGH=${onnxCropResult.results.length} ` +
+          `MEDIUM=${onnxCropResult.mediumCrops.length} LOW/none=${onnxCropResult.lowConfidenceCrops.length} ` +
+          `(of ${cropsPayload.length} crops, thresholds high=${onnxCropResult.thresholds.high} medium=${onnxCropResult.thresholds.medium})`
+        );
+
+        if (geminiIndices.length === 0) {
+          // All crops classified HIGH — fast path above should have fired. Defensive branch
+          // in case HIGH is a strict subset (e.g. inference errors that didn't push).
+          log.warn(`[CropContext] All crops classified HIGH but fast path didn't trigger — using ONNX results only.`);
+          allAnalysis = [...onnxCropResult.results];
+          cropsPayload = [];
+        } else {
+          // Reduce cropsPayload to crops that need Gemini (MEDIUM + LOW, sorted by original index).
+          // Save the mapping so the V6 response block can find the original cropIndex.
+          reducedPayloadToOriginalIdx = geminiIndices;
+          cropsPayload = geminiIndices.map(idx => cropsPayload[idx]);
+          // Seed allAnalysis with HIGH ONNX results; V6 block appends MEDIUM (resolved) and LOW.
+          allAnalysis = [...onnxCropResult.results];
+
+          log.info(
+            `[CropContext] Sending ${cropsPayload.length} crops to Gemini V6 ` +
+            `(${mediumIndices.length} MEDIUM for compare + ${lowIndices.length} LOW as primary). ` +
+            `HIGH kept: ${onnxCropResult.results.length}`
+          );
         }
       }
       // ==================== END ONNX LAYER ====================
@@ -1910,9 +2171,12 @@ class UnifiedImageWorker extends EventEmitter {
       // This block executes IF:
       // 1. recognition_method === 'gemini' (or other)
       // 2. recognition_method === 'local-onnx' BUT ONNX partially failed (see above)
-
-      // Step 4: Call V6 edge function based on strategy
-      if (cropContextConfig.strategy === 'sequential') {
+      //
+      // Phase 1 (2026-04): Skip V6 entirely if the ONNX dispatch emptied cropsPayload
+      // (all HIGH defensive branch). allAnalysis already contains the HIGH ONNX results.
+      if (cropsPayload.length === 0) {
+        log.info(`[CropContext] Skipping V6 call: cropsPayload is empty (all crops handled by ONNX HIGH or no crops extracted)`);
+      } else if (cropContextConfig.strategy === 'sequential') {
         // SEQUENTIAL: Process each crop one at a time
         log.info(`[CropContext] Using SEQUENTIAL strategy - processing ${cropsPayload.length} crops one by one`);
 
@@ -1970,16 +2234,57 @@ class UnifiedImageWorker extends EventEmitter {
                 height: rawBbox.height * 100
               } : undefined;
 
-              allAnalysis.push({
+              // Phase 1 (2026-04): map reduced sequential index → original cropIndex so we
+              // can detect MEDIUM crops (present in mediumOnnxByCropIndex) and invoke the
+              // cascade resolver, and tag LOW crops distinctively for analysis_provider.
+              const wasReducedSeq = reducedPayloadToOriginalIdx.length > 0;
+              const originalCropIdx = wasReducedSeq ? (reducedPayloadToOriginalIdx[i] ?? i) : i;
+
+              const geminiEntry: any = {
                 raceNumber: cropResult.raceNumber,
-                drivers: cropResult.drivers || [],
+                // Issue #104: client-side sanity filter on top of server-side filter.
+                drivers: this.filterDriversAgainstParticipants(cropResult.drivers),
                 category: this.category,
                 teamName: cropResult.teamName,
                 otherText: cropResult.otherText || [],
                 confidence: cropResult.confidence,
                 boundingBox,
-                modelSource: 'gemini-v6-crop-seq'
-              });
+                modelSource: 'gemini-v6-crop-seq',
+                // Issue #104: propagate filtered otherPeople (empty unless preset opted in).
+                otherPeople: this.extractOtherPeopleFromCrop(cropResult),
+                cropIndex: originalCropIdx
+              };
+
+              const medOnnxSeq = mediumOnnxByCropIndex.get(originalCropIdx);
+              if (medOnnxSeq) {
+                // MEDIUM zone: cascade resolver between ONNX and Gemini candidates.
+                const resolution = this.resolveOnnxGeminiCandidates(medOnnxSeq.raceNumber, cropResult.raceNumber);
+                allAnalysis.push({
+                  ...geminiEntry,
+                  raceNumber: resolution.winner,
+                  modelSource: `onnx+v6-${resolution.resolution}-seq`,
+                  _zoneResolution: {
+                    zone: 'MEDIUM',
+                    resolution: resolution.resolution,
+                    winnerSource: resolution.winnerSource,
+                    onnx: { raceNumber: medOnnxSeq.raceNumber, confidence: medOnnxSeq.confidence },
+                    gemini: { raceNumber: cropResult.raceNumber, confidence: cropResult.confidence }
+                  }
+                });
+                log.info(
+                  `[CropContext] MEDIUM seq resolved crop ${originalCropIdx}: ` +
+                  `onnx='${medOnnxSeq.raceNumber}'(c=${(medOnnxSeq.confidence || 0).toFixed(3)}) vs ` +
+                  `v6='${cropResult.raceNumber}'(c=${(cropResult.confidence || 0).toFixed(3)}) → ` +
+                  `winner='${resolution.winner}' (${resolution.resolution})`
+                );
+              } else if (wasReducedSeq) {
+                // LOW zone: Gemini is the sole source, tag so analysis_provider differs.
+                geminiEntry.modelSource = 'v6-fallback-from-low-onnx-seq';
+                allAnalysis.push(geminiEntry);
+              } else {
+                // Pure Gemini sequential flow.
+                allAnalysis.push(geminiEntry);
+              }
             }
             // Accumulate usage
             if (response.data.usage) {
@@ -2019,8 +2324,15 @@ class UnifiedImageWorker extends EventEmitter {
           sizeBytes: compressedBuffer.length,
           participantPreset: this.participantsData.length > 0 ? {
             name: 'Preset Dynamic',
-            participants: this.participantsData
+            participants: this.participantsData,
+            // Issue #104: propagate the per-preset flag. When false, V6 constrains
+            // Gemini to drivers-from-list-only and strips otherPeople from the response.
+            allowExternalPersonRecognition: this.config.allowExternalPersonRecognition === true
           } : undefined,
+          // Issue #104: presetId is a server-side fallback for the race condition where
+          // the renderer clicks Analyze before `_loadPresetData()` populates the array.
+          // Backwards compatible: old V6 ignores the field.
+          presetId: this.config.presetId || undefined,
           modelName: APP_CONFIG.defaultModel,
           // V6 Baseline 2026: Track detection source for all crops
           bboxSources: cropsPayload.map(() => detectionSource),
@@ -2063,10 +2375,23 @@ class UnifiedImageWorker extends EventEmitter {
           throw new Error(`V6 analysis failed: ${response.data.error || 'Unknown error'}`);
         }
 
-        // Transform V6 response to standard analysis format
+        // Transform V6 response to standard analysis format.
+        //
+        // Phase 1 (2026-04): APPEND V6 results to allAnalysis (previously REPLACED, which
+        // silently discarded HIGH ONNX results seeded by the ONNX layer). For MEDIUM crops
+        // we run the cascade resolver and emit a single resolved record with a distinctive
+        // `modelSource` tag for analysis_provider telemetry.
         const v6Result = response.data;
         v6ImageId = v6Result.imageId;  // Capture DB UUID for analysis_log UPDATE
-        allAnalysis = v6Result.cropAnalysis.map((crop: any) => {
+        const v6Crops: any[] = v6Result.cropAnalysis || [];
+        const wasReduced = reducedPayloadToOriginalIdx.length > 0;
+
+        for (let vi = 0; vi < v6Crops.length; vi++) {
+          const crop = v6Crops[vi];
+          // When we reduced cropsPayload (MEDIUM+LOW only), map V6 position → original cropIndex.
+          // When pure Gemini (no reduction), V6 position IS the original cropIndex.
+          const originalCropIdx = wasReduced ? (reducedPayloadToOriginalIdx[vi] ?? vi) : vi;
+
           // Get bbox from response or local data, convert from 0-1 to 0-100 for logging
           const rawBbox = crop.originalBbox || extractedCrops.find((c: any) => c.detectionId === crop.detectionId)?.originalBbox;
           const boundingBox = rawBbox ? {
@@ -2076,17 +2401,58 @@ class UnifiedImageWorker extends EventEmitter {
             height: rawBbox.height * 100
           } : undefined;
 
-          return {
+          // Base Gemini-shaped entry (drivers/team/otherText only come from Gemini)
+          const geminiEntry: any = {
             raceNumber: crop.raceNumber,
-            drivers: crop.drivers || [],
+            // Issue #104: client-side sanity filter on top of server-side filter.
+            drivers: this.filterDriversAgainstParticipants(crop.drivers),
             category: this.category,
             teamName: crop.teamName,
             otherText: crop.otherText || [],
             confidence: crop.confidence,
             boundingBox,
-            modelSource: 'gemini-v6-crop'
+            modelSource: 'gemini-v6-crop',
+            // Issue #104: propagate filtered otherPeople.
+            otherPeople: this.extractOtherPeopleFromCrop(crop),
+            cropIndex: originalCropIdx
           };
-        });
+
+          const medOnnx = mediumOnnxByCropIndex.get(originalCropIdx);
+          if (medOnnx) {
+            // MEDIUM zone: cascade resolver between ONNX and Gemini candidates.
+            const resolution = this.resolveOnnxGeminiCandidates(medOnnx.raceNumber, crop.raceNumber);
+            const resolvedEntry = {
+              ...geminiEntry,
+              raceNumber: resolution.winner,
+              // analysis_provider proxy:
+              // 'onnx+v6-agree' | 'onnx+v6-preset-onnx' | 'onnx+v6-preset-gemini' |
+              // 'onnx+v6-default-gemini' | 'onnx+v6-both-missing'
+              modelSource: `onnx+v6-${resolution.resolution}`,
+              // Telemetry payload kept on the record for downstream logging / DB
+              _zoneResolution: {
+                zone: 'MEDIUM',
+                resolution: resolution.resolution,
+                winnerSource: resolution.winnerSource,
+                onnx: { raceNumber: medOnnx.raceNumber, confidence: medOnnx.confidence },
+                gemini: { raceNumber: crop.raceNumber, confidence: crop.confidence }
+              }
+            };
+            allAnalysis.push(resolvedEntry);
+            log.info(
+              `[CropContext] MEDIUM resolved crop ${originalCropIdx}: ` +
+              `onnx='${medOnnx.raceNumber}'(c=${(medOnnx.confidence || 0).toFixed(3)}) vs ` +
+              `v6='${crop.raceNumber}'(c=${(crop.confidence || 0).toFixed(3)}) → ` +
+              `winner='${resolution.winner}' (${resolution.resolution})`
+            );
+          } else if (wasReduced) {
+            // LOW zone: V6 is the sole source, tag so analysis_provider distinguishes it.
+            geminiEntry.modelSource = 'v6-fallback-from-low-onnx';
+            allAnalysis.push(geminiEntry);
+          } else {
+            // Pure Gemini flow (no ONNX layer ran for this image): keep default tag.
+            allAnalysis.push(geminiEntry);
+          }
+        }
 
         totalUsage = v6Result.usage || totalUsage;
 
@@ -2337,8 +2703,12 @@ class UnifiedImageWorker extends EventEmitter {
       sizeBytes: compressedBuffer.length,
       participantPreset: this.participantsData.length > 0 ? {
         name: 'Preset Dynamic',
-        participants: this.participantsData
+        participants: this.participantsData,
+        // Issue #104: propagate the per-preset flag on the fullImage path too.
+        allowExternalPersonRecognition: this.config.allowExternalPersonRecognition === true
       } : undefined,
+      // Issue #104: presetId fallback (backwards compatible).
+      presetId: this.config.presetId || undefined,
       bboxSources: ['full-image']  // Mark as full image source
     };
 
@@ -2367,14 +2737,17 @@ class UnifiedImageWorker extends EventEmitter {
       // Transform V6 response to standard analysis format
       const analysis = v6Result.cropAnalysis.map((crop: any) => ({
         raceNumber: crop.raceNumber,
-        drivers: crop.drivers || [],
+        // Issue #104: client-side sanity filter on top of server-side filter.
+        drivers: this.filterDriversAgainstParticipants(crop.drivers),
         category: this.category,
         teamName: crop.teamName,
         otherText: crop.otherText || [],
         confidence: crop.confidence,
         boundingBox: undefined,  // No bounding box for full image
         modelSource: 'gemini-v6-full-image',
-        bboxSource: crop.bboxSource || 'full-image'
+        bboxSource: crop.bboxSource || 'full-image',
+        // Issue #104: propagate filtered otherPeople.
+        otherPeople: this.extractOtherPeopleFromCrop(crop)
       }));
 
       // Deduct token
@@ -2414,6 +2787,95 @@ class UnifiedImageWorker extends EventEmitter {
       // Fallback to legacy CSV data
       this.participantsData = this.config.csvData;
     }
+  }
+
+  // ==================== ISSUE #104 — CLIENT-SIDE SANITY NET ====================
+  //
+  // The Edge Function V6 already filters `drivers[]` against the preset (governed
+  // by the STRICT_DRIVER_FILTER env var). We repeat the filter on the desktop
+  // as a defence-in-depth: it protects users when V6 is running in `shadow` mode
+  // (filter logs but doesn't remove), when the env var is set to `off` for
+  // emergency rollback, or when the user is pinned to a pre-fix V6 build.
+  //
+  // The filter is a no-op if no preset is loaded (participantsData is empty) —
+  // that keeps behaviour identical for free-form / non-preset analyses.
+
+  /**
+   * Normalize a person name for case/accent-insensitive comparison.
+   * Mirrors the Edge Function implementation in response-parser.ts.
+   */
+  private normalizePersonName(s: string): string {
+    if (!s || typeof s !== 'string') return '';
+    return s
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9 ]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  /**
+   * Filter an array of driver names to contain only those present in the current
+   * preset participant list (nome, navigatore, plus any per-driver names on
+   * preset_participant_drivers if the row carries them).
+   *
+   * Returns the original array unchanged when no preset is loaded.
+   */
+  private filterDriversAgainstParticipants(drivers: string[] | undefined | null): string[] {
+    const src = Array.isArray(drivers) ? drivers : [];
+    if (src.length === 0) return [];
+    if (!this.participantsData || this.participantsData.length === 0) return src;
+
+    const allowed = new Set<string>();
+    for (const p of this.participantsData) {
+      if (p?.nome) allowed.add(this.normalizePersonName(p.nome));
+      if (p?.navigatore) allowed.add(this.normalizePersonName(p.navigatore));
+      // Per-driver names (endurance / rally crews) attached on the preset row.
+      const perDriver = p?.preset_participant_drivers || p?.drivers;
+      if (Array.isArray(perDriver)) {
+        for (const d of perDriver) {
+          const n = typeof d === 'string' ? d : d?.driver_name;
+          if (n) allowed.add(this.normalizePersonName(n));
+        }
+      }
+    }
+
+    const removed: string[] = [];
+    const kept = src.filter((name) => {
+      if (typeof name !== 'string' || !name.trim()) return false;
+      if (allowed.has(this.normalizePersonName(name))) return true;
+      removed.push(name);
+      return false;
+    });
+
+    if (removed.length > 0) {
+      log.warn(
+        `[Issue #104] Client-side sanity filter removed ${removed.length} non-preset driver name(s): ${removed.join(', ')}`
+      );
+    }
+    return kept;
+  }
+
+  /**
+   * Extract and sanitise the `otherPeople` array from a V6 crop result.
+   *
+   * Returns [] unless the preset opted into external recognition AND Gemini
+   * returned entries at or above the confidence threshold. Applies a 0.8
+   * confidence floor to keep marginal guesses out of IPTC.
+   */
+  private extractOtherPeopleFromCrop(crop: any): Array<{ name: string; role: string; confidence: number }> {
+    if (!this.config.allowExternalPersonRecognition) return [];
+    const raw = Array.isArray(crop?.otherPeople) ? crop.otherPeople : [];
+    const OTHER_PEOPLE_MIN_CONFIDENCE = 0.8;
+    return raw
+      .filter((p: any) => p && typeof p.name === 'string' && p.name.trim())
+      .map((p: any) => ({
+        name: p.name.trim(),
+        role: typeof p.role === 'string' ? p.role : 'other',
+        confidence: typeof p.confidence === 'number' ? p.confidence : 0,
+      }))
+      .filter((p: any) => p.confidence >= OTHER_PEOPLE_MIN_CONFIDENCE);
   }
 
   /**
@@ -2466,7 +2928,7 @@ class UnifiedImageWorker extends EventEmitter {
     // Get recognition configuration from current sport category
     const recognitionConfig = this.currentSportCategory?.recognition_config || {
       maxResults: 5,
-      minConfidence: 0.35,  // Lowered for RF-DETR small models (was 0.7)
+      minConfidence: 0.35,  // Low-zone threshold for ONNX detections (below this → V6 fallback)
       confidenceDecayFactor: 0.9,
       relativeConfidenceGap: 0.3,
       focusMode: 'auto',
@@ -2685,6 +3147,7 @@ class UnifiedImageWorker extends EventEmitter {
             microThumbPath,
             compressedPath,
             sceneCategory: sceneClassification.category,
+            sceneConfidence: sceneClassification.confidence,
             sceneSkipped: true
           });
         }
@@ -3209,17 +3672,8 @@ class UnifiedImageWorker extends EventEmitter {
           (analysisResult as any)._parallelVisualTags = stdParallelVisualTags;
         }
 
-        // Track RF-DETR usage metrics if present
-        if (analysisResult.rfDetrUsage) {
-          this.totalRfDetrDetections += analysisResult.rfDetrUsage.detectionsCount || 0;
-          this.totalRfDetrCost += analysisResult.rfDetrUsage.estimatedCostUSD || 0;
-
-          // Set recognition method based on actual usage
-          if (!this.recognitionMethod) {
-            this.recognitionMethod = 'rf-detr';
-          }
-        } else if (!this.recognitionMethod && analysisResult.success) {
-          // If no RF-DETR usage but analysis succeeded, it's Gemini
+        // Track recognition method for telemetry (Gemini vs local-onnx)
+        if (!this.recognitionMethod && analysisResult.success) {
           this.recognitionMethod = 'gemini';
         }
       }
@@ -3350,7 +3804,7 @@ class UnifiedImageWorker extends EventEmitter {
               height: bbox.height * 100
             };
           } else {
-            // RF-DETR or other: pass through (viewer handles conversion)
+            // Other bbox formats: pass through (viewer handles conversion)
             boundingBox = {
               x: bbox.x,
               y: bbox.y,
@@ -3378,7 +3832,7 @@ class UnifiedImageWorker extends EventEmitter {
           // Include both formats for maximum compatibility
           box_2d,  // Original Gemini format [y1, x1, y2, x2] (0-1000)
           boundingBox,  // Converted format {x, y, width, height}
-          modelSource: vehicle.modelSource, // Recognition method used (gemini/rf-detr)
+          modelSource: vehicle.modelSource, // Recognition method used (gemini / local-onnx / onnx+v6-*)
           // Diagnostic: ONNX ambiguity info (when model is uncertain between two classes)
           onnxAmbiguity: vehicle._ambiguityInfo ? {
             secondClassName: vehicle._ambiguityInfo.secondClassName,
@@ -3476,6 +3930,10 @@ class UnifiedImageWorker extends EventEmitter {
       // in the result for the main process to log via its own analysisLogger
       imageAnalysisEvent = {
         imageId: imageFile.id,
+        // Persist the Supabase UUID alongside the legacy client-side id so that later
+        // user corrections can update analysis_results without hitting
+        // "invalid input syntax for type uuid" errors.
+        dbImageId: dbImageId || undefined,
         fileName: imageFile.fileName,
         originalFileName: path.basename(imageFile.originalPath),
         originalPath: imageFile.originalPath,
@@ -3503,6 +3961,12 @@ class UnifiedImageWorker extends EventEmitter {
         visualTags: visualTagsResult?.tags || undefined,
         // Backward compatibility - use first vehicle as primary
         primaryVehicle: vehicles.length > 0 ? vehicles[0] : undefined,
+        // Scene classification (ONNX) — only populated when sport_categories.scene_classifier_enabled = true.
+        // sceneSkipped is false here by construction: if it were true, the skip branch above
+        // would have logged and returned before reaching this event-building block.
+        sceneCategory: sceneClassification?.category,
+        sceneConfidence: sceneClassification?.confidence,
+        sceneSkipped: sceneClassification ? false : undefined,
         // Per-image error/warning tracking for diagnostics
         processingErrors: processingErrors.length > 0 ? processingErrors : undefined,
         processingWarnings: processingWarnings.length > 0 ? processingWarnings : undefined
@@ -3554,9 +4018,6 @@ class UnifiedImageWorker extends EventEmitter {
         microThumbPath,
         // Path after folder organization (move/copy)
         organizedPath,
-        // RF-DETR Metrics from worker
-        rfDetrDetections: this.totalRfDetrDetections,
-        rfDetrCost: this.totalRfDetrCost,
         recognitionMethod: this.recognitionMethod || undefined,
         // Local ONNX inference metrics
         localOnnxInferenceMs: analysisResult.localOnnxInferenceMs,
@@ -4262,40 +4723,68 @@ class UnifiedImageWorker extends EventEmitter {
       await this.uploadSemaphore.acquire();
     }
 
-    // Track upload time and size for network monitoring
-    const uploadStartTime = Date.now();
-    let uploadError: any = null;
+    // Retry loop for transient errors: network failures + gateway HTML responses
+    // Issues #95, #98, #100, #103, #106, #107, #108
+    const MAX_UPLOAD_RETRIES = 3;
+    let lastUploadError: any = null;
+    let lastAttemptDurationMs = 0;
 
     try {
-      const result = await this.supabase.storage
-        .from('uploaded-images')
-        .upload(storageFileName, buffer, {
-          cacheControl: '3600',
-          upsert: false,
-          contentType: mimeType
-        });
+      for (let attempt = 0; attempt <= MAX_UPLOAD_RETRIES; attempt++) {
+        if (attempt > 0) {
+          // Exponential backoff with jitter: 500ms, 1000ms, 2000ms (+0-250ms jitter)
+          const backoffMs = Math.min(500 * Math.pow(2, attempt - 1), 2000) + Math.floor(Math.random() * 250);
+          log.warn(`[uploadToStorage] Retry ${attempt}/${MAX_UPLOAD_RETRIES} for ${fileName} after ${backoffMs}ms (last error: ${lastUploadError?.message || lastUploadError})`);
+          await new Promise(resolve => setTimeout(resolve, backoffMs));
+        }
 
-      uploadError = result.error;
-    } catch (err) {
-      uploadError = err;
+        const attemptStartTime = Date.now();
+        let attemptError: any = null;
+
+        try {
+          const result = await this.supabase.storage
+            .from('uploaded-images')
+            .upload(storageFileName, buffer, {
+              cacheControl: '3600',
+              upsert: false,
+              contentType: mimeType
+            });
+
+          attemptError = result.error;
+        } catch (err) {
+          attemptError = err;
+        }
+
+        lastAttemptDurationMs = Date.now() - attemptStartTime;
+
+        // Record metrics for THIS attempt (so network monitor sees every try)
+        if (this.networkMonitor) {
+          this.networkMonitor.recordUploadAttempt(!attemptError, lastAttemptDurationMs, buffer.length);
+        }
+
+        if (!attemptError) {
+          lastUploadError = null;
+          break; // Success
+        }
+
+        lastUploadError = attemptError;
+        const errMsg = attemptError.message || String(attemptError);
+        if (!isUploadRetryable(errMsg) || attempt === MAX_UPLOAD_RETRIES) {
+          break; // Non-retryable, or exhausted attempts
+        }
+      }
     } finally {
-      const uploadDurationMs = Date.now() - uploadStartTime;
-
-      // Release semaphore slot with metrics for AIMD evaluation
+      // Release semaphore slot ONCE for AIMD evaluation.
+      // Pass the last attempt's duration so AIMD throughput math stays sensible.
       if (this.uploadSemaphore) {
-        this.uploadSemaphore.release(uploadDurationMs, buffer.length, !uploadError);
-      }
-
-      // Record upload metrics for network monitoring (if available)
-      if (this.networkMonitor) {
-        this.networkMonitor.recordUploadAttempt(!uploadError, uploadDurationMs, buffer.length);
+        this.uploadSemaphore.release(lastAttemptDurationMs, buffer.length, !lastUploadError);
       }
     }
 
-    if (uploadError) {
-      throw new Error(`Upload failed for ${fileName}: ${uploadError.message || uploadError}`);
+    if (lastUploadError) {
+      throw new Error(`Upload failed for ${fileName}: ${lastUploadError.message || lastUploadError}`);
     }
-    
+
     // Costruisci l'URL pubblico Supabase per questa immagine
     const publicUrl = `${SUPABASE_CONFIG.url}/storage/v1/object/public/uploaded-images/${storageFileName}`;
     
@@ -4884,6 +5373,20 @@ class UnifiedImageWorker extends EventEmitter {
 
     // Build Person Shown strings from matched participants
     const personShownStrings = this.buildPersonShownStrings(csvMatch);
+
+    // Issue #104: append recognised external persons (VIPs, team principals etc.)
+    // to PersonInImage as distinct entries with a role suffix. Only active when
+    // the preset opted in and Gemini returned names above the confidence floor.
+    if (this.config.allowExternalPersonRecognition && Array.isArray(analysis)) {
+      for (const vehicle of analysis) {
+        if (!Array.isArray(vehicle?.otherPeople)) continue;
+        for (const person of vehicle.otherPeople) {
+          if (!person?.name) continue;
+          const role = person.role && person.role !== 'other' ? ` (${person.role})` : '';
+          personShownStrings.push(`${person.name}${role}`);
+        }
+      }
+    }
 
     if (imageFile.isRaw) {
       // Per i file RAW, crea un file XMP sidecar con keywords e descrizione
@@ -5772,6 +6275,18 @@ class UnifiedImageWorker extends EventEmitter {
         }
       }
 
+      // Issue #104: External persons (team principal, VIPs, celebrities, …) as
+      // dedicated "VIP:" keywords so they never collide with race-participant
+      // drivers. Only emitted when the preset opted in AND Gemini returned
+      // entries above the confidence threshold (enforced in extractOtherPeopleFromCrop).
+      if (Array.isArray(analysis.otherPeople) && analysis.otherPeople.length > 0) {
+        for (const person of analysis.otherPeople) {
+          if (person?.name) {
+            vehicleKeywords.push(`VIP: ${person.name}`);
+          }
+        }
+      }
+
       // Aggiungi le keywords del veicolo corrente
       allKeywords.push(...vehicleKeywords);
 
@@ -5808,6 +6323,17 @@ class UnifiedImageWorker extends EventEmitter {
       // Import dinamico del modulo organizer per mantenere la modularità
       const { FolderOrganizer } = await import('./utils/folder-organizer');
 
+      // Issue #105 hardening: when a participant preset is active, pass the list of
+      // legitimate race numbers so FolderOrganizer can detect phantom numbers as a
+      // defense-in-depth safety net (even though extractNumbersWithMatches should
+      // already have filtered to preset-only numbers upstream).
+      const allowedNumbersFromPreset: string[] | undefined =
+        this.participantsData.length > 0
+          ? this.participantsData
+              .map((p: any) => (typeof p?.numero === 'string' ? p.numero.trim() : p?.numero != null ? String(p.numero) : ''))
+              .filter((n: string) => n.length > 0)
+          : undefined;
+
       // Crea configurazione organizer da config del processor
       const organizerConfig = {
         enabled: this.config.folderOrganization.enabled,
@@ -5817,7 +6343,10 @@ class UnifiedImageWorker extends EventEmitter {
         createUnknownFolder: this.config.folderOrganization.createUnknownFolder,
         unknownFolderName: this.config.folderOrganization.unknownFolderName,
         destinationPath: this.config.folderOrganization.destinationPath,
-        includeXmpFiles: this.config.folderOrganization.includeXmpFiles
+        includeXmpFiles: this.config.folderOrganization.includeXmpFiles,
+        // Issue #105 hardening
+        allowedNumbers: allowedNumbersFromPreset,
+        restrictToAllowedNumbers: allowedNumbersFromPreset !== undefined, // enforce when preset is active
       };
 
       // Crea istanza organizer
@@ -5886,6 +6415,31 @@ class UnifiedImageWorker extends EventEmitter {
         if (!organizeResult.success) {
           console.error(`[UnifiedWorker] Failed to organize ${imageFile.fileName}:`, organizeResult.error);
         }
+      }
+
+      // Issue #105 telemetry: drain any phantom-number events detected by the defensive filter
+      // inside FolderOrganizer and forward them to the analysis logger so they surface in DB
+      // queries even if the upstream matcher regressed silently.
+      try {
+        const phantomEvents = organizer.getPhantomNumberEvents();
+        if (phantomEvents.length > 0 && this.analysisLogger) {
+          const phantomNumbers = [...new Set(phantomEvents.map(e => e.number))];
+          this.analysisLogger.logUnknownNumber({
+            imageId: imageFile.id,
+            fileName: imageFile.fileName,
+            detectedNumbers: phantomNumbers,
+            participantPresetName: 'Dynamic Preset',
+            participantCount: this.participantsData.length,
+            appliedFuzzyCorrection: this.smartMatcher ? this.smartMatcher.getCorrections().some(c => c.type === 'FUZZY') : false,
+            organizationFolder: 'PHANTOM_DETECTED' // distinct marker for issue #105 observability
+          });
+          console.warn(
+            `[UnifiedWorker] Issue #105 phantom numbers logged for ${imageFile.fileName}: ${phantomNumbers.join(', ')}`
+          );
+        }
+      } catch (telemetryErr: any) {
+        // Telemetry must never block organization
+        console.error('[UnifiedWorker] Failed to log phantom-number telemetry:', telemetryErr?.message || telemetryErr);
       }
 
       return organizeResult?.organizedPath;
@@ -6108,6 +6662,11 @@ export class UnifiedImageProcessor extends EventEmitter {
   private processedImages: number = 0;
   private ghostVehicleCount: number = 0; // Track images with potential ghost vehicle warnings
   private analysisLogger?: AnalysisLogger;
+  // Captured at first-chunk start; used by finalize() to populate the
+  // summary sidecar's createdAt without re-walking the JSONL.
+  private summaryStartTimeMs: number = 0;
+  // Captured at first-chunk start; folder for the summary sidecar.
+  private summaryFolderPath: string = '';
   private temporalManager: TemporalClusterManager;
   private filesystemTimestampExtractor: FilesystemTimestampExtractor;
   private imageTimestamps: Map<string, ImageTimestamp> = new Map(); // Store timestamps by file path
@@ -6117,10 +6676,8 @@ export class UnifiedImageProcessor extends EventEmitter {
   private performanceTimer?: PerformanceTimer;
   private errorTracker?: ErrorTracker;
   private systemEnvironment?: any; // Store for updating with final network speed
-  // RF-DETR Metrics Tracking (aggregated from workers)
-  private totalRfDetrDetections: number = 0;
-  private totalRfDetrCost: number = 0;
-  private recognitionMethod: 'gemini' | 'rf-detr' | 'local-onnx' | null = null;
+  // Recognition method (aggregated from workers, for telemetry only)
+  private recognitionMethod: 'gemini' | 'local-onnx' | null = null;
   private currentSportCategory: any = null; // Current category config from Supabase
   // PERFORMANCE: Cache sport categories once per batch (avoids 12-13 redundant Supabase calls per 100 images)
   private batchSportCategories: any[] | undefined = undefined;
@@ -6171,18 +6728,36 @@ export class UnifiedImageProcessor extends EventEmitter {
   private readonly UPDATE_TIMEOUT_MS = 3000; // Timeout per singolo update
 
   // ============================================================================
-  // BATCH DATABASE INSERTS for analysis_results (ONNX local inference optimization)
-  // With local ONNX, inference is ~200ms per image, causing 10+ concurrent inserts
-  // that overwhelm Supabase with statement timeouts. Batch them instead.
+  // BATCH DATABASE INSERTS for analysis_results (ONNX local inference)
+  //
+  // v1.2.0 — "Backfill Problem" fix: the queue is still batched client-side,
+  // but the actual INSERT now goes through the `persistOnnxAnalysis` Supabase
+  // Edge Function which runs the write with service_role server-side. That
+  // escapes PostgREST's per-transaction `SET LOCAL statement_timeout = 8s`
+  // cage which was killing direct INSERTs under concurrent ONNX load and
+  // silently dropping rows into JSONL-only fallback.
+  //
+  // JSONL remains the durable source of truth: on edge-function failure we
+  // emit PERSIST_FAILED events so the reconciliation pass can retry later.
   // ============================================================================
   private pendingAnalysisInserts: Array<{
     data: any;
     timestamp: number;
   }> = [];
-  private readonly BATCH_INSERT_THRESHOLD = 10; // Flush every 10 analysis inserts
-  private readonly INSERT_TIMEOUT_MS = 15000; // Timeout for batch insert (increased from 8s to handle high-throughput ONNX batches)
-  private readonly INSERT_MAX_RETRIES = 2; // Retry failed batch inserts before falling back to individual
-  private insertFlushInProgress = false; // Prevent concurrent flushes from racing
+  private readonly BATCH_INSERT_THRESHOLD = 50;    // Flush when queue reaches this size (was 10; edge function amortizes fixed cost over more rows)
+  private readonly BATCH_MAX_PAYLOAD_ROWS = 200;   // Hard cap per invocation — matches edge function MAX_BATCH_SIZE
+  private readonly INVOKE_TIMEOUT_MS = 30000;      // Per-invocation ceiling (Deno edge runtime limit is 30s)
+  private readonly PERSIST_MAX_RETRIES = 3;        // Retry whole batch on network/5xx only (NOT on 207 partial — those are per-row terminal)
+  /**
+   * Promise singleton — replaces the old `insertFlushInProgress` boolean.
+   *
+   * The boolean version silently skipped concurrent flushes: if caller A was
+   * in-flight when caller B arrived, B returned immediately without flushing
+   * AND without awaiting A's promise — a mid-batch trigger was simply lost.
+   * The singleton pattern makes B await A's resolution; if new rows arrived
+   * during A they're caught on the next BATCH_INSERT_THRESHOLD trigger.
+   */
+  private insertFlushPromise: Promise<void> | null = null;
 
   // ============================================================================
   // RAW PREVIEW CALIBRATION (dynamic extraction strategy per extension)
@@ -6301,99 +6876,532 @@ export class UnifiedImageProcessor extends EventEmitter {
   }
 
   /**
-   * Flush pending analysis_results inserts as a single batch operation.
-   * With local ONNX inference (~200ms/image), 10 workers produce results nearly
-   * simultaneously, causing statement timeouts on individual inserts.
-   * Batching reduces DB calls from N to 1 and avoids connection contention.
+   * Flush pending analysis_results inserts via the `persistOnnxAnalysis`
+   * Supabase Edge Function (v1.2.0+ replacement for direct PostgREST INSERT).
+   *
+   * The edge function performs the actual write with service_role, which
+   * bypasses the 8s PostgREST per-transaction statement_timeout that was
+   * killing concurrent ONNX inserts (the "Backfill Problem"). See
+   * racetagger-app/supabase/functions/persistOnnxAnalysis/index.ts.
+   *
+   * Concurrency: uses a Promise singleton so that if a second caller arrives
+   * mid-flush, it awaits the in-flight promise instead of silently skipping
+   * (which was how rows were being lost in the boolean-guard predecessor).
+   *
+   * Failure handling: per-row failures reported by the edge function
+   * (HTTP 207 with failures[]) are logged as PERSIST_FAILED events in the
+   * JSONL stream. Whole-batch failures after PERSIST_MAX_RETRIES are also
+   * logged as PERSIST_FAILED for every row in the batch. JSONL remains the
+   * durable source of truth; the finalize-time reconciliation pass (added
+   * separately) will retry failed rows against the edge function.
+   *
+   * @param source  request-origin marker sent to the edge function for log
+   *                correlation: 'batch' is the normal threshold-triggered
+   *                flush, 'finalize' is the end-of-execution drain, and
+   *                'reconcile' is the post-finalize retry pass that replays
+   *                PERSIST_FAILED events from the JSONL.
    */
-  private async flushPendingInserts(): Promise<void> {
+  private async flushPendingInserts(source: 'batch' | 'finalize' | 'reconcile' = 'batch'): Promise<void> {
+    // If a flush is already running, return the in-flight promise so callers
+    // await the SAME work instead of racing (or silently skipping, as the old
+    // boolean-guard version did — that was the bug that lost rows).
+    if (this.insertFlushPromise) {
+      return this.insertFlushPromise;
+    }
+
     if (this.pendingAnalysisInserts.length === 0) {
       return;
     }
 
-    // Prevent concurrent flushes from racing (high-throughput ONNX can trigger multiple)
-    if (this.insertFlushInProgress) {
-      if (DEBUG_MODE) console.log('[DBInsert] Flush already in progress, skipping (will retry at next threshold)');
+    // Synchronous claim of the flush slot — no other async code can interleave
+    // between this check and the assignment on a single-threaded JS event loop.
+    const promise = this.doFlushPendingInserts(source);
+    this.insertFlushPromise = promise.finally(() => {
+      this.insertFlushPromise = null;
+    });
+    return this.insertFlushPromise;
+  }
+
+  /**
+   * Inner implementation — called only through flushPendingInserts() so the
+   * promise-singleton invariant is preserved. Splits the current queue into
+   * sub-batches of ≤ BATCH_MAX_PAYLOAD_ROWS and invokes the edge function
+   * for each sub-batch in sequence.
+   */
+  private async doFlushPendingInserts(source: 'batch' | 'finalize' | 'reconcile'): Promise<void> {
+    // Snapshot + clear: new rows arriving during the invoke land on the next
+    // trigger. Cleared up-front so a slow/hung invocation doesn't block new
+    // rows from accumulating toward the next threshold.
+    const snapshot = [...this.pendingAnalysisInserts];
+    this.pendingAnalysisInserts = [];
+    const totalRows = snapshot.length;
+
+    // Resolve authenticated user at flush time. The edge function enforces
+    // body.userId === jwt.user.id, so a stale/missing userId is terminal.
+    const authState = authService.getAuthState();
+    const userId = authState.isAuthenticated ? authState.user?.id : null;
+    if (!userId) {
+      log.error(
+        `[ONNX/Persist] No authenticated user at flush time — dropping ${totalRows} rows. ` +
+        `JSONL remains authoritative; the reconciliation pass must retry when auth is available.`,
+      );
+      this.emitPersistFailedForRows(
+        snapshot.map(s => s.data),
+        'no_auth',
+        'Flush attempted without authenticated user',
+      );
       return;
     }
-    this.insertFlushInProgress = true;
 
-    // Take a snapshot of current pending inserts and clear immediately
-    // so new results don't get lost if flush takes time
-    const insertBatch = [...this.pendingAnalysisInserts];
-    this.pendingAnalysisInserts = [];
-    const insertCount = insertBatch.length;
-    log.info(`[DBInsert] Flushing ${insertCount} pending analysis_results inserts...`);
+    // Split into sub-batches of ≤ BATCH_MAX_PAYLOAD_ROWS. Each sub-batch is a
+    // separate edge-function invocation; a failed sub-batch does not block the
+    // rest (parallel execution is avoided to keep backpressure on our side).
+    const subBatches: typeof snapshot[] = [];
+    for (let i = 0; i < snapshot.length; i += this.BATCH_MAX_PAYLOAD_ROWS) {
+      subBatches.push(snapshot.slice(i, i + this.BATCH_MAX_PAYLOAD_ROWS));
+    }
+
+    log.info(
+      `[ONNX/Persist] Flushing ${totalRows} rows via persistOnnxAnalysis ` +
+      `(${subBatches.length} sub-batch${subBatches.length === 1 ? '' : 'es'}, source=${source})`,
+    );
+
+    let totalPersisted = 0;
+    let totalFailed = 0;
+
+    for (let i = 0; i < subBatches.length; i++) {
+      const batch = subBatches[i];
+      const { persisted, failed } = await this.persistBatchViaEdgeFunction(batch, userId, source, i + 1, subBatches.length);
+      totalPersisted += persisted;
+      totalFailed += failed;
+    }
+
+    // Record flush-level stats into the diagnostics singleton so the support
+    // report digest still surfaces ONNX-persist totals.
+    dbInsertDiagnostics.recordFlush(totalRows, totalPersisted);
+
+    if (totalFailed > 0) {
+      log.error(
+        `[ONNX/Persist] Flush finished: ${totalPersisted}/${totalRows} persisted, ${totalFailed} failed. ` +
+        `PERSIST_FAILED events emitted to JSONL for each failure.`,
+      );
+    } else {
+      log.info(`[ONNX/Persist] Flush complete: ${totalPersisted}/${totalRows} rows persisted`);
+    }
+  }
+
+  /**
+   * Invoke `persistOnnxAnalysis` for a single sub-batch.
+   *
+   * Retries on network errors, timeouts, 5xx, 408, 429. Does NOT retry on
+   * 207 Multi-Status (the edge function already attempted per-row fallback
+   * server-side; retrying would just duplicate PK violations).
+   *
+   * Does NOT retry on 400/401/403 either — those indicate a request-shape or
+   * auth problem that won't resolve without code changes.
+   */
+  private async persistBatchViaEdgeFunction(
+    batchItems: Array<{ data: any; timestamp: number }>,
+    userId: string,
+    source: 'batch' | 'finalize' | 'reconcile',
+    batchIdx: number,
+    batchCount: number,
+  ): Promise<{ persisted: number; failed: number; failedImageIds: string[] }> {
+    const rows = batchItems.map(i => i.data);
+    const requestBody = {
+      userId,
+      executionId: this.config.executionId,
+      rows,
+      source,
+    };
+
+    let lastError: any = null;
+
+    for (let attempt = 0; attempt <= this.PERSIST_MAX_RETRIES; attempt++) {
+      if (attempt > 0) {
+        // Exponential backoff: 1s, 2s, 4s
+        const backoffMs = 1000 * Math.pow(2, attempt - 1);
+        log.info(
+          `[ONNX/Persist] Batch ${batchIdx}/${batchCount} retry ${attempt}/${this.PERSIST_MAX_RETRIES} after ${backoffMs}ms backoff…`,
+        );
+        await new Promise(r => setTimeout(r, backoffMs));
+      }
+
+      try {
+        const { getSupabaseClient } = await import('./database-service');
+        const supabase = getSupabaseClient();
+
+        const invokePromise = supabase.functions.invoke('persistOnnxAnalysis', {
+          body: requestBody,
+        });
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`Edge function invoke timeout after ${this.INVOKE_TIMEOUT_MS}ms`)),
+            this.INVOKE_TIMEOUT_MS,
+          ),
+        );
+
+        const { data, error } = (await Promise.race([invokePromise, timeoutPromise])) as any;
+
+        if (error) {
+          // supabase-js surfaces non-2xx as FunctionsHttpError. Status lives on
+          // `error.context?.status` for HTTP errors; for network layer problems
+          // there's no status and we treat it as retryable.
+          const status: number | undefined = error.context?.status ?? error.status;
+          const isRetryable = !status || status >= 500 || status === 408 || status === 429;
+
+          if (isRetryable && attempt < this.PERSIST_MAX_RETRIES) {
+            log.warn(
+              `[ONNX/Persist] Batch ${batchIdx}/${batchCount} attempt ${attempt + 1} failed ` +
+              `(status=${status ?? 'network'}, will retry): ${error.message}`,
+            );
+            lastError = error;
+            continue;
+          }
+
+          // Non-retryable or retries exhausted — give up on this sub-batch.
+          log.error(
+            `[ONNX/Persist] Batch ${batchIdx}/${batchCount} failed non-retryably ` +
+            `(status=${status ?? 'network'}, attempt ${attempt + 1}): ${error.message}`,
+          );
+          this.emitPersistFailedForRows(
+            rows,
+            `invoke_${status ?? 'network'}`,
+            error.message || 'invoke failed',
+            source === 'reconcile' ? 'reconcile' : 'batch',
+          );
+          return {
+            persisted: 0,
+            failed: rows.length,
+            failedImageIds: rows.map(r => r?.image_id).filter((id): id is string => typeof id === 'string'),
+          };
+        }
+
+        // 2xx response — edge function returns persisted/failed/failures counts.
+        // 207 Multi-Status ALSO lands here (supabase-js treats 2xx+207 as ok);
+        // we distinguish partial success via data.failed / data.failures.
+        const persisted = typeof data?.persisted === 'number' ? data.persisted : 0;
+        const failed = typeof data?.failed === 'number' ? data.failed : 0;
+        const failures: Array<{ image_id: string; code: string; message: string; stage: string }> =
+          Array.isArray(data?.failures) ? data.failures : [];
+
+        if (failed === 0) {
+          log.info(
+            `[ONNX/Persist] Batch ${batchIdx}/${batchCount}: ${persisted}/${rows.length} rows persisted` +
+            (attempt > 0 ? ` (retry ${attempt})` : ''),
+          );
+        } else {
+          log.warn(
+            `[ONNX/Persist] Batch ${batchIdx}/${batchCount} partial: ${persisted} persisted, ${failed} failed ` +
+            `(see PERSIST_FAILED events in JSONL)`,
+          );
+          // Build a lookup so per-row failures carry the ORIGINAL payload — the
+          // reconciliation pass can then retry the INSERT verbatim against
+          // persistOnnxAnalysis without having to reconstruct it.
+          const rowByImageId = new Map<string, any>();
+          for (const r of rows) {
+            if (r && typeof r.image_id === 'string') rowByImageId.set(r.image_id, r);
+          }
+          for (const f of failures) {
+            // When the reconciliation pass replays a row, emit failures with
+            // stage='reconcile' so the backfill script (and subsequent
+            // reconciliation runs) don't re-process rows that already tried.
+            const stage = source === 'reconcile' ? 'reconcile' : f.stage;
+            this.emitPersistFailedEvent(f.image_id, f.code, f.message, stage, rowByImageId.get(f.image_id));
+          }
+        }
+        return {
+          persisted,
+          failed,
+          failedImageIds: failures.map(f => f.image_id).filter((id): id is string => typeof id === 'string'),
+        };
+      } catch (err: any) {
+        lastError = err;
+        const isTimeout = typeof err?.message === 'string' && err.message.includes('timeout');
+        if (attempt < this.PERSIST_MAX_RETRIES) {
+          log.warn(
+            `[ONNX/Persist] Batch ${batchIdx}/${batchCount} attempt ${attempt + 1} threw ` +
+            `(${isTimeout ? 'timeout' : 'exception'}, will retry): ${err.message || String(err)}`,
+          );
+          continue;
+        }
+        log.error(
+          `[ONNX/Persist] Batch ${batchIdx}/${batchCount} threw on final attempt ${attempt + 1}: ${err.message || String(err)}`,
+        );
+      }
+    }
+
+    // All retries exhausted.
+    log.error(
+      `[ONNX/Persist] Batch ${batchIdx}/${batchCount} FAILED after ${this.PERSIST_MAX_RETRIES + 1} attempts: ` +
+      `${lastError?.message || 'unknown'} — emitting PERSIST_FAILED for ${rows.length} rows`,
+    );
+    this.emitPersistFailedForRows(
+      rows,
+      'retries_exhausted',
+      lastError?.message || 'retries exhausted',
+      source === 'reconcile' ? 'reconcile' : 'batch',
+    );
+    return {
+      persisted: 0,
+      failed: rows.length,
+      failedImageIds: rows.map(r => r?.image_id).filter((id): id is string => typeof id === 'string'),
+    };
+  }
+
+  /**
+   * Emit a single PERSIST_FAILED event to the JSONL stream so the
+   * reconciliation pass (or the external backfill script) can retry the row.
+   *
+   * `rowData` carries the FULL `analysis_results` payload. Including it makes
+   * the JSONL event self-contained for retry — callers don't need to
+   * cross-reference IMAGE_ANALYSIS (which stores a translated, lossy view of
+   * the same data). Omitting it is permitted for truly pathological failures
+   * where the payload isn't in scope, but normal code paths should always
+   * pass it.
+   */
+  private emitPersistFailedEvent(
+    imageId: string,
+    code: string,
+    message: string,
+    stage: string,
+    rowData?: any,
+  ): void {
+    try {
+      dbInsertDiagnostics.recordLostRow(imageId, code, message);
+      log.warn(
+        `[JSONLFallback] image_id=${imageId} NOT persisted to analysis_results (code=${code}, stage=${stage}): ${message}`,
+      );
+      if (this.analysisLogger) {
+        this.analysisLogger.logPersistFailed({
+          imageId,
+          code,
+          message,
+          stage,
+          rowData,
+        });
+      }
+    } catch (err: any) {
+      // Logging must never throw; swallow so we don't cascade failures.
+      console.error('[ONNX/Persist] Failed to emit PERSIST_FAILED event:', err?.message || err);
+    }
+  }
+
+  /**
+   * Helper: emit PERSIST_FAILED for every row in a batch (used for whole-batch
+   * failures like invoke errors or exhausted retries). Each event carries its
+   * own rowData so reconciliation can retry verbatim.
+   */
+  private emitPersistFailedForRows(rows: any[], code: string, message: string, stage: string = 'batch'): void {
+    for (const row of rows) {
+      this.emitPersistFailedEvent(row?.image_id, code, message, stage, row);
+    }
+  }
+
+  /**
+   * Finalize-time reconciliation pass.
+   *
+   * Replays PERSIST_FAILED events from the execution's JSONL log against
+   * `persistOnnxAnalysis` one more time, so transient failures (edge-function
+   * cold-start, brief network blip, a single row that hit a Postgres timeout
+   * while its siblings succeeded) get recovered before the user closes the
+   * execution screen.
+   *
+   * The JSONL is the canonical source of truth: each PERSIST_FAILED event
+   * carries its full `rowData` payload (added v1.2.0), so this method does
+   * NOT need to cross-reference IMAGE_ANALYSIS or reconstruct anything. It
+   * just reads the log, dedupes against PERSIST_RECOVERED markers, and
+   * replays.
+   *
+   * Design constraints:
+   *  - Single pass per finalize. If retries fail again, the PERSIST_FAILED
+   *    stage='reconcile' event remains in the log and the external
+   *    backfill script is the next recourse.
+   *  - Non-blocking on errors: any I/O exception (missing JSONL, parse
+   *    error, auth missing) is logged and swallowed — reconciliation
+   *    must never block the execution from finalizing.
+   *  - Bounded by the same 30s finalize timeout that wraps the final flush.
+   *
+   * @returns summary of recovered vs still-missing rows for telemetry
+   */
+  private async runReconciliationPass(): Promise<{
+    scanned: number;
+    failedRetryable: number;
+    recovered: number;
+    stillMissing: number;
+  }> {
+    const summary = { scanned: 0, failedRetryable: 0, recovered: 0, stillMissing: 0 };
+    const executionId = this.config.executionId;
+    if (!executionId) {
+      log.warn('[ONNX/Reconcile] No executionId in config — skipping reconciliation');
+      return summary;
+    }
+
+    // Resolve JSONL path. Using require at call time avoids pulling electron
+    // into the module-level import graph (this file is imported from workers).
+    let jsonlPath: string;
+    try {
+      const { app } = require('electron');
+      jsonlPath = path.join(app.getPath('userData'), '.analysis-logs', `exec_${executionId}.jsonl`);
+    } catch (err: any) {
+      log.warn(`[ONNX/Reconcile] Failed to resolve JSONL path: ${err?.message || err} — skipping`);
+      return summary;
+    }
+
+    if (!fs.existsSync(jsonlPath)) {
+      log.info(`[ONNX/Reconcile] No JSONL at ${jsonlPath} — skipping (no local-ONNX analyses this run)`);
+      return summary;
+    }
+
+    // Stream-parse the JSONL line-by-line. For a 1000-image execution the file
+    // is typically a few MB but nothing prevents it from being larger — avoid
+    // a synchronous readFile to keep memory bounded.
+    const readline = require('readline');
+    const failedByImage = new Map<string, { imageId: string; code: string; message: string; stage: string; rowData?: any }>();
+    const recoveredImageIds = new Set<string>();
 
     try {
-      const { getSupabaseClient } = await import('./database-service');
-      const supabase = getSupabaseClient();
-
-      // Extract just the data objects for batch insert
-      const insertData = insertBatch.map(item => item.data);
-
-      // Retry loop with backoff
-      let lastError: any = null;
-      for (let attempt = 0; attempt <= this.INSERT_MAX_RETRIES; attempt++) {
-        if (attempt > 0) {
-          const backoffMs = 1000 * attempt; // 1s, 2s
-          log.info(`[DBInsert] Retry ${attempt}/${this.INSERT_MAX_RETRIES} after ${backoffMs}ms backoff...`);
-          await new Promise(resolve => setTimeout(resolve, backoffMs));
-        }
-
+      const stream = fs.createReadStream(jsonlPath, { encoding: 'utf-8' });
+      const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+      for await (const line of rl) {
+        if (!line) continue;
+        let event: any;
         try {
-          // Single batch insert with timeout protection
-          const insertPromise = supabase
-            .from('analysis_results')
-            .insert(insertData);
-
-          const timeoutPromise = new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Batch insert timeout')), this.INSERT_TIMEOUT_MS)
-          );
-
-          const { error } = await Promise.race([insertPromise, timeoutPromise]) as any;
-
-          if (!error) {
-            log.info(`[DBInsert] Batch insert complete: ${insertCount} analysis results saved${attempt > 0 ? ` (retry ${attempt})` : ''}`);
-            return; // Success!
-          }
-
-          lastError = error;
-          log.warn(`[DBInsert] Batch insert attempt ${attempt + 1} failed: ${error.message}`);
-        } catch (err: any) {
-          lastError = err;
-          log.warn(`[DBInsert] Batch insert attempt ${attempt + 1} threw: ${err.message}`);
-        }
-      }
-
-      // All retries failed - fallback to individual inserts
-      log.error(`[DBInsert] All ${this.INSERT_MAX_RETRIES + 1} batch attempts failed, falling back to individual inserts`);
-      let successCount = 0;
-      let errorCount = 0;
-      for (const item of insertData) {
-        try {
-          const { error: singleError } = await supabase
-            .from('analysis_results')
-            .insert(item);
-          if (singleError) {
-            errorCount++;
-            if (DEBUG_MODE) console.warn(`[DBInsert] Single insert failed for image ${item.image_id}:`, singleError.message);
-          } else {
-            successCount++;
-          }
+          event = JSON.parse(line);
         } catch {
-          errorCount++;
+          // Malformed line — skip. JSONL readers tolerate corruption at the
+          // end of file (partial write on crash); one bad line is not a
+          // reason to abort reconciliation.
+          continue;
+        }
+        summary.scanned++;
+        if (event?.type === 'PERSIST_FAILED' && typeof event.imageId === 'string') {
+          // Last write wins: if multiple PERSIST_FAILED events exist for the
+          // same imageId (e.g. a retry that also failed), we replay from the
+          // most recent rowData.
+          failedByImage.set(event.imageId, {
+            imageId: event.imageId,
+            code: event.code,
+            message: event.message,
+            stage: event.stage,
+            rowData: event.rowData,
+          });
+        } else if (event?.type === 'PERSIST_RECOVERED' && typeof event.imageId === 'string') {
+          recoveredImageIds.add(event.imageId);
         }
       }
-      log.info(`[DBInsert] Fallback complete: ${successCount} success, ${errorCount} errors`);
-
-    } catch (error: any) {
-      log.error(`[DBInsert] Failed to flush inserts: ${error.message}`);
-      // Re-add failed inserts to the queue so they can be retried at next threshold
-      this.pendingAnalysisInserts.unshift(...insertBatch);
-    } finally {
-      this.insertFlushInProgress = false;
+    } catch (err: any) {
+      log.error(`[ONNX/Reconcile] JSONL read failed: ${err?.message || err} — skipping reconciliation`);
+      return summary;
     }
+
+    // Drop already-recovered rows (PERSIST_RECOVERED supersedes PERSIST_FAILED
+    // for the same imageId) and rows without rowData (legacy JSONL or the
+    // rare pathological case where the payload was unavailable).
+    const retryTargets: Array<{ data: any; timestamp: number }> = [];
+    const retryImageIds: string[] = [];
+    for (const event of failedByImage.values()) {
+      if (recoveredImageIds.has(event.imageId)) continue;
+      if (!event.rowData || typeof event.rowData !== 'object') {
+        summary.stillMissing++;
+        log.warn(
+          `[ONNX/Reconcile] image_id=${event.imageId} failed previously but has no rowData in JSONL ` +
+          `(code=${event.code}) — cannot retry, leaving for external backfill script`,
+        );
+        continue;
+      }
+      retryTargets.push({ data: event.rowData, timestamp: Date.now() });
+      retryImageIds.push(event.imageId);
+      summary.failedRetryable++;
+    }
+
+    if (retryTargets.length === 0) {
+      log.info(
+        `[ONNX/Reconcile] Nothing to replay (scanned=${summary.scanned}, ` +
+        `recovered-already=${recoveredImageIds.size}, still-missing=${summary.stillMissing})`,
+      );
+      return summary;
+    }
+
+    // Auth check — same contract as doFlushPendingInserts. If auth is gone at
+    // finalize time (e.g. user signed out) we can't retry; the PERSIST_FAILED
+    // events remain in the log for the next launch or the backfill script.
+    const authState = authService.getAuthState();
+    const userId = authState.isAuthenticated ? authState.user?.id : null;
+    if (!userId) {
+      log.warn(
+        `[ONNX/Reconcile] No authenticated user — leaving ${retryTargets.length} rows for external backfill`,
+      );
+      summary.stillMissing += retryTargets.length;
+      return summary;
+    }
+
+    log.info(
+      `[ONNX/Reconcile] Replaying ${retryTargets.length} failed rows against persistOnnxAnalysis ` +
+      `(scanned=${summary.scanned}, recovered-already=${recoveredImageIds.size})`,
+    );
+
+    // Split into sub-batches using the same BATCH_MAX_PAYLOAD_ROWS ceiling as
+    // the batch/finalize flushes. Sequential invocations keep backpressure.
+    const subBatches: Array<Array<{ data: any; timestamp: number }>> = [];
+    for (let i = 0; i < retryTargets.length; i += this.BATCH_MAX_PAYLOAD_ROWS) {
+      subBatches.push(retryTargets.slice(i, i + this.BATCH_MAX_PAYLOAD_ROWS));
+    }
+
+    const stillFailedSet = new Set<string>();
+    for (let i = 0; i < subBatches.length; i++) {
+      try {
+        const { failedImageIds } = await this.persistBatchViaEdgeFunction(
+          subBatches[i],
+          userId,
+          'reconcile',
+          i + 1,
+          subBatches.length,
+        );
+        for (const id of failedImageIds) stillFailedSet.add(id);
+      } catch (err: any) {
+        // persistBatchViaEdgeFunction is not supposed to throw (it catches
+        // internally and emits PERSIST_FAILED), but be defensive — a thrown
+        // error means the whole sub-batch is still missing.
+        log.error(`[ONNX/Reconcile] Sub-batch ${i + 1}/${subBatches.length} threw: ${err?.message || err}`);
+        for (const item of subBatches[i]) {
+          if (typeof item?.data?.image_id === 'string') stillFailedSet.add(item.data.image_id);
+        }
+      }
+    }
+
+    // Emit PERSIST_RECOVERED for every row that was in retryImageIds but NOT
+    // in stillFailedSet — those are now actually in analysis_results.
+    for (const imageId of retryImageIds) {
+      if (stillFailedSet.has(imageId)) {
+        summary.stillMissing++;
+        continue;
+      }
+      summary.recovered++;
+      if (this.analysisLogger) {
+        try {
+          this.analysisLogger.logPersistRecovered({
+            imageId,
+            attempts: 1,
+            source: 'reconcile',
+          });
+        } catch (err: any) {
+          // Non-fatal — the row IS persisted, we just failed to log the marker.
+          log.warn(`[ONNX/Reconcile] Failed to emit PERSIST_RECOVERED for ${imageId}: ${err?.message || err}`);
+        }
+      }
+    }
+
+    if (summary.stillMissing > 0) {
+      log.warn(
+        `[ONNX/Reconcile] Done: recovered=${summary.recovered}/${summary.failedRetryable}, ` +
+        `still-missing=${summary.stillMissing} — backfill script is the next recourse`,
+      );
+    } else if (summary.recovered > 0) {
+      log.info(`[ONNX/Reconcile] Done: recovered all ${summary.recovered} failed rows ✅`);
+    }
+
+    return summary;
   }
 
   /**
@@ -6427,7 +7435,7 @@ export class UnifiedImageProcessor extends EventEmitter {
         this.temporalManager.initializeFromSportCategories(sportCategories);
       }
 
-      // Find and store current sport category for RF-DETR tracking
+      // Find and store current sport category for recognition / tracking config
       this.currentSportCategory = sportCategories.find(
         (cat: any) => cat.code.toLowerCase() === (this.config.category || 'motorsport').toLowerCase()
       );
@@ -7183,6 +8191,15 @@ export class UnifiedImageProcessor extends EventEmitter {
           { appendMode: isChunkProcessing }
         );
 
+        // Capture the start instant ONCE, only on the first chunk. Used at
+        // finalize() time to populate the summary sidecar's `createdAt`,
+        // which the home page uses for sort order. Without this, chunked
+        // processing would overwrite createdAt on every chunk and the home
+        // page would show the wrong time.
+        if (!isChunkProcessing || !this.summaryStartTimeMs) {
+          this.summaryStartTimeMs = Date.now();
+        }
+
         // TIER 1 TELEMETRY: Collect enhanced system environment (optional, safe)
         this.systemEnvironment = undefined;
 
@@ -7251,6 +8268,21 @@ export class UnifiedImageProcessor extends EventEmitter {
         // Log execution start with total image count (not chunk size)
         // Use this.totalImages for chunked processing to get the full batch size
         const totalImageCount = isChunkProcessing ? this.totalImages : imageFiles.length;
+
+        // Derive source folder from the first image path (used by Home page for at-a-glance ID).
+        // This is a best-effort field; downstream features use the `source_folder` column on
+        // the `executions` table as the canonical source for R2/HD resolution.
+        let sourceFolderForLog: string | undefined;
+        try {
+          const firstPath = imageFiles[0]?.originalPath;
+          if (firstPath && typeof firstPath === 'string') {
+            sourceFolderForLog = require('path').dirname(firstPath);
+          }
+        } catch { /* best-effort — never block execution over this */ }
+        if (sourceFolderForLog && !this.summaryFolderPath) {
+          this.summaryFolderPath = sourceFolderForLog;
+        }
+
         this.analysisLogger.logExecutionStart(
           totalImageCount,
           this.config.presetId,
@@ -7259,7 +8291,8 @@ export class UnifiedImageProcessor extends EventEmitter {
             id: this.config.presetId,
             name: this.config.presetName || 'Unknown',
             participantCount: this.config.participantPresetData?.length || 0
-          } : undefined
+          } : undefined,
+          sourceFolderForLog
         );
 
         if (DEBUG_MODE) console.log(`[UnifiedProcessor] Analysis logging enabled for execution ${this.config.executionId} (total: ${totalImageCount} images)`);
@@ -7296,12 +8329,9 @@ export class UnifiedImageProcessor extends EventEmitter {
               participantCount: this.config.participantPresetData?.length || 0,
               folderOrganizationEnabled: !!this.config.folderOrganization?.enabled,
               enableAdvancedAnnotations: this.config.enableAdvancedAnnotations,
-              // RF-DETR Tracking
+              // Recognition telemetry
               recognition_method: null, // Will be updated after first image
-              recognition_method_version: this.currentSportCategory?.edge_function_version ? `V${this.currentSportCategory.edge_function_version}` : 'V2',
-              rf_detr_workflow_url: this.currentSportCategory?.rf_detr_workflow_url || null,
-              rf_detr_detections_count: 0, // Will be updated at the end
-              rf_detr_total_cost: 0 // Will be updated at the end
+              recognition_method_version: this.currentSportCategory?.edge_function_version ? `V${this.currentSportCategory.edge_function_version}` : 'V2'
             },
             // TIER 1 TELEMETRY: Add system environment telemetry
             system_environment: this.systemEnvironment
@@ -7872,13 +8902,20 @@ export class UnifiedImageProcessor extends EventEmitter {
         // FINAL FLUSH: Send any remaining pending database inserts (ONNX analysis_results)
         if (this.pendingAnalysisInserts.length > 0) {
           console.log(`[Finalize] Flushing ${this.pendingAnalysisInserts.length} remaining analysis_results inserts...`);
-          // CRITICAL: Force-reset the flush lock before final flush.
-          // A previous mid-batch flush may have left insertFlushInProgress=true
-          // (e.g., if it timed out or errored without hitting the finally block),
-          // which causes flushPendingInserts() to silently return without flushing.
-          this.insertFlushInProgress = false;
+          // Wait for any in-flight flush to settle before issuing the final one.
+          // The Promise-singleton pattern (replaces the old insertFlushInProgress
+          // boolean) guarantees that once we await it the slot is released, so a
+          // subsequent flushPendingInserts('finalize') runs without contention.
+          if (this.insertFlushPromise) {
+            try {
+              await this.insertFlushPromise;
+            } catch {
+              // Non-fatal — the in-flight flush already logged its own failure;
+              // we still want to issue the finalize flush below.
+            }
+          }
           try {
-            await this.flushPendingInserts();
+            await this.flushPendingInserts('finalize');
             console.log(`[Finalize] ✅ analysis_results flush complete`);
           } catch (flushError) {
             console.error(`[Finalize] ❌ analysis_results flush failed (non-fatal):`, flushError);
@@ -7895,6 +8932,23 @@ export class UnifiedImageProcessor extends EventEmitter {
             console.error(`[Finalize] ❌ database updates flush failed (non-fatal):`, flushError);
           }
         }
+
+        // RECONCILIATION PASS: Replay any PERSIST_FAILED events from the JSONL
+        // against persistOnnxAnalysis one more time. Runs AFTER the final flush
+        // so any rows dropped during that flush have a chance to be recovered
+        // here. Non-fatal: errors are logged and we proceed to finalize the
+        // execution regardless.
+        try {
+          const reconcile = await this.runReconciliationPass();
+          if (reconcile.recovered > 0 || reconcile.stillMissing > 0) {
+            console.log(
+              `[Finalize] Reconciliation pass: recovered=${reconcile.recovered}, ` +
+              `stillMissing=${reconcile.stillMissing} (scanned=${reconcile.scanned})`,
+            );
+          }
+        } catch (reconcileError: any) {
+          console.error(`[Finalize] ⚠️ Reconciliation pass failed (non-fatal): ${reconcileError?.message || reconcileError}`);
+        }
       };
 
       const flushTimeout = new Promise<void>((_, reject) =>
@@ -7905,27 +8959,19 @@ export class UnifiedImageProcessor extends EventEmitter {
       console.log(`[Finalize] ✅ All flush operations complete`);
     } catch (flushTimeoutError: any) {
       console.error(`[Finalize] ⚠️ Flush operations timed out or failed: ${flushTimeoutError.message}. Proceeding to finalization.`);
-      // Clear pending queues to prevent memory leaks
+      // Clear pending queues to prevent memory leaks — any in-flight flush
+      // will settle on its own and release insertFlushPromise in its finally
+      // block. We intentionally do NOT null out insertFlushPromise here to
+      // avoid forgetting a still-running invocation.
       this.pendingAnalysisInserts = [];
       this.pendingUpdates = [];
-      this.insertFlushInProgress = false;
     }
 
-    // Aggregate RF-DETR metrics from all worker results
+    // Aggregate recognition method from worker results (for telemetry)
     for (const result of results) {
-      if (result.success && result.rfDetrDetections !== undefined) {
-        this.totalRfDetrDetections += result.rfDetrDetections;
-        this.totalRfDetrCost += result.rfDetrCost || 0;
-
-        // Set recognition method from first successful result
-        if (!this.recognitionMethod && result.recognitionMethod) {
-          this.recognitionMethod = result.recognitionMethod;
-        }
+      if (result.success && !this.recognitionMethod && result.recognitionMethod) {
+        this.recognitionMethod = result.recognitionMethod;
       }
-    }
-
-    if (this.totalRfDetrDetections > 0) {
-      if (DEBUG_MODE) console.log(`[UnifiedProcessor] RF-DETR Total Metrics - Detections: ${this.totalRfDetrDetections}, Total Cost: $${this.totalRfDetrCost.toFixed(4)}`);
     }
 
     // Finalize analysis logging
@@ -7936,6 +8982,70 @@ export class UnifiedImageProcessor extends EventEmitter {
 
     if (this.analysisLogger && isLastChunkOrNonChunked) {
       const successful = results.filter(r => r.success).length;
+
+      // ====== SUMMARY SIDECAR (early, durable) =================================
+      // Write a small JSON sidecar describing this execution BEFORE we attempt
+      // any of the slow operations below (DB updates, log upload). The sidecar
+      // is the home page's recovery anchor: if the JSONL gets truncated or
+      // its EXECUTION_START line is corrupted, get-local-executions falls back
+      // to this file to keep the analysis visible. See
+      // src/utils/analysis-logger.ts (writeExecutionSummary) for the contract.
+      try {
+        const { writeExecutionSummary } = require('./utils/analysis-logger');
+        const successfulCountForSummary = successful;
+        const imagesWithNumbers = results.reduce((acc, r) => {
+          if (!r.success || !Array.isArray(r.analysis)) return acc;
+          return r.analysis.some((v: any) => v && typeof v.raceNumber === 'string' && v.raceNumber.trim()) ? acc + 1 : acc;
+        }, 0);
+        const finalStatus: 'completed' | 'completed_with_errors' =
+          successfulCountForSummary === results.length ? 'completed' : 'completed_with_errors';
+        const startedIso = this.summaryStartTimeMs
+          ? new Date(this.summaryStartTimeMs).toISOString()
+          : new Date().toISOString();
+        const presetForSummary = this.config.presetId
+          ? {
+              id: this.config.presetId,
+              name: this.config.presetName || 'Unknown',
+              participantCount: this.config.participantPresetData?.length || 0,
+            }
+          : null;
+        const userIdForSummary = (() => {
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const { authService } = require('./auth-service');
+            const s = authService.getAuthState();
+            return s?.isAuthenticated ? s.user?.id ?? null : null;
+          } catch {
+            return null;
+          }
+        })();
+        const appVersionForSummary = (() => {
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            return require('electron').app.getVersion() ?? null;
+          } catch {
+            return null;
+          }
+        })();
+        writeExecutionSummary(this.analysisLogger.getLocalPath(), {
+          id: this.config.executionId || '',
+          createdAt: startedIso,
+          completedAt: new Date().toISOString(),
+          status: finalStatus,
+          sportCategory: this.config.category || 'motorsport',
+          totalImages: results.length,
+          imagesWithNumbers,
+          folderPath: this.summaryFolderPath,
+          executionName: null,
+          participantPreset: presetForSummary,
+          userId: userIdForSummary,
+          appVersion: appVersionForSummary,
+        });
+      } catch (summaryError) {
+        // Defensive: a sidecar write failure must NOT block finalize.
+        console.warn('[FINALIZE] ⚠️ Summary sidecar write failed (non-critical):', summaryError);
+      }
+      // ==========================================================================
 
       // TIER 1 TELEMETRY: Collect final telemetry stats (optional)
       let performanceBreakdown: any = undefined;
@@ -7991,9 +9101,7 @@ export class UnifiedImageProcessor extends EventEmitter {
             errorSummary,
             // Recognition method statistics
             recognitionStats: this.recognitionMethod ? {
-              method: this.recognitionMethod,
-              rfDetrDetections: this.totalRfDetrDetections > 0 ? this.totalRfDetrDetections : undefined,
-              rfDetrCost: this.totalRfDetrCost > 0 ? this.totalRfDetrCost : undefined
+              method: this.recognitionMethod
             } : undefined
           }
         );
@@ -8038,12 +9146,10 @@ export class UnifiedImageProcessor extends EventEmitter {
           const { data: currentExecution } = await Promise.race([execSelectPromise, execSelectTimeout]) as any;
           clearTimeout(execSelectTimeoutId!); // FIX: Cancel timeout to prevent false warning
 
-          // Update execution_settings with RF-DETR metrics
+          // Update execution_settings with final recognition method
           const updatedExecutionSettings = {
             ...(currentExecution?.execution_settings || {}),
-            recognition_method: this.recognitionMethod,
-            rf_detr_detections_count: this.totalRfDetrDetections,
-            rf_detr_total_cost: this.totalRfDetrCost
+            recognition_method: this.recognitionMethod
           };
 
           const executionUpdate = {
@@ -8057,7 +9163,7 @@ export class UnifiedImageProcessor extends EventEmitter {
             error_summary: errorSummary,
             // Update system_environment with final network speed (backward compatibility)
             system_environment: this.systemEnvironment,
-            // Update execution_settings with RF-DETR metrics
+            // Update execution_settings with final recognition method
             execution_settings: updatedExecutionSettings
           };
 

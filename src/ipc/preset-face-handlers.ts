@@ -20,7 +20,14 @@ import {
   loadPresetFaceDescriptors,
   getPresetParticipantFacePhotoCount,
   PresetParticipantFacePhoto,
-  CreatePresetFacePhotoParams
+  CreatePresetFacePhotoParams,
+  submitFeatureInterestSurvey,
+  checkFeatureInterestSurvey,
+  // v1.1.4 — Preset Participant Toggle (soft-disable)
+  togglePresetParticipantActive,
+  togglePresetDriverActive,
+  bulkSetPresetParticipantsActive,
+  resetPresetActiveStates
 } from '../database-service';
 import * as crypto from 'crypto';
 import * as path from 'path';
@@ -672,5 +679,179 @@ export function registerPresetFaceHandlers(): void {
     }
   });
 
-  console.log('[PresetFace IPC] Registered 14 preset face & driver handlers');
+  /**
+   * Get face photo status for all participants in a preset (for traffic light indicator).
+   * Returns a map: participantId → { totalDrivers, driversWithPhotos }
+   * - green: driversWithPhotos === totalDrivers (all have photos)
+   * - yellow: driversWithPhotos > 0 but < totalDrivers (partial)
+   * - grey: driversWithPhotos === 0 or no drivers
+   */
+  ipcMain.handle('preset-face-status-batch', async (_, presetId: string) => {
+    try {
+      if (!presetId) {
+        return { success: false, error: 'presetId is required' };
+      }
+
+      const client = authService.getSupabaseClient();
+
+      // Get all drivers for this preset's participants
+      const { data: participants, error: pErr } = await client
+        .from('preset_participants')
+        .select(`
+          id,
+          preset_participant_drivers(
+            id,
+            driver_name
+          )
+        `)
+        .eq('preset_id', presetId);
+
+      if (pErr) throw pErr;
+
+      // Get all face photos for drivers in this preset (single query)
+      const allDriverIds = (participants || [])
+        .flatMap((p: any) => (p.preset_participant_drivers || []).map((d: any) => d.id))
+        .filter(Boolean);
+
+      let photosMap: Record<string, number> = {};
+      if (allDriverIds.length > 0) {
+        const { data: photos, error: phErr } = await client
+          .from('preset_participant_face_photos')
+          .select('driver_id')
+          .in('driver_id', allDriverIds);
+
+        if (phErr) throw phErr;
+
+        // Count photos per driver
+        for (const photo of photos || []) {
+          if (photo.driver_id) {
+            photosMap[photo.driver_id] = (photosMap[photo.driver_id] || 0) + 1;
+          }
+        }
+      }
+
+      // Build status map per participant
+      const statusMap: Record<string, { totalDrivers: number; driversWithPhotos: number }> = {};
+      for (const p of participants || []) {
+        const drivers = (p as any).preset_participant_drivers || [];
+        const totalDrivers = drivers.length;
+        const driversWithPhotos = drivers.filter((d: any) => (photosMap[d.id] || 0) > 0).length;
+        statusMap[(p as any).id] = { totalDrivers, driversWithPhotos };
+      }
+
+      return { success: true, data: statusMap };
+    } catch (error) {
+      console.error('[PresetFace IPC] Batch status error:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  // ==================== FACE RECOGNITION INTEREST SURVEY ====================
+  ipcMain.handle('face-rec-submit-survey', async (_, data: { responses: any; comment: string | null }) => {
+    try {
+      await submitFeatureInterestSurvey({ ...data, feature_area: 'face_recognition' });
+      return { success: true };
+    } catch (error) {
+      console.error('[PresetFace IPC] Survey submit error:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  ipcMain.handle('face-rec-check-survey', async () => {
+    try {
+      return { success: true, ...(await checkFeatureInterestSurvey('face_recognition')) };
+    } catch (error) {
+      console.error('[PresetFace IPC] Survey check error:', error);
+      return { success: false, submitted: false };
+    }
+  });
+
+  // ==================== PRESET PARTICIPANT TOGGLE (v1.1.4) ====================
+  // Soft-disable flag for participants/drivers. Mirrors database-service API
+  // on the renderer side. All handlers follow the standard { success, data?, error? }
+  // contract used elsewhere in this file. RLS enforces that only the preset
+  // owner can update — public/official presets bubble up a Supabase error
+  // the renderer presents as a "Duplica per personalizzare" hint.
+
+  /**
+   * Toggle is_active on a single preset participant (entire car/crew).
+   */
+  ipcMain.handle('preset:toggleParticipantActive', async (_, params: {
+    participantId: string;
+    isActive: boolean;
+  }) => {
+    try {
+      if (!params?.participantId || typeof params.isActive !== 'boolean') {
+        return { success: false, error: 'participantId and isActive are required' };
+      }
+      const updated = await togglePresetParticipantActive(params.participantId, params.isActive);
+      return { success: true, data: updated };
+    } catch (error) {
+      console.error('[PresetToggle IPC] toggleParticipantActive error:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  /**
+   * Toggle is_active on a single driver inside a multi-driver crew (endurance).
+   */
+  ipcMain.handle('preset:toggleDriverActive', async (_, params: {
+    driverId: string;
+    isActive: boolean;
+  }) => {
+    try {
+      if (!params?.driverId || typeof params.isActive !== 'boolean') {
+        return { success: false, error: 'driverId and isActive are required' };
+      }
+      const updated = await togglePresetDriverActive(params.driverId, params.isActive);
+      return { success: true, data: updated };
+    } catch (error) {
+      console.error('[PresetToggle IPC] toggleDriverActive error:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  /**
+   * Bulk set is_active on many participants of the same preset. Used by
+   * "Disabilita tutta la squadra X" / "Riabilita selezionati".
+   */
+  ipcMain.handle('preset:bulkSetActive', async (_, params: {
+    presetId: string;
+    participantIds: string[];
+    isActive: boolean;
+  }) => {
+    try {
+      if (!params?.presetId || !Array.isArray(params.participantIds) || typeof params.isActive !== 'boolean') {
+        return { success: false, error: 'presetId, participantIds[] and isActive are required' };
+      }
+      const updated = await bulkSetPresetParticipantsActive(
+        params.presetId,
+        params.participantIds,
+        params.isActive
+      );
+      return { success: true, data: { updated } };
+    } catch (error) {
+      console.error('[PresetToggle IPC] bulkSetActive error:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  /**
+   * Reset every participant + every driver of a preset back to is_active=true.
+   * Two-step confirmation handled by the renderer.
+   */
+  ipcMain.handle('preset:resetActiveStates', async (_, params: { presetId: string }) => {
+    try {
+      if (!params?.presetId) {
+        return { success: false, error: 'presetId is required' };
+      }
+      const res = await resetPresetActiveStates(params.presetId);
+      return { success: true, data: res };
+    } catch (error) {
+      console.error('[PresetToggle IPC] resetActiveStates error:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  console.log('[PresetFace IPC] Registered 17 preset face & driver handlers + 4 toggle handlers');
 }

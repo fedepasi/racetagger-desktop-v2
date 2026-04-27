@@ -227,7 +227,10 @@ class ResultsPageManager {
           confidence: vehicle.confidence || 0,
           matchedBy: vehicle.finalResult?.matchedBy || 'none',
           matchStatus: vehicle.finalResult?.matchStatus || 'no_match',
-          alternativeCandidates: vehicle.finalResult?.alternativeCandidates || null
+          alternativeCandidates: vehicle.finalResult?.alternativeCandidates || null,
+          // Issue #104 — extra-preset people (VIPs, team principals, etc.), only populated
+          // when the preset has allow_external_person_recognition = true.
+          otherPeople: Array.isArray(vehicle.otherPeople) ? vehicle.otherPeople : []
         }));
 
         // Cerca i path locali delle anteprime usando saved thumbnail paths o search

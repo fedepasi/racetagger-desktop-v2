@@ -39,10 +39,14 @@ import {
   resendClientInvite,
   getUnlinkedGalleries,
   linkGalleryToProject,
+  getR2UploadStatus,
+  resetR2UploadStatus,
+  updateExecutionSourceFolder,
 } from '../database-service';
 import { r2UploadService } from '../r2-upload-service';
 import { DEBUG_MODE } from '../config';
 import { getBatchConfig } from './context';
+import { dialog, BrowserWindow } from 'electron';
 
 export function registerDeliveryHandlers(): void {
   if (DEBUG_MODE) console.log('[IPC] Registering delivery handlers...');
@@ -146,6 +150,8 @@ export function registerDeliveryHandlers(): void {
     const imageIds = items.map((item: any) => item.imageId);
     await markImagesUploadQueued(imageIds);
 
+    // Allow retry for this execution (clears dedup guard from previous attempts)
+    r2UploadService.allowRetry(executionId);
     r2UploadService.queueExecution(executionId, items);
     r2UploadService.start();
     return { queued: items.length };
@@ -153,6 +159,31 @@ export function registerDeliveryHandlers(): void {
   createHandler('delivery-r2-upload-progress', () => r2UploadService.getProgress());
   createHandler('delivery-r2-upload-cancel', () => { r2UploadService.cancel(); return { cancelled: true }; });
   createHandler('delivery-get-upload-history', () => r2UploadService.getUploadHistory());
+  createHandler('delivery-r2-upload-status', (executionId: string) => getR2UploadStatus(executionId));
+  createHandler('delivery-r2-reset-status', ({ executionId, statuses }: { executionId: string; statuses?: string[] }) => resetR2UploadStatus(executionId, statuses));
+  createHandler('delivery-update-source-folder', ({ executionId, sourceFolder }: { executionId: string; sourceFolder: string }) => updateExecutionSourceFolder(executionId, sourceFolder));
+
+  // Browse for new source folder (opens native folder picker dialog)
+  createHandler('delivery-browse-source-folder', async (executionId: string) => {
+    const win = BrowserWindow.getFocusedWindow();
+    if (!win) return { cancelled: true };
+
+    const result = await dialog.showOpenDialog(win, {
+      properties: ['openDirectory'],
+      title: 'Select the folder containing the original images',
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return { cancelled: true };
+    }
+
+    const newFolder = result.filePaths[0];
+
+    // Update source_folder in DB
+    await updateExecutionSourceFolder(executionId, newFolder);
+
+    return { cancelled: false, sourceFolder: newFolder };
+  });
 
   // ==================== SYNC DELIVERY RULES FROM PRESET ====================
   createHandler('delivery-sync-rules-from-preset', (presetId: string) => syncDeliveryRulesFromPreset(presetId));

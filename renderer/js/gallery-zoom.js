@@ -28,9 +28,15 @@ class GalleryZoomController {
     this.panStartTranslateX = 0;
     this.panStartTranslateY = 0;
 
+    // Click vs drag detection
+    this._mouseDownX = null;
+    this._mouseDownY = null;
+    this._mouseMoved = false;
+    this._clickDragThreshold = 5; // px of movement before treating as drag
+
     // Bound handlers (for removal)
     this._onWheel = this._handleWheel.bind(this);
-    this._onDblClick = this._handleDoubleClick.bind(this);
+    this._onClick = this._handleClick.bind(this);
     this._onMouseDown = this._handleMouseDown.bind(this);
     this._onMouseMove = this._handleMouseMove.bind(this);
     this._onMouseUp = this._handleMouseUp.bind(this);
@@ -55,7 +61,7 @@ class GalleryZoomController {
     const target = imageWrapper || containerEl;
 
     target.addEventListener('wheel', this._onWheel, { passive: false });
-    target.addEventListener('dblclick', this._onDblClick);
+    target.addEventListener('click', this._onClick);
     target.addEventListener('mousedown', this._onMouseDown);
     window.addEventListener('mousemove', this._onMouseMove);
     window.addEventListener('mouseup', this._onMouseUp);
@@ -110,9 +116,14 @@ class GalleryZoomController {
     this._zoomToPoint(e.clientX, e.clientY, newScale, false);
   }
 
-  _handleDoubleClick(e) {
-    // Don't interfere with nav buttons
+  _handleClick(e) {
+    // Don't interfere with nav buttons or zoom controls
     if (e.target.closest('.lv-gallery-nav') || e.target.closest('.lv-zoom-controls')) return;
+    // If the user dragged (panned) we don't treat the release as a click
+    if (this._mouseMoved) {
+      this._mouseMoved = false;
+      return;
+    }
 
     if (this.scale > 1.05) {
       this.reset(true);
@@ -122,10 +133,17 @@ class GalleryZoomController {
   }
 
   _handleMouseDown(e) {
-    // Only pan with left button when zoomed
-    if (e.button !== 0 || this.scale <= 1.01) return;
+    if (e.button !== 0) return;
     // Don't interfere with nav buttons or controls
     if (e.target.closest('.lv-gallery-nav') || e.target.closest('.lv-zoom-controls')) return;
+
+    // Track for click-vs-drag detection (used by _handleClick)
+    this._mouseDownX = e.clientX;
+    this._mouseDownY = e.clientY;
+    this._mouseMoved = false;
+
+    // Only start panning when zoomed
+    if (this.scale <= 1.01) return;
 
     this.isPanning = true;
     this.panStartX = e.clientX;
@@ -138,6 +156,15 @@ class GalleryZoomController {
   }
 
   _handleMouseMove(e) {
+    // Update drag detection regardless of pan state
+    if (this._mouseDownX !== null && !this._mouseMoved) {
+      const ddx = e.clientX - this._mouseDownX;
+      const ddy = e.clientY - this._mouseDownY;
+      if (Math.hypot(ddx, ddy) > this._clickDragThreshold) {
+        this._mouseMoved = true;
+      }
+    }
+
     if (!this.isPanning) return;
 
     const dx = e.clientX - this.panStartX;
@@ -151,6 +178,8 @@ class GalleryZoomController {
   }
 
   _handleMouseUp() {
+    this._mouseDownX = null;
+    this._mouseDownY = null;
     if (!this.isPanning) return;
     this.isPanning = false;
     this.containerEl.classList.remove('lv-grabbing');

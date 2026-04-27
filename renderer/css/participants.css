@@ -4190,3 +4190,154 @@
 .preset-card.preset-paths-warning {
   border-color: rgba(234, 179, 8, 0.4);
 }
+
+/* ==================== Face Recognition Status Indicator ==================== */
+
+.face-status-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+
+.face-status-dot.status-green {
+  background-color: #22c55e;
+  box-shadow: 0 0 4px rgba(34, 197, 94, 0.5);
+}
+
+.face-status-dot.status-yellow {
+  background-color: #eab308;
+  box-shadow: 0 0 4px rgba(234, 179, 8, 0.5);
+}
+
+.face-status-dot.status-grey {
+  background-color: #94a3b8;
+}
+
+/* ==================== v1.1.4 — Preset Participant Toggle ==================== */
+/* Soft-disable UI: per-row toggle switch + inactive-row styling + summary pill.
+ * Keep colours consistent with existing badges (.category-badge, .face-status-dot). */
+
+/* Toggle switch */
+.active-toggle {
+  display: inline-block;
+  position: relative;
+  width: 36px;
+  height: 20px;
+  cursor: pointer;
+}
+.active-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.active-toggle-slider {
+  position: absolute;
+  inset: 0;
+  background: #94a3b8;
+  border-radius: 20px;
+  transition: background .15s ease;
+}
+.active-toggle-slider::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform .15s ease;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+}
+.active-toggle input:checked + .active-toggle-slider {
+  background: #22c55e;
+}
+.active-toggle input:checked + .active-toggle-slider::before {
+  transform: translateX(16px);
+}
+.active-toggle input:disabled + .active-toggle-slider {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.active-toggle input:focus-visible + .active-toggle-slider {
+  outline: 2px solid rgba(59, 130, 246, 0.6);
+  outline-offset: 2px;
+}
+
+/* Inactive row — greyed out + strikethrough-ish */
+.participant-row-inactive {
+  opacity: 0.55;
+}
+.participant-row-inactive td:not(:first-child) {
+  text-decoration: line-through;
+  text-decoration-color: rgba(148, 163, 184, 0.6);
+}
+
+/* Summary pill in table header */
+.active-participants-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: 12px;
+}
+.active-count-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: rgba(34, 197, 94, 0.10);
+  border: 1px solid rgba(34, 197, 94, 0.30);
+  border-radius: 999px;
+  color: #16a34a;
+  font-size: 12px;
+  font-weight: 600;
+}
+.active-count-pill .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 4px rgba(34, 197, 94, 0.6);
+}
+.active-count-pill.has-disabled {
+  background: rgba(234, 179, 8, 0.12);
+  border-color: rgba(234, 179, 8, 0.35);
+  color: #ca8a04;
+}
+.active-count-pill.has-disabled .dot {
+  background: #eab308;
+  box-shadow: 0 0 4px rgba(234, 179, 8, 0.6);
+}
+
+/* Link-style reset button in the header */
+.btn.btn-link {
+  background: transparent;
+  border: none;
+  color: var(--accent-primary, #3b82f6);
+  text-decoration: underline;
+  padding: 4px 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.btn.btn-link:hover {
+  color: var(--accent-hover, #2563eb);
+}
+
+/* v1.1.4 — Inactive driver panel inside the participant edit modal */
+.driver-panel-inactive {
+  opacity: 0.55;
+}
+.driver-panel-inactive .driver-panel-title {
+  text-decoration: line-through;
+  text-decoration-color: rgba(148, 163, 184, 0.6);
+}
+.driver-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.driver-active-toggle {
+  margin-left: auto;
+}

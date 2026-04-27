@@ -428,16 +428,24 @@ function setupFaceDetectionIPC() {
 // Auto-initialize on DOM ready
 // ============================================
 
+/**
+ * Initialize face detector if face recognition is enabled.
+ * Can be called manually after the feature flag has been loaded from DB.
+ * Uses the global FACE_RECOGNITION_ENABLED flag set by loadFaceRecognitionFlag()
+ * in driver-face-manager.js (loaded via delivery-get-plan-limits IPC).
+ */
 function initFaceDetector() {
-  // Face recognition is disabled (coming soon) - skip model loading to save memory
-  const FACE_RECOGNITION_ENABLED = false;
+  // Check the global flag set by driver-face-manager.js loadFaceRecognitionFlag()
+  // Falls back to false if the flag hasn't been loaded yet
+  const isEnabled = (typeof FACE_RECOGNITION_ENABLED !== 'undefined') ? FACE_RECOGNITION_ENABLED : false;
 
-  if (!FACE_RECOGNITION_ENABLED) {
-    console.log('[FaceDetector] Face recognition disabled (coming soon) - skipping model initialization');
+  if (!isEnabled) {
+    console.log('[FaceDetector] Face recognition disabled - skipping model initialization');
     // Still export the class/functions so nothing breaks, but don't load models
     return null;
   }
 
+  console.log('[FaceDetector] Face recognition enabled - initializing models');
   const detector = getFaceDetector();
   setupFaceDetectionIPC();
 
@@ -458,10 +466,7 @@ if (typeof window !== 'undefined') {
   window.setupFaceDetectionIPC = setupFaceDetectionIPC;
 }
 
-// Auto-init when DOM is ready
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initFaceDetector);
-} else {
-  // DOM already loaded
-  setTimeout(initFaceDetector, 100);
-}
+// NOTE: Auto-init removed. Face detector is now initialized explicitly
+// by loadFaceRecognitionFlag() in driver-face-manager.js after the
+// feature flag has been loaded from DB via delivery-get-plan-limits IPC.
+// Call window.initFaceDetector() manually when ready.

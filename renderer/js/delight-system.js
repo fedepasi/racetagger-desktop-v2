@@ -502,10 +502,142 @@ class DelightSystem {
       successContainer.classList.add('delight-hidden');
       setTimeout(() => successContainer.remove(), 300);
     }, duration);
-    
+
     return successContainer;
   }
-  
+
+  /**
+   * New-style inline completion card.
+   *
+   * Replaces the big "Race Analysis Complete!" overlay (`showSuccess('batch_complete', ...)`)
+   * with a subtle banner + name editor. The caller can save the custom name via the
+   * `rename-execution` IPC, which appends an EXECUTION_META_UPDATE event to the JSONL.
+   *
+   * options:
+   *   - executionId   (required) the execution to rename
+   *   - stats         object of { label -> value } shown as compact chips
+   *   - durationSec   number shown in the banner ("✓ Analysis complete · 52.1s")
+   *   - defaultName   prefilled input (usually the auto-generated title)
+   *   - sportLabel    optional, used to synthesize chip suggestions
+   *   - onDismiss     callback fired when Skip clicked OR Save succeeds
+   */
+  showAnalysisCompletionCard(options = {}) {
+    const {
+      executionId,
+      stats = {},
+      durationSec,
+      defaultName = '',
+      sportLabel = '',
+      onDismiss
+    } = options;
+
+    // Remove any existing variants so consecutive runs don't stack.
+    const existingSuccess = document.getElementById('delight-success');
+    if (existingSuccess) existingSuccess.remove();
+    const existingCard = document.getElementById('analysis-completion-card');
+    if (existingCard) existingCard.remove();
+
+    const card = this.createElement('div', {
+      className: 'analysis-completion-card delight-fade-in',
+      id: 'analysis-completion-card'
+    });
+
+    const statsHtml = Object.keys(stats).length
+      ? `<div class="acc-stats">${Object.entries(stats).map(([label, value]) => `
+            <div class="acc-stat"><span class="acc-stat-value">${value}</span><span class="acc-stat-label">${label}</span></div>
+          `).join('')}</div>`
+      : '';
+
+    // Chip suggestions — synthesized from the current date + sport, no heavy logic.
+    const today = new Date();
+    const dateLabel = today.toLocaleDateString('it-IT', { day: 'numeric', month: 'short', year: 'numeric' });
+    const chipSource = [
+      sportLabel ? `${sportLabel} · ${dateLabel}` : null,
+      dateLabel,
+      sportLabel ? `${sportLabel} — Morning` : null
+    ].filter(Boolean);
+
+    const chipsHtml = chipSource.length
+      ? `<div class="acc-chips">${chipSource.map(c =>
+          `<button type="button" class="acc-chip" data-chip="${c.replace(/"/g, '&quot;')}">${c}</button>`
+        ).join('')}</div>`
+      : '';
+
+    const durationLabel = typeof durationSec === 'number'
+      ? `${durationSec.toFixed(1)}s`
+      : '';
+
+    card.innerHTML = `
+      <div class="acc-banner">
+        <span class="acc-check">✓</span>
+        <span class="acc-banner-text">Analysis complete${durationLabel ? ` · ${durationLabel}` : ''}</span>
+      </div>
+      <label class="acc-label" for="acc-name-input">Name this analysis (optional)</label>
+      <input type="text" id="acc-name-input" class="acc-name-input" maxlength="120"
+             placeholder="e.g. Giro di Lombardia 2026 · Start"
+             value="${(defaultName || '').replace(/"/g, '&quot;')}">
+      ${chipsHtml}
+      ${statsHtml}
+      <div class="acc-actions">
+        <button type="button" class="acc-btn acc-btn-skip">Skip</button>
+        <button type="button" class="acc-btn acc-btn-save">Save name</button>
+      </div>
+    `;
+
+    const container = document.querySelector('.content-section.active-section') || document.body;
+    container.appendChild(card);
+
+    const input = card.querySelector('#acc-name-input');
+    const saveBtn = card.querySelector('.acc-btn-save');
+    const skipBtn = card.querySelector('.acc-btn-skip');
+
+    // Chip clicks prefill the input.
+    card.querySelectorAll('.acc-chip').forEach(btn => {
+      btn.addEventListener('click', () => {
+        input.value = btn.getAttribute('data-chip') || '';
+        input.focus();
+      });
+    });
+
+    const dismiss = () => {
+      card.classList.add('delight-hidden');
+      setTimeout(() => card.remove(), 300);
+      if (typeof onDismiss === 'function') onDismiss();
+    };
+
+    skipBtn.addEventListener('click', dismiss);
+
+    const doSave = async () => {
+      const name = (input.value || '').trim();
+      if (!name || !executionId) {
+        dismiss();
+        return;
+      }
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving…';
+      try {
+        if (window.api && window.api.invoke) {
+          await window.api.invoke('rename-execution', executionId, name);
+        }
+      } catch (err) {
+        console.warn('[Delight] rename-execution failed:', err);
+      } finally {
+        dismiss();
+      }
+    };
+
+    saveBtn.addEventListener('click', doSave);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); doSave(); }
+      else if (e.key === 'Escape') { e.preventDefault(); dismiss(); }
+    });
+
+    // Auto-focus so user can just type + Enter.
+    setTimeout(() => input.focus(), 50);
+
+    return card;
+  }
+
   // showConfetti method removed
   
   // showSpecialAchievement method removed

@@ -63,6 +63,10 @@ export interface PresetParticipantDriver {
   driver_nationality?: string | null;
   driver_order: number;
   created_at?: string;
+  // v1.1.4 — Preset Participant Toggle: soft-disable flag. When false, this
+  // driver is excluded from AI matching (face recognition, name matching)
+  // but kept in the preset so the user can re-enable it without re-entry.
+  is_active?: boolean;
 }
 
 export interface PresetParticipant {
@@ -85,6 +89,10 @@ export interface PresetParticipant {
   folder_3_path?: string;    // Absolute filesystem path for folder 3
   delivery_to_client_id?: string | null; // FK to projects (client) for auto-delivery routing
   created_at?: string;
+  // v1.1.4 — Preset Participant Toggle: soft-disable flag. When false, the
+  // entire participant (car/crew) is excluded from AI matching (numero, livrea,
+  // faces) but kept in the preset for reversibility. Defaults TRUE on the DB.
+  is_active?: boolean;
 }
 
 // --- Helper per ottenere l'ID utente corrente ---
@@ -963,6 +971,12 @@ export interface ParticipantPresetSupabase {
   sport_categories?: SportCategory;
   is_official?: boolean;
   iptc_metadata?: any;  // PresetIptcMetadata stored as JSONB
+
+  // Issue #104: When true, Gemini is allowed to identify persons outside the
+  // preset participant list (team principals, VIPs, celebrities). Results go
+  // into a separate `otherPeople[]` field in the V6 response, never into
+  // `drivers[]`. Default false = strict preset-only mode.
+  allow_external_person_recognition?: boolean;
 }
 
 export interface PresetParticipantSupabase {
@@ -987,6 +1001,11 @@ export interface PresetParticipantSupabase {
   sort_order?: number;
   created_at?: string;
   face_photo_count?: number; // Cached count of face photos
+  // v1.1.4 — Preset Participant Toggle: soft-disable flag mirrored from the
+  // Supabase row. Consumers MUST filter on is_active !== false before feeding
+  // the participant into smart-matcher / prompt-builder.
+  is_active?: boolean;
+  updated_at?: string; // Added in migration 20260417130000 alongside is_active
 }
 
 /**
@@ -1700,7 +1719,7 @@ export async function updatePresetLastUsedSupabase(presetId: string): Promise<vo
 /**
  * Update participant preset details in Supabase
  */
-export async function updateParticipantPresetSupabase(presetId: string, updateData: Partial<Pick<ParticipantPresetSupabase, 'name' | 'description' | 'category_id' | 'custom_folders' | 'iptc_metadata'>>): Promise<void> {
+export async function updateParticipantPresetSupabase(presetId: string, updateData: Partial<Pick<ParticipantPresetSupabase, 'name' | 'description' | 'category_id' | 'custom_folders' | 'iptc_metadata' | 'allow_external_person_recognition'>>): Promise<void> {
   const userId = getCurrentUserId();
   if (!userId) throw new Error('User not authenticated');
 
@@ -1755,6 +1774,224 @@ export async function deleteParticipantPresetSupabase(presetId: string): Promise
     console.error('[DB] Error deleting participant preset from Supabase:', error);
     throw error;
   }
+}
+
+// ============================================================================
+// PRESET PARTICIPANT TOGGLE (v1.1.4) — soft-disable API
+// ----------------------------------------------------------------------------
+// Four entry points the renderer / IPC layer uses to flip is_active on
+// preset_participants and preset_participant_drivers without deleting data.
+//
+// Authorisation is enforced by Supabase RLS (policy restricts UPDATE to
+// `participant_presets.user_id = auth.uid() AND is_official = false`). The
+// client-side checks below are UX-only: a public/official preset cannot be
+// toggled, so we short-circuit before the network call to give a clear error.
+//
+// Every successful mutation invalidates:
+//   - `presetsCache` entry for the affected preset (so subsequent reads
+//     reflect the new state)
+//   - `cacheLastUpdated` (force re-fetch on next list call)
+// The edge-function `preset-loader` cache is warm-instance only and will
+// expire on its own; callers that need immediate server-side effect should
+// also invalidate via the dedicated admin RPC (future work, not v1.1.4).
+// ============================================================================
+
+/**
+ * Invalidate the local preset cache entry for a given preset so the next read
+ * goes back to Supabase. Small wrapper used by the toggle mutators below.
+ */
+function invalidatePresetCacheEntry(presetId: string): void {
+  const idx = presetsCache.findIndex(p => p.id === presetId);
+  if (idx !== -1) {
+    presetsCache.splice(idx, 1);
+  }
+  cacheLastUpdated = 0;
+}
+
+/**
+ * Toggle the `is_active` flag on a single preset participant.
+ *
+ * @param participantId UUID of the preset_participants row.
+ * @param isActive New value. `false` = excluded from AI matching; `true` = default/re-enable.
+ * @throws when the user is unauthenticated or RLS rejects the update
+ *         (which happens for public/official presets — callers should treat
+ *         that as a UX "read-only" signal and prompt the user to duplicate).
+ */
+export async function togglePresetParticipantActive(
+  participantId: string,
+  isActive: boolean
+): Promise<PresetParticipantSupabase> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+
+  const authenticatedClient = authService.getSupabaseClient();
+
+  // Use .select('*, participant_presets!inner(user_id, is_official)') so RLS
+  // gives us a deterministic error instead of a silent 0-row update when the
+  // preset is public/official.
+  const { data, error } = await authenticatedClient
+    .from('preset_participants')
+    .update({ is_active: isActive })
+    .eq('id', participantId)
+    .select('*, participant_presets!inner(id, user_id, is_official)')
+    .single();
+
+  if (error) {
+    console.error('[DB] togglePresetParticipantActive failed:', error);
+    throw error;
+  }
+
+  const presetId = (data as any)?.preset_id;
+  if (presetId) invalidatePresetCacheEntry(presetId);
+
+  console.log(`[DB] Participant ${participantId} is_active → ${isActive}`);
+  return data as PresetParticipantSupabase;
+}
+
+/**
+ * Toggle the `is_active` flag on a single driver inside a multi-driver
+ * participant (e.g. WEC endurance crews).
+ *
+ * Note: disabling the last active driver in a crew does NOT automatically
+ * disable the parent participant — that's a UI-layer concern and the caller
+ * should surface a warning ("all drivers disabled, car will still be
+ * matched by numero/livrea"). Keeping the two flags independent lets the
+ * user disable just face recognition for one pilot without affecting the
+ * whole car's number/livery matching.
+ */
+export async function togglePresetDriverActive(
+  driverId: string,
+  isActive: boolean
+): Promise<PresetParticipantDriver> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+
+  const authenticatedClient = authService.getSupabaseClient();
+
+  const { data, error } = await authenticatedClient
+    .from('preset_participant_drivers')
+    .update({ is_active: isActive })
+    .eq('id', driverId)
+    .select('*, preset_participants!inner(preset_id, participant_presets!inner(id, user_id, is_official))')
+    .single();
+
+  if (error) {
+    console.error('[DB] togglePresetDriverActive failed:', error);
+    throw error;
+  }
+
+  // Navigate the joined structure to find the preset id for cache invalidation
+  const presetId = (data as any)?.preset_participants?.preset_id;
+  if (presetId) invalidatePresetCacheEntry(presetId);
+
+  console.log(`[DB] Driver ${driverId} is_active → ${isActive}`);
+  return data as PresetParticipantDriver;
+}
+
+/**
+ * Bulk-toggle is_active for many participants of the same preset in one round
+ * trip. Used by the "Disable all from team X" / "Re-enable all" UI action.
+ *
+ * @param presetId UUID of the participant_presets row the IDs must belong to.
+ *   Passed separately so we can narrow the UPDATE — RLS still verifies
+ *   ownership via the preset — and so the server can reject cross-preset IDs
+ *   injected by a rogue payload.
+ * @param participantIds UUIDs of preset_participants rows to update. Must all
+ *   belong to `presetId`.
+ * @param isActive New value to apply to every row.
+ * @returns the number of rows actually updated.
+ */
+export async function bulkSetPresetParticipantsActive(
+  presetId: string,
+  participantIds: string[],
+  isActive: boolean
+): Promise<number> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+  if (!Array.isArray(participantIds) || participantIds.length === 0) return 0;
+
+  const authenticatedClient = authService.getSupabaseClient();
+
+  const { data, error } = await authenticatedClient
+    .from('preset_participants')
+    .update({ is_active: isActive })
+    .eq('preset_id', presetId)
+    .in('id', participantIds)
+    .select('id');
+
+  if (error) {
+    console.error('[DB] bulkSetPresetParticipantsActive failed:', error);
+    throw error;
+  }
+
+  invalidatePresetCacheEntry(presetId);
+  const updated = Array.isArray(data) ? data.length : 0;
+  console.log(`[DB] Bulk set is_active=${isActive} on ${updated}/${participantIds.length} participants of preset ${presetId}`);
+  return updated;
+}
+
+/**
+ * Reset every participant and every driver of a preset back to is_active = true.
+ *
+ * This is the "Ripristina tutti" action in the editor header: it's one
+ * confirmation away from undoing every soft-disable. We deliberately do NOT
+ * require the caller to list IDs — the operation is scoped to `presetId` and
+ * RLS keeps it constrained to presets owned by the current user.
+ */
+export async function resetPresetActiveStates(presetId: string): Promise<{
+  participantsReset: number;
+  driversReset: number;
+}> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+
+  const authenticatedClient = authService.getSupabaseClient();
+
+  // 1. Reset participants
+  const { data: partData, error: partErr } = await authenticatedClient
+    .from('preset_participants')
+    .update({ is_active: true })
+    .eq('preset_id', presetId)
+    .eq('is_active', false) // no-op rows skipped — cheaper + updated_at stays clean
+    .select('id');
+
+  if (partErr) {
+    console.error('[DB] resetPresetActiveStates (participants) failed:', partErr);
+    throw partErr;
+  }
+
+  // 2. Reset drivers. Need to scope by participant_id IN (SELECT id FROM
+  //    preset_participants WHERE preset_id = $1). Supabase-js does not support
+  //    subselects here, so fetch the participant id list first.
+  const { data: allPartIds, error: idsErr } = await authenticatedClient
+    .from('preset_participants')
+    .select('id')
+    .eq('preset_id', presetId);
+  if (idsErr) {
+    console.error('[DB] resetPresetActiveStates (fetch participant ids) failed:', idsErr);
+    throw idsErr;
+  }
+  const partIds = (allPartIds || []).map((r: any) => r.id).filter(Boolean);
+
+  let driversReset = 0;
+  if (partIds.length > 0) {
+    const { data: drvData, error: drvErr } = await authenticatedClient
+      .from('preset_participant_drivers')
+      .update({ is_active: true })
+      .in('participant_id', partIds)
+      .eq('is_active', false)
+      .select('id');
+    if (drvErr) {
+      console.error('[DB] resetPresetActiveStates (drivers) failed:', drvErr);
+      throw drvErr;
+    }
+    driversReset = Array.isArray(drvData) ? drvData.length : 0;
+  }
+
+  invalidatePresetCacheEntry(presetId);
+  const participantsReset = Array.isArray(partData) ? partData.length : 0;
+  console.log(`[DB] Reset preset ${presetId}: ${participantsReset} participants + ${driversReset} drivers re-enabled`);
+  return { participantsReset, driversReset };
 }
 
 // ============================================================================
@@ -2775,6 +3012,9 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
     }> = [];
 
     // 1. Get all participants with their direct face photos (backward compatibility)
+    // v1.1.4 — Preset Participant Toggle: exclude soft-disabled participants so
+    // their face descriptors are NOT loaded into the recognizer's memory
+    // vector. This is the critical cut for "disable an entire car/crew".
     const { data: participants, error: participantsError } = await authenticatedClient
       .from('preset_participants')
       .select(`
@@ -2782,6 +3022,7 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
         numero,
         nome,
         squadra,
+        is_active,
         preset_participant_face_photos!participant_id (
           id,
           photo_url,
@@ -2791,7 +3032,8 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
           detection_confidence
         )
       `)
-      .eq('preset_id', presetId);
+      .eq('preset_id', presetId)
+      .eq('is_active', true);
 
     if (participantsError) {
       console.error('[DB] Error loading preset face descriptors (participants):', participantsError);
@@ -2831,6 +3073,10 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
 
     if (participantIds.length > 0) {
       // 2b. Get drivers for these participants (no join on preset_participants needed)
+      // v1.1.4 — also exclude soft-disabled drivers so their face descriptors
+      // aren't added to the recognizer. Belt-and-braces: participant_id is
+      // already filtered to active participants above, but a driver can be
+      // disabled individually while the parent crew stays active (endurance).
       const { data: drivers, error: driversError } = await authenticatedClient
         .from('preset_participant_drivers')
         .select(`
@@ -2838,9 +3084,11 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
           driver_name,
           driver_metatag,
           driver_nationality,
-          participant_id
+          participant_id,
+          is_active
         `)
-        .in('participant_id', participantIds);
+        .in('participant_id', participantIds)
+        .eq('is_active', true);
 
       if (driversError) {
         console.error('[DB] Error loading preset drivers:', driversError);
@@ -3088,10 +3336,14 @@ export async function syncDeliveryRulesFromPreset(presetId: string): Promise<{ c
   const client = getSupabaseClient();
 
   // 1. Get all participants for this preset with delivery_to_client_id set
+  // v1.1.4 — Exclude soft-disabled participants: a disabled participant
+  // should not have delivery rules generated, and existing auto-rules for
+  // disabled participants become "stale" and get cleaned up by step 5.
   const { data: participants, error: pErr } = await client
     .from('preset_participants')
-    .select('id, numero, nome, squadra, categoria, delivery_to_client_id')
-    .eq('preset_id', presetId);
+    .select('id, numero, nome, squadra, categoria, delivery_to_client_id, is_active')
+    .eq('preset_id', presetId)
+    .eq('is_active', true);
 
   if (pErr) throw new Error(`Failed to load preset participants: ${pErr.message}`);
 
@@ -3318,6 +3570,7 @@ export async function getUserPlanLimits() {
     delivery_enabled: flagMap['delivery_enabled'] ?? planLimits.delivery_enabled ?? false,
     projects_enabled: flagMap['projects_enabled'] ?? planLimits.projects_enabled ?? false,
     r2_storage_enabled: flagMap['r2_storage_enabled'] ?? planLimits.r2_storage_enabled ?? false,
+    face_recognition_enabled: flagMap['face_recognition_enabled'] ?? planLimits.face_recognition_enabled ?? false,
     r2_storage_max_gb: planLimits.r2_storage_max_gb ?? 0,
     gallery_max_galleries: planLimits.gallery_max_galleries ?? 3,
   };
@@ -3446,7 +3699,7 @@ export async function getUserRecentExecutions() {
   if (!userId) throw new Error('Not authenticated');
   const { data, error } = await client
     .from('executions')
-    .select('id, name, execution_at, status, processed_images, project_id')
+    .select('id, name, execution_at, status, processed_images, project_id, source_folder')
     .eq('user_id', userId)
     .in('status', ['completed', 'completed_with_errors'])
     .order('execution_at', { ascending: false })
@@ -3515,16 +3768,82 @@ export async function markImagesUploadQueued(imageIds: string[]) {
   }
 }
 
+// ==================== R2 UPLOAD: Detailed status for an execution ====================
+
+export async function getR2UploadStatus(executionId: string) {
+  const client = getSupabaseClient();
+
+  // Get counts per status
+  const { data: images, error } = await client
+    .from('images')
+    .select('id, original_filename, original_upload_status, original_storage_provider, original_storage_path, original_file_size')
+    .eq('execution_id', executionId);
+
+  if (error) throw new Error(error.message);
+  if (!images) return { total: 0, completed: 0, failed: 0, queued: 0, pending: 0, images: [] };
+
+  const stats = {
+    total: images.length,
+    completed: 0,
+    failed: 0,
+    queued: 0,
+    pending: 0,
+    images: images.map((img: any) => ({
+      id: img.id,
+      filename: img.original_filename,
+      status: img.original_upload_status || 'pending',
+      provider: img.original_storage_provider,
+      r2_path: img.original_storage_path,
+      file_size: img.original_file_size,
+    })),
+  };
+
+  for (const img of images) {
+    const status = img.original_upload_status || 'pending';
+    if (status === 'completed') stats.completed++;
+    else if (status === 'failed') stats.failed++;
+    else if (status === 'queued') stats.queued++;
+    else stats.pending++;
+  }
+
+  return stats;
+}
+
+// Reset stuck queued/failed images back to pending so they can be retried
+export async function resetR2UploadStatus(executionId: string, resetStatuses: string[] = ['queued', 'failed']) {
+  const client = getSupabaseClient();
+  const conditions = resetStatuses.map(s => `original_upload_status.eq.${s}`).join(',');
+  const { data, error } = await client
+    .from('images')
+    .update({ original_upload_status: 'pending', original_storage_provider: null, original_storage_path: null })
+    .eq('execution_id', executionId)
+    .or(conditions)
+    .select('id');
+  if (error) throw new Error(error.message);
+  return { reset: data?.length || 0 };
+}
+
+// Update source_folder for an execution (manual repair)
+export async function updateExecutionSourceFolder(executionId: string, sourceFolder: string) {
+  const client = getSupabaseClient();
+  const { error } = await client
+    .from('executions')
+    .update({ source_folder: sourceFolder })
+    .eq('id', executionId);
+  if (error) throw new Error(error.message);
+}
+
 // ==================== FEATURE INTEREST SURVEYS ====================
 
-export async function submitFeatureInterestSurvey(data: { responses: any; comment: string | null }) {
+export async function submitFeatureInterestSurvey(data: { responses: any; comment: string | null; feature_area?: string }) {
   const client = getSupabaseClient();
   const userId = authService.getCurrentUserId();
   if (!userId) throw new Error('Not authenticated');
+  const featureArea = data.feature_area || 'delivery_gallery';
   const { error } = await client.from('feature_interest_surveys').upsert(
     {
       user_id: userId,
-      feature_area: 'delivery_gallery',
+      feature_area: featureArea,
       responses: data.responses,
       comment: data.comment,
       submitted_at: new Date().toISOString(),
@@ -3534,7 +3853,7 @@ export async function submitFeatureInterestSurvey(data: { responses: any; commen
   if (error) throw new Error(error.message);
 }
 
-export async function checkFeatureInterestSurvey(): Promise<{ submitted: boolean }> {
+export async function checkFeatureInterestSurvey(featureArea?: string): Promise<{ submitted: boolean }> {
   const client = getSupabaseClient();
   const userId = authService.getCurrentUserId();
   if (!userId) throw new Error('Not authenticated');
@@ -3542,7 +3861,7 @@ export async function checkFeatureInterestSurvey(): Promise<{ submitted: boolean
     .from('feature_interest_surveys')
     .select('id')
     .eq('user_id', userId)
-    .eq('feature_area', 'delivery_gallery')
+    .eq('feature_area', featureArea || 'delivery_gallery')
     .maybeSingle();
   return { submitted: !!data };
 }

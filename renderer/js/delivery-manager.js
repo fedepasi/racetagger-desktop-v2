@@ -67,9 +67,20 @@
     if (galleriesSection) galleriesSection.style.display = 'block';
     if (projectsSection && planLimits.projects_enabled) projectsSection.style.display = 'block';
 
+    // Show HD uploads section if R2 is enabled
+    if (planLimits.r2_storage_enabled) {
+      var uploadsSection = document.getElementById('delivery-uploads-section');
+      if (uploadsSection) uploadsSection.style.display = 'block';
+      loadR2ExecutionStatus();
+    }
+
     await loadGalleries();
     if (planLimits.projects_enabled) await loadProjects();
     bindEvents();
+
+    // Bind R2 refresh button
+    var btnRefresh = document.getElementById('btn-refresh-r2-status');
+    if (btnRefresh) btnRefresh.addEventListener('click', loadR2ExecutionStatus);
   }
 
   async function loadGalleries() {
@@ -201,7 +212,7 @@
         : projectGalleries.map(function(g) {
             var dateStr = g.event_date ? g.event_date : '';
             var seasonBadge = g.season ? '<span style="font-size: 10px; padding: 2px 8px; border-radius: 12px; background: rgba(99,102,241,0.15); color: #818cf8; font-weight: 600;">' + escapeHtml(g.season) + '</span>' : '';
-            var slugLine = g.slug ? '<div style="font-size: 10px; color: var(--text-muted); margin-top: 4px; font-family: Monaco, monospace; opacity: 0.7;">photos.racetagger.cloud/g/' + escapeHtml(g.slug) + '</div>' : '';
+            var slugLine = g.slug ? '<div style="font-size: 10px; color: var(--text-muted); margin-top: 4px; font-family: Monaco, monospace; opacity: 0.7;">photos.racetagger.cloud/' + escapeHtml(g.slug) + '</div>' : '';
             return '<div style="background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px;">' +
               '<div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">' +
                 '<h5 style="color: var(--text-primary); font-size: 13px; margin: 0;">' + escapeHtml(g.title) + '</h5>' +
@@ -513,7 +524,7 @@
     if (!modal) return;
 
     document.getElementById('gallery-detail-name').textContent = gallery.title;
-    var fullLink = gallery.slug ? 'photos.racetagger.cloud/g/' + gallery.slug : '(no slug)';
+    var fullLink = gallery.slug ? 'photos.racetagger.cloud/' + gallery.slug : '(no slug)';
     document.getElementById('gallery-detail-slug').textContent = fullLink;
     document.getElementById('gallery-detail-status').textContent = gallery.status;
     document.getElementById('gallery-detail-views').textContent = gallery.total_views || 0;
@@ -1523,6 +1534,159 @@
         btn.style.color = 'var(--text-secondary)';
         btn.style.borderColor = 'var(--border-color)';
       }
+    }
+  };
+
+  // ==================== R2 EXECUTION STATUS PANEL ====================
+
+  async function loadR2ExecutionStatus() {
+    var listEl = document.getElementById('r2-execution-list');
+    var emptyEl = document.getElementById('r2-execution-empty');
+    if (!listEl) return;
+
+    try {
+      // Get recent executions first
+      var execResult = await window.api.invoke('delivery-get-recent-executions');
+      if (!execResult || !execResult.success || !execResult.data || execResult.data.length === 0) {
+        listEl.innerHTML = '';
+        if (emptyEl) emptyEl.style.display = 'block';
+        return;
+      }
+
+      var executions = execResult.data;
+      var html = '';
+
+      // Load R2 status for each execution (limit to 10 most recent)
+      var recentExecs = executions.slice(0, 10);
+      for (var exec of recentExecs) {
+        try {
+          var statusResult = await window.api.invoke('delivery-r2-upload-status', exec.id);
+          if (!statusResult || !statusResult.success) continue;
+          var st = statusResult.data;
+          if (st.total === 0) continue;
+
+          var pct = st.total > 0 ? Math.round((st.completed / st.total) * 100) : 0;
+          var hasIssues = st.failed > 0 || st.queued > 0;
+          var allDone = st.completed === st.total;
+          var borderColor = allDone ? 'rgba(34, 197, 94, 0.3)' : hasIssues ? 'rgba(239, 68, 68, 0.3)' : 'rgba(255,255,255,0.06)';
+          var statusBadge = allDone
+            ? '<span style="font-size:10px;padding:3px 8px;border-radius:10px;background:rgba(34,197,94,0.15);color:#4ade80;font-weight:600;">✓ Complete</span>'
+            : st.failed > 0
+            ? '<span style="font-size:10px;padding:3px 8px;border-radius:10px;background:rgba(239,68,68,0.15);color:#f87171;font-weight:600;">⚠ ' + st.failed + ' Failed</span>'
+            : st.queued > 0
+            ? '<span style="font-size:10px;padding:3px 8px;border-radius:10px;background:rgba(251,191,36,0.15);color:#fbbf24;font-weight:600;">⏳ ' + st.queued + ' Queued</span>'
+            : '<span style="font-size:10px;padding:3px 8px;border-radius:10px;background:rgba(148,163,184,0.15);color:#94a3b8;font-weight:600;">○ Pending</span>';
+
+          var execDate = exec.execution_at ? new Date(exec.execution_at).toLocaleDateString('en-US', { day:'numeric', month:'short', year:'numeric' }) : '';
+          var execName = exec.name || 'Execution';
+          var sourceFolder = exec.source_folder || null;
+
+          html += '<div style="background:var(--bg-card,#1e293b);border:1px solid ' + borderColor + ';border-radius:10px;padding:14px;transition:border-color 0.3s;">';
+          html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">';
+          html += '<div><span style="font-size:13px;font-weight:600;color:var(--text-primary);">' + execName + '</span>';
+          html += '<span style="font-size:11px;color:var(--text-muted);margin-left:8px;">' + execDate + '</span></div>';
+          html += statusBadge;
+          html += '</div>';
+
+          // Source folder path + update button (only if not all completed)
+          if (!allDone) {
+            html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;padding:6px 8px;background:rgba(255,255,255,0.03);border-radius:6px;border:1px solid rgba(255,255,255,0.04);">';
+            html += '<span style="font-size:10px;color:var(--text-muted);white-space:nowrap;">📁</span>';
+            html += '<span id="r2-folder-' + exec.id + '" style="font-size:10px;color:' + (sourceFolder ? 'var(--text-muted)' : '#f87171') + ';overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;" title="' + escapeHtml(sourceFolder || 'No folder set') + '">';
+            html += sourceFolder ? escapeHtml(sourceFolder) : '<em>No source folder set</em>';
+            html += '</span>';
+            html += '<button onclick="window.__r2UpdateFolder(\'' + exec.id + '\')" style="background:none;border:1px solid rgba(148,163,184,0.2);color:#94a3b8;padding:2px 8px;border-radius:5px;font-size:9px;cursor:pointer;white-space:nowrap;flex-shrink:0;" title="Browse for new folder location">📂 Update</button>';
+            html += '</div>';
+          }
+
+          // Progress bar
+          html += '<div style="background:rgba(255,255,255,0.06);border-radius:4px;height:4px;overflow:hidden;margin-bottom:8px;">';
+          var barColor = allDone ? '#22c55e' : hasIssues ? '#f59e0b' : '#3b82f6';
+          html += '<div style="height:100%;border-radius:4px;background:' + barColor + ';width:' + pct + '%;transition:width 0.4s ease;"></div>';
+          html += '</div>';
+
+          // Stats row
+          html += '<div style="display:flex;gap:12px;font-size:11px;color:var(--text-muted);align-items:center;flex-wrap:wrap;">';
+          html += '<span>📷 ' + st.total + ' images</span>';
+          html += '<span style="color:#4ade80;">✓ ' + st.completed + '</span>';
+          if (st.failed > 0) html += '<span style="color:#f87171;">✗ ' + st.failed + '</span>';
+          if (st.queued > 0) html += '<span style="color:#fbbf24;">⏳ ' + st.queued + '</span>';
+          if (st.pending > 0) html += '<span>○ ' + st.pending + ' pending</span>';
+
+          // Action buttons
+          if (st.failed > 0 || st.queued > 0) {
+            html += '<div style="margin-left:auto;display:flex;gap:6px;">';
+            html += '<button onclick="window.__r2RetryExecution(\'' + exec.id + '\')" style="background:none;border:1px solid rgba(59,130,246,0.3);color:#60a5fa;padding:3px 10px;border-radius:6px;font-size:10px;cursor:pointer;font-weight:600;">↻ Retry</button>';
+            html += '<button onclick="window.__r2ResetExecution(\'' + exec.id + '\')" style="background:none;border:1px solid rgba(239,68,68,0.2);color:#f87171;padding:3px 10px;border-radius:6px;font-size:10px;cursor:pointer;">Reset</button>';
+            html += '</div>';
+          }
+          html += '</div>';
+          html += '</div>';
+        } catch (e) {
+          console.warn('[R2 Status] Error loading status for execution', exec.id, e);
+        }
+      }
+
+      listEl.innerHTML = html;
+      if (emptyEl) emptyEl.style.display = html ? 'none' : 'block';
+    } catch (e) {
+      console.error('[R2 Status] Error:', e);
+      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;text-align:center;padding:16px;">Error loading R2 status</div>';
+    }
+  }
+
+  // Global handlers for retry/reset buttons (called from onclick in generated HTML)
+  window.__r2RetryExecution = async function(executionId) {
+    try {
+      // First reset failed/queued back to pending
+      await window.api.invoke('delivery-r2-reset-status', { executionId, statuses: ['failed', 'queued'] });
+      // Then start the upload
+      var result = await window.api.invoke('delivery-r2-upload-start', executionId);
+      if (result && result.success && result.data) {
+        if (result.data.error) {
+          alert('R2 Upload: ' + result.data.error);
+        } else {
+          console.log('[R2] Retry queued: ' + (result.data.queued || 0) + ' images');
+        }
+      }
+      // Refresh the status display after a short delay
+      setTimeout(loadR2ExecutionStatus, 1500);
+    } catch (e) {
+      alert('Retry failed: ' + (e.message || e));
+    }
+  };
+
+  window.__r2ResetExecution = async function(executionId) {
+    if (!confirm('Reset all failed/queued uploads for this execution back to pending?')) return;
+    try {
+      var result = await window.api.invoke('delivery-r2-reset-status', { executionId, statuses: ['failed', 'queued'] });
+      if (result && result.success) {
+        console.log('[R2] Reset ' + (result.data?.reset || 0) + ' images');
+        await loadR2ExecutionStatus();
+      }
+    } catch (e) {
+      alert('Reset failed: ' + (e.message || e));
+    }
+  };
+
+  window.__r2UpdateFolder = async function(executionId) {
+    try {
+      var result = await window.api.invoke('delivery-browse-source-folder', executionId);
+      if (!result || !result.success) return;
+      var data = result.data;
+      if (data.cancelled) return;
+
+      // Update the displayed path immediately
+      var folderEl = document.getElementById('r2-folder-' + executionId);
+      if (folderEl) {
+        folderEl.textContent = data.sourceFolder;
+        folderEl.title = data.sourceFolder;
+        folderEl.style.color = 'var(--text-muted)';
+      }
+
+      console.log('[R2] Source folder updated to: ' + data.sourceFolder);
+    } catch (e) {
+      alert('Failed to update folder: ' + (e.message || e));
     }
   };
 

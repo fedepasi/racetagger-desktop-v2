@@ -110,6 +110,18 @@
     <!-- Upload history list -->
     <div id="upload-history-list"></div>
 
+    <!-- Per-Execution R2 Status (DB-backed) -->
+    <div id="r2-execution-status" style="margin-top: 16px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+        <span style="font-size: 13px; font-weight: 600; color: var(--text-secondary);">Upload Status by Execution</span>
+        <button id="btn-refresh-r2-status" style="background: none; border: 1px solid var(--border-color); color: var(--text-muted); padding: 4px 10px; border-radius: 6px; font-size: 11px; cursor: pointer;" title="Refresh upload status">↻ Refresh</button>
+      </div>
+      <div id="r2-execution-list" style="display: flex; flex-direction: column; gap: 8px;"></div>
+      <div id="r2-execution-empty" style="display: none; text-align: center; padding: 16px; color: var(--text-muted); font-size: 12px;">
+        No executions with R2 upload data found.
+      </div>
+    </div>
+
     <!-- Empty state -->
     <div id="upload-history-empty" style="display: none; text-align: center; padding: 24px; color: var(--text-muted); font-size: 13px;">
       No HD uploads yet. Use the "📦 Deliver" button on the Results page to start uploading originals.

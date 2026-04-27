@@ -359,6 +359,63 @@ class DiagnosticLogger {
   }
 
   /**
+   * Return only log content from the current session — i.e. everything after
+   * the most recent [SESSION START] marker written by initialize().
+   *
+   * This replaces getRecentLogs() for the support-report flow: a naive tail
+   * buries the relevant portion when the session has been running for hours.
+   *
+   * @param safetyCapLines Maximum number of lines returned. If the current
+   *   session exceeds this cap, the head (startup banner + early context)
+   *   and the tail are preserved, with a [TRUNCATED] notice in between.
+   */
+  getCurrentSessionLogs(safetyCapLines: number = 10000): string {
+    this.flush(); // Ensure buffer is written first
+
+    try {
+      if (!fs.existsSync(this.logFile)) return '';
+      const content = fs.readFileSync(this.logFile, 'utf-8');
+      const lines = content.split('\n');
+
+      // Scan backwards for the last [SESSION START] marker
+      let sessionStartIdx = -1;
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (lines[i].indexOf('[SESSION START]') !== -1) {
+          // Include the banner row above the marker (the '=' line), if present
+          sessionStartIdx = i > 0 && lines[i - 1].startsWith('=') ? i - 1 : i;
+          break;
+        }
+      }
+
+      // If no marker in the current file (e.g. rotated away mid-session),
+      // fall back to a plain tail so we still return something useful.
+      if (sessionStartIdx === -1) {
+        return lines.slice(-safetyCapLines).join('\n');
+      }
+
+      const sessionLines = lines.slice(sessionStartIdx);
+
+      // Apply safety cap: keep head + [TRUNCATED] + tail
+      if (sessionLines.length > safetyCapLines) {
+        const HEAD = 50;
+        const tailCount = Math.max(1, safetyCapLines - HEAD - 1);
+        const head = sessionLines.slice(0, HEAD);
+        const tail = sessionLines.slice(-tailCount);
+        const omitted = sessionLines.length - HEAD - tailCount;
+        return [
+          ...head,
+          `... [TRUNCATED: ${omitted} lines omitted between session head and tail — cap=${safetyCapLines}] ...`,
+          ...tail,
+        ].join('\n');
+      }
+
+      return sessionLines.join('\n');
+    } catch (error: any) {
+      return `[Error reading current-session logs: ${error.message}]`;
+    }
+  }
+
+  /**
    * Clean up resources on app quit.
    */
   shutdown(): void {
@@ -367,6 +424,12 @@ class DiagnosticLogger {
         clearInterval(this.flushTimer);
         this.flushTimer = null;
       }
+      // Write SESSION END marker so future support reports can recognise a
+      // clean shutdown vs. a crash (absence of this marker = crash/kill).
+      try {
+        const endMarker = `\n${'='.repeat(80)}\n[SESSION END] ${new Date().toISOString()}\n${'='.repeat(80)}\n`;
+        this.buffer.push(endMarker);
+      } catch { /* ok */ }
       this.flush();
       if (this.writeStream) {
         this.writeStream.end();

@@ -1930,3 +1930,155 @@ body.dragover::after {
     animation-duration: 0.3s !important;
   }
 }
+
+/* =================================================================
+   NEW: Analysis Completion Card
+   Replaces the big celebratory `.delight-success-container` overlay
+   with a subtle banner + inline name editor. Lives on whichever page
+   is active when the analysis completes.
+   ================================================================= */
+
+.analysis-completion-card {
+  background: var(--bg-card, #1e293b);
+  border: 1px solid var(--border-color, rgba(148, 163, 184, 0.2));
+  border-radius: 12px;
+  padding: 16px 20px;
+  margin: 16px 0;
+  max-width: 720px;
+  animation: accFadeIn 0.35s ease-out both;
+  color: var(--text-primary, #f1f5f9);
+}
+
+@keyframes accFadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.analysis-completion-card.delight-hidden {
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.analysis-completion-card .acc-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.12);
+  color: var(--accent-success, #10b981);
+  font-size: 0.85rem;
+  font-weight: 600;
+  width: fit-content;
+  margin-bottom: 12px;
+}
+.analysis-completion-card .acc-check {
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.analysis-completion-card .acc-label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--text-muted, #94a3b8);
+  margin-bottom: 6px;
+}
+
+.analysis-completion-card .acc-name-input {
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 1rem;
+  font-weight: 500;
+  background: var(--bg-dark, #0f172a);
+  color: var(--text-primary, #f1f5f9);
+  border: 1px solid var(--border-color, rgba(148, 163, 184, 0.25));
+  border-radius: 8px;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.analysis-completion-card .acc-name-input:focus {
+  border-color: var(--accent-primary, #3b82f6);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+}
+
+.analysis-completion-card .acc-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.analysis-completion-card .acc-chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  background: rgba(148, 163, 184, 0.1);
+  color: var(--text-secondary, #cbd5e1);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.analysis-completion-card .acc-chip:hover {
+  background: rgba(59, 130, 246, 0.12);
+  border-color: var(--accent-primary, #3b82f6);
+  color: var(--text-primary, #f1f5f9);
+}
+
+.analysis-completion-card .acc-stats {
+  display: flex;
+  gap: 20px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color, rgba(148, 163, 184, 0.15));
+}
+.analysis-completion-card .acc-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.analysis-completion-card .acc-stat-value {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text-primary, #f1f5f9);
+}
+.analysis-completion-card .acc-stat-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-muted, #94a3b8);
+}
+
+.analysis-completion-card .acc-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+.analysis-completion-card .acc-btn {
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.08s ease;
+}
+.analysis-completion-card .acc-btn:active { transform: translateY(1px); }
+.analysis-completion-card .acc-btn[disabled] { opacity: 0.6; cursor: not-allowed; }
+
+.analysis-completion-card .acc-btn-skip {
+  background: transparent;
+  color: var(--text-secondary, #cbd5e1);
+  border-color: var(--border-color, rgba(148, 163, 184, 0.25));
+}
+.analysis-completion-card .acc-btn-skip:hover {
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.analysis-completion-card .acc-btn-save {
+  background: var(--accent-primary, #3b82f6);
+  color: #fff;
+}
+.analysis-completion-card .acc-btn-save:hover {
+  background: var(--accent-primary-hover, #2563eb);
+}

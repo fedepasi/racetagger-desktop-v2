@@ -163,7 +163,91 @@ async function loadRecentExecutions() {
 }
 
 /**
- * Render recent executions cards
+ * Human-readable sport label with emoji.
+ * Intentionally forgiving — handles the handful of codes the desktop app actually produces
+ * and otherwise falls back to a title-cased version of whatever is stored.
+ */
+function formatSportCategory(raw) {
+  if (!raw) return '🏁 Sport';
+  const key = String(raw).toLowerCase();
+  const table = {
+    motorsport:       '🏎️ Motorsport',
+    cycling:          '🚴 Cycling',
+    running:          '🏃 Running',
+    'running-cycling':'🚴 Running & Cycling',
+    triathlon:        '🏊 Triathlon',
+    motorcycle:       '🏍️ Motorcycle',
+    karting:          '🏎️ Karting',
+    horse:            '🐎 Horse Racing',
+    skiing:           '⛷️ Skiing',
+    generic:          '🏁 Generic'
+  };
+  if (table[key]) return table[key];
+  return '🏁 ' + (raw.charAt(0).toUpperCase() + raw.slice(1));
+}
+
+/**
+ * Compose the delivery-badge HTML for a single execution, gated on the
+ * per-user feature flags we got back from the IPC handler.
+ * Returns an empty string when the user has no delivery features active
+ * (so the row stays clean rather than showing "N/A" pills).
+ */
+function renderDeliveryBadges(exec) {
+  const d = exec.delivery;
+  if (!d) return '';
+  const flags = d.featureFlags || {};
+  const badges = [];
+
+  // --- Gallery badge ---
+  if (flags.gallery_enabled) {
+    const galleries = Array.isArray(d.galleries) ? d.galleries : [];
+    if (galleries.length === 0) {
+      badges.push(`<span class="badge-delivery none" title="Not yet delivered to any gallery">📂 Not delivered</span>`);
+    } else if (galleries.length === 1) {
+      const g = galleries[0];
+      const title = g.title || 'Gallery';
+      badges.push(
+        `<span class="badge-delivery ok" data-gallery-id="${escapeHtml(g.id || '')}" title="Delivered to ${escapeHtml(title)} (${g.count} photos)">✓ ${escapeHtml(title)}</span>`
+      );
+    } else {
+      const names = galleries.slice(0, 3).map(g => g.title).join(', ');
+      badges.push(
+        `<span class="badge-delivery ok" title="Delivered to: ${escapeHtml(names)}">✓ ${galleries.length} galleries</span>`
+      );
+    }
+  }
+
+  // --- HD (R2) badge ---
+  if (flags.r2_storage_enabled) {
+    const hd = d.hd || 'none';
+    switch (hd) {
+      case 'uploaded':
+        badges.push(`<span class="badge-delivery ok" title="All ${d.hdTotal} originals uploaded">✓ HD ready</span>`);
+        break;
+      case 'uploading':
+      case 'pending':
+      case 'queued':
+        badges.push(`<span class="badge-delivery progress" title="HD upload in progress (${d.hdCount}/${d.hdTotal})"><span class="spin-dot"></span> HD uploading</span>`);
+        break;
+      case 'failed':
+        badges.push(`<span class="badge-delivery failed" title="HD upload failed">✕ HD failed</span>`);
+        break;
+      case 'partial':
+        badges.push(`<span class="badge-delivery partial" title="Some originals uploaded (${d.hdCount}/${d.hdTotal})">◐ HD partial</span>`);
+        break;
+      case 'none':
+      default:
+        // No-op: don't clutter the row with "HD not uploaded" for every execution.
+        // The gallery-less case above already communicates "no delivery happened".
+        break;
+    }
+  }
+
+  return badges.length ? `<span class="delivery-badges">${badges.join('')}</span>` : '';
+}
+
+/**
+ * Render recent executions as compact rows (.card-b).
  */
 function renderRecentExecutions(executions) {
   const container = document.getElementById('recent-executions-list');
@@ -183,33 +267,172 @@ function renderRecentExecutions(executions) {
       ? Math.round((exec.imagesWithNumbers / exec.totalImages) * 100)
       : 0;
 
+    // Title falls back to a sensible default when the user hasn't renamed the execution.
+    const hasCustomName = !!(exec.executionName && String(exec.executionName).trim());
+    const displayName = hasCustomName
+      ? exec.executionName
+      : `${formatSportCategory(exec.sportCategory).replace(/^\S+\s/, '')} — ${formattedDate}`;
+    const titleClass = hasCustomName ? 'title' : 'title is-default';
+
+    const preset = exec.participantPreset;
+    const presetLabel = preset && preset.name
+      ? `🎯 ${escapeHtml(preset.name)}${preset.participantCount ? ` (${preset.participantCount})` : ''}`
+      : '';
+
+    const sportLabel = escapeHtml(formatSportCategory(exec.sportCategory));
+
+    const folderPath = exec.folderPath ? escapeHtml(exec.folderPath) : '';
+    const folderLine = folderPath
+      ? `<div class="folder-line">
+           <span class="folder-icon">📂</span>
+           <span class="folder-path" title="${folderPath}">${folderPath}</span>
+           ${renderDeliveryBadges(exec)}
+         </div>`
+      : (renderDeliveryBadges(exec)
+          ? `<div class="folder-line">${renderDeliveryBadges(exec)}</div>`
+          : '');
+
+    const statusLabel = exec.status === 'completed' ? 'Completed'
+      : exec.status === 'processing' ? 'Processing'
+      : exec.status === 'failed' ? 'Failed'
+      : 'Pending';
+
     return `
-      <div class="execution-card" onclick="openExecutionResults('${exec.id}')">
-        <div class="execution-header">
-          <span class="execution-category">${escapeHtml(exec.sportCategory)}</span>
-          <span class="execution-status ${exec.status}">${exec.status}</span>
+      <div class="card-b" data-execution-id="${escapeHtml(exec.id)}">
+        <div class="card-b-main">
+          <div class="title-row">
+            <span class="${titleClass}" data-role="title">${escapeHtml(displayName)}</span>
+            <button class="rename-btn" data-role="rename" title="Rename analysis" aria-label="Rename analysis">✏️</button>
+          </div>
+          <div class="meta-line">
+            <span>${escapeHtml(formattedDate)}</span>
+            <span class="sep">·</span>
+            <span>${sportLabel}</span>
+            ${presetLabel ? `<span class="sep">·</span><span class="preset-chip">${presetLabel}</span>` : ''}
+          </div>
+          ${folderLine}
         </div>
-        <div class="execution-date">${formattedDate}</div>
-        <div class="execution-stats">
-          <div class="execution-stat">
-            <span class="execution-stat-value">${exec.totalImages}</span>
-            <span class="execution-stat-label">Photos</span>
+        <div class="card-b-side">
+          <div class="mini-stats">
+            <div class="mini-stat">
+              <span class="mini-stat-value">${exec.totalImages}</span>
+              <span class="mini-stat-label">Photos</span>
+            </div>
+            <div class="mini-stat">
+              <span class="mini-stat-value">${exec.imagesWithNumbers}</span>
+              <span class="mini-stat-label">Detected</span>
+            </div>
+            <div class="mini-stat">
+              <span class="mini-stat-value success-rate">${successRate}%</span>
+              <span class="mini-stat-label">Success</span>
+            </div>
           </div>
-          <div class="execution-stat">
-            <span class="execution-stat-value">${exec.imagesWithNumbers}</span>
-            <span class="execution-stat-label">Detected</span>
-          </div>
-          <div class="execution-stat">
-            <span class="execution-stat-value">${successRate}%</span>
-            <span class="execution-stat-label">Success</span>
-          </div>
+          <span class="status-pill ${escapeHtml(exec.status || 'pending')}">${statusLabel}</span>
         </div>
-        <button class="execution-view-btn" onclick="event.stopPropagation(); openExecutionResults('${exec.id}')">
-          View Results
-        </button>
       </div>
     `;
   }).join('');
+
+  // Wire up click handlers on each row:
+  //   - click row     → open results
+  //   - click ✏️      → enter inline rename mode
+  //   - click a badge → (reserved) suppress row click so the badge can navigate later
+  container.querySelectorAll('.card-b').forEach((row) => {
+    const executionId = row.dataset.executionId;
+
+    row.addEventListener('click', (e) => {
+      // If user clicked the rename button or an already-open input, ignore.
+      const target = e.target;
+      if (target.closest('[data-role="rename"]') || target.closest('[data-role="rename-input"]')) return;
+      if (target.closest('.badge-delivery')) {
+        // Reserved: in the future, clicking a gallery badge can navigate to the gallery
+        // detail page. For now we just prevent the row click from firing.
+        e.stopPropagation();
+        return;
+      }
+      openExecutionResults(executionId);
+    });
+
+    const renameBtn = row.querySelector('[data-role="rename"]');
+    if (renameBtn) {
+      renameBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        enterRenameMode(row, executionId);
+      });
+    }
+  });
+}
+
+/**
+ * Swap the title <span> for an editable <input> and wire up Enter/Esc/blur.
+ */
+function enterRenameMode(row, executionId) {
+  const titleEl = row.querySelector('[data-role="title"]');
+  const renameBtn = row.querySelector('[data-role="rename"]');
+  if (!titleEl) return;
+
+  const currentText = titleEl.textContent;
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = currentText;
+  input.maxLength = 120;
+  input.className = 'rename-input';
+  input.setAttribute('data-role', 'rename-input');
+  input.setAttribute('aria-label', 'Rename analysis');
+
+  titleEl.replaceWith(input);
+  if (renameBtn) renameBtn.style.display = 'none';
+
+  input.focus();
+  input.select();
+
+  let finalized = false;
+  const restore = (newText, isDefault) => {
+    if (finalized) return;
+    finalized = true;
+    const span = document.createElement('span');
+    span.className = isDefault ? 'title is-default' : 'title';
+    span.setAttribute('data-role', 'title');
+    span.textContent = newText;
+    input.replaceWith(span);
+    if (renameBtn) renameBtn.style.display = '';
+  };
+
+  const commit = async () => {
+    const trimmed = input.value.trim();
+    if (!trimmed || trimmed === currentText) {
+      // No-op: restore previous value with original default-ness.
+      restore(currentText, titleEl.classList.contains('is-default'));
+      return;
+    }
+    try {
+      const result = await window.api.invoke('rename-execution', executionId, trimmed);
+      if (result && result.success) {
+        restore(trimmed, false);
+      } else {
+        console.warn('[Home] rename-execution failed:', result);
+        restore(currentText, titleEl.classList.contains('is-default'));
+      }
+    } catch (err) {
+      console.error('[Home] rename-execution error:', err);
+      restore(currentText, titleEl.classList.contains('is-default'));
+    }
+  };
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      commit();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      restore(currentText, titleEl.classList.contains('is-default'));
+    }
+  });
+
+  input.addEventListener('blur', () => {
+    commit();
+  });
 }
 
 /**
