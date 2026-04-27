@@ -93,3 +93,4 @@ ml-training/rf-detr-onnx-converter
 src/assets/models/
 .claude/settings.local.json
 tests/exec_*.json
+.claude/worktrees/
