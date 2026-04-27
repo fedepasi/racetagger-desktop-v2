@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RaceTagger - Analysis Results</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <link rel="stylesheet" href="css/processing-status.css">
+  <link rel="stylesheet" href="css/results-integrated.css">
+  <link rel="stylesheet" href="css/feedback-modal.css">
+</head>
+<body>
+  <div class="results-page">
+    <!-- Header -->
+    <div class="results-header">
+      <div class="results-header-top">
+        <div class="results-title">
+          <div class="results-breadcrumb">
+            <span>🏠 Main</span>
+            <span>→</span>
+            <span>📊 Results</span>
+            <span id="execution-badge"></span>
+          </div>
+          <h1 id="results-title">Analysis Complete!</h1>
+          <p class="results-subtitle" id="results-subtitle">Loading execution data...</p>
+          <div class="results-info-tags" id="results-info-tags"></div>
+        </div>
+
+        <div class="results-actions">
+          <button id="btn-unified-export" class="btn-export" style="display: none;" title="Export files with rename, organize, and IPTC metadata — or write IPTC to originals">
+            📤 Export & IPTC
+          </button>
+          <button id="btn-done" class="btn-done">
+            ✅ DONE!
+          </button>
+          <button id="btn-new-analysis" class="btn-new-analysis">
+            ✨ Start New Analysis
+          </button>
+        </div>
+      </div>
+
+      <div class="results-stats" id="results-stats">
+        <div class="results-stat-item">
+          <span class="results-stat-value" id="lv-total">0</span>
+          <span class="results-stat-label">Total Images</span>
+        </div>
+        <div class="results-stat-item results-stat-item--success">
+          <span class="results-stat-value" id="lv-matched">0</span>
+          <span class="results-stat-label">Matched</span>
+        </div>
+        <div class="results-stat-item results-stat-item--warning">
+          <span class="results-stat-value" id="lv-no-match">0</span>
+          <span class="results-stat-label">No Match</span>
+        </div>
+        <div class="results-stat-item results-stat-item--info">
+          <span class="results-stat-value" id="lv-corrections">0</span>
+          <span class="results-stat-label">Corrections</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Content -->
+    <div class="results-content">
+      <!-- Loading State -->
+      <div class="results-loading" id="results-loading">
+        <div class="loading-spinner"></div>
+        <h3>Loading Results...</h3>
+        <p>Please wait while we load your analysis results</p>
+      </div>
+
+      <!-- Error State -->
+      <div class="results-error" id="results-error">
+        <div class="error-icon">❌</div>
+        <h3>Failed to Load Results</h3>
+        <p id="error-message">An error occurred while loading the results</p>
+        <a href="index.html" class="btn-new-analysis">← Back to Main</a>
+      </div>
+
+      <!-- Empty State -->
+      <div class="results-empty" id="results-empty">
+        <div class="empty-icon">📋</div>
+        <h3>No Results Found</h3>
+        <p>This execution doesn't have any results yet</p>
+        <a href="index.html" class="btn-new-analysis">← Back to Main</a>
+      </div>
+
+      <!-- Log Visualizer Container -->
+      <div id="log-visualizer-container" style="display: none;">
+        <!-- Il LogVisualizer sarà inserito qui -->
+      </div>
+    </div>
+  </div>
+
+  <script src="js/gallery-zoom.js"></script>
+  <script src="js/log-visualizer.js"></script>
+  <script src="js/results-page.js"></script>
+  <script src="js/unified-export-iptc-modal.js"></script>
+  <script src="js/feedback-modal.js"></script>
+
+  <script>
+    // Wait for DOM to be ready before attaching event listeners
+    document.addEventListener('DOMContentLoaded', () => {
+      console.log('[Results] Attaching navigation button listeners');
+
+      const btnDone = document.getElementById('btn-done');
+      const btnNewAnalysis = document.getElementById('btn-new-analysis');
+
+      if (btnDone) {
+        btnDone.addEventListener('click', async () => {
+          console.log('[Results] DONE button clicked');
+
+          // Check for unsaved changes before leaving
+          if (window.logVisualizer && window.logVisualizer.hasUnsavedChanges) {
+            const confirmed = confirm('You have unsaved changes. Save before leaving?');
+            if (confirmed) {
+              try {
+                await window.logVisualizer.saveAllChanges();
+              } catch (error) {
+                console.error('[Results] Error saving changes:', error);
+                const proceed = confirm('Error saving changes. Leave anyway?');
+                if (!proceed) return;
+              }
+            }
+          }
+
+          console.log('[Results] Navigating to home...');
+          window.location.href = 'index.html';
+        });
+      }
+
+      if (btnNewAnalysis) {
+        btnNewAnalysis.addEventListener('click', async () => {
+          console.log('[Results] Start New Analysis button clicked');
+
+          // Check for unsaved changes
+          if (window.logVisualizer && window.logVisualizer.hasUnsavedChanges) {
+            const confirmed = confirm('You have unsaved changes. Save before starting new analysis?');
+            if (confirmed) {
+              try {
+                await window.logVisualizer.saveAllChanges();
+              } catch (error) {
+                console.error('[Results] Error saving changes:', error);
+                const proceed = confirm('Error saving changes. Continue anyway?');
+                if (!proceed) return;
+              }
+            }
+          }
+
+          console.log('[Results] Navigating to analysis section...');
+          // Use sessionStorage to tell index.html to open analysis tab
+          sessionStorage.setItem('navigateToSection', 'analysis');
+          window.location.href = 'index.html';
+        });
+      }
+
+      console.log('[Results] Navigation buttons setup complete');
+    });
+  </script>
+
+  <!-- Support FAB — same system as index.html, no duplication -->
+  <div class="feedback-fab-wrapper" id="feedback-fab-wrapper">
+    <div class="feedback-fab-tooltip" id="feedback-fab-tooltip">
+      <span class="feedback-fab-tooltip-text">Report a bug, request a feature, or share your feedback — we're listening!</span>
+      <button class="feedback-fab-tooltip-close" id="feedback-fab-tooltip-close" aria-label="Close">&times;</button>
+    </div>
+    <button class="feedback-fab" id="feedback-fab" onclick="openFeedbackModal()" title="Support">
+      <svg class="feedback-fab-icon" viewBox="-1 -2 26 27" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 11h1a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H3a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1Z"/>
+        <path d="M21 11h-1a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h1a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1Z"/>
+        <path d="M2 11V9a10 10 0 0 1 20 0v2"/>
+        <path d="M18 18v1a2 2 0 0 1-2 2h-2"/>
+      </svg>
+    </button>
+  </div>
+</body>
+</html>

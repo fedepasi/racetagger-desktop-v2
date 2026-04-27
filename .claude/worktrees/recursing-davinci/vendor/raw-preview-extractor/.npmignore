@@ -1,0 +1,27 @@
+# Source files
+src/cpp/
+examples/
+test/
+
+# Development files
+.gitignore
+.git/
+*.md
+!README.md
+
+# Build tools
+tsconfig.json
+jest.config.js
+binding.gyp
+
+# IDE files
+.vscode/
+.idea/
+
+# Test files
+coverage/
+.nyc_output/
+
+# OS files
+.DS_Store
+Thumbs.db

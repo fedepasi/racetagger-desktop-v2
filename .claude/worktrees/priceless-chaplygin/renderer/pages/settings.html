@@ -1,0 +1,154 @@
+<!-- Settings Page Content -->
+<!-- Loaded dynamically by router.js -->
+
+<div id="section-settings" class="content-section active-section">
+  <div class="settings-page">
+    <h1 class="page-title">Settings</h1>
+
+    <!-- Account & Profile -->
+    <div class="card mb-lg">
+      <div class="card-header">
+        <div class="card-title">Account & Profile</div>
+      </div>
+      <div class="card-body">
+        <div class="settings-item">
+          <div class="settings-item-label">Email</div>
+          <div class="settings-item-value" id="settings-user-email">Loading...</div>
+        </div>
+        <div class="settings-item">
+          <div class="settings-item-label">Analyses Remaining</div>
+          <div class="settings-item-value">
+            <span id="settings-token-balance">0</span> images
+            <button id="settings-buy-tokens-btn" class="btn btn-outline btn-sm">Buy more</button>
+          </div>
+        </div>
+        <div class="settings-item">
+          <div class="settings-item-label">Account Status</div>
+          <div class="settings-item-value" id="settings-subscription-status">
+            <span class="status-badge status-active">Active</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Privacy & AI -->
+    <div class="card mb-lg">
+      <div class="card-header">
+        <div class="card-title">Privacy & AI</div>
+      </div>
+      <div class="card-body">
+        <div class="toggle-option">
+          <label class="toggle-container" for="settings-training-consent">
+            <input type="checkbox" id="settings-training-consent" class="toggle-input">
+            <div class="toggle-content">
+              <div class="toggle-title">AI Training Contribution</div>
+              <div class="form-text">
+                Help improve RaceTagger by allowing your processed images to be used for AI training.
+              </div>
+            </div>
+          </label>
+        </div>
+        <div class="info-box mt-md">
+          <span class="info-icon">ℹ️</span>
+          <div class="info-text text-sm">
+            <strong>What does this mean?</strong><br>
+            When enabled, images you analyze may be used to improve our AI recognition accuracy.
+            <ul class="consent-details-list">
+              <li>Images are stored securely and used only for model training</li>
+              <li>No personal data or metadata is shared externally</li>
+              <li>You can disable this at any time</li>
+            </ul>
+          </div>
+        </div>
+        <div class="consent-timestamp" id="settings-consent-updated"></div>
+
+        <hr style="border: none; border-top: 1px solid var(--border-color); margin: 16px 0;">
+
+        <div class="toggle-option">
+          <label class="toggle-container" for="settings-error-telemetry">
+            <input type="checkbox" id="settings-error-telemetry" class="toggle-input" checked>
+            <div class="toggle-content">
+              <div class="toggle-title">Automatic Error Reporting</div>
+              <div class="form-text">
+                Automatically send anonymous error reports when critical failures occur, helping us fix issues faster.
+              </div>
+            </div>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Local AI (Ollama) -->
+    <div class="card mb-lg">
+      <div class="card-header">
+        <div class="card-title">Local AI (Ollama)</div>
+      </div>
+      <div class="card-body">
+        <p class="form-text mb-md">
+          Run GLM-OCR locally via <strong>Ollama</strong> for offline race number recognition — no tokens required.
+          Model: <code>glm-ocr</code> (0.9B params, ~2.2 GB download).
+        </p>
+
+        <!-- Status row -->
+        <div class="settings-item">
+          <div class="settings-item-label">Ollama Status</div>
+          <div class="settings-item-value">
+            <span id="ollama-status-badge" class="status-badge status-inactive">Checking...</span>
+            <span id="ollama-version-label" style="margin-left:8px; font-size:0.8em; color:var(--text-muted);"></span>
+          </div>
+        </div>
+
+        <!-- Model row -->
+        <div class="settings-item">
+          <div class="settings-item-label">GLM-OCR Model</div>
+          <div class="settings-item-value">
+            <span id="ollama-model-badge" class="status-badge status-inactive">Not downloaded</span>
+            <span id="ollama-model-size-label" style="margin-left:8px; font-size:0.8em; color:var(--text-muted);"></span>
+          </div>
+        </div>
+
+        <!-- Progress bar (hidden by default) -->
+        <div id="ollama-download-progress-wrap" style="display:none; margin-top:12px;">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <div style="flex:1; height:8px; background:var(--border-color); border-radius:4px; overflow:hidden;">
+              <div id="ollama-download-progress-bar" style="height:100%; width:0%; background:var(--color-turquoise); transition:width 0.3s;"></div>
+            </div>
+            <span id="ollama-download-progress-pct" style="font-size:0.8em; color:var(--text-muted); min-width:36px; text-align:right;">0%</span>
+          </div>
+          <div id="ollama-download-status-text" style="font-size:0.75em; color:var(--text-muted); margin-top:4px;">Downloading model...</div>
+        </div>
+
+        <!-- Action buttons -->
+        <div style="display:flex; gap:10px; margin-top:16px; flex-wrap:wrap;">
+          <button id="ollama-refresh-btn" class="btn btn-outline btn-sm">Refresh Status</button>
+          <button id="ollama-download-btn" class="btn btn-primary btn-sm" style="display:none;">Download Model (2.2 GB)</button>
+          <button id="ollama-test-btn" class="btn btn-outline btn-sm" style="display:none;">Test Inference</button>
+        </div>
+
+        <!-- Test result (hidden by default) -->
+        <div id="ollama-test-result" style="display:none; margin-top:12px; padding:10px; background:var(--bg-secondary); border-radius:6px; font-size:0.8em; font-family:monospace; white-space:pre-wrap; max-height:120px; overflow-y:auto;"></div>
+
+        <div class="info-box mt-md">
+          <span class="info-icon">ℹ️</span>
+          <div class="info-text text-sm">
+            Ollama must be installed separately from <strong>ollama.com</strong>. Once installed and running,
+            download the GLM-OCR model here. Local inference uses no internet connection and consumes no tokens.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- About -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">About</div>
+      </div>
+      <div class="card-body">
+        <div class="settings-item">
+          <div class="settings-item-label">Version</div>
+          <div class="settings-item-value" id="settings-app-version">Loading...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Racetagger XMP Generator 1.0">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about=""
+      xmlns:dc="http://purl.org/dc/elements/1.1/"
+      xmlns:xmp="http://ns.adobe.com/xap/1.0/">
+      <dc:subject>
+        <rdf:Bag>
+          <rdf:li>5</rdf:li>
+          <rdf:li>leclerc</rdf:li>
+          <rdf:li>ferrari</rdf:li>
+          <rdf:li>racetagger</rdf:li>
+        </rdf:Bag>
+      </dc:subject>
+      <xmp:Instructions>RACETAGGER_V1:{&quot;v&quot;:1,&quot;numbers&quot;:[&quot;5&quot;,&quot;12&quot;],&quot;drivers&quot;:[[&quot;Driver A&quot;],[&quot;Driver B&quot;]],&quot;teams&quot;:[&quot;Team A&quot;,&quot;Team B&quot;],&quot;category&quot;:&quot;motorsport&quot;,&quot;folders&quot;:{&quot;folder_1&quot;:&quot;Class_GT3&quot;,&quot;folder_2&quot;:&quot;All_Cars&quot;},&quot;ts&quot;:&quot;2026-02-18T12:00:00.000Z&quot;}</xmp:Instructions>
+      <xmp:MetadataDate>2026-02-20T17:20:16.896Z</xmp:MetadataDate>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>

@@ -1,0 +1,348 @@
+<!-- Destinations Page Content -->
+<!-- Loaded dynamically by router.js -->
+
+      <div id="section-destinations" class="content-section active-section">
+        <!-- VIEW 1: Lista destinazioni (default) -->
+        <div id="destinations-list-view" class="destinations-subview active">
+          <div class="destinations-page">
+            <div class="page-header">
+              <h1 class="page-title">Export Destinations</h1>
+              <button id="add-destination-btn" class="btn btn-primary">
+                <span class="btn-icon">+</span> New Destination
+              </button>
+            </div>
+
+            <div class="destinations-intro mb-lg">
+              <div class="intro-card">
+                <span class="intro-icon">📤</span>
+                <div class="intro-content">
+                  <h3>Configure Export Destinations</h3>
+                  <p>Set up multiple export destinations with custom metadata, filename patterns, and folder structures. Each destination can have its own agency credits, keywords, and Person Shown templates.</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Destinations List -->
+            <div id="destinations-list" class="destinations-grid">
+              <!-- Destinations will be rendered here by JS -->
+            </div>
+
+            <!-- Empty State -->
+            <div id="destinations-empty" class="empty-state" style="display: none;">
+              <div class="empty-icon">📁</div>
+              <h3>No Destinations Configured</h3>
+              <p>Create your first export destination to organize your photos with custom metadata and folder structures.</p>
+              <button id="create-first-dest-btn" class="btn btn-primary">
+                <span class="btn-icon">+</span> Create First Destination
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- VIEW 2: Editor destinazione (nascosto di default) -->
+        <div id="destinations-editor-view" class="destinations-subview">
+          <!-- Editor Page Header -->
+          <div class="editor-page-header">
+            <div class="editor-header-left">
+              <button id="dest-back-btn" class="btn btn-icon" title="Back to list">
+                <span>←</span> Back
+              </button>
+              <h1 id="dest-editor-title">New Export Destination</h1>
+            </div>
+            <div class="editor-header-right">
+              <span id="dest-unsaved-indicator" class="unsaved-badge" style="display: none;">
+                Unsaved changes
+              </span>
+              <button id="dest-cancel-btn" class="btn btn-secondary">Cancel</button>
+              <button id="dest-save-btn" class="btn btn-primary">
+                <span class="btn-icon">💾</span> Save Destination
+              </button>
+            </div>
+          </div>
+
+          <!-- Tabs Navigation -->
+          <div class="destination-tabs">
+            <button class="tab-btn active" data-tab="general">📁 General</button>
+            <button class="tab-btn" data-tab="metadata">📋 Credits & Contact</button>
+            <button class="tab-btn" data-tab="templates">📝 Templates</button>
+            <button class="tab-btn" data-tab="keywords">🏷️ Keywords</button>
+            <button class="tab-btn" data-tab="ftp">☁️ FTP Upload</button>
+          </div>
+
+          <!-- Form Container -->
+          <div class="editor-form-container">
+            <!-- Tab Content: General -->
+            <div class="tab-content active" data-tab="general">
+              <div class="form-row">
+                <div class="form-group flex-2">
+                  <label for="dest-name">Destination Name *</label>
+                  <input type="text" id="dest-name" placeholder="e.g., Getty Images, Local Archive">
+                </div>
+                <div class="form-group flex-1">
+                  <label>&nbsp;</label>
+                  <label class="checkbox-label">
+                    <input type="checkbox" id="dest-is-default">
+                    <span>Default destination</span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="dest-base-folder">Base Folder</label>
+                <div class="input-with-button">
+                  <input type="text" id="dest-base-folder" placeholder="/path/to/export/folder" readonly>
+                  <button type="button" id="dest-browse-folder-btn" class="btn btn-secondary btn-sm">
+                    Browse...
+                  </button>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="dest-subfolder-pattern">
+                  Subfolder Pattern
+                  <span class="label-hint" title="Pattern for organizing into subfolders">ℹ️</span>
+                </label>
+                <input type="text" id="dest-subfolder-pattern" placeholder="{team}/{number}" value="{team}/{number}">
+                <div class="form-hint">
+                  Placeholders: <code>{team}</code> <code>{number}</code> <code>{name}</code> <code>{event}</code> <code>{date}</code>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group flex-2">
+                  <label for="dest-filename-pattern">
+                    Filename Pattern
+                    <span class="label-hint" title="Pattern for renaming exported files">ℹ️</span>
+                  </label>
+                  <input type="text" id="dest-filename-pattern" placeholder="{surname}_{seq:4}">
+                  <div class="form-hint">
+                    Placeholders: <code>{original}</code> <code>{surname}</code> <code>{number}</code> <code>{seq}</code> <code>{seq:N}</code> <code>{date}</code>
+                  </div>
+                </div>
+                <div class="form-group flex-1">
+                  <label for="dest-seq-mode">Sequence Mode</label>
+                  <select id="dest-seq-mode">
+                    <option value="per_subject">Per Subject</option>
+                    <option value="global">Global</option>
+                    <option value="per_folder">Per Folder</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="filename-preview">
+                <span class="preview-label">Preview:</span>
+                <span id="dest-filename-preview" class="preview-value">Verstappen_0001.jpg</span>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="checkbox-label">
+                    <input type="checkbox" id="dest-auto-apply">
+                    <span>Auto-apply to matching images</span>
+                  </label>
+                </div>
+                <div class="form-group flex-2" id="dest-condition-group" style="display: none;">
+                  <label for="dest-apply-condition">Condition</label>
+                  <input type="text" id="dest-apply-condition" placeholder="e.g., team:Ferrari or number:16">
+                  <div class="form-hint">Format: field:value (e.g., team:Ferrari, number:16)</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Tab Content: Metadata (Credits & Contact) -->
+            <div class="tab-content" data-tab="metadata">
+              <h4>Credits & Copyright</h4>
+              <div class="form-row">
+                <div class="form-group flex-1">
+                  <label for="dest-credit">Credit (IPTC:Credit)</label>
+                  <input type="text" id="dest-credit" placeholder="Photographer/Agency name">
+                </div>
+                <div class="form-group flex-1">
+                  <label for="dest-source">Source (IPTC:Source)</label>
+                  <input type="text" id="dest-source" placeholder="e.g., Getty Images">
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group flex-1">
+                  <label for="dest-copyright">Copyright (dc:rights)</label>
+                  <input type="text" id="dest-copyright" placeholder="© 2025 Agency Name">
+                </div>
+                <div class="form-group flex-1">
+                  <label for="dest-copyright-owner">Copyright Owner</label>
+                  <input type="text" id="dest-copyright-owner" placeholder="Owner name">
+                </div>
+              </div>
+
+              <h4 class="mt-lg">Creator Info</h4>
+              <div class="form-row">
+                <div class="form-group flex-1">
+                  <label for="dest-creator">Creator (By-line)</label>
+                  <input type="text" id="dest-creator" placeholder="Photographer name">
+                </div>
+                <div class="form-group flex-1">
+                  <label for="dest-authors-position">Author's Position</label>
+                  <input type="text" id="dest-authors-position" placeholder="e.g., Staff Photographer">
+                </div>
+              </div>
+
+              <h4 class="mt-lg">Contact Information</h4>
+              <div class="form-row">
+                <div class="form-group flex-1">
+                  <label for="dest-contact-email">Email</label>
+                  <input type="email" id="dest-contact-email" placeholder="contact@agency.com">
+                </div>
+                <div class="form-group flex-1">
+                  <label for="dest-contact-website">Website</label>
+                  <input type="text" id="dest-contact-website" placeholder="https://www.agency.com">
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group flex-1">
+                  <label for="dest-contact-phone">Phone</label>
+                  <input type="tel" id="dest-contact-phone" placeholder="+1 234 567 890">
+                </div>
+                <div class="form-group flex-1">
+                  <label for="dest-contact-address">Address</label>
+                  <input type="text" id="dest-contact-address" placeholder="Street address">
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group flex-1">
+                  <label for="dest-contact-city">City</label>
+                  <input type="text" id="dest-contact-city" placeholder="City">
+                </div>
+                <div class="form-group flex-1">
+                  <label for="dest-contact-country">Country</label>
+                  <input type="text" id="dest-contact-country" placeholder="Country">
+                </div>
+              </div>
+            </div>
+
+            <!-- Tab Content: Templates -->
+            <div class="tab-content" data-tab="templates">
+              <h4>Event Information Templates</h4>
+              <div class="form-group">
+                <label for="dest-headline-template">Headline Template (IPTC:Headline)</label>
+                <input type="text" id="dest-headline-template" placeholder="{name} at {event}">
+                <div class="form-hint">
+                  Placeholders: <code>{name}</code> <code>{team}</code> <code>{number}</code> <code>{event}</code> <code>{date}</code>
+                </div>
+              </div>
+              <div class="form-group">
+                <label for="dest-event-template">Event Template (IPTC:Event)</label>
+                <input type="text" id="dest-event-template" placeholder="{event}">
+              </div>
+              <div class="form-group">
+                <label for="dest-description-template">Description Template (Caption)</label>
+                <textarea id="dest-description-template" rows="3" placeholder="{name} driving for {team} at {event}"></textarea>
+              </div>
+
+              <h4 class="mt-lg">Person Shown</h4>
+              <div class="form-group">
+                <label for="dest-person-shown-template">
+                  Person Shown Template (IPTC:PersonInImage)
+                  <span class="label-hint" title="Used by photo agencies for subject identification">ℹ️</span>
+                </label>
+                <input type="text" id="dest-person-shown-template" placeholder="{name} ({nationality}) {team}">
+                <div class="form-hint">
+                  Placeholders: <code>{name}</code> <code>{surname}</code> <code>{number}</code> <code>{team}</code> <code>{car_model}</code> <code>{nationality}</code>
+                </div>
+              </div>
+
+              <h4 class="mt-lg">Location</h4>
+              <div class="form-row">
+                <div class="form-group flex-1">
+                  <label for="dest-city">City</label>
+                  <input type="text" id="dest-city" placeholder="Monaco">
+                </div>
+                <div class="form-group flex-1">
+                  <label for="dest-country">Country</label>
+                  <input type="text" id="dest-country" placeholder="Monaco">
+                </div>
+                <div class="form-group flex-1">
+                  <label for="dest-location">Venue/Location</label>
+                  <input type="text" id="dest-location" placeholder="Circuit de Monaco">
+                </div>
+              </div>
+            </div>
+
+            <!-- Tab Content: Keywords -->
+            <div class="tab-content" data-tab="keywords">
+              <div class="form-group">
+                <label for="dest-base-keywords">Base Keywords</label>
+                <textarea id="dest-base-keywords" rows="4" placeholder="Enter keywords, one per line or comma-separated:&#10;motorsport&#10;racing&#10;F1&#10;Formula 1"></textarea>
+                <div class="form-hint">
+                  Enter keywords separated by commas or new lines. These will be added to all images exported to this destination.
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="checkbox-label">
+                  <input type="checkbox" id="dest-append-keywords" checked>
+                  <span>Append to existing image keywords (don't replace)</span>
+                </label>
+              </div>
+            </div>
+
+            <!-- Tab Content: FTP Upload (Pro) -->
+            <div class="tab-content" data-tab="ftp">
+              <div class="pro-feature-banner">
+                <span class="pro-badge">PRO</span>
+                <span>FTP/SFTP upload is available with Professional tier or above</span>
+              </div>
+
+              <div class="form-group">
+                <label for="dest-upload-method">Upload Method</label>
+                <select id="dest-upload-method">
+                  <option value="local">Local Only (Copy to folder)</option>
+                  <option value="ftp">FTP</option>
+                  <option value="sftp">SFTP (Secure)</option>
+                </select>
+              </div>
+
+              <div id="ftp-settings" style="display: none;">
+                <div class="form-row">
+                  <div class="form-group flex-2">
+                    <label for="dest-ftp-host">FTP Host</label>
+                    <input type="text" id="dest-ftp-host" placeholder="ftp.agency.com">
+                  </div>
+                  <div class="form-group flex-1">
+                    <label for="dest-ftp-port">Port</label>
+                    <input type="number" id="dest-ftp-port" value="21">
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group flex-1">
+                    <label for="dest-ftp-username">Username</label>
+                    <input type="text" id="dest-ftp-username" placeholder="username">
+                  </div>
+                  <div class="form-group flex-1">
+                    <label for="dest-ftp-password">Password</label>
+                    <input type="password" id="dest-ftp-password" placeholder="••••••••">
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label for="dest-ftp-remote-path">Remote Path</label>
+                  <input type="text" id="dest-ftp-remote-path" placeholder="/uploads/photos/">
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label class="checkbox-label">
+                      <input type="checkbox" id="dest-ftp-passive" checked>
+                      <span>Passive mode</span>
+                    </label>
+                  </div>
+                  <div class="form-group">
+                    <label class="checkbox-label">
+                      <input type="checkbox" id="dest-keep-local" checked>
+                      <span>Keep local copy after upload</span>
+                    </label>
+                  </div>
+                </div>
+                <button type="button" id="dest-test-ftp-btn" class="btn btn-secondary btn-sm">
+                  Test Connection
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>

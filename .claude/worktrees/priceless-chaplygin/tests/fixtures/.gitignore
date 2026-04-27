@@ -1,0 +1,30 @@
+# Ignore large downloaded test files
+images/high-res-*.jpg
+images/downloaded-*.nef
+images/downloaded-*.cr2
+images/downloaded-*.arw
+images/*.raw
+images/*.orf
+images/*.dng
+
+# Ignore temporary test outputs
+*.tmp
+*.temp
+*-test-output.*
+
+# Keep directory structure
+!images/README.md
+!csv/
+!metadata/
+!onnx-models/
+
+# Keep small committed sample files
+!images/sample.jpg
+!images/sample-small.nef
+!images/sample.cr2
+!images/motorsport-track.jpg
+!images/paddock.jpg
+!images/podium.jpg
+!images/portrait.jpg
+!images/race-numbers.jpg
+!images/multi-subjects.jpg

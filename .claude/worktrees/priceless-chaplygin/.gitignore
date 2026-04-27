@@ -1,0 +1,95 @@
+node_modules
+.env
+.env.*
+dist
+.DS_Store
+release
+
+# CRITICO: package-lock.json può causare conflitti cross-platform
+# Ogni piattaforma genera binari nativi diversi per better-sqlite3, sharp, ecc.
+package-lock.json
+
+# Cache Electron e npm (platform-specific)
+.electron-gyp/
+.npm/
+.cache/
+
+# Temporary files
+tmp/
+*.tmp
+temp_*
+
+# Session and cache files
+session-archive/
+*.session
+*.cache
+
+# Large image files (keep only necessary icons)
+*.dmg
+*.zip
+*.tar.gz
+*.exe
+*.msi
+*.deb
+*.AppImage
+*.blockmap
+
+# Log files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test output
+coverage/
+.nyc_output/
+
+# macOS
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Build artifacts
+*.pid
+*.seed
+*.pid.lock
+
+# Test files temporanei (creati durante debugging)
+test-*.js
+test-*.ts
+
+# ImageMagick portable binaries (too large for git)
+vendor/win32/*/imagemagick/
+vendor/darwin/imagemagick/
+vendor/linux/imagemagick/
+
+# Large vendor binaries (downloaded separately)
+vendor/win32/*/exiftool_files/
+vendor/win32/*/exiftool-*/
+
+# Google Cloud credentials (secrets)
+gen-lang-client-*.jsonml-training/
+ml-training/rf-detr-medium.pth
+ml-training/rf-detr-base.pth
+ml-training/formula_e_dataset/
+venv-ml/bin/
+venv-ml/lib/
+venv-ml/include/
+venv-ml/
+gen-lang-client-0306323675-4a0dc3eb7723.json
+racetagggen-lang-client-0306323675-4a0dc3eb7723.json
+venv-ml/bin/activate
+ml-training/rf-detr-onnx-converter
+src/assets/models/
+.claude/settings.local.json
+tests/exec_*.json

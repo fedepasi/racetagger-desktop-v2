@@ -1,0 +1,412 @@
+<!-- Analysis Page Content -->
+<!-- Loaded dynamically by router.js -->
+
+<div id="section-analysis" class="content-section active-section">
+  <div class="card mb-lg">
+    <div class="card-header">
+      <div class="card-title">Image Analysis</div>
+  </div>
+  <div class="card-body">
+    <div id="error-message" class="error-message" style="display: none;"></div>
+
+    <!-- Unified Folder & Category Selection -->
+    <div class="selection-group mb-md">
+      <!--<label class="form-label selection-group-label">Select Images Folder & Category</label>-->
+
+      <div class="selection-controls">
+        <div class="folder-section">
+          <div class="folder-selector-enhanced">
+            <div class="step-badge">1</div>
+            <label class="folder-label">
+              <span class="folder-icon">📂</span>
+              Select Images Folder
+            </label>
+            <button id="folder-select-button" class="btn btn-secondary folder-btn">
+              📂 Select Folder
+            </button>
+            <div class="form-text folder-hint folder-drop-hint">or drag & drop a folder here</div>
+            <div id="selected-folder" class="form-text folder-selected"></div>
+            <div id="image-count" class="form-text folder-hint">No images selected</div>
+          </div>
+        </div>
+
+        <div class="category-section">
+          <div class="category-selector-enhanced">
+            <div class="step-badge">2</div>
+            <label class="category-label" for="category-select">
+              <span class="category-icon">🏎️</span>
+              Sport Category
+            </label>
+            <!-- Hidden native select for value storage & compatibility -->
+            <select class="form-control category-control" id="category-select" style="display:none;">
+              <option value="motorsport">Motorsport</option>
+              <option value="running">Running & Cycling</option>
+              <option value="other">Other Sports</option>
+            </select>
+            <!-- Custom visual dropdown with rich HTML support -->
+            <div class="custom-category-dropdown" id="custom-category-dropdown">
+              <button type="button" class="custom-dropdown-trigger" id="custom-dropdown-trigger">
+                <span class="cdd-emoji">🏎️</span>
+                <span class="cdd-name">Motorsport</span>
+                <span class="cdd-chevron">&#9662;</span>
+              </button>
+              <div class="custom-dropdown-menu" id="custom-dropdown-menu">
+                <!-- Options populated dynamically by JS -->
+              </div>
+            </div>
+            <div class="form-text category-hint">
+              Choose sport type for better AI recognition
+            </div>
+          </div>
+        </div>
+
+        <div class="preset-section">
+          <div class="preset-selector-enhanced">
+            <div class="step-badge step-new">3</div>
+            <div class="preset-new-indicator">NEW</div>
+            <label class="preset-label" for="preset-select">
+              <span class="preset-icon">🎯</span>
+              Participant Preset
+            </label>
+            <!-- Hidden native select for value storage & compatibility -->
+            <select class="form-control preset-control" id="preset-select" style="display:none;">
+              <option value="">Enhance Recognition Accuracy</option>
+            </select>
+            <!-- Custom visual dropdown (cross-platform consistent rendering) -->
+            <div class="custom-preset-dropdown" id="custom-preset-dropdown">
+              <button type="button" class="custom-preset-trigger" id="custom-preset-trigger">
+                <span class="cpd-name">Enhance Recognition Accuracy</span>
+                <span class="cpd-chevron">&#9662;</span>
+              </button>
+              <div class="custom-preset-menu" id="custom-preset-menu">
+                <!-- Options populated dynamically by JS -->
+              </div>
+            </div>
+            <div class="form-text preset-hint">
+              Load participant data for precise race number matching and sponsor detection
+            </div>
+            <div class="preset-details" id="preset-details" style="display: none;">
+              <div class="preset-info">
+                <div class="preset-participants">
+                  <span id="preset-participant-count">0</span> participants loaded
+                </div>
+                <div class="preset-actions">
+                  <button type="button" class="btn btn-link preset-manage-btn" onclick="navigateToParticipants()">
+                    Manage Presets
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- FOLDER ORGANIZATION: Available as post-analysis action -->
+    <div id="folder-organization-section" class="info-box mb-md" style="display: flex; align-items: center; gap: 1rem; padding: 1.1rem 1.25rem; background: rgba(234, 179, 8, 0.08); border: 1.5px solid rgba(234, 179, 8, 0.35); border-radius: 10px;">
+      <span class="info-icon" style="font-size: 26px; filter: drop-shadow(0 0 4px rgba(234, 179, 8, 0.4));">📁</span>
+      <div class="info-text" style="color: var(--text-secondary, #ccc); font-size: 13.5px; line-height: 1.55;">
+        <strong style="color: #facc15; font-size: 14.5px;">Folder Organization</strong> is available after analysis.
+        Review your results, make any corrections, then organize photos into folders from the results page.
+      </div>
+    </div>
+
+    <!-- VISUAL TAGGING: AI-powered tag extraction for marketing search -->
+    <div id="visual-tagging-section" class="visual-tagging-section mb-md">
+      <div class="section-header mb-sm">
+        <h4>🏷️ Visual Tagging</h4>
+        <span class="token-cost-badge">+0.5 tokens/image</span>
+        <p class="form-text">Extract searchable visual tags for advanced photo search:</p>
+      </div>
+
+      <div class="toggle-option">
+        <label class="toggle-container" for="visual-tagging-enabled">
+          <input type="checkbox" id="visual-tagging-enabled" class="toggle-input">
+          <div class="toggle-slider"></div>
+          <div class="toggle-content">
+            <div class="toggle-title text-white">Enable visual tagging</div>
+            <div class="form-text">Extract location, weather, scene type, subjects, and more from each image</div>
+          </div>
+        </label>
+      </div>
+
+      <div id="visual-tagging-options" class="visual-tagging-opts mt-md" style="display: none;">
+        <div class="tag-categories-info info-box info-box-info mb-sm">
+          <span class="info-icon">🏷️</span>
+          <div class="info-text">
+            <strong>Tags extracted:</strong>
+            <ul class="tag-list">
+              <li><span class="tag-category">📍 Location</span> - track, city, landmarks</li>
+              <li><span class="tag-category">🌤️ Weather</span> - sunny, rainy, golden hour</li>
+              <li><span class="tag-category">👥 Scene</span> - action, podium, pit stop</li>
+              <li><span class="tag-category">🎯 Subjects</span> - vehicles, crowd, crew</li>
+              <li><span class="tag-category">🎨 Style</span> - motion blur, panning, close-up</li>
+              <li><span class="tag-category">😊 Emotion</span> - excitement, tension, joy</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="toggle-option">
+          <label class="toggle-container" for="embed-tags-in-metadata">
+            <input type="checkbox" id="embed-tags-in-metadata" class="toggle-input">
+            <div class="toggle-slider"></div>
+            <div class="toggle-content">
+              <div class="toggle-title text-white">Embed tags as IPTC Keywords</div>
+              <div class="form-text">Add visual tags to image metadata for search in Lightroom, Photo Mechanic, etc.</div>
+            </div>
+          </label>
+        </div>
+
+        <div class="tagging-note info-box mt-sm">
+          <span class="info-icon">⚡</span>
+          <div class="info-text">
+            <strong>Performance:</strong> Visual tagging runs in parallel with recognition, adding minimal processing time.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mb-md">
+      <button id="advanced-toggle" class="btn btn-secondary" style="display: none;">Advanced Options</button>
+      <div id="advanced-panel" class="card mt-sm" style="display: none;">
+        <div class="card-body">
+        <div class="model-selection-section">
+          <div class="section-header mb-sm">
+            <h4>Analysis Configuration</h4>
+            <p class="form-text">Select the AI model to use for analysis:</p>
+          </div>
+
+
+          <div class="form-group">
+            <label class="form-label" for="model-select">Analysis mode:</label>
+            <select class="form-control" id="model-select">
+              <option value="gemini-2.5-flash-lite-preview-06-17">FAST - Quick results for live events (10x speed, ~85% accuracy, low cost)</option>
+              <option value="gemini-2.5-flash-preview-04-17">BALANCED - Optimal for most events (3x speed, ~92% accuracy, medium cost)</option>
+              <option value="gemini-2.5-pro-preview-05-06">ADVANCED - Maximum precision results (~98% accuracy, premium cost)</option>
+            </select>
+            <div class="form-text">
+              <strong>Current mode:</strong> <span id="current-model-display">FAST</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="csv-section mt-md">
+          <div class="section-header mb-sm">
+            <h4>Starting List</h4>
+            <p class="form-text">Optionally upload a CSV file with the starting list to compare race numbers and add metadata to images:</p>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="csv-upload">Starting list CSV (optional):</label>
+            <input
+              class="form-control"
+              id="csv-upload"
+              name="csv-upload"
+              type="file"
+              accept=".csv"
+            />
+          </div>
+          <button id="download-csv-template" class="btn btn-secondary">Download CSV Template</button>
+          <div id="csv-info" class="form-text mt-sm" style="display: none;">
+            <div id="csv-filename"></div>
+            <div id="csv-entries"></div>
+          </div>
+        </div>
+
+        <div class="metadata-section mt-md">
+          <div class="section-header mb-sm">
+            <h4>Metadata Management</h4>
+            <p class="form-text">Choose how to handle image metadata:</p>
+          </div>
+
+          <div class="metadata-options space-y-3">
+            <label class="radio-option" for="metadata-strategy-no">
+              <input type="radio" id="metadata-strategy-no" name="metadata-strategy" value="no_metadata" checked>
+              <div class="radio-content">
+                <div class="radio-title">Don't add metadata</div>
+                <div class="form-text">Don't modify the image or create XMP files</div>
+              </div>
+            </label>
+
+            <label class="radio-option" for="metadata-strategy-default">
+              <input type="radio" id="metadata-strategy-default" name="metadata-strategy" value="default">
+              <div class="radio-content">
+                <div class="radio-title">Use default metatag</div>
+                <div class="form-text">Automatically add filename and date as metatag</div>
+              </div>
+            </label>
+
+            <label class="radio-option" for="metadata-strategy-manual">
+              <input type="radio" id="metadata-strategy-manual" name="metadata-strategy" value="manual">
+              <div class="radio-content">
+                <div class="radio-title">Enter metatag manually</div>
+                <div class="form-text">Specify a custom metatag for all images</div>
+              </div>
+            </label>
+
+            <div id="manual-metatag-container" class="manual-input-container" style="display: none;">
+              <input type="text" id="manual-metatag" class="form-control" placeholder="e.g: Race XYZ, 05/10/2025">
+            </div>
+
+            <label class="radio-option" for="metadata-strategy-full">
+              <input type="radio" id="metadata-strategy-full" name="metadata-strategy" value="full">
+              <div class="radio-content">
+                <div class="radio-title">Use all analysis data</div>
+                <div class="form-text">Embed all analysis results as metadata</div>
+              </div>
+            </label>
+          </div>
+
+          <div class="metadata-note">
+            <p><strong>Note:</strong> If the CSV file contains a <code>metatag</code> field, it will always be used for matching images.</p>
+          </div>
+
+          <!-- Metadata Overwrite Options -->
+          <div class="metadata-overwrite-section mt-md">
+            <div class="section-header mb-sm">
+              <h5>Metadata Write Mode</h5>
+              <p class="form-text">Choose how to handle existing metadata in images:</p>
+            </div>
+
+            <div class="overwrite-options space-y-2">
+              <label class="checkbox-option" for="keywords-overwrite">
+                <input type="checkbox" id="keywords-overwrite" name="keywords-overwrite">
+                <div class="checkbox-content">
+                  <div class="checkbox-title">Overwrite keywords</div>
+                  <div class="form-text">Replace existing IPTC keywords instead of appending</div>
+                </div>
+              </label>
+
+              <label class="checkbox-option" for="description-overwrite" id="description-overwrite-container" style="display: none;">
+                <input type="checkbox" id="description-overwrite" name="description-overwrite">
+                <div class="checkbox-content">
+                  <div class="checkbox-title">Overwrite description</div>
+                  <div class="form-text">Replace existing description instead of appending</div>
+                </div>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="resize-optimization-section mt-md">
+          <div class="section-header mb-sm">
+            <h4>Upload Optimization</h4>
+            <p class="form-text">Automatically reduce image sizes to speed up upload (original image is not modified):</p>
+          </div>
+
+          <div class="toggle-option">
+            <label class="toggle-container" for="resize-enabled">
+              <input type="checkbox" id="resize-enabled" class="toggle-input">
+              <div class="toggle-slider"></div>
+              <div class="toggle-content">
+                <div class="toggle-title">Enable upload optimization</div>
+                <div class="form-text">When enabled, large images are resized for upload while maintaining optimal quality for AI analysis</div>
+              </div>
+            </label>
+          </div>
+
+          <div id="resize-presets-container" class="preset-options mt-md" style="display: none;">
+            <div class="preset-header">
+              <h5>Optimization level:</h5>
+              <p class="form-text">Choose the balance between upload speed and analysis quality</p>
+            </div>
+
+            <div class="preset-list space-y-3">
+              <label class="preset-option" for="preset-fast">
+                <input type="radio" id="preset-fast" name="resize-preset" value="fast">
+                <div class="preset-content">
+                  <div class="preset-name">Fast</div>
+                  <div class="preset-description">1080px, 75% quality - Faster upload</div>
+                </div>
+              </label>
+
+              <label class="preset-option" for="preset-balanced">
+                <input type="radio" id="preset-balanced" name="resize-preset" value="balanced" checked>
+                <div class="preset-content">
+                  <div class="preset-name">Balanced</div>
+                  <div class="preset-description">1440px, 85% quality - Speed/quality balance (recommended)</div>
+                  <div class="preset-badge">Recommended</div>
+                </div>
+              </label>
+
+              <label class="preset-option" for="preset-quality">
+                <input type="radio" id="preset-quality" name="resize-preset" value="quality">
+                <div class="preset-content">
+                  <div class="preset-name">Quality</div>
+                  <div class="preset-description">1920px, 90% quality - Maximum analysis precision</div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <div id="resize-estimate" class="resize-info mt-sm" style="display: none;">
+            <div class="info-box">
+              <span class="info-icon">📊</span>
+              <span class="info-text">Estimated size reduction: <strong id="size-reduction-estimate">60-80%</strong></span>
+            </div>
+          </div>
+        </div>
+
+        </div>
+      </div>
+    </div>
+
+
+    <button id="upload-button" class="btn btn-primary" disabled>Analyze Folder</button>
+
+    <!-- Enhanced Progress Tracking -->
+    <div id="progress-container" class="processing-status-panel" style="display: none;">
+      <div class="processing-header">
+        <h3 class="processing-title">Processing Images...</h3>
+        <button id="cancel-processing-btn" class="btn btn-secondary btn-sm">Cancel</button>
+      </div>
+
+      <div class="processing-stats">
+        <div class="processing-counter">
+          <span id="current-image-number">1</span> of <span id="total-images">0</span> images
+        </div>
+        <div class="processing-percentage">
+          <span id="progress-percent">0</span>%
+        </div>
+        <div class="processing-eta">
+          ETA: <span id="progress-eta-time">Calculating...</span>
+        </div>
+      </div>
+
+      <div class="processing-bar-container">
+        <div id="progress-bar" class="processing-main-bar">
+          <div id="progress-fill" class="processing-fill"></div>
+        </div>
+      </div>
+
+      <div class="processing-current">
+        <div class="processing-current-image">
+          <div class="processing-image-preview" id="current-image-preview">
+            <div class="processing-image-placeholder">📸</div>
+          </div>
+          <div class="processing-image-info">
+            <span class="processing-image-status" id="current-image-status">⏳</span>
+            <span class="processing-image-name" id="current-image-name">Preparing...</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Performance Telemetry -->
+      <div class="processing-telemetry">
+        <div class="telemetry-item">
+          <span class="telemetry-label">Average Speed:</span>
+          <span class="telemetry-value" id="telemetry-average-time">-</span>
+        </div>
+        <div class="telemetry-item">
+          <span class="telemetry-label">Processing Time:</span>
+          <span class="telemetry-value" id="telemetry-processing-time">-</span>
+        </div>
+        <div class="telemetry-item">
+          <span class="telemetry-label">Images/min:</span>
+          <span class="telemetry-value" id="telemetry-throughput">-</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+<!-- END Analysis Section -->

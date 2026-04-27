@@ -1,0 +1,63 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build output
+build/
+dist/
+# NOTE: prebuilds/ is NOT ignored — native .node binaries must be in the repo
+# because CI cannot compile C++ native addons from source
+
+# TypeScript
+*.tsbuildinfo
+
+# Testing
+coverage/
+.nyc_output/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# RAW test files (too large for repo)
+test/samples/*.cr2
+test/samples/*.cr3
+test/samples/*.nef
+test/samples/*.arw
+test/samples/*.dng
+test/samples/*.raf
+test/samples/*.orf
+test/samples/*.pef
+test/samples/*.rw2
+
+# Electron example build
+examples/electron-app/dist/
+examples/electron-app/node_modules/
+
+# Native build artifacts (except .node prebuilds which are committed)
+!prebuilds/**/*.node
+*.obj
+*.pdb
+*.exp
+*.lib
+*.map
+
+# Logs
+*.log
+
+# Windows reserved files
+nul

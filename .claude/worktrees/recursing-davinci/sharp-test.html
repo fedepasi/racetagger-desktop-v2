@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sharp Debug Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .log-container {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 15px;
+            margin-top: 20px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .log-entry {
+            margin: 2px 0;
+            padding: 2px 0;
+        }
+        .log-info { color: #0066cc; }
+        .log-success { color: #28a745; }
+        .log-error { color: #dc3545; font-weight: bold; }
+        .log-warn { color: #ffc107; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🖼️ Sharp Debug Test</h1>
+        <p>This tool tests Sharp loading in the packaged RaceTagger app and displays detailed logs.</p>
+        
+        <div>
+            <button onclick="testSharpLoading()">🧪 Test Sharp Loading</button>
+            <button onclick="getDebugLogs()">📋 Get All Debug Logs</button>
+            <button onclick="clearLogs()">🗑️ Clear Logs</button>
+            <button onclick="clearDebugLogs()">🧹 Clear Debug Logs</button>
+        </div>
+        
+        <div class="log-container" id="logContainer">
+            <div class="log-entry log-info">🔵 Sharp Debug Test ready. Click "Test Sharp Loading" to begin.</div>
+        </div>
+    </div>
+
+    <script>
+        const { ipcRenderer } = require('electron');
+        
+        function addLog(level, message, timestamp = null) {
+            const logContainer = document.getElementById('logContainer');
+            const logEntry = document.createElement('div');
+            logEntry.className = `log-entry log-${level}`;
+            
+            const time = timestamp ? new Date(timestamp).toLocaleTimeString() : new Date().toLocaleTimeString();
+            let icon = '';
+            switch(level) {
+                case 'info': icon = '🔵'; break;
+                case 'success': icon = '✅'; break;
+                case 'error': icon = '❌'; break;
+                case 'warn': icon = '⚠️'; break;
+            }
+            
+            logEntry.innerHTML = `<span style="color: #666;">[${time}]</span> ${icon} ${message}`;
+            logContainer.appendChild(logEntry);
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+        
+        // Listen for Sharp debug logs from main process
+        ipcRenderer.on('sharp-debug-log', (event, logEntry) => {
+            addLog(logEntry.level, logEntry.message, logEntry.timestamp);
+        });
+        
+        async function testSharpLoading() {
+            addLog('info', '🚀 Starting Sharp loading test...');
+            
+            try {
+                const result = await ipcRenderer.invoke('test-sharp-loading');
+                
+                if (result.success) {
+                    addLog('success', `✨ Sharp test completed successfully!`);
+                    if (result.metadata) {
+                        addLog('info', `📊 Test metadata: ${JSON.stringify(result.metadata)}`);
+                    }
+                    if (result.outputSize) {
+                        addLog('info', `📦 Output buffer size: ${result.outputSize} bytes`);
+                    }
+                } else {
+                    addLog('error', `💥 Sharp test failed: ${result.error}`);
+                    if (result.stack) {
+                        addLog('error', `📚 Error stack: ${result.stack}`);
+                    }
+                }
+            } catch (error) {
+                addLog('error', `🚨 IPC error: ${error.message}`);
+            }
+        }
+        
+        async function getDebugLogs() {
+            try {
+                const logs = await ipcRenderer.invoke('get-sharp-debug-logs');
+                addLog('info', `📋 Retrieved ${logs.length} debug logs from main process:`);
+                
+                logs.forEach(log => {
+                    addLog(log.level, log.message, log.timestamp);
+                });
+            } catch (error) {
+                addLog('error', `🚨 Failed to get debug logs: ${error.message}`);
+            }
+        }
+        
+        async function clearDebugLogs() {
+            try {
+                await ipcRenderer.invoke('clear-sharp-debug-logs');
+                addLog('success', '🧹 Debug logs cleared from main process');
+            } catch (error) {
+                addLog('error', `🚨 Failed to clear debug logs: ${error.message}`);
+            }
+        }
+        
+        function clearLogs() {
+            const logContainer = document.getElementById('logContainer');
+            logContainer.innerHTML = '<div class="log-entry log-info">🔵 Logs cleared. Ready for new tests.</div>';
+        }
+        
+        // Auto-load existing logs when page loads
+        window.addEventListener('load', () => {
+            setTimeout(getDebugLogs, 1000);
+        });
+    </script>
+</body>
+</html>
