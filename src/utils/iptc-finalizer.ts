@@ -30,6 +30,7 @@ export async function finalizeIptcMetadata(
 ): Promise<IptcFinalizationSummary> {
   const startTime = Date.now();
   const { iptcMetadata, results, keywordsMode, onProgress, onError } = config;
+  const metadataStrategy = config.metadataStrategy ?? 'merge';
 
   const summary: IptcFinalizationSummary = {
     totalFiles: results.length,
@@ -41,7 +42,7 @@ export async function finalizeIptcMetadata(
   };
 
   console.log(`[IPTC Finalizer] Starting batch finalization for ${results.length} files`);
-  console.log(`[IPTC Finalizer] Keywords mode: ${keywordsMode}`);
+  console.log(`[IPTC Finalizer] Keywords mode: ${keywordsMode}, metadata strategy: ${metadataStrategy}`);
   console.log(`[IPTC Finalizer] Profile has: credit=${!!iptcMetadata.credit}, copyright=${!!iptcMetadata.copyright}, ` +
     `description=${!!iptcMetadata.descriptionTemplate}, baseKeywords=${iptcMetadata.baseKeywords?.length || 0}`);
 
@@ -58,8 +59,13 @@ export async function finalizeIptcMetadata(
       // Build metadata — handle multi-match or single-match
       const metadata = buildMetadataForResult(result, iptcMetadata, keywordsMode);
 
-      // Write metadata (handles both JPEG and RAW via writeFullMetadata)
-      await writeFullMetadata(result.imagePath, metadata);
+      // Write metadata (handles both JPEG and RAW via writeFullMetadata).
+      // Replace mode pre-clears the IPTC IIM and the XMP namespaces this
+      // writer touches before applying the preset; merge mode preserves
+      // any pre-existing tags from other tools.
+      await writeFullMetadata(result.imagePath, metadata, {
+        replaceAll: metadataStrategy === 'replace'
+      });
 
       summary.successCount++;
 
@@ -239,8 +245,13 @@ function buildMetadataForResult(
 /**
  * Append flattened visual tags to metadata keywords if the flag is enabled.
  * Avoids duplicates (case-insensitive).
+ *
+ * Exported so the Export-to-Folder path (`unified-export-handler.ts`) can apply
+ * the same logic before calling `writeFullMetadata`. Without this, the
+ * `includeVisualTags` flag of an IPTC Pro preset was honored only by
+ * `Write to Originals` and silently dropped on `Export to Folder`.
  */
-function appendVisualTagsToKeywords(
+export function appendVisualTagsToKeywords(
   metadata: ExportDestinationMetadata,
   visualTags: Record<string, string[]> | undefined,
   includeVisualTags: boolean | undefined

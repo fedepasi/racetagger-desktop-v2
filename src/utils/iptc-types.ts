@@ -89,6 +89,13 @@ export interface IptcFinalizationConfig {
   iptcMetadata: PresetIptcMetadata;          // IPTC profile from preset
   results: FinalizedResult[];                 // Corrected results from review page
   keywordsMode: 'append' | 'overwrite';      // Merge or replace keywords
+  // Optional. Mirrors the Write Behavior toggle from the unified IPTC modal:
+  //   'merge'   (default) — write only the preset fields, preserve everything else
+  //   'replace'           — clear IPTC IIM + the XMP namespaces this writer
+  //                         touches, then write only this preset
+  // Defaulted in finalizeIptcMetadata so older callers that omit it keep the
+  // legacy merge behavior.
+  metadataStrategy?: 'merge' | 'replace';
   onProgress?: (current: number, total: number, fileName: string) => void;
   onError?: (fileName: string, error: string) => void;
 }

@@ -91,12 +91,19 @@ export function registerPresetIptcHandlers(): void {
     }
   });
 
-  // Batch finalize IPTC metadata after review
+  // Batch finalize IPTC metadata after review.
+  //
+  // Signature is positional + a trailing options bag. Older callers that
+  // didn't pass the options object continue to work because the default
+  // `metadataStrategy` is 'merge' (the legacy behavior). New callers (the
+  // unified IPTC modal) pass `{ metadataStrategy: 'merge' | 'replace' }` to
+  // surface the Write Behavior toggle for in-place writes.
   ipcMain.handle('iptc-finalize-batch', async (
     _event,
     iptcMetadata: PresetIptcMetadata,
     results: FinalizedResult[],
-    keywordsMode: 'append' | 'overwrite'
+    keywordsMode: 'append' | 'overwrite',
+    options?: { metadataStrategy?: 'merge' | 'replace' }
   ): Promise<HandlerResult<IptcFinalizationSummary>> => {
     try {
       if (!iptcMetadata) {
@@ -106,12 +113,14 @@ export function registerPresetIptcHandlers(): void {
         return { success: false, error: 'No results to finalize' };
       }
 
-      console.log(`[IPC] Starting IPTC finalization for ${results.length} files`);
+      const metadataStrategy = options?.metadataStrategy || 'merge';
+      console.log(`[IPC] Starting IPTC finalization for ${results.length} files (metadataStrategy=${metadataStrategy})`);
 
       const summary = await finalizeIptcMetadata({
         iptcMetadata,
         results,
         keywordsMode,
+        metadataStrategy,
         onProgress: (current, total, fileName) => {
           safeSend('iptc-finalize-progress', { current, total, fileName });
         },

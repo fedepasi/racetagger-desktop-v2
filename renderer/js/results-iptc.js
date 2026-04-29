@@ -154,6 +154,11 @@ function createIptcProModal() {
               <div class="ipf"><label>Email</label><input type="text" id="ipf-contact-email" value="${escapeAttr(m.contactEmail)}"></div>
               <div class="ipf"><label>Phone</label><input type="text" id="ipf-contact-phone" value="${escapeAttr(m.contactPhone)}"></div>
               <div class="ipf"><label>Website</label><input type="text" id="ipf-contact-website" value="${escapeAttr(m.contactWebsite)}"></div>
+              <div class="ipf"><label>Address</label><input type="text" id="ipf-contact-address" value="${escapeAttr(m.contactAddress)}"></div>
+              <div class="ipf"><label>City</label><input type="text" id="ipf-contact-city" value="${escapeAttr(m.contactCity)}"></div>
+              <div class="ipf"><label>State</label><input type="text" id="ipf-contact-region" value="${escapeAttr(m.contactRegion)}"></div>
+              <div class="ipf"><label>Zip</label><input type="text" id="ipf-contact-postal-code" value="${escapeAttr(m.contactPostalCode)}"></div>
+              <div class="ipf"><label>Country</label><input type="text" id="ipf-contact-country" value="${escapeAttr(m.contactCountry)}"></div>
             </div>
           </div>
 
@@ -347,23 +352,29 @@ function collectIptcProFormData() {
   if (getValue('ipf-copyright')) data.copyright = getValue('ipf-copyright');
   if (getValue('ipf-copyright-owner')) data.copyrightOwner = getValue('ipf-copyright-owner');
 
-  // Creator
+  // Creator & Contact
   if (getValue('ipf-creator')) data.creator = getValue('ipf-creator');
   if (getValue('ipf-authors-position')) data.authorsPosition = getValue('ipf-authors-position');
   if (getValue('ipf-contact-email')) data.contactEmail = getValue('ipf-contact-email');
   if (getValue('ipf-contact-phone')) data.contactPhone = getValue('ipf-contact-phone');
   if (getValue('ipf-contact-website')) data.contactWebsite = getValue('ipf-contact-website');
+  // Address fields are now editable in this modal too. Previously the form had
+  // no inputs for them and the collector pulled them only from `orig`, which
+  // combined with the broken slash-syntax in metadata-writer.ts meant the
+  // entire CreatorContactInfo address block was silently dropped.
+  if (getValue('ipf-contact-address')) data.contactAddress = getValue('ipf-contact-address');
+  if (getValue('ipf-contact-city')) data.contactCity = getValue('ipf-contact-city');
+  if (getValue('ipf-contact-region')) data.contactRegion = getValue('ipf-contact-region');
+  if (getValue('ipf-contact-postal-code')) data.contactPostalCode = getValue('ipf-contact-postal-code');
+  if (getValue('ipf-contact-country')) data.contactCountry = getValue('ipf-contact-country');
 
-  // Carry over contact fields from original metadata (not editable in finalization panel)
+  // Carry over fields not exposed by this simplified modal so the IPTC Pro
+  // preset configuration is honored end-to-end.
   const orig = iptcProIptcMetadata;
-  if (orig.contactAddress) data.contactAddress = orig.contactAddress;
-  if (orig.contactCity) data.contactCity = orig.contactCity;
-  if (orig.contactRegion) data.contactRegion = orig.contactRegion;
-  if (orig.contactPostalCode) data.contactPostalCode = orig.contactPostalCode;
-  if (orig.contactCountry) data.contactCountry = orig.contactCountry;
   if (orig.copyrightMarked) data.copyrightMarked = orig.copyrightMarked;
   if (orig.copyrightUrl) data.copyrightUrl = orig.copyrightUrl;
   if (orig.captionWriter) data.captionWriter = orig.captionWriter;
+  if (orig.includeVisualTags) data.includeVisualTags = orig.includeVisualTags;
 
   // Event
   if (getValue('ipf-headline')) data.headlineTemplate = getValue('ipf-headline');

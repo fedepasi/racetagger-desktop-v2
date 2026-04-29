@@ -10,6 +10,7 @@
  * show/hide based on mode.
  */
 
+
 // ============================================================
 // Constants
 // ============================================================
@@ -340,6 +341,54 @@ function createUnifiedModal() {
           </div>
         </div>
 
+        <!--
+          Write Behavior — explicit toggles for the two conflict scenarios users
+          hit on real workflows:
+            (a) RE-EXPORTING a session into the same folder. Today we silently
+                rename to "_2.jpg" / "_3.jpg" which leaves duplicates on disk.
+                Power users want to OVERWRITE in place, or SKIP files already
+                exported (e.g. quick incremental re-runs after fixing one match).
+            (b) RE-WRITING IPTC into images that already carry metadata from
+                another tool (Lightroom, Bridge, Photo Mechanic). Today we
+                always merge — Race-Tagger only touches the fields it manages
+                and leaves everything else intact. Some workflows want a clean
+                slate ("replace all IPTC/XMP, then write only my preset"), e.g.
+                when re-licensing a back catalog under a new copyright profile.
+        -->
+        <div class="export-section" id="unified-write-behavior">
+          <div class="export-section-head">
+            <label>⚙️ Write Behavior</label>
+            <span class="export-section-hint">How to handle files & metadata that already exist</span>
+          </div>
+          <div class="export-section-body">
+            <div class="ipf" id="unified-file-conflict-row">
+              <label>If a file with the same name already exists in destination</label>
+              <div class="ipf-radio-row">
+                <label><input type="radio" name="unified-conflict" value="rename" checked>
+                  <span>Auto-rename <em style="color:#94a3b8">(file_2.jpg, file_3.jpg…)</em></span>
+                </label>
+                <label><input type="radio" name="unified-conflict" value="overwrite">
+                  <span>Overwrite <em style="color:#fbbf24">(replace existing file)</em></span>
+                </label>
+                <label><input type="radio" name="unified-conflict" value="skip">
+                  <span>Skip <em style="color:#94a3b8">(leave existing file untouched)</em></span>
+                </label>
+              </div>
+            </div>
+            <div class="ipf">
+              <label>Existing metadata in target image</label>
+              <div class="ipf-radio-row">
+                <label><input type="radio" name="unified-meta-strategy" value="merge" checked>
+                  <span>Merge <em style="color:#94a3b8">(keep fields not specified here)</em></span>
+                </label>
+                <label><input type="radio" name="unified-meta-strategy" value="replace">
+                  <span>Replace <em style="color:#fbbf24">(clear all IPTC/XMP first, then write only this preset)</em></span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- IPTC Metadata (always visible) -->
         <div class="unified-iptc-section">
           <div class="unified-iptc-section-header">
@@ -372,6 +421,11 @@ function createUnifiedModal() {
                 <div class="ipf"><label>Email</label><input type="text" id="unified-contact-email" value="${escapeAttrUnified(m.contactEmail)}"></div>
                 <div class="ipf"><label>Phone</label><input type="text" id="unified-contact-phone" value="${escapeAttrUnified(m.contactPhone)}"></div>
                 <div class="ipf"><label>Website</label><input type="text" id="unified-contact-website" value="${escapeAttrUnified(m.contactWebsite)}"></div>
+                <div class="ipf"><label>Address</label><input type="text" id="unified-contact-address" value="${escapeAttrUnified(m.contactAddress)}"></div>
+                <div class="ipf"><label>City</label><input type="text" id="unified-contact-city" value="${escapeAttrUnified(m.contactCity)}"></div>
+                <div class="ipf"><label>State</label><input type="text" id="unified-contact-region" value="${escapeAttrUnified(m.contactRegion)}"></div>
+                <div class="ipf"><label>Zip</label><input type="text" id="unified-contact-postal-code" value="${escapeAttrUnified(m.contactPostalCode)}"></div>
+                <div class="ipf"><label>Country</label><input type="text" id="unified-contact-country" value="${escapeAttrUnified(m.contactCountry)}"></div>
               </div>
             </div>
 
@@ -627,15 +681,22 @@ function setUnifiedMode(mode, matchedCount, totalCount) {
   const writeWarning = document.getElementById('unified-write-warning');
   const labelExport = document.getElementById('unified-mode-label-export');
   const labelWrite = document.getElementById('unified-mode-label-write');
+  // The "If file exists in destination" toggle only makes sense in
+  // Export-to-Folder mode — Write-to-Originals always operates in place
+  // on the user's existing files, so there is no destination collision
+  // to resolve.
+  const fileConflictRow = document.getElementById('unified-file-conflict-row');
 
   if (mode === 'export') {
     if (exportOptions) exportOptions.style.display = '';
     if (writeWarning) writeWarning.style.display = 'none';
+    if (fileConflictRow) fileConflictRow.style.display = '';
     if (labelExport) labelExport.classList.add('unified-mode-active');
     if (labelWrite) labelWrite.classList.remove('unified-mode-active');
   } else {
     if (exportOptions) exportOptions.style.display = 'none';
     if (writeWarning) writeWarning.style.display = 'flex';
+    if (fileConflictRow) fileConflictRow.style.display = 'none';
     if (labelExport) labelExport.classList.remove('unified-mode-active');
     if (labelWrite) labelWrite.classList.add('unified-mode-active');
   }
@@ -734,23 +795,30 @@ function collectUnifiedIptcFormData() {
   if (getValue('unified-copyright')) data.copyright = getValue('unified-copyright');
   if (getValue('unified-copyright-owner')) data.copyrightOwner = getValue('unified-copyright-owner');
 
-  // Creator
+  // Creator & Contact
   if (getValue('unified-creator')) data.creator = getValue('unified-creator');
   if (getValue('unified-authors-position')) data.authorsPosition = getValue('unified-authors-position');
   if (getValue('unified-contact-email')) data.contactEmail = getValue('unified-contact-email');
   if (getValue('unified-contact-phone')) data.contactPhone = getValue('unified-contact-phone');
   if (getValue('unified-contact-website')) data.contactWebsite = getValue('unified-contact-website');
+  // Address fields are now editable in the form (BUGFIX: previously they were
+  // pulled only from `orig` so users couldn't override them at export time and
+  // the writer's broken slash syntax made them silently disappear anyway).
+  if (getValue('unified-contact-address')) data.contactAddress = getValue('unified-contact-address');
+  if (getValue('unified-contact-city')) data.contactCity = getValue('unified-contact-city');
+  if (getValue('unified-contact-region')) data.contactRegion = getValue('unified-contact-region');
+  if (getValue('unified-contact-postal-code')) data.contactPostalCode = getValue('unified-contact-postal-code');
+  if (getValue('unified-contact-country')) data.contactCountry = getValue('unified-contact-country');
 
-  // Carry over non-editable contact fields from original metadata
+  // Carry over fields that don't have an input in this simplified modal.
+  // captionWriter and includeVisualTags were missing from this carry-over
+  // block and were therefore lost on Export-to-Folder even when configured
+  // in the IPTC Pro preset.
   const orig = unifiedIptcMetadata || {};
-  if (orig.contactAddress) data.contactAddress = orig.contactAddress;
-  if (orig.contactCity) data.contactCity = orig.contactCity;
-  if (orig.contactRegion) data.contactRegion = orig.contactRegion;
-  if (orig.contactPostalCode) data.contactPostalCode = orig.contactPostalCode;
-  if (orig.contactCountry) data.contactCountry = orig.contactCountry;
   if (orig.copyrightMarked) data.copyrightMarked = orig.copyrightMarked;
   if (orig.copyrightUrl) data.copyrightUrl = orig.copyrightUrl;
   if (orig.captionWriter) data.captionWriter = orig.captionWriter;
+  if (orig.includeVisualTags) data.includeVisualTags = orig.includeVisualTags;
 
   // Event
   if (getValue('unified-headline')) data.headlineTemplate = getValue('unified-headline');
@@ -911,6 +979,33 @@ async function startUnifiedExport() {
   const writeIptc = hasAnyIptc;
   const kwMode = document.querySelector('input[name="unified-kw-mode"]:checked')?.value || 'append';
 
+  // Write Behavior toggles (file conflicts + metadata strategy). Defaults are
+  // backward-compatible with the legacy hard-coded behavior: rename + merge.
+  const fileConflictStrategy =
+    document.querySelector('input[name="unified-conflict"]:checked')?.value || 'rename';
+  const metadataStrategy =
+    document.querySelector('input[name="unified-meta-strategy"]:checked')?.value || 'merge';
+
+  // If user picked "Overwrite", confirm — destructive action that nukes the
+  // existing copy in destination. We don't confirm "Skip" because it's safe.
+  if (fileConflictStrategy === 'overwrite') {
+    const ok = confirm(
+      `You chose to OVERWRITE existing files in:\n${destFolder}\n\n` +
+      `Files in the destination with matching names will be replaced ` +
+      `permanently. Continue?`
+    );
+    if (!ok) return;
+  }
+  if (metadataStrategy === 'replace') {
+    const ok = confirm(
+      `You chose to REPLACE existing IPTC/XMP metadata in target images.\n\n` +
+      `All IPTC/XMP fields previously written by other tools (Lightroom, ` +
+      `Bridge, Photo Mechanic, etc.) will be CLEARED before this preset is ` +
+      `written. EXIF camera data is not affected. Continue?`
+    );
+    if (!ok) return;
+  }
+
   unifiedIsProcessing = true;
   showUnifiedProgress('Exporting files...');
 
@@ -935,7 +1030,9 @@ async function startUnifiedExport() {
       writeIptc: writeIptc,
       iptcMetadata: writeIptc ? iptcMetadata : null,
       keywordsMode: writeIptc ? kwMode : null,
-      eventName: unifiedPresetData?.name || ''
+      eventName: unifiedPresetData?.name || '',
+      fileConflictStrategy: fileConflictStrategy,
+      metadataStrategy: metadataStrategy
     });
 
     if (response.success) {
@@ -944,6 +1041,7 @@ async function startUnifiedExport() {
         '✅ Export Complete!',
         `${summary.copiedFiles} files exported` +
           (summary.renamedFiles > 0 ? `, ${summary.renamedFiles} renamed` : '') +
+          (summary.skippedFiles > 0 ? `, ${summary.skippedFiles} skipped (already existed)` : '') +
           (summary.iptcWritten > 0 ? `, ${summary.iptcWritten} with IPTC` : '') +
           (summary.errors > 0 ? `, ${summary.errors} errors` : ''),
         `Duration: ${(summary.durationMs / 1000).toFixed(1)}s`
@@ -976,6 +1074,12 @@ async function startUnifiedWriteOriginals() {
   const iptcMetadata = collectUnifiedIptcFormData();
   const kwMode = document.querySelector('input[name="unified-kw-mode"]:checked')?.value || 'append';
 
+  // Same metadata strategy toggle as Export-to-Folder. The file-conflict
+  // toggle is irrelevant here (we always operate on the originals in place),
+  // so it's hidden by setUnifiedMode() above.
+  const metadataStrategy =
+    document.querySelector('input[name="unified-meta-strategy"]:checked')?.value || 'merge';
+
   // Sanity check: warn the user if the form is essentially empty so we don't
   // silently invoke exiftool with nothing to write (which would look to the
   // user like the feature is broken).
@@ -989,6 +1093,17 @@ async function startUnifiedWriteOriginals() {
   if (!hasContent) {
     alert('No IPTC fields filled in. Please enter at least one field (Headline, Caption, Keywords, Credit, etc.) before writing.');
     return;
+  }
+
+  // Replace mode is destructive on the user's original files — confirm.
+  if (metadataStrategy === 'replace') {
+    const ok = confirm(
+      `You chose to REPLACE existing IPTC/XMP metadata in your ORIGINAL files.\n\n` +
+      `All IPTC/XMP fields previously written by other tools (Lightroom, ` +
+      `Bridge, Photo Mechanic, etc.) will be CLEARED before this preset is ` +
+      `written. EXIF camera data is not affected. This cannot be undone. Continue?`
+    );
+    if (!ok) return;
   }
 
   unifiedIsProcessing = true;
@@ -1007,8 +1122,12 @@ async function startUnifiedWriteOriginals() {
   });
 
   try {
-    // IPTC Pro uses 3 positional params
-    const response = await window.api.invoke('iptc-finalize-batch', iptcMetadata, results, kwMode);
+    // IPTC Pro: 3 positional params + 1 options object so older callers
+    // remain compatible (the handler defaults metadataStrategy to 'merge'
+    // when the options arg is missing).
+    const response = await window.api.invoke('iptc-finalize-batch', iptcMetadata, results, kwMode, {
+      metadataStrategy
+    });
 
     if (response.success) {
       const summary = response.data;

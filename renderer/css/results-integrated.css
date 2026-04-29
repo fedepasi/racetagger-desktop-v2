@@ -2235,6 +2235,24 @@
   gap: 20px;
 }
 
+/*
+  Prevent flex-shrink from collapsing direct children of `.unified-export-body`.
+  The body is a flex container (column) with `flex:1; overflow-y:auto`. Without
+  an explicit `flex-shrink: 0` on the children, sections with low intrinsic
+  height (e.g. the Write Behavior block — only two short radio rows) get
+  squashed to a few pixels when the total content exceeds the body's height,
+  while taller sections (long text fields / placeholder grids) hold their
+  ground. The result was a section that was technically in the DOM and
+  visible at `display: block` but rendered at 830x2 px, looking like an
+  empty divider line.
+  We force every direct child of the body NOT to shrink so it always keeps
+  its intrinsic height; the body's own `overflow-y: auto` then handles the
+  scrolling when the total exceeds 88vh.
+*/
+.unified-export-body > * {
+  flex-shrink: 0;
+}
+
 /* Mode Selector */
 .unified-mode-selector {
   display: flex;

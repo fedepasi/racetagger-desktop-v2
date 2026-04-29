@@ -579,15 +579,16 @@ export interface ExportDestinationMetadata {
   location?: string;            // IPTC:Sub-location / Iptc4xmpCore:Location
   worldRegion?: string;         // XMP-iptcExt:LocationCreatedWorldRegion
 
-  // Contact Info
-  contactAddress?: string;      // XMP-iptcCore:CreatorContactInfo/CiAdrExtadr
-  contactCity?: string;         // XMP-iptcCore:CreatorContactInfo/CiAdrCity
-  contactRegion?: string;       // XMP-iptcCore:CreatorContactInfo/CiAdrRegion
-  contactPostalCode?: string;   // XMP-iptcCore:CreatorContactInfo/CiAdrPcode
-  contactCountry?: string;      // XMP-iptcCore:CreatorContactInfo/CiAdrCtry
-  contactPhone?: string;        // XMP-iptcCore:CreatorContactInfo/CiTelWork
-  contactEmail?: string;        // XMP-iptcCore:CreatorContactInfo/CiEmailWork
-  contactWebsite?: string;      // XMP-iptcCore:CreatorContactInfo/CiUrlWork
+  // Contact Info — written via ExifTool flat aliases on XMP-iptcCore that
+  // expand into the canonical Iptc4xmpCore:CreatorContactInfo struct.
+  contactAddress?: string;      // XMP-iptcCore:CreatorAddress         → CiAdrExtadr
+  contactCity?: string;         // XMP-iptcCore:CreatorCity            → CiAdrCity
+  contactRegion?: string;       // XMP-iptcCore:CreatorRegion          → CiAdrRegion
+  contactPostalCode?: string;   // XMP-iptcCore:CreatorPostalCode      → CiAdrPcode
+  contactCountry?: string;      // XMP-iptcCore:CreatorCountry         → CiAdrCtry
+  contactPhone?: string;        // XMP-iptcCore:CreatorWorkTelephone   → CiTelWork
+  contactEmail?: string;        // XMP-iptcCore:CreatorWorkEmail       → CiEmailWork
+  contactWebsite?: string;      // XMP-iptcCore:CreatorWorkURL         → CiUrlWork
 
   // Keywords
   keywords?: string[];          // IPTC:Keywords
@@ -618,10 +619,15 @@ export interface ExportDestinationMetadata {
  */
 export async function writeFullMetadata(
   imagePath: string,
-  metadata: ExportDestinationMetadata
+  metadata: ExportDestinationMetadata,
+  options: { replaceAll?: boolean } = {}
 ): Promise<void> {
+  const { replaceAll = false } = options;
   try {
-    // RAW files: write to XMP sidecar instead of directly to the file
+    // RAW files: write to XMP sidecar instead of directly to the file.
+    // For RAW the sidecar IS a fresh document on each write, so the
+    // "merge vs replace" distinction does not apply — the sidecar always
+    // contains exactly what we generate.
     if (isRawFile(imagePath)) {
       // Check if we have full IPTC metadata (IPTC Pro mode) — use createFullXmpSidecar
       const hasFullMetadata = metadata.credit || metadata.copyright || metadata.creator
@@ -658,6 +664,31 @@ export async function writeFullMetadata(
       '-P', // Preserve file timestamp
       '-codedcharacterset=utf8', // Handle UTF-8 characters
     ];
+
+    // === REPLACE MODE ===
+    // When the user picked "Replace" in the Write Behavior modal, clear all
+    // IPTC IIM tags and the XMP namespaces this writer touches BEFORE writing
+    // the new values. Order matters: the deletes must be the first arguments
+    // so they apply to the original file state, then the per-tag writes
+    // re-populate only what the preset specifies.
+    //
+    // Scope: IPTC:All + the seven XMP namespaces this writer ever uses.
+    //   - XMP-iptcCore  / XMP-iptcExt  → IPTC PhotoMetadata 2024 fields
+    //   - XMP-photoshop                → legacy Photoshop equivalents
+    //   - XMP-dc                       → Dublin Core (Title, Creator, Rights)
+    //   - XMP-plus                     → PLUS (Model Release, License)
+    //   - XMP-xmpRights                → Marked, WebStatement
+    // EXIF (camera data, GPS, exposure) is intentionally NOT cleared — that's
+    // hardware-recorded info, not editorial metadata.
+    if (replaceAll) {
+      args.push('-IPTC:All=');
+      args.push('-XMP-iptcCore:All=');
+      args.push('-XMP-iptcExt:All=');
+      args.push('-XMP-photoshop:All=');
+      args.push('-XMP-dc:All=');
+      args.push('-XMP-plus:All=');
+      args.push('-XMP-xmpRights:All=');
+    }
 
     // === CREDITS ===
     if (metadata.credit) {
@@ -732,30 +763,45 @@ export async function writeFullMetadata(
     }
 
     // === CONTACT INFO ===
-    // Contact info uses nested XMP structure
+    // CreatorContactInfo is an XMP struct in the Iptc4xmpCore namespace. The
+    // bundled ExifTool binary (vendor/darwin/exiftool, see XMP.pm lines
+    // 1270-1316) exposes the eight nested fields via convenience FLAT
+    // ALIASES on the XMP-iptcCore namespace — `CreatorAddress`,
+    // `CreatorCity`, `CreatorRegion`, `CreatorPostalCode`, `CreatorCountry`,
+    // `CreatorWorkTelephone`, `CreatorWorkEmail`, `CreatorWorkURL`. Writing
+    // any of these auto-creates the parent `CreatorContactInfo` resource
+    // with the correct `Iptc4xmpCore:Ci*` element, which is exactly what
+    // Photo Mechanic / Adobe Bridge persist on disk (canonical IPTC
+    // PhotoMetadata 2024 layout).
+    //
+    // Earlier syntaxes that did NOT work with this binary:
+    //   -XMP-iptcCore:CreatorContactInfo/Iptc4xmpCore:CiAdrCity=value (slash)
+    //   -XMP-iptcCore:CreatorContactInfoCiAdrCity=value (concatenated flat)
+    // Both produced "Tag '...' is not defined" warnings (silent on stderr,
+    // exit code 0) so the contact block was dropped from every export.
     if (metadata.contactAddress) {
-      args.push(`-XMP-iptcCore:CreatorContactInfo/Iptc4xmpCore:CiAdrExtadr=${metadata.contactAddress}`);
+      args.push(`-XMP-iptcCore:CreatorAddress=${metadata.contactAddress}`);
     }
     if (metadata.contactCity) {
-      args.push(`-XMP-iptcCore:CreatorContactInfo/Iptc4xmpCore:CiAdrCity=${metadata.contactCity}`);
+      args.push(`-XMP-iptcCore:CreatorCity=${metadata.contactCity}`);
     }
     if (metadata.contactRegion) {
-      args.push(`-XMP-iptcCore:CreatorContactInfo/Iptc4xmpCore:CiAdrRegion=${metadata.contactRegion}`);
+      args.push(`-XMP-iptcCore:CreatorRegion=${metadata.contactRegion}`);
     }
     if (metadata.contactPostalCode) {
-      args.push(`-XMP-iptcCore:CreatorContactInfo/Iptc4xmpCore:CiAdrPcode=${metadata.contactPostalCode}`);
+      args.push(`-XMP-iptcCore:CreatorPostalCode=${metadata.contactPostalCode}`);
     }
     if (metadata.contactCountry) {
-      args.push(`-XMP-iptcCore:CreatorContactInfo/Iptc4xmpCore:CiAdrCtry=${metadata.contactCountry}`);
+      args.push(`-XMP-iptcCore:CreatorCountry=${metadata.contactCountry}`);
     }
     if (metadata.contactPhone) {
-      args.push(`-XMP-iptcCore:CreatorContactInfo/Iptc4xmpCore:CiTelWork=${metadata.contactPhone}`);
+      args.push(`-XMP-iptcCore:CreatorWorkTelephone=${metadata.contactPhone}`);
     }
     if (metadata.contactEmail) {
-      args.push(`-XMP-iptcCore:CreatorContactInfo/Iptc4xmpCore:CiEmailWork=${metadata.contactEmail}`);
+      args.push(`-XMP-iptcCore:CreatorWorkEmail=${metadata.contactEmail}`);
     }
     if (metadata.contactWebsite) {
-      args.push(`-XMP-iptcCore:CreatorContactInfo/Iptc4xmpCore:CiUrlWork=${metadata.contactWebsite}`);
+      args.push(`-XMP-iptcCore:CreatorWorkURL=${metadata.contactWebsite}`);
     }
 
     // === KEYWORDS ===
@@ -804,7 +850,26 @@ export async function writeFullMetadata(
       args.push(`-XMP-iptcExt:DigitalSourceType=${metadata.digitalSourceType}`);
     }
     if (metadata.modelReleaseStatus) {
-      args.push(`-XMP-plus:ModelReleaseStatus=${metadata.modelReleaseStatus}`);
+      // PLUS persists ModelReleaseStatus as a controlled-vocab URI
+      // (`http://ns.useplus.org/ldf/vocab/<CODE>` per PLUS LDF 2.0.1) — that's
+      // what Photo Mechanic and Adobe Bridge write to disk.
+      //
+      // Two pitfalls handled here:
+      //  1. The IPTC Pro dropdown stores SHORT CODES (MR-NON, MR-NAP, MR-LMR,
+      //     MR-UMR, MR-UPR, MR-LPR), so we expand them to the full PLUS URI.
+      //  2. ExifTool's PrintConv in PLUS.pm rejects BOTH the short codes
+      //     ("not in PrintConv") AND custom URIs unless they exactly match
+      //     one of the labels Phil hardcoded. The robust fix is to suffix
+      //     the tag name with `#`, which tells ExifTool "no print conversion,
+      //     write the raw value as-is" (https://exiftool.org/exiftool_pod.html
+      //     — see the `#` operator on -TAG=VALUE). This is the same trick
+      //     Photo Mechanic uses internally (it bypasses its own enum
+      //     validation when writing PLUS controlled vocab fields).
+      const code = String(metadata.modelReleaseStatus).trim();
+      const value = /^https?:\/\//i.test(code)
+        ? code
+        : `http://ns.useplus.org/ldf/vocab/${code}`;
+      args.push(`-XMP-plus:ModelReleaseStatus#=${value}`);
     }
     if (metadata.scene && metadata.scene.length > 0) {
       for (const sceneCode of metadata.scene) {
@@ -822,18 +887,38 @@ export async function writeFullMetadata(
       args.push(`-XMP-photoshop:DateCreated=${metadata.dateCreated}`);
     }
     if (metadata.provinceState) {
+      // Photo location State/Province lives in `IPTC:Province-State` (IIM)
+      // and `XMP-photoshop:State` (XMP) — that's the MWG-recommended pair
+      // and what Photo Mechanic / Adobe Bridge write. The previous attempt
+      // to mirror it to `XMP-iptcCore:ProvinceState` was wrong: that tag
+      // does not exist in the IPTC Core schema (the iptcCore "region" is a
+      // sub-field of CreatorContactInfo, not a top-level photo-location
+      // property), so ExifTool emitted a "Tag not defined" warning and
+      // dropped the value from XMP. Confirmed by reading XMP.pm in the
+      // bundled binary (no top-level ProvinceState in iptcCore).
       args.push(`-IPTC:Province-State=${metadata.provinceState}`);
-      args.push(`-XMP-iptcCore:ProvinceState=${metadata.provinceState}`);
+      args.push(`-XMP-photoshop:State=${metadata.provinceState}`);
     }
 
-    // Only proceed if we have metadata to write
-    if (args.length <= 3) {
+    // Only proceed if we have metadata to write. The setup-args baseline is
+    // 3 (overwrite_original / -P / charset) plus 7 more when replaceAll
+    // pre-clears the namespaces — so the "no-op" threshold is dynamic.
+    const setupArgsCount = 3 + (replaceAll ? 7 : 0);
+    if (args.length <= setupArgsCount) {
       return;
     }
 
     args.push(imagePath);
 
-    await nativeToolManager.executeTool('exiftool', args);
+    // We surface ExifTool stderr (warnings) explicitly because executeTool()
+    // only rejects on a non-zero exit code while ExifTool emits "Tag not
+    // defined" / "Can't convert" as warnings with exit 0. Without this log
+    // the previous CreatorContactInfo / ProvinceState / ModelReleaseStatus
+    // syntax bugs would have stayed silent for another release cycle.
+    const exifResult = await nativeToolManager.executeTool('exiftool', args);
+    if (exifResult.stderr && exifResult.stderr.trim()) {
+      console.warn(`[MetadataWriter] ExifTool stderr for ${path.basename(imagePath)}:\n${exifResult.stderr.trim()}`);
+    }
   } catch (error) {
     console.error(`[MetadataWriter] Failed to write full metadata:`, error);
     throw new Error(`Failed to write full metadata with ExifTool: ${error instanceof Error ? error.message : 'Unknown error'}`);

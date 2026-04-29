@@ -535,21 +535,30 @@ class LogVisualizer {
         return;
       }
 
-      // Numeric shortcuts for the needs-review candidate picker.
-      //   1-9 → select the candidate whose visible rank badge matches the digit
-      //         (the badge already shows i+1, so the mapping is direct);
-      //   0   → "None of these".
-      // Both branches simulate a click on the existing DOM element, which
-      // means resolveReview, autoFillVehicleEditorFromCandidate and
-      // navigateToNextReview all run exactly as in the mouse path — no
-      // duplication and no risk of drift.
-      // Skipped when:
-      //   - an input/select/textarea is focused (so typing "0" in the Race
-      //     Number field works as expected);
-      //   - any modifier (Ctrl/Cmd/Alt) is held, to avoid colliding with
-      //     browser shortcuts;
-      //   - no review panel is currently rendered (only needs_review images
-      //     have one — on other images the digit is ignored).
+      // Digit handling — two distinct fast-paths:
+      //
+      // (a) Needs-review candidate picker:
+      //     1-9 → click the candidate at that rank;
+      //     0   → "None of these".
+      //   Simulates a click on the existing DOM element so resolveReview,
+      //   autoFillVehicleEditorFromCandidate and navigateToNextReview all run
+      //   exactly as in the mouse path. Active only when a review panel is
+      //   visible (i.e. ambiguous match for the current photo).
+      //
+      // (b) Type-to-edit Race Number (no review panel visible):
+      //     Auto-focus on entering an image was removed because it forced a
+      //     double-arrow press to navigate (select() left the value
+      //     highlighted, so the first ←/→ only deselected). The trade-off was
+      //     that typing a number became a two-step "click then type". This
+      //     fast-path restores the one-keystroke flow: when the gallery owns
+      //     the keyboard, typing a digit focuses the Race Number input,
+      //     replaces its value with that digit, and parks the caret at the
+      //     end so subsequent digits append naturally.
+      //
+      // Both branches are skipped if:
+      //   - an input/select/textarea is already focused (so typing "0" in
+      //     the Race Number field still types "0" instead of triggering "None");
+      //   - any modifier (Ctrl/Cmd/Alt) is held — leave browser shortcuts alone.
       if (!isInputFocused && /^[0-9]$/.test(e.key) &&
           !e.ctrlKey && !e.metaKey && !e.altKey) {
         const reviewPanelVisible = !!document.querySelector('.lv-review-panel, .lv-review-bar');
@@ -577,6 +586,21 @@ class LogVisualizer {
             // Digit pressed but no candidate at that position (e.g. "5" with
             // only 3 candidates) → silently ignore so the user gets no
             // accidental side-effect.
+          }
+        } else {
+          // (b) Type-to-edit: focus the first Race Number input and seed it
+          // with the digit the user just typed. Preserve change-tracking by
+          // dispatching an 'input' event so any listeners (auto-save, dirty
+          // flag, datalist) react as if the user typed normally.
+          const raceInput = document.querySelector('#lv-vehicles [data-field="raceNumber"]');
+          if (raceInput) {
+            e.preventDefault();
+            raceInput.value = e.key;
+            raceInput.focus();
+            // Caret at end so the user can keep typing (e.g. "3" then "4" → "34").
+            try { raceInput.setSelectionRange(raceInput.value.length, raceInput.value.length); } catch (_) {}
+            raceInput.dispatchEvent(new Event('input', { bubbles: true }));
+            return;
           }
         }
       }
@@ -1864,11 +1888,16 @@ class LogVisualizer {
         // Auto-fill the vehicle editor fields
         this.autoFillVehicleEditorFromCandidate(chosenCandidate);
 
-        // Navigate to next needs_review (only on first resolution, not re-selections)
+        // Navigate to next needs_review (only on first resolution, not re-selections).
+        // The 150 ms delay is purely for visual feedback (let the user see the
+        // green check appear) — the actual persistence runs in background via
+        // resolveReview's fire-and-forget saveAllChanges call, so we no longer
+        // need the old 600 ms padding that was hiding the slow synchronous
+        // save round-trip.
         if (!isAlreadyResolved) {
           setTimeout(() => {
             this.navigateToNextReview(resultIndex);
-          }, 600);
+          }, 150);
         }
       });
     });
@@ -1901,10 +1930,12 @@ class LogVisualizer {
 
         await this.resolveReview(resultIndex, null);
 
+        // Same rationale as the candidate click above: 150 ms is just for the
+        // ✕ icon to render before we move on; saveAllChanges runs async.
         if (!isAlreadyResolved) {
           setTimeout(() => {
             this.navigateToNextReview(resultIndex);
-          }, 600);
+          }, 150);
         }
       });
     });
@@ -2038,6 +2069,10 @@ class LogVisualizer {
     // Mark status as resolved
     primaryVehicle.matchStatus = 'matched';
     result._reviewResolved = true;
+    // Durable correction flag — survives the manualCorrections Map being
+    // cleared by the background save below, so the Corrections counter
+    // stays accurate.
+    result.hasCorrection = true;
 
     // Track as a manual correction for saving
     // Include matchStatus and matchedBy so they persist through JSONL refresh
@@ -2073,13 +2108,25 @@ class LogVisualizer {
     const chosenLabel = chosenCandidate ? `#${chosenCandidate.participantNumber}` : 'None';
     console.log(`[LogVisualizer] Review resolved for ${result.fileName}: chose ${chosenLabel}`);
 
-    // Auto-save immediately — review resolution is an explicit user action, persist right away
-    try {
-      await this.saveAllChanges();
-    } catch (error) {
-      console.error('[LogVisualizer] Auto-save after review resolution failed:', error);
-      this.showNotification('⚠️ Review choice applied but auto-save failed. Click Save to persist.', 'warning');
-    }
+    // Persist in the background. We deliberately do NOT await here so the
+    // caller can advance to the next photo immediately. saveAllChanges()
+    // serialises overlapping saves internally and removes only the snapshot
+    // it actually persisted, so corrections queued while a save is in flight
+    // are not lost.
+    //
+    // silent:      suppress the "Saving..." / "Successfully saved" toasts
+    //              (would interrupt the rapid review cadence)
+    // skipRefresh: skip the post-save refreshDataFromLogs round-trip — we
+    //              already mutated the in-memory result, and the gallery's
+    //              own state machine (`_reviewResolved` + filteredResults)
+    //              keeps the UI consistent until the gallery is closed,
+    //              at which point the next manual save / page reload will
+    //              re-extract from the JSONL.
+    this.saveAllChanges({ silent: true, skipRefresh: true })
+      .catch(error => {
+        console.error('[LogVisualizer] Background auto-save failed:', error);
+        this.showNotification('⚠️ Save failed in background. Click Save All to retry.', 'warning');
+      });
   }
 
   /**
@@ -2229,46 +2276,33 @@ class LogVisualizer {
   }
 
   /**
-   * Close gallery
+   * Close gallery.
+   *
+   * The gallery modal MUST disappear synchronously the moment the user clicks
+   * the top-right ✕ (or hits Escape, or clicks the overlay). Previously we
+   * removed the review-candidate panel up-front but only set
+   * `display: none` AFTER `await performAutoSave()` resolved — so when the
+   * save took a beat, the user saw the candidate panel vanish while the
+   * rest of the gallery stayed on screen, which read as "the X only closed
+   * the selection option, not the gallery." Order of operations matters:
+   * hide the modal first, then run async work in the background.
    */
   async closeGallery() {
     this.isGalleryOpen = false;
     if (this.zoomController) this.zoomController.reset(false);
 
-    // Restore body scrolling IMMEDIATELY — before any async work that could fail
+    // ---- Synchronous teardown (visible to the user) -----------------------
     document.body.style.overflow = '';
-
-    // Remove any lingering review panels
-    document.querySelectorAll('.lv-review-panel, .lv-review-bar').forEach(el => el.remove());
-
-    // Handle unsaved changes before closing
-    if (this.hasUnsavedChanges) {
-      console.log('[LogVisualizer] Triggering final auto-save before closing gallery');
-      if (this.autoSaveTimer) {
-        clearTimeout(this.autoSaveTimer);
-        this.autoSaveTimer = null;
-      }
-
-      try {
-        await this.performAutoSave();
-      } catch (error) {
-        console.error('[LogVisualizer] Error during final auto-save:', error);
-        // Continue closing even if auto-save fails
-      }
-    }
-
-    // === Strategy G: Check for learned data after gallery closes ===
-    // Don't show modal automatically — just update the badge/button
-    try {
-      this._checkLearnedDataAvailability();
-    } catch (learnError) {
-      console.warn('[LogVisualizer] Learned data check failed (non-critical):', learnError);
-    }
 
     const gallery = document.getElementById('lv-gallery');
     if (gallery) {
       gallery.style.display = 'none';
     }
+
+    // Remove any lingering review panels AFTER the modal is hidden so the
+    // user never sees the panel disappear while the modal is still on
+    // screen.
+    document.querySelectorAll('.lv-review-panel, .lv-review-bar').forEach(el => el.remove());
 
     // Clear vehicle editor content to prevent stale onclick handlers
     const vehiclesContainer = document.getElementById('lv-vehicles');
@@ -2283,6 +2317,34 @@ class LogVisualizer {
         const currentResult = results[this.currentImageIndex];
         this.updateResultCard(currentResult.fileName);
       }
+    }
+
+    // ---- Async housekeeping (gallery is already hidden by now) ------------
+    // Handle unsaved changes — we still await this so callers (like the
+    // page-unload handler) can rely on the save having completed when the
+    // promise resolves, but it no longer blocks the visual close.
+    if (this.hasUnsavedChanges) {
+      console.log('[LogVisualizer] Triggering final auto-save after closing gallery');
+      if (this.autoSaveTimer) {
+        clearTimeout(this.autoSaveTimer);
+        this.autoSaveTimer = null;
+      }
+
+      try {
+        await this.performAutoSave();
+      } catch (error) {
+        console.error('[LogVisualizer] Error during final auto-save:', error);
+        // Modal is already hidden — surface the error but don't try to
+        // re-open anything.
+      }
+    }
+
+    // === Strategy G: Check for learned data after gallery closes ===
+    // Don't show modal automatically — just update the badge/button
+    try {
+      this._checkLearnedDataAvailability();
+    } catch (learnError) {
+      console.warn('[LogVisualizer] Learned data check failed (non-critical):', learnError);
     }
 
     // Reset auto-save state
@@ -2413,8 +2475,12 @@ class LogVisualizer {
     // Update vehicle information
     this.updateVehicleEditor(result, this.currentImageIndex);
 
-    // Auto-focus the Race Number field so the user can immediately type a number
-    this._focusFirstRaceNumberInput();
+    // NOTE: we deliberately do NOT auto-focus the Race Number input here.
+    // Auto-focus + select() meant the first ←/→ keypress only deselected the
+    // text — the user had to press the arrow twice to actually navigate one
+    // image. Without auto-focus the gallery owns the keyboard, so arrows
+    // navigate immediately. Typing a digit still starts editing thanks to
+    // the type-to-edit fast-path in the keydown handler in setupGalleryListeners.
 
     // Update navigation buttons
     const prevBtn = document.getElementById('lv-gallery-prev');
@@ -3013,6 +3079,12 @@ class LogVisualizer {
         // Set confidence to 100% for manual corrections
         result.analysis[vehicleIndex].confidence = 1.0;
 
+        // Durable correction flag — _hasCorrection() looks up the Map by
+        // `fileName` while saveVehicleChanges keys by `${fileName}_${vehicleIndex}`,
+        // so without this flag the Corrections counter would never increase
+        // for manual edits.
+        result.hasCorrection = true;
+
         // Update UI
         this.updateVehicleEditor(result, imageIndex);
         this.updateStatistics();
@@ -3108,6 +3180,11 @@ class LogVisualizer {
         result.analysis[vehicleIndex].matchedBy = 'user_manual';
       }
       result._reviewResolved = true;
+      // Durable correction flag — _hasCorrection() looks up the Map by
+      // `fileName` but this code path keys by `${fileName}_${vehicleIndex}`,
+      // so without setting the flag on the result the Corrections counter
+      // would never tick up for needs-review or no-match edits.
+      result.hasCorrection = true;
 
       // Update UI - find the current index if in gallery
       let currentIndex = -1;
@@ -3716,52 +3793,126 @@ class LogVisualizer {
   /**
    * Save all manual corrections to log and metadata
    */
-  async saveAllChanges() {
+  /**
+   * Persist all pending manualCorrections.
+   *
+   * Modes:
+   *  - User-initiated (Save All button): default options, shows toasts and
+   *    refreshes data from logs after persistence so the UI is up-to-date.
+   *  - Background auto-save (called by resolveReview after a candidate click):
+   *    pass `{ silent: true, skipRefresh: true }` so the user is not
+   *    interrupted by toasts and the rapid review cadence isn't broken by
+   *    the post-save refresh round-trip.
+   *
+   * Concurrency contract:
+   *  - At most one save is in flight at any time. If a second call arrives
+   *    while the first is awaiting the IPC response, the second is queued
+   *    (we keep at most ONE pending save — additional calls collapse onto
+   *    the same queued promise) and runs immediately after the first
+   *    settles. This matches the user's mental model: "save what's in the
+   *    correction map right now"; only one trailing run is needed because
+   *    each run snapshots whatever is currently pending.
+   *
+   * Snapshot/remove pattern:
+   *  - Old code did `manualCorrections.clear()` after a successful save.
+   *    With background saves the user could enqueue a new correction
+   *    BETWEEN the snapshot and the IPC reply; the clear would then drop
+   *    that correction. We now snapshot the file names we are persisting
+   *    and delete only those entries, leaving any newer corrections in the
+   *    map for the next save cycle.
+   *
+   * @param {Object} [options]
+   * @param {boolean} [options.silent=false]      Suppress info/success toasts.
+   * @param {boolean} [options.skipRefresh=false] Skip refreshDataFromLogs after save.
+   */
+  async saveAllChanges(options = {}) {
+    const { silent = false, skipRefresh = false } = options;
+
     if (this.manualCorrections.size === 0) {
-      this.showNotification('ℹ️ No changes to save', 'info');
+      if (!silent) this.showNotification('ℹ️ No changes to save', 'info');
       return;
     }
 
-    try {
-      this.showNotification('💾 Saving all changes...', 'info');
+    // ---- Concurrency guard (single in-flight + single queued) ----
+    if (this._saveInFlight) {
+      // Coalesce: if another save is already queued, just return its promise
+      // so all callers wait on the same trailing run.
+      if (this._saveQueued) return this._saveQueued;
+      this._saveQueued = (async () => {
+        try {
+          await this._saveInFlight;
+        } catch (_) { /* the in-flight call handles its own errors */ }
+        this._saveQueued = null;
+        return this.saveAllChanges(options);
+      })();
+      return this._saveQueued;
+    }
 
-      // Prepare correction data
-      const corrections = Array.from(this.manualCorrections.values());
+    this._saveInFlight = (async () => {
+      try {
+        if (!silent) this.showNotification('💾 Saving all changes...', 'info');
 
-      // Send to main process for log update and metadata writing
-      const result = await window.api.invoke('update-analysis-log', {
-        executionId: this.executionId,
-        corrections,
-        timestamp: new Date().toISOString()
-      });
+        // Snapshot what we're about to persist. Anything added to
+        // manualCorrections after this point belongs to the next save.
+        const corrections = Array.from(this.manualCorrections.values());
+        const persistedFileNames = corrections.map(c => c.fileName);
 
-      if (result.success) {
-        this.showNotification(`✅ Successfully saved ${corrections.length} corrections`, 'success');
-        // Clear manual corrections since they're now persisted
-        this.manualCorrections.clear();
-        // Clear the unsaved changes flag to prevent beforeunload warning
-        this.hasUnsavedChanges = false;
-        this.updateStatistics();
+        const result = await window.api.invoke('update-analysis-log', {
+          executionId: this.executionId,
+          corrections,
+          timestamp: new Date().toISOString()
+        });
 
-        // Hide Save All button after successful save
-        const saveAllBtn = document.getElementById('lv-save-all');
-        if (saveAllBtn) {
-          saveAllBtn.style.display = 'none';
-          saveAllBtn.classList.remove('btn-pulse');
-          console.log('[LogVisualizer] Save All button hidden - all changes saved');
+        if (!result.success) {
+          throw new Error(result.error);
         }
 
-        // IMPORTANT: Refresh data to show updated results immediately
-        await this.refreshDataFromLogs();
-        console.log('[LogVisualizer] Data refreshed after successful save');
-      } else {
-        throw new Error(result.error);
-      }
+        if (!silent) {
+          this.showNotification(`✅ Successfully saved ${corrections.length} corrections`, 'success');
+        }
 
-    } catch (error) {
-      console.error('[LogVisualizer] Error saving all changes:', error);
-      this.showNotification('❌ Error saving changes: ' + error.message, 'error');
-    }
+        // Targeted removal — only drop the snapshot we just persisted, not
+        // anything the user has added in the meantime.
+        for (const fn of persistedFileNames) {
+          this.manualCorrections.delete(fn);
+        }
+        // Only clear the unsaved flag if no other corrections snuck in.
+        if (this.manualCorrections.size === 0) {
+          this.hasUnsavedChanges = false;
+          const saveAllBtn = document.getElementById('lv-save-all');
+          if (saveAllBtn) {
+            saveAllBtn.style.display = 'none';
+            saveAllBtn.classList.remove('btn-pulse');
+            console.log('[LogVisualizer] Save All button hidden - all changes saved');
+          }
+        }
+
+        this.updateStatistics();
+
+        // The post-save log refresh is the single most expensive step in this
+        // function — it re-fetches the entire JSONL and re-extracts every
+        // result. For background saves during ambiguous-match review we
+        // skip it: in-memory state was already mutated by resolveReview,
+        // and the next manual Save All (or gallery close / page reload)
+        // will reconcile.
+        if (!skipRefresh) {
+          await this.refreshDataFromLogs();
+          console.log('[LogVisualizer] Data refreshed after successful save');
+        }
+      } catch (error) {
+        console.error('[LogVisualizer] Error saving all changes:', error);
+        if (!silent) {
+          this.showNotification('❌ Error saving changes: ' + error.message, 'error');
+        }
+        // Re-throw so background callers can decide what to do (resolveReview
+        // shows a non-blocking warning; manual Save All shows the toast above).
+        throw error;
+      } finally {
+        this._saveInFlight = null;
+      }
+    })();
+
+    return this._saveInFlight;
   }
 
   /**
@@ -3917,7 +4068,31 @@ class LogVisualizer {
   }
 
   /**
-   * Refresh data from updated logs after save
+   * Refresh data from updated logs after save.
+   *
+   * IMPORTANT: when the gallery modal is open we must NOT call `render()` —
+   * `render()` rewrites `currentContainer.innerHTML`, which tears down the
+   * `#lv-gallery` modal DOM (re-emitting it with `display: none`). That is
+   * exactly what produced the "modal closes when 'Successfully saved' toast
+   * appears" bug during ambiguous-match resolution: after `resolveReview`
+   * auto-saved, this method nuked the modal before the deferred
+   * `navigateToNextReview` could move to the next needs-review photo.
+   *
+   * Equally important: we must NOT re-filter `filteredResults` here either.
+   * `_isNeedsReview()` excludes `_reviewResolved` photos, so re-filtering
+   * would shrink the array and shift its indices, which means the
+   * `setTimeout(() => navigateToNextReview(resultIndex), 600)` in the
+   * candidate-click handler would skip a photo (or land on the wrong one).
+   *
+   * Strategy:
+   *  - Always update `imageResults` from the source-of-truth logs.
+   *  - Preserve any in-memory `_reviewResolved` flag so the "Review resolved"
+   *    state persists across the refresh until the user closes the gallery.
+   *  - If the gallery is open: replace the stale entries inside
+   *    `filteredResults` with the fresh objects in place (same length, same
+   *    order), refresh just the result-card grid + statistics + the current
+   *    vehicle editor — leave the gallery modal DOM alone.
+   *  - If the gallery is closed: a full `render()` is fine.
    */
   async refreshDataFromLogs() {
     try {
@@ -3927,18 +4102,55 @@ class LogVisualizer {
       const logData = await window.api.invoke('get-analysis-log', this.executionId);
 
       if (logData && logData.length > 0) {
+        this.logData = logData;
+
         // Re-extract results from logs (like results-page does)
         const updatedResults = await this.extractResultsFromLogs(logData);
 
         if (updatedResults && updatedResults.length > 0) {
-          // Update the internal data
-          this.imageResults = updatedResults;
-          this.filteredResults = [...this.imageResults];
+          // Preserve _reviewResolved flag from the in-memory copy in case
+          // extractResultsFromLogs missed it (defensive: it should already
+          // re-apply it from MANUAL_CORRECTION events with resolvedFromReview).
+          const previouslyResolved = new Set(
+            (this.imageResults || []).filter(r => r._reviewResolved).map(r => r.fileName)
+          );
+          updatedResults.forEach(r => {
+            if (previouslyResolved.has(r.fileName)) r._reviewResolved = true;
+          });
 
-          // Re-render the interface with updated data
-          this.render(this.currentContainer);
+          if (this.isGalleryOpen) {
+            // Build a quick lookup so we can swap stale references in
+            // filteredResults without changing its length / order — that
+            // keeps navigateToNextReview's index math correct.
+            const byFileName = new Map(updatedResults.map(r => [r.fileName, r]));
+            this.filteredResults = this.filteredResults.map(stale => {
+              const fresh = byFileName.get(stale.fileName);
+              if (!fresh) return stale; // shouldn't happen, but be defensive
+              if (stale._reviewResolved) fresh._reviewResolved = true;
+              return fresh;
+            });
 
-          console.log(`[LogVisualizer] Successfully refreshed ${updatedResults.length} results`);
+            this.imageResults = updatedResults;
+
+            // Refresh result-card grid + counters without touching the
+            // gallery modal DOM.
+            this.renderResults();
+            this.updateStatistics();
+
+            // Refresh the vehicle editor for the photo currently shown in
+            // the gallery so any saved changes are reflected immediately.
+            const current = this.filteredResults[this.currentImageIndex];
+            if (current) {
+              this.updateVehicleEditor(current, this.currentImageIndex);
+            }
+          } else {
+            // Gallery closed — full re-render is safe.
+            this.imageResults = updatedResults;
+            this.filteredResults = [...this.imageResults];
+            this.render(this.currentContainer);
+          }
+
+          console.log(`[LogVisualizer] Successfully refreshed ${updatedResults.length} results (galleryOpen=${this.isGalleryOpen})`);
         }
       }
     } catch (error) {
@@ -4009,6 +4221,9 @@ class LogVisualizer {
           console.log(`[LogVisualizer] Applying deletion: ${fileName} vehicle ${vehicleIndex}`);
           result.analysis.splice(vehicleIndex, 1);
         }
+        // Mark as corrected so the Corrections counter reflects this edit
+        // even after the in-memory manualCorrections Map has been flushed.
+        result.hasCorrection = true;
       } else if (changes) {
         // Handle update: modify vehicle properties
         if (result.analysis && result.analysis[vehicleIndex]) {
@@ -4029,6 +4244,12 @@ class LogVisualizer {
 
           // Set confidence to 100% for manually corrected vehicles
           result.analysis[vehicleIndex].confidence = 1.0;
+
+          // Durable correction flag — _hasCorrection() falls back to this
+          // when the in-memory manualCorrections Map has been cleared by
+          // a save (the comment above _hasCorrection promised this; the
+          // flag was just never being set here).
+          result.hasCorrection = true;
         }
       }
     });
