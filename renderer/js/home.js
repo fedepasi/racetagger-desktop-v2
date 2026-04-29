@@ -328,6 +328,11 @@ function renderRecentExecutions(executions) {
             </div>
           </div>
           <span class="status-pill ${escapeHtml(exec.status || 'pending')}">${statusLabel}</span>
+          <button class="delete-execution-btn" data-role="delete" title="Remove from history" aria-label="Remove from history">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </button>
         </div>
       </div>
     `;
@@ -341,9 +346,10 @@ function renderRecentExecutions(executions) {
     const executionId = row.dataset.executionId;
 
     row.addEventListener('click', (e) => {
-      // If user clicked the rename button or an already-open input, ignore.
+      // If user clicked the rename button, the delete button, or an already-open input, ignore.
       const target = e.target;
       if (target.closest('[data-role="rename"]') || target.closest('[data-role="rename-input"]')) return;
+      if (target.closest('[data-role="delete"]')) return;
       if (target.closest('.badge-delivery')) {
         // Reserved: in the future, clicking a gallery badge can navigate to the gallery
         // detail page. For now we just prevent the row click from firing.
@@ -360,7 +366,130 @@ function renderRecentExecutions(executions) {
         enterRenameMode(row, executionId);
       });
     }
+
+    const deleteBtn = row.querySelector('[data-role="delete"]');
+    if (deleteBtn) {
+      deleteBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        // Title (after escapeHtml is harmless here — we just need a label for the modal).
+        const titleEl = row.querySelector('[data-role="title"]');
+        const labelText = titleEl ? titleEl.textContent : 'this analysis';
+        confirmDeleteExecution(row, executionId, labelText);
+      });
+    }
   });
+}
+
+/**
+ * Show a small confirmation modal before removing an analysis from the
+ * local Home view. On confirm: invoke the IPC handler, then animate the row
+ * out. On error: re-enable the button and show an inline notice.
+ *
+ * Built ad-hoc (no shared confirm helper exists in the renderer yet) but
+ * follows the same overlay+card pattern feedback-modal.js uses elsewhere
+ * so the visual style stays consistent.
+ */
+function confirmDeleteExecution(row, executionId, labelText) {
+  // Reuse if a previous modal is still in the DOM (defensive).
+  const existing = document.getElementById('delete-execution-modal');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'delete-execution-modal';
+  overlay.className = 'delete-modal-overlay';
+  overlay.innerHTML = `
+    <div class="delete-modal" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title">
+      <h3 id="delete-modal-title" class="delete-modal-title">Remove this analysis?</h3>
+      <p class="delete-modal-body">
+        <strong>${escapeHtml(labelText || 'This analysis')}</strong> will be removed from your history.
+        The original photos on your computer are not affected.
+      </p>
+      <div class="delete-modal-actions">
+        <button type="button" class="delete-modal-btn delete-modal-btn-cancel" data-role="cancel">Cancel</button>
+        <button type="button" class="delete-modal-btn delete-modal-btn-confirm" data-role="confirm">Remove</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const cleanup = () => {
+    overlay.remove();
+    document.removeEventListener('keydown', onKey);
+  };
+
+  const onKey = (ev) => {
+    if (ev.key === 'Escape') {
+      ev.preventDefault();
+      cleanup();
+    }
+  };
+  document.addEventListener('keydown', onKey);
+
+  // Click outside the dialog dismisses (matches feedback modal behaviour).
+  overlay.addEventListener('click', (ev) => {
+    if (ev.target === overlay) cleanup();
+  });
+
+  overlay.querySelector('[data-role="cancel"]').addEventListener('click', cleanup);
+
+  const confirmBtn = overlay.querySelector('[data-role="confirm"]');
+  confirmBtn.addEventListener('click', async () => {
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = 'Removing…';
+    try {
+      const result = await window.api.invoke('delete-local-execution', executionId);
+      if (result && result.success) {
+        // Animate the row out, then remove it from the DOM. If the row no
+        // longer exists (user navigated away), this is a no-op.
+        cleanup();
+        if (row && row.parentNode) {
+          row.style.transition = 'opacity 180ms ease, transform 180ms ease';
+          row.style.opacity = '0';
+          row.style.transform = 'translateX(-8px)';
+          setTimeout(() => {
+            if (row.parentNode) row.parentNode.removeChild(row);
+            // If the list is now empty, re-render the empty state.
+            const container = document.getElementById('recent-executions-list');
+            if (container && container.children.length === 0) {
+              container.innerHTML = `
+                <div class="empty-executions">
+                  <div class="empty-executions-icon">📷</div>
+                  <h3>No analyses yet</h3>
+                  <p>Start your first analysis to see your history here</p>
+                </div>
+              `;
+            }
+          }, 200);
+        }
+      } else {
+        const msg = (result && result.error) || 'Could not remove this analysis.';
+        showDeleteModalError(overlay, msg);
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Remove';
+      }
+    } catch (err) {
+      console.error('[Home] delete-local-execution failed:', err);
+      showDeleteModalError(overlay, 'Could not remove this analysis. Please try again.');
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = 'Remove';
+    }
+  });
+
+  // Focus the cancel button by default (safer than the destructive action).
+  setTimeout(() => {
+    const cancelBtn = overlay.querySelector('[data-role="cancel"]');
+    if (cancelBtn) cancelBtn.focus();
+  }, 0);
+}
+
+function showDeleteModalError(overlay, message) {
+  let err = overlay.querySelector('.delete-modal-error');
+  if (!err) {
+    err = document.createElement('p');
+    err.className = 'delete-modal-error';
+    overlay.querySelector('.delete-modal-body').insertAdjacentElement('afterend', err);
+  }
+  err.textContent = message;
 }
 
 /**

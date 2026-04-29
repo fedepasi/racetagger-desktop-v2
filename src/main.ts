@@ -2758,8 +2758,19 @@ async function handleFeedbackSubmission(event: IpcMainEvent, feedbackData: any) 
 }
 
 /**
- * Check and download ONNX models at app startup
- * Shows progress modal in renderer if downloads are needed
+ * Check and download ONNX models at app startup.
+ * Shows progress modal in renderer if downloads are needed.
+ *
+ * Two stages, presented as a single download flow to the user:
+ *   1) Legacy code-based models from the `model_registry` Supabase table
+ *      (categories with use_local_onnx=true), via ModelManager.downloadModel(code).
+ *   2) YOLO models from yolo-model-registry.ts needed by the user's enabled
+ *      sport categories (segmenter for crop_config.enabled, detector for
+ *      use_local_onnx), via ModelManager.ensureGenericModelAvailable(modelId).
+ *
+ * Stage 2 closes issue #124: previously the YOLO segmenter (~42 MB) was
+ * downloaded lazily at the first "Avvia analisi" click, blocking the pipeline
+ * for ~30s on the first run after install/upgrade.
  */
 async function checkAndDownloadModels(): Promise<void> {
   console.log('[Main Process] checkAndDownloadModels() called');
@@ -2773,38 +2784,73 @@ async function checkAndDownloadModels(): Promise<void> {
     modelManager.setSupabaseClient(supabaseClient);
     console.log('[Main Process] Supabase client set');
 
-    // Check which models need to be downloaded
-    console.log('[Main Process] Checking models to download...');
-    const { models, totalSizeMB } = await modelManager.getModelsToDownload();
-    console.log('[Main Process] Models to download:', models.length, 'Total size:', totalSizeMB, 'MB');
+    // Stage 1 — legacy code-based models (use_local_onnx=true categories)
+    console.log('[Main Process] Checking code-based models to download...');
+    const { models: codeModels, totalSizeMB: codeSizeMB } =
+      await modelManager.getModelsToDownload();
+    console.log(
+      `[Main Process] Code-based models to download: ${codeModels.length} (${codeSizeMB.toFixed(1)} MB)`
+    );
 
-    if (models.length === 0) {
+    // Stage 2 — YOLO registry models needed by user's enabled sport categories
+    // (issue #124: pre-download to avoid lazy ~30s wait at first analysis)
+    console.log('[Main Process] Checking YOLO registry models to download...');
+    const { models: yoloModels, totalSizeMB: yoloSizeMB } =
+      await modelManager.getYoloModelsToDownload();
+    console.log(
+      `[Main Process] YOLO registry models to download: ${yoloModels.length} (${yoloSizeMB.toFixed(1)} MB)`
+    );
+
+    const totalModels = codeModels.length + yoloModels.length;
+    const totalSizeMB = codeSizeMB + yoloSizeMB;
+
+    if (totalModels === 0) {
       console.log('[Main Process] No models need download, all up to date');
       return;
     }
 
-    // Notify renderer to show download modal
+    // Notify renderer to show download modal (combined stages)
     safeSend('model-download-start', {
-      totalModels: models.length,
+      totalModels,
       totalSizeMB
     });
 
-    // Download each model with progress tracking
+    // Download each model with progress tracking. Both stages share the same
+    // running counters so the renderer sees a single "X / Y models" flow.
     let downloadedTotal = 0;
-    for (let i = 0; i < models.length; i++) {
-      const model = models[i];
+    let modelIndex = 0;
 
-      await modelManager.downloadModel(model.code, (percent, downloadedMB, totalMB) => {
+    // Stage 1 — code-based models via downloadModel(code)
+    for (const model of codeModels) {
+      modelIndex++;
+      await modelManager.downloadModel(model.code, (percent, downloadedMB, _totalMB) => {
         safeSend('model-download-progress', {
-          currentModel: i + 1,
-          totalModels: models.length,
+          currentModel: modelIndex,
+          totalModels,
           modelPercent: percent,
           downloadedMB: downloadedTotal + downloadedMB,
           totalMB: totalSizeMB
         });
       });
-
       downloadedTotal += model.sizeMB;
+    }
+
+    // Stage 2 — YOLO registry models via ensureGenericModelAvailable(modelId)
+    for (const yoloModel of yoloModels) {
+      modelIndex++;
+      await modelManager.ensureGenericModelAvailable(
+        yoloModel.modelId,
+        (percent, downloadedMB, _totalMB) => {
+          safeSend('model-download-progress', {
+            currentModel: modelIndex,
+            totalModels,
+            modelPercent: percent,
+            downloadedMB: downloadedTotal + downloadedMB,
+            totalMB: totalSizeMB
+          });
+        }
+      );
+      downloadedTotal += yoloModel.sizeMB;
     }
 
     // Notify renderer that download is complete

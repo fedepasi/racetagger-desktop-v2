@@ -411,8 +411,26 @@ export function registerSupabaseHandlers(): void {
       });
 
       if (error) {
-        console.error('[PDF Parser] Edge function error:', error);
-        return { success: false, error: error.message };
+        // FunctionsHttpError on non-2xx responses hides the body, so the renderer ends up
+        // seeing `{"name":"FunctionsHttpError","context":{}}` with no clue why it failed.
+        // Read the response body manually and surface the real edge-function error message.
+        let bodyDetail: any = null;
+        try {
+          const resp: Response | undefined = (error as any)?.context;
+          if (resp && typeof resp.text === 'function') {
+            const raw = await resp.text();
+            try { bodyDetail = JSON.parse(raw); } catch { bodyDetail = raw; }
+          }
+        } catch (_) { /* ignore */ }
+
+        const detailMsg =
+          (bodyDetail && typeof bodyDetail === 'object' && (bodyDetail.error || bodyDetail.message)) ||
+          (typeof bodyDetail === 'string' ? bodyDetail : null) ||
+          error.message ||
+          'Unknown edge function error';
+
+        console.error('[PDF Parser] Edge function error:', detailMsg, bodyDetail || error);
+        return { success: false, error: detailMsg };
       }
 
       // The edge function returns its own success/error format

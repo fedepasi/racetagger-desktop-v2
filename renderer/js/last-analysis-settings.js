@@ -223,32 +223,19 @@ function applyCategorySetting(category) {
 function applyPresetSetting(presetId) {
   if (!presetId) return;
 
-  const presetSelect = document.getElementById('preset-select');
-  if (!presetSelect) return;
+  // PresetController.select() is the only sanctioned way to set a preset. It
+  // queues the call internally if the list isn't loaded yet and applies it as
+  // soon as the refresh completes — no polling, no DOM-readiness assumptions.
+  if (window.presetController) {
+    window.presetController.select(presetId).catch((err) => {
+      console.warn('[LastAnalysisSettings] applyPresetSetting failed:', err);
+    });
+    console.log('[LastAnalysisSettings] Preset restore queued:', presetId);
+    return;
+  }
 
-  // The preset options are populated asynchronously after category loads.
-  // Poll until the option is available (max ~3s).
-  let attempts = 0;
-  const maxAttempts = 30;
-
-  const tryApply = () => {
-    const option = presetSelect.querySelector(`option[value="${presetId}"]`);
-    if (option) {
-      presetSelect.value = presetId;
-      const event = new Event('change', { bubbles: true });
-      presetSelect.dispatchEvent(event);
-      console.log('[LastAnalysisSettings] Preset restored:', presetId);
-      return;
-    }
-    attempts++;
-    if (attempts < maxAttempts) {
-      setTimeout(tryApply, 100);
-    } else {
-      console.warn('[LastAnalysisSettings] Preset option not found after polling:', presetId);
-    }
-  };
-
-  tryApply();
+  // Fallback (shouldn't happen — preset-controller.js loads before this file).
+  console.warn('[LastAnalysisSettings] presetController not available; cannot restore preset');
 }
 
 function applyFolderOrganizationSettings(settings) {

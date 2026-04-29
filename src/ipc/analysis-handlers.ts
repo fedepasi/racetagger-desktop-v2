@@ -368,6 +368,85 @@ export function registerAnalysisHandlers(): void {
     }
   });
 
+  // Soft-delete an execution from the user's local home view.
+  //
+  // Behaviour
+  // ---------
+  //   1. (Best-effort) Stamps `executions.deleted_at = now()` in Supabase.
+  //      The DB row is preserved so the management portal can keep showing
+  //      it (with a "user-deleted" badge). RLS already restricts updates to
+  //      the row's owner.
+  //   2. Removes the local `exec_{id}.jsonl` and `exec_{id}.jsonl.summary.json`
+  //      files. After this, `scanLocalExecutions` no longer surfaces the
+  //      execution on the home page.
+  //
+  // Design choices
+  // --------------
+  //   - Local file removal is the source of truth for the user's home page,
+  //     so we do it even when the Supabase update fails (offline, RLS, etc.).
+  //     The user-visible promise — "the row goes away" — is honoured.
+  //   - Supabase failures are logged but not surfaced as errors. Worst case:
+  //     the row stays active server-side and the next time the user signs in
+  //     on a different machine the analysis reappears in the local cache —
+  //     acceptable trade-off vs. blocking the UI on a network hop.
+  ipcMain.handle('delete-local-execution', async (_, executionId: string) => {
+    try {
+      if (!executionId || typeof executionId !== 'string') {
+        return { success: false, error: 'Invalid execution id' };
+      }
+
+      // 1. Best-effort soft-delete in Supabase. Filtered by user_id so a
+      //    compromised renderer can't nuke other users' rows (defense in
+      //    depth — RLS already enforces this).
+      try {
+        const authState = authService.getAuthState();
+        if (authState.isAuthenticated && authState.user?.id) {
+          const supabase = getSupabaseClient();
+          const { error: dbError } = await supabase
+            .from('executions')
+            .update({ deleted_at: new Date().toISOString() })
+            .eq('id', executionId)
+            .eq('user_id', authState.user.id);
+          if (dbError && DEBUG_MODE) {
+            console.warn('[Analysis] Supabase soft-delete failed (non-fatal):', dbError);
+          }
+        }
+      } catch (dbError) {
+        if (DEBUG_MODE) console.warn('[Analysis] Supabase soft-delete threw (non-fatal):', dbError);
+      }
+
+      // 2. Remove local artifacts. We unlink both the JSONL and its sidecar;
+      //    either one missing is fine (the scanner tolerates orphans). We
+      //    consider success as "the row will not reappear on next refresh",
+      //    which only requires both files to be absent.
+      const logsDir = path.join(app.getPath('userData'), '.analysis-logs');
+      const jsonlPath = path.join(logsDir, `exec_${executionId}.jsonl`);
+      const summaryPath = path.join(logsDir, `exec_${executionId}.jsonl.summary.json`);
+
+      const removeIfExists = (p: string) => {
+        try {
+          if (fs.existsSync(p)) fs.unlinkSync(p);
+        } catch (e) {
+          if (DEBUG_MODE) console.warn(`[Analysis] Could not remove ${p}:`, e);
+        }
+      };
+      removeIfExists(jsonlPath);
+      removeIfExists(summaryPath);
+
+      // Verify both files are gone before returning success — otherwise the
+      // home row would reappear on the next refresh and confuse the user.
+      const stillThere = fs.existsSync(jsonlPath) || fs.existsSync(summaryPath);
+      if (stillThere) {
+        return { success: false, error: 'Could not remove local log files (permission?)' };
+      }
+
+      return { success: true, data: { executionId } };
+    } catch (error) {
+      console.error('[Analysis] Error deleting local execution:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
   // Rename an execution: appends an EXECUTION_META_UPDATE event to the JSONL
   // (local source of truth) and best-effort syncs the name column on the
   // `executions` row in Supabase. Safe to call for finalized executions.
@@ -409,5 +488,5 @@ export function registerAnalysisHandlers(): void {
     }
   });
 
-  if (DEBUG_MODE) console.log('[IPC] Analysis handlers registered (6 handlers)');
+  if (DEBUG_MODE) console.log('[IPC] Analysis handlers registered (7 handlers)');
 }

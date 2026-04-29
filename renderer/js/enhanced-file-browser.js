@@ -17,23 +17,29 @@ class EnhancedFileBrowser {
       { id: 'png', label: 'PNG', icon: '🎨' }
     ];
 
-    // Initialize selected preset
-    this.selectedPreset = null;
-    this.availablePresets = [];
-    // Track ongoing preset loading to avoid race conditions
-    this.presetLoadingPromise = null;
+    // Preset state lives in window.presetController — single source of truth.
+    // We expose `selectedPreset` as a read-only proxy for legacy callers.
 
     this.init();
   }
-  
+
+  // Backward-compat shims so any straggler callers keep working until they're
+  // migrated. New code should read window.presetController.selected directly.
+  get selectedPreset() {
+    return (window.presetController && window.presetController.selected) || null;
+  }
+  get presetLoadingPromise() {
+    return window.presetController ? window.presetController._listRefreshPromise : null;
+  }
+
   init() {
     this.replaceOriginalBrowser();
     this.bindEvents();
     this.setupDragAndDrop();
     this.setupPresetListeners();
-    this.setupPresetSelector();
-    // Load available presets first, then load selected preset
-    this.loadAvailablePresets();
+    // Preset list loading + dropdown wiring is owned by PresetController.
+    // EnhancedFileBrowser used to fetch the list and bind a `change` listener here;
+    // both are now done by presetController.bindToView() (called from router.js).
   }
   
   replaceOriginalBrowser() {
@@ -965,60 +971,38 @@ class EnhancedFileBrowser {
   }
 
   /**
-   * Setup preset event listeners
+   * Subscribe to PresetController so the optional `#current-preset-display` chip
+   * (rendered elsewhere in this class via createPresetDisplay) refreshes whenever
+   * the selection changes — without us holding our own copy of the preset.
    */
   setupPresetListeners() {
-    // Listen for preset selection from participants manager
-    window.addEventListener('presetSelected', (event) => {
-      this.selectedPreset = event.detail;
-      this.updatePresetDisplay();
-    });
-
-    // Listen for preset cleared
-    window.addEventListener('presetCleared', () => {
-      this.selectedPreset = null;
+    if (!window.presetController) return;
+    window.presetController.addEventListener('selection-changed', () => {
       this.updatePresetDisplay();
     });
   }
 
   /**
-   * Load selected preset from localStorage
-   */
-  async loadSelectedPreset() {
-    try {
-      // Note: localStorage persistence removed - presets start unselected each time
-
-      // Fallback to window.getSelectedPreset if available
-      if (typeof window.getSelectedPreset === 'function') {
-        const legacyPreset = window.getSelectedPreset();
-        if (legacyPreset && legacyPreset.id) {
-          await this.handlePresetSelection(legacyPreset.id);
-        }
-      }
-    } catch (error) {
-      this.selectedPreset = null;
-    }
-  }
-
-  /**
-   * Update preset display in the UI
+   * Update the optional `#current-preset-display` chip in the file-browser area.
+   * Reads the selection directly from PresetController — no local cache.
    */
   updatePresetDisplay() {
     const presetDisplay = document.getElementById('current-preset-display');
 
     if (!presetDisplay) {
-      // Create preset display if it doesn't exist
       this.createPresetDisplay();
       return;
     }
 
-    if (this.selectedPreset) {
-      const participantCount = this.selectedPreset.participants ? this.selectedPreset.participants.length : 0;
+    const preset = window.presetController?.selected || null;
+
+    if (preset) {
+      const participantCount = preset.participants ? preset.participants.length : 0;
       presetDisplay.innerHTML = `
         <div class="preset-info">
           <div class="preset-header">
             <span class="preset-icon">👥</span>
-            <span class="preset-name">${this.selectedPreset.name}</span>
+            <span class="preset-name">${preset.name}</span>
           </div>
           <div class="preset-details">
             <span class="participant-count">${participantCount} participants</span>
@@ -1069,30 +1053,22 @@ class EnhancedFileBrowser {
     }
 
     try {
-
-      // Issue #104 — race-condition guard: if a preset is being loaded, wait for
-      // it to complete before building the config. Otherwise we'd dispatch an
-      // analysis with an empty participants list, which defeats preset-scoped
-      // driver filtering entirely.
-      if (this.presetLoadingPromise) {
-        try {
-          console.log('[EnhancedFileBrowser] Awaiting in-flight preset load before starting analysis...');
-          await this.presetLoadingPromise;
-        } catch (presetErr) {
-          console.warn('[EnhancedFileBrowser] Preset load error (continuing):', presetErr);
-        }
+      // Wait for any in-flight preset list refresh / selection IPC to settle, so
+      // the read of presetController.selected below is authoritative.
+      if (window.presetController) {
+        await window.presetController.ready();
       }
 
-      // Sanity check: if a preset is selected it MUST have at least one participant.
-      // An empty participants array means the preset hasn't finished loading
-      // (or failed to load) — sending the analysis now would bypass preset-scope
-      // driver filtering on the server.
-      if (this.selectedPreset && (!this.selectedPreset.participants || this.selectedPreset.participants.length === 0)) {
+      const preset = window.presetController?.selected || null;
+
+      // Sanity check (Issue #104): if a preset is selected, it MUST have participants.
+      // An empty list would silently bypass preset-scoped driver filtering on the server.
+      if (preset && (!preset.participants || preset.participants.length === 0)) {
         this.showNotification(
           'Preset selezionato ma lista partecipanti vuota — attendi che il preset finisca di caricare e riprova.',
           'warning'
         );
-        console.warn('[EnhancedFileBrowser] Refusing to start analysis: preset selected but participants empty', this.selectedPreset);
+        console.warn('[EnhancedFileBrowser] Refusing to start analysis: preset selected but participants empty', preset);
         return;
       }
 
@@ -1108,12 +1084,12 @@ class EnhancedFileBrowser {
           preset: document.querySelector('[name="resize-preset"]:checked')?.value || 'balanced'
         },
         // Include participant preset data
-        participantPreset: this.selectedPreset ? {
-          id: this.selectedPreset.presetId || this.selectedPreset.id,
-          name: this.selectedPreset.presetName || this.selectedPreset.name,
-          participants: this.selectedPreset.participants || [],
+        participantPreset: preset ? {
+          id: preset.id,
+          name: preset.name,
+          participants: preset.participants || [],
           // Issue #104 — preset-scope driver filter flag
-          allow_external_person_recognition: this.selectedPreset.allow_external_person_recognition === true
+          allow_external_person_recognition: preset.allow_external_person_recognition === true
         } : null
       };
       
@@ -1185,287 +1161,21 @@ class EnhancedFileBrowser {
       .map(file => file.index);
   }
 
-  /**
-   * Load available participant presets from the API
-   */
-  async loadAvailablePresets() {
-    try {
-      // Check if user is admin
-      const isAdmin = await window.api.invoke('auth-is-admin');
-
-      // Use appropriate endpoint based on admin status
-      const channelName = isAdmin
-        ? 'supabase-get-all-participant-presets-admin'
-        : 'supabase-get-participant-presets';
-
-      console.log('[EnhancedFileBrowser] Loading presets via:', channelName);
-      const response = await window.api.invoke(channelName);
-      console.log('[EnhancedFileBrowser] Response:', response.success, 'presets:', response.data?.length);
-
-      if (response.success && Array.isArray(response.data)) {
-        // Debug: log first preset to see structure
-        if (response.data.length > 0) {
-          const firstPreset = response.data[0];
-          console.log('[EnhancedFileBrowser] First preset structure:', {
-            id: firstPreset.id,
-            name: firstPreset.name,
-            hasParticipants: !!firstPreset.participants,
-            participantsLength: firstPreset.participants?.length,
-            hasPresetParticipants: !!(firstPreset).preset_participants,
-            presetParticipantsLength: (firstPreset).preset_participants?.length,
-            keys: Object.keys(firstPreset)
-          });
-        }
-
-        this.availablePresets = response.data.map(preset => {
-          // Try both 'participants' and 'preset_participants' in case of mapping issues
-          const participants = preset.participants || preset.preset_participants || [];
-          return {
-            id: preset.id,
-            name: preset.name,
-            description: preset.description,
-            participantCount: participants.length,
-            participants: participants
-          };
-        });
-
-        console.log('[EnhancedFileBrowser] Mapped presets:', this.availablePresets.map(p => `${p.name}: ${p.participantCount}`));
-
-        this.updatePresetSelector();
-
-        // After loading presets, restore the selected one from localStorage
-        this.loadSelectedPreset();
-      } else {
-        console.log('[EnhancedFileBrowser] No presets or invalid response');
-        this.availablePresets = [];
-      }
-    } catch (error) {
-      console.error('[EnhancedFileBrowser] Error loading presets:', error);
-      this.availablePresets = [];
-    }
-  }
+  // ----------------------------------------------------------------------------
+  // Preset list / selection / dropdown wiring used to live here. It has been
+  // extracted into renderer/js/preset-controller.js (PresetController) so there
+  // is exactly one owner of preset state, one IPC fetcher, and one set of DOM
+  // listeners that get re-bound on every page-loaded. EnhancedFileBrowser now
+  // only reads window.presetController.selected when it needs the current preset.
+  // ----------------------------------------------------------------------------
 
   /**
-   * Setup preset selector event handlers
+   * Compatibility shim — `loadAvailablePresets` was the entry point used by the
+   * router on page (re-)entry. It now just delegates to PresetController. Kept
+   * because external code still calls it by name.
    */
-  setupPresetSelector() {
-    const presetSelect = document.getElementById('preset-select');
-    if (presetSelect) {
-      // Load fresh data when user focuses the select (opens dropdown)
-      presetSelect.addEventListener('focus', () => {
-        this.loadAvailablePresets();
-      });
-
-      presetSelect.addEventListener('change', (e) => {
-        this.handlePresetSelection(e.target.value);
-      });
-    }
-  }
-
-  /**
-   * Handle preset selection from dropdown
-   */
-  async handlePresetSelection(presetId) {
-    console.log('[EnhancedFileBrowser] handlePresetSelection called with:', presetId);
-
-    if (!presetId) {
-      // Clear preset selection
-      console.log('[EnhancedFileBrowser] Clearing preset selection');
-      this.selectedPreset = null;
-      this.presetLoadingPromise = null;
-      // Note: localStorage persistence removed - presets are selected fresh each time
-      this.updatePresetDetails();
-      return;
-    }
-
-    // Track this loading operation so other code can await it
-    const loadingPromise = this._loadPresetData(presetId);
-    this.presetLoadingPromise = loadingPromise;
-    return loadingPromise;
-  }
-
-  /**
-   * Internal: Load preset data from Supabase.
-   * Separated to allow tracking via presetLoadingPromise.
-   */
-  async _loadPresetData(presetId) {
-    try {
-      // Always load full preset data from server to ensure we have complete participants
-      console.log('[EnhancedFileBrowser] Loading preset by ID:', presetId);
-      const response = await window.api.invoke('supabase-get-participant-preset-by-id', presetId);
-      console.log('[EnhancedFileBrowser] Preset load response:', response.success, response.data?.name, 'participants:', response.data?.participants?.length);
-
-      if (response.success && response.data) {
-        this.selectedPreset = {
-          id: response.data.id,
-          name: response.data.name,
-          description: response.data.description,
-          participants: response.data.participants || [],
-          // Issue #104 — preset-scope driver filter (opt-in per preset)
-          allow_external_person_recognition: response.data.allow_external_person_recognition === true
-        };
-        console.log('[EnhancedFileBrowser] selectedPreset set:', this.selectedPreset.id, this.selectedPreset.name,
-          '| allowExternal:', this.selectedPreset.allow_external_person_recognition);
-
-        // Note: localStorage persistence removed - presets are selected fresh each time
-
-        // Update last used timestamp
-        await window.api.invoke('supabase-update-preset-last-used', presetId);
-
-        // Update UI
-        this.updatePresetDetails();
-
-        // Show accuracy confirmation message
-        this.showAccuracyConfirmation();
-
-        // Dispatch event for other components
-        window.dispatchEvent(new CustomEvent('presetSelected', {
-          detail: this.selectedPreset
-        }));
-      } else {
-        console.log('[EnhancedFileBrowser] Preset load failed or no data');
-      }
-    } catch (error) {
-      console.error('[EnhancedFileBrowser] Error selecting preset:', error);
-    }
-  }
-
-  /**
-   * Update preset selector dropdown options
-   */
-  updatePresetSelector() {
-    const presetSelect = document.getElementById('preset-select');
-    if (!presetSelect) return;
-
-    // Clear existing options except the first one
-    presetSelect.innerHTML = '<option value="">Enhance Recognition Accuracy</option>';
-
-    // Add available presets
-    this.availablePresets.forEach(preset => {
-      const option = document.createElement('option');
-      option.value = preset.id;
-      option.textContent = `${preset.name} (${preset.participantCount} participants)`;
-      presetSelect.appendChild(option);
-    });
-
-    // Set current selection if any
-    if (this.selectedPreset) {
-      presetSelect.value = this.selectedPreset.id;
-    }
-
-    // If no selectedPreset but dropdown has a value, try to sync it
-    if (!this.selectedPreset && presetSelect.value) {
-      const presetId = presetSelect.value;
-      this.handlePresetSelection(presetId);
-    }
-
-    // Sync the custom visual dropdown with updated options
-    if (typeof window.syncCustomPresetDropdown === 'function') {
-      window.syncCustomPresetDropdown();
-    }
-  }
-
-  /**
-   * Update preset details display
-   */
-  updatePresetDetails() {
-    const presetDetails = document.getElementById('preset-details');
-    const presetParticipantCount = document.getElementById('preset-participant-count');
-
-    if (!presetDetails || !presetParticipantCount) return;
-
-    if (this.selectedPreset) {
-      presetDetails.style.display = 'block';
-      presetParticipantCount.textContent = this.selectedPreset.participants.length;
-    } else {
-      presetDetails.style.display = 'none';
-    }
-  }
-
-  /**
-   * Show accuracy-focused confirmation when preset is selected
-   */
-  showAccuracyConfirmation() {
-    if (!this.selectedPreset) return;
-
-    // Create success message for delight system
-    const participantCount = this.selectedPreset.participants.length;
-
-    // Try to integrate with delight system if available
-    if (window.delightSystem && window.delightSystem.showSuccess) {
-      // Use existing success method with custom accuracy messaging
-      const stats = {
-        'Participants': participantCount,
-        'Accuracy Mode': 'Enhanced'
-      };
-
-      // Add custom success message to delight system temporarily
-      if (!window.delightSystem.successMessages) {
-        window.delightSystem.successMessages = {};
-      }
-
-      window.delightSystem.successMessages.preset_accuracy = {
-        icon: '🎯',
-        title: 'Accuracy Enhanced!',
-        message: `${participantCount} participants loaded for precise number matching and sponsor detection`
-      };
-
-      window.delightSystem.showSuccess('preset_accuracy', stats, 4000);
-    } else {
-      // Fallback: show simple notification
-      const message = `🎯 ${participantCount} participants loaded - Enhanced accuracy active!`;
-      this.showSimpleNotification(message, 'success');
-    }
-
-    // Add subtle animation to preset selector
-    const presetSelector = document.querySelector('.preset-selector-enhanced');
-    if (presetSelector) {
-      presetSelector.style.animation = 'preset-success-pulse 0.6s ease-out';
-      setTimeout(() => {
-        presetSelector.style.animation = '';
-      }, 600);
-    }
-  }
-
-  /**
-   * Simple notification fallback
-   */
-  showSimpleNotification(message, type = 'info') {
-    const notification = document.createElement('div');
-    notification.className = `preset-notification preset-notification-${type}`;
-    notification.textContent = message;
-    notification.style.cssText = `
-      position: fixed;
-      top: 20px;
-      right: 20px;
-      background: ${type === 'success' ? '#10b981' : '#3b82f6'};
-      color: white;
-      padding: 12px 20px;
-      border-radius: 8px;
-      box-shadow: 0 4px 16px rgba(0,0,0,0.2);
-      z-index: 1000;
-      font-size: 14px;
-      font-weight: 500;
-      transform: translateX(100%);
-      transition: transform 0.3s ease;
-    `;
-
-    document.body.appendChild(notification);
-
-    // Animate in
-    setTimeout(() => {
-      notification.style.transform = 'translateX(0)';
-    }, 100);
-
-    // Remove after delay
-    setTimeout(() => {
-      notification.style.transform = 'translateX(100%)';
-      setTimeout(() => {
-        if (notification.parentNode) {
-          notification.parentNode.removeChild(notification);
-        }
-      }, 300);
-    }, 3000);
+  loadAvailablePresets() {
+    return window.presetController ? window.presetController.refresh() : Promise.resolve();
   }
 }
 

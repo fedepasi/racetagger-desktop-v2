@@ -1056,6 +1056,19 @@ export function invalidatePresetsCache(): void {
 }
 
 /**
+ * Clear ALL in-memory caches (categories + presets + timestamps).
+ * Used on explicit logout to make sure the next login starts with fresh data
+ * and never reuses the previous user's cached state.
+ */
+export function clearAllCaches(): void {
+  categoriesCache = [];
+  presetsCache = [];
+  cacheLastUpdated = 0;
+  cacheIncludesInactive = false;
+  console.log('[Cache] All in-memory caches cleared (logout)');
+}
+
+/**
  * Cache all Supabase data at app startup
  */
 export async function cacheSupabaseData(): Promise<void> {

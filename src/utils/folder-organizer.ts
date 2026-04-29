@@ -369,9 +369,28 @@ export class FolderOrganizer {
 
       const copiedPaths: string[] = [];
       const conflictStrategy = this.config.conflictStrategy || 'rename';
-      let firstOperation: 'copy' | 'move' | 'skip' = this.config.mode;
+      // Preserve the original source path — we never mutate it during PHASE 1 so
+      // every copy reads from the same on-disk file and the original is still
+      // available for rollback / inspection if any step fails.
+      const originalPath = imagePath;
 
-      // COPY FILE TO ALL FOLDERS
+      // ============================================================
+      // PHASE 1 — COPY into every assigned folder
+      //
+      // We always copy (never rename) during the loop, even when mode='move'.
+      // This guarantees the file lands in EVERY folder of EVERY participant
+      // before the original is touched. Rationale:
+      //   • Multi-participant photos (the bug this fixes): each concorrente
+      //     gets the file independently — there is no "first wins, others
+      //     copy from the first" coupling that could break if iter 0 skips
+      //     for a conflict or fails part-way.
+      //   • Robustness: if any copy fails the original is still on disk, so
+      //     the user can retry without data loss.
+      //   • Determinism: every copy uses the same source, so the output is
+      //     identical regardless of iteration order.
+      // The actual "move" semantic (delete the original) is deferred to
+      // PHASE 2 below and only runs if at least one copy succeeded.
+      // ============================================================
       for (let i = 0; i < foldersToCreate.length; i++) {
         const folderTarget = foldersToCreate[i];
         // Use absolute path if set and exists, otherwise fall back to baseDir/name
@@ -412,17 +431,12 @@ export class FolderOrganizer {
 
         const targetPath = path.join(targetFolder, targetFileName);
         let finalTargetPath = targetPath;
-        let operation: 'copy' | 'move' | 'skip' = this.config.mode;
+        let skipThisFolder = false;
 
-        // For multiple folders: MOVE to first, COPY to rest (if mode = 'move')
-        if (this.config.mode === 'move' && i > 0) {
-          operation = 'copy'; // Force copy for additional folders
-        }
-
-        // Handle file name conflicts
+        // Handle file name conflicts (per-folder, independent of move/copy mode)
         if (fs.existsSync(targetPath)) {
           if (conflictStrategy === 'skip') {
-            operation = 'skip';
+            skipThisFolder = true;
           } else if (conflictStrategy === 'rename') {
             finalTargetPath = await this.resolveFileNameConflict(targetPath);
           } else if (conflictStrategy === 'overwrite') {
@@ -430,37 +444,60 @@ export class FolderOrganizer {
           }
         }
 
-        // Perform operation if not skipped
-        if (operation !== 'skip') {
-          // Save original path before potential mutation (needed for XMP lookup)
-          const sourcePathForXmp = imagePath;
+        if (skipThisFolder) {
+          continue;
+        }
 
-          if (operation === 'copy') {
-            await fsPromises.copyFile(imagePath, finalTargetPath);
-          } else {
-            // Move (only for first folder when mode = 'move')
-            await fsPromises.rename(imagePath, finalTargetPath);
-            imagePath = finalTargetPath; // Update source path for subsequent copies
+        // Always COPY in PHASE 1 — even when the user requested 'move'.
+        await fsPromises.copyFile(originalPath, finalTargetPath);
+
+        // Mirror the XMP sidecar (RAW workflows). Always 'copy' here too;
+        // the original sidecar will be removed in PHASE 2 if mode='move'.
+        await this.handleXmpSidecar(originalPath, finalTargetPath, 'copy');
+
+        copiedPaths.push(finalTargetPath);
+      }
+
+      // ============================================================
+      // PHASE 2 — In move mode, delete the original (and its XMP sidecar)
+      // only after every copy in PHASE 1 has completed successfully.
+      // If no copy succeeded (everything was skipped / conflicted), the
+      // original is preserved so the user does not lose data.
+      // ============================================================
+      let firstOperation: 'copy' | 'move' | 'skip';
+      if (copiedPaths.length === 0) {
+        firstOperation = 'skip';
+      } else if (this.config.mode === 'move') {
+        try {
+          await fsPromises.unlink(originalPath);
+
+          // Also remove the original XMP sidecar — we already mirrored it
+          // to every target folder during PHASE 1.
+          if (this.isRawFile(originalPath) && this.config.includeXmpFiles) {
+            const originalXmpPath = this.getXmpSidecarPath(originalPath);
+            if (fs.existsSync(originalXmpPath)) {
+              try {
+                await fsPromises.unlink(originalXmpPath);
+              } catch (xmpErr) {
+                console.warn(`[FolderOrganizer] Failed to delete original XMP sidecar ${originalXmpPath}:`, xmpErr);
+              }
+            }
           }
-
-          // Handle XMP sidecar file (use pre-move source path so XMP is found at original location)
-          await this.handleXmpSidecar(
-            i === 0 ? sourcePathForXmp : copiedPaths[0],
-            finalTargetPath,
-            operation
-          );
-
-          copiedPaths.push(finalTargetPath);
+          firstOperation = 'move';
+        } catch (deleteErr) {
+          // Couldn't delete the original — copies are in place but the source
+          // survives. Report as 'copy' so the caller's accounting reflects
+          // reality (the file was duplicated, not moved).
+          console.error(`[FolderOrganizer] Failed to delete original after copying ${originalPath}:`, deleteErr);
+          firstOperation = 'copy';
         }
-
-        if (i === 0) {
-          firstOperation = operation;
-        }
+      } else {
+        firstOperation = 'copy';
       }
 
       const result: FolderOrganizationResult = {
         success: true,
-        originalPath: imagePath,
+        originalPath: originalPath,
         organizedPath: copiedPaths[0],
         folderName: foldersToCreate.map(ft => ft.absolutePath || ft.name).join(', '),
         operation: firstOperation,

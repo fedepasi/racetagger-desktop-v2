@@ -357,6 +357,27 @@ function handleRegister(event) {
 
 // Handle logout button click
 function handleLogout() {
+  // Full client-side cleanup BEFORE sending the IPC logout, so that:
+  // - racetagger-folder-paths-{presetId} (the cause of "wrong path on re-login")
+  // - racetagger-last-analysis-settings, racetagger-selected-preset
+  // - preset-sort-*, iptc-pro-defaults, resize-enabled, resize-preset
+  // - sport categories cache, currentExecutionId, totalResults
+  // are never carried into the next session.
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.clear();
+    }
+  } catch (e) {
+    console.warn('[Auth] localStorage.clear() failed on logout:', e);
+  }
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.clear();
+    }
+  } catch (e) {
+    console.warn('[Auth] sessionStorage.clear() failed on logout:', e);
+  }
+
   if (window.api) {
     window.api.send('logout');
   }

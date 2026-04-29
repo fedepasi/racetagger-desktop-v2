@@ -65,7 +65,7 @@ function checkUnifiedExportAvailability() {
 // ============================================================
 // Open modal
 // ============================================================
-function openUnifiedExportModal() {
+async function openUnifiedExportModal() {
   if (unifiedIsProcessing) return;
 
   const lv = window.logVisualizer;
@@ -74,26 +74,49 @@ function openUnifiedExportModal() {
     return;
   }
 
-  // Refresh preset data to pick up any IPTC changes
+  // 1) Save unsaved corrections first (if any) so the user's edits aren't lost
+  //    when we refetch the preset and rebuild the form.
+  if (lv.hasUnsavedChanges) {
+    const confirmed = confirm('You have unsaved corrections. Save them before proceeding? (Recommended)');
+    if (confirmed) {
+      try {
+        await lv.saveAllChanges();
+      } catch (err) {
+        console.error('[Unified Export] Error saving changes:', err);
+        // Continue anyway — the user has been warned.
+      }
+    }
+  }
+
+  // 2) Re-fetch the participant preset from Supabase so the export always uses
+  //    the current state of the preset, not the snapshot loaded when the
+  //    results page was first opened. This covers cases like:
+  //      • the user fixed a driver/team/car_model in the preset after analysis
+  //      • the user edited the IPTC profile (Caption template, keywords,
+  //        credit, copyright, etc.) after analysis
+  //    Without this refetch, those edits would silently be ignored at export
+  //    time. Failure here is non-fatal: we fall back to whatever cached data
+  //    we already have so the user can still export.
+  try {
+    if (typeof lv.loadParticipantPresetData === 'function') {
+      await lv.loadParticipantPresetData();
+    }
+  } catch (err) {
+    console.warn('[Unified Export] Could not refresh preset data — using cached version:', err);
+  }
+
+  // 3) Adopt the (possibly refreshed) preset into the modal's local state.
   if (lv.participantPresetData) {
     unifiedPresetData = lv.participantPresetData;
     unifiedIptcMetadata = (unifiedPresetData.iptc_metadata &&
       Object.keys(unifiedPresetData.iptc_metadata).length > 0)
       ? unifiedPresetData.iptc_metadata
       : null;
-  }
-
-  // Save unsaved changes first
-  if (lv.hasUnsavedChanges) {
-    const confirmed = confirm('You have unsaved corrections. Save them before proceeding? (Recommended)');
-    if (confirmed) {
-      lv.saveAllChanges().then(() => {
-        createUnifiedModal();
-      }).catch(err => {
-        console.error('[Unified Export] Error saving changes:', err);
-        createUnifiedModal();
-      });
-      return;
+    // Keep the window-level participant list in sync so buildUnifiedImages()
+    // and getUnifiedSampleParticipant() see the freshest data when they fall
+    // back to window.currentPresetParticipants.
+    if (Array.isArray(unifiedPresetData.participants)) {
+      window.currentPresetParticipants = unifiedPresetData.participants;
     }
   }
 
@@ -393,7 +416,10 @@ function createUnifiedModal() {
               <div class="iptc-pro-col-body">
                 <div class="iptc-pro-tags-wrap" id="unified-keywords-wrap">
                   <span id="unified-keywords-tags"></span>
-                  <input type="text" id="unified-keywords-input" placeholder="Add keyword...">
+                  <input type="text" id="unified-keywords-input" placeholder="Type keyword and press Enter to add...">
+                </div>
+                <div class="ipf-hint" style="font-size:0.7rem; color:#94a3b8; padding:2px 0 0 0;">
+                  Press Enter or comma to confirm each keyword. Templates like {number}, {name}, {team} are allowed.
                 </div>
                 <div class="ipf-radio-row">
                   <label><input type="radio" name="unified-kw-mode" value="append" ${m.appendKeywords !== false ? 'checked' : ''}> Merge with existing keywords</label>
@@ -570,13 +596,13 @@ function wireUnifiedEvents(matchedCount, totalCount) {
     kwInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ',') {
         e.preventDefault();
-        const val = kwInput.value.replace(/,/g, '').trim();
-        if (val && !unifiedKeywordsList.includes(val)) {
-          unifiedKeywordsList.push(val);
-          renderUnifiedKeywords();
-        }
-        kwInput.value = '';
+        commitPendingUnifiedKeyword();
       }
+    });
+    // Auto-commit on blur (when user clicks elsewhere) so that keywords
+    // typed/pasted without pressing Enter are still captured.
+    kwInput.addEventListener('blur', () => {
+      commitPendingUnifiedKeyword();
     });
   }
 
@@ -675,10 +701,30 @@ function removeUnifiedKeyword(index) {
   renderUnifiedKeywords();
 }
 
+/**
+ * Commits whatever is currently typed in the keyword input as a single keyword.
+ * Used by Enter/comma keypress, blur, and the form data collector as a safety net
+ * so that keywords typed (or pasted) without pressing Enter are still captured.
+ */
+function commitPendingUnifiedKeyword() {
+  const kwInput = document.getElementById('unified-keywords-input');
+  if (!kwInput) return;
+  const val = kwInput.value.replace(/,/g, '').trim();
+  if (val && !unifiedKeywordsList.includes(val)) {
+    unifiedKeywordsList.push(val);
+    renderUnifiedKeywords();
+  }
+  kwInput.value = '';
+}
+
 // ============================================================
 // Collect IPTC form data
 // ============================================================
 function collectUnifiedIptcFormData() {
+  // Safety net: commit any pending keyword that was typed/pasted but not
+  // confirmed with Enter/comma before the user clicked the action button.
+  commitPendingUnifiedKeyword();
+
   const data = {};
   const getValue = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
 
@@ -929,6 +975,21 @@ async function startUnifiedWriteOriginals() {
 
   const iptcMetadata = collectUnifiedIptcFormData();
   const kwMode = document.querySelector('input[name="unified-kw-mode"]:checked')?.value || 'append';
+
+  // Sanity check: warn the user if the form is essentially empty so we don't
+  // silently invoke exiftool with nothing to write (which would look to the
+  // user like the feature is broken).
+  const hasContent = Object.keys(iptcMetadata).some(k => {
+    if (k === 'appendKeywords' || k === 'personShownFormat') return false;
+    const v = iptcMetadata[k];
+    if (v === undefined || v === null || v === '') return false;
+    if (Array.isArray(v) && v.length === 0) return false;
+    return true;
+  });
+  if (!hasContent) {
+    alert('No IPTC fields filled in. Please enter at least one field (Headline, Caption, Keywords, Credit, etc.) before writing.');
+    return;
+  }
 
   unifiedIsProcessing = true;
   showUnifiedProgress('Writing IPTC metadata...', true);

@@ -887,6 +887,112 @@
   color: var(--accent-warning, #f59e0b);
 }
 
+/* ---- Delete button (X next to status pill) ---- */
+.card-b .delete-execution-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+  flex-shrink: 0;
+}
+.card-b:hover .delete-execution-btn { opacity: 0.7; }
+.card-b .delete-execution-btn:hover {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--accent-danger, #ef4444);
+  opacity: 1;
+}
+.card-b .delete-execution-btn:focus-visible {
+  outline: 2px solid var(--accent-danger, #ef4444);
+  outline-offset: 1px;
+  opacity: 1;
+}
+
+/* ---- Confirm-delete modal (built ad-hoc by home.js) ---- */
+.delete-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  padding: 16px;
+  animation: delete-modal-fade-in 0.12s ease-out;
+}
+.delete-modal {
+  background: var(--bg-card, #1f2937);
+  border: 1px solid var(--border-color, rgba(148, 163, 184, 0.18));
+  border-radius: 12px;
+  padding: 20px 22px;
+  max-width: 420px;
+  width: 100%;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+}
+.delete-modal-title {
+  margin: 0 0 8px 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary, #e5e7eb);
+}
+.delete-modal-body {
+  margin: 0 0 16px 0;
+  font-size: 0.88rem;
+  line-height: 1.45;
+  color: var(--text-secondary, #cbd5e1);
+}
+.delete-modal-error {
+  margin: -8px 0 14px 0;
+  font-size: 0.8rem;
+  color: var(--accent-danger, #ef4444);
+}
+.delete-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.delete-modal-btn {
+  padding: 8px 14px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+}
+.delete-modal-btn-cancel {
+  background: transparent;
+  border-color: var(--border-color, rgba(148, 163, 184, 0.25));
+  color: var(--text-secondary, #cbd5e1);
+}
+.delete-modal-btn-cancel:hover {
+  background: var(--bg-medium, rgba(148, 163, 184, 0.08));
+}
+.delete-modal-btn-confirm {
+  background: var(--accent-danger, #ef4444);
+  color: #fff;
+}
+.delete-modal-btn-confirm:hover {
+  background: #dc2626;
+}
+.delete-modal-btn-confirm:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+@keyframes delete-modal-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
 .loading-placeholder {
   text-align: center;
   padding: var(--spacing-2xl);
@@ -927,5 +1033,6 @@
     border-top: 1px solid var(--border-color);
   }
   .card-b .rename-btn { opacity: 1; }
+  .card-b .delete-execution-btn { opacity: 0.7; }
   .card-b .folder-path { font-size: 0.75rem; }
 }

@@ -58,9 +58,11 @@ window.selectedCategory = selectedCategory; // Expose globally for other modules
 let analysisStartTime = null;
 let analysisEndTime = null;
 
-// Preset filtering cache
-let cachedAllPresets = []; // All loaded presets (unfiltered)
-let categoryCodeToIdMap = {}; // Map category code to ID for filtering
+// Map category code → category id. Built when dynamic categories load and forwarded to
+// window.presetController so it can filter the visible preset list. The preset list itself
+// (and the selected preset) is owned exclusively by presetController — there is no
+// duplicate cache here.
+let categoryCodeToIdMap = {};
 
 // No preset warning modal callback
 let noPresetWarningCallback = null;
@@ -930,9 +932,10 @@ function handleCategorySelection(event) {
   // Sync custom dropdown trigger display (for programmatic changes from last-analysis-settings, etc.)
   syncCustomDropdownTrigger(selectedCategory);
 
-  // Re-filter presets based on the new category
-  if (cachedAllPresets.length > 0) {
-    filterAndDisplayPresets();
+  // Re-filter presets via the controller; it owns the preset list and emits a
+  // 'list-changed' event so the dropdown re-renders itself.
+  if (window.presetController) {
+    window.presetController.applyCategoryFilter(selectedCategory);
   }
 }
 
@@ -1478,7 +1481,7 @@ let invalidPathsWarningCallback = null;
  * If invalid paths found, shows a warning modal; otherwise proceeds directly.
  */
 async function checkInvalidPathsThenProceed() {
-  const preset = window.enhancedFileBrowser?.selectedPreset;
+  const preset = window.presetController?.selected;
   if (!preset || !preset.id) {
     return proceedWithFolderAnalysis();
   }
@@ -1575,59 +1578,29 @@ function continueWithInvalidPaths() {
 
 // Handle folder analysis
 async function handleFolderAnalysis() {
-  // Wait for any in-progress preset loading before checking (fixes race condition
-  // where dropdown shows a value but async IPC load hasn't completed yet)
-  const presetSelect = document.getElementById('preset-select');
-  const dropdownHasValue = presetSelect && presetSelect.value && presetSelect.value !== '';
-  const presetNotYetLoaded = !window.enhancedFileBrowser?.selectedPreset?.id;
-
-  if (dropdownHasValue && presetNotYetLoaded && window.enhancedFileBrowser?.presetLoadingPromise) {
-    console.log('[Analysis] Preset dropdown has value but data not loaded yet — waiting for async load...');
-    try {
-      await Promise.race([
-        window.enhancedFileBrowser.presetLoadingPromise,
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000))
-      ]);
-      console.log('[Analysis] Preset loading completed, selectedPreset:', window.enhancedFileBrowser?.selectedPreset?.id);
-    } catch (e) {
-      console.warn('[Analysis] Preset loading wait timed out or failed:', e.message);
-    }
+  // Single source of truth: PresetController. Wait for any in-flight refresh or
+  // selection IPC to settle, then read .selected. No more layered defensive
+  // reload logic — if state is wrong here, the bug is in the controller, not here.
+  if (window.presetController) {
+    await window.presetController.ready();
   }
-
-  // If dropdown has a value but selectedPreset is STILL null (promise wasn't tracked,
-  // or it resolved without setting data), force a reload as last resort
-  if (dropdownHasValue && !window.enhancedFileBrowser?.selectedPreset?.id && window.enhancedFileBrowser) {
-    console.log('[Analysis] Preset still not loaded after wait — forcing reload for preset:', presetSelect.value);
-    try {
-      await window.enhancedFileBrowser.handlePresetSelection(presetSelect.value);
-      console.log('[Analysis] Forced preset reload completed, selectedPreset:', window.enhancedFileBrowser?.selectedPreset?.id);
-    } catch (e) {
-      console.warn('[Analysis] Forced preset reload failed:', e.message);
-    }
-  }
-
-  // Check if participant preset is selected - show warning if not
-  const hasPreset = window.enhancedFileBrowser?.selectedPreset?.id;
+  const preset = window.presetController?.selected || null;
+  const hasPreset = !!preset?.id;
   const dontShowWarning = localStorage.getItem('racetagger-no-preset-warning-dismissed') === 'true';
 
-  console.log('[Analysis] handleFolderAnalysis - hasPreset:', hasPreset, 'selectedPreset:', window.enhancedFileBrowser?.selectedPreset, 'dontShowWarning:', dontShowWarning);
+  console.log('[Analysis] handleFolderAnalysis - hasPreset:', hasPreset, 'selected:', preset);
 
   if (!hasPreset && !dontShowWarning) {
-    // Show warning modal and wait for user decision
     return new Promise((resolve) => {
       noPresetWarningCallback = (shouldContinue) => {
         noPresetWarningCallback = null;
-        if (shouldContinue) {
-          // Continue with analysis (after invalid paths check)
-          checkInvalidPathsThenProceed();
-        }
+        if (shouldContinue) checkInvalidPathsThenProceed();
         resolve();
       };
       showNoPresetWarning();
     });
   }
 
-  // Normal flow - check invalid paths then proceed
   return checkInvalidPathsThenProceed();
 }
 
@@ -1766,26 +1739,17 @@ async function proceedWithFolderAnalysis() {
       }
     }
 
-    // Add participant preset configuration if available
-    const presetSelectEl = document.getElementById('preset-select');
-    if (presetSelectEl && presetSelectEl.value) {
-      // Safety: if dropdown has value but selectedPreset is still null, try one more await
-      if (window.enhancedFileBrowser && !window.enhancedFileBrowser.selectedPreset) {
-        console.log('[Analysis] Config build: dropdown has value but selectedPreset is null — attempting reload');
-        try {
-          await window.enhancedFileBrowser.handlePresetSelection(presetSelectEl.value);
-        } catch (e) {
-          console.warn('[Analysis] Config build: preset reload failed:', e.message);
-        }
-      }
-      // Get preset data from the enhanced file browser instance if available
-      if (window.enhancedFileBrowser && window.enhancedFileBrowser.selectedPreset) {
-        config.participantPreset = {
-          id: window.enhancedFileBrowser.selectedPreset.id,
-          name: window.enhancedFileBrowser.selectedPreset.name,
-          participants: window.enhancedFileBrowser.selectedPreset.participants || []
-        };
-      }
+    // Attach the participant preset to the config straight from the controller.
+    // No reload-on-the-fly safety nets here: handleFolderAnalysis already awaited
+    // presetController.ready(), so .selected is authoritative.
+    const selectedPreset = window.presetController?.selected;
+    if (selectedPreset && selectedPreset.id) {
+      config.participantPreset = {
+        id: selectedPreset.id,
+        name: selectedPreset.name,
+        participants: selectedPreset.participants || [],
+        allow_external_person_recognition: selectedPreset.allow_external_person_recognition === true,
+      };
     }
 
     // Add project_id if a project is selected (for delivery auto-routing)
@@ -2369,6 +2333,13 @@ function populateCategorySelect(categories) {
   });
   console.log('[Renderer] Built category mapping:', Object.keys(categoryCodeToIdMap).length, 'categories,', Object.keys(proCategoryMap).length, 'PRO');
 
+  // Hand the freshly-built code→id map to the preset controller so it can filter
+  // the visible list. Apply the current category as the active filter.
+  if (window.presetController) {
+    window.presetController.setCategoryMap(categoryCodeToIdMap);
+    window.presetController.applyCategoryFilter(selectedCategory);
+  }
+
   // Keep current selection if possible
   const currentValue = categorySelect.value;
 
@@ -2458,145 +2429,44 @@ function selectCustomCategory(code, silent) {
   }
 }
 
-// Initialize custom dropdown open/close listeners
+// Initialize custom CATEGORY dropdown open/close listeners.
+// The preset dropdown is now owned end-to-end by PresetController.bindToView(),
+// which (re-)wires its own click/keyboard handlers on every page-loaded — keeping
+// it resilient to the SPA router replacing the page DOM.
 let customDropdownInitialized = false;
 function initCustomDropdownListeners() {
   if (customDropdownInitialized) return;
   customDropdownInitialized = true;
 
-  // Toggle dropdown on trigger click (handles BOTH category and preset dropdowns)
+  // Toggle category dropdown on trigger click; close on outside click.
   document.addEventListener('click', (e) => {
-    // --- Category dropdown ---
     const catTrigger = document.getElementById('custom-dropdown-trigger');
     const catDropdown = document.getElementById('custom-category-dropdown');
     const catMenu = document.getElementById('custom-dropdown-menu');
-
-    // --- Preset dropdown ---
-    const presetTrigger = document.getElementById('custom-preset-trigger');
-    const presetDropdown = document.getElementById('custom-preset-dropdown');
-    const presetMenu = document.getElementById('custom-preset-menu');
-
-    // Category dropdown toggle
-    if (catTrigger && catDropdown && catMenu) {
-      if (catTrigger.contains(e.target)) {
-        catDropdown.classList.toggle('open');
-        // Close preset if open
-        if (presetDropdown) presetDropdown.classList.remove('open');
-      } else if (!catMenu.contains(e.target)) {
-        catDropdown.classList.remove('open');
-      }
-    }
-
-    // Preset dropdown toggle
-    if (presetTrigger && presetDropdown && presetMenu) {
-      if (presetTrigger.contains(e.target)) {
-        presetDropdown.classList.toggle('open');
-        // Close category if open
-        if (catDropdown) catDropdown.classList.remove('open');
-      } else if (!presetMenu.contains(e.target)) {
-        presetDropdown.classList.remove('open');
-      }
+    if (!catTrigger || !catDropdown || !catMenu) return;
+    if (catTrigger.contains(e.target)) {
+      catDropdown.classList.toggle('open');
+    } else if (!catMenu.contains(e.target)) {
+      catDropdown.classList.remove('open');
     }
   });
 
-  // Keyboard navigation (Escape closes any open dropdown)
+  // Escape closes the category dropdown.
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      const catDropdown = document.getElementById('custom-category-dropdown');
-      if (catDropdown && catDropdown.classList.contains('open')) {
-        catDropdown.classList.remove('open');
-        document.getElementById('custom-dropdown-trigger')?.focus();
-      }
-      const presetDropdown = document.getElementById('custom-preset-dropdown');
-      if (presetDropdown && presetDropdown.classList.contains('open')) {
-        presetDropdown.classList.remove('open');
-        document.getElementById('custom-preset-trigger')?.focus();
-      }
+    if (e.key !== 'Escape') return;
+    const catDropdown = document.getElementById('custom-category-dropdown');
+    if (catDropdown && catDropdown.classList.contains('open')) {
+      catDropdown.classList.remove('open');
+      document.getElementById('custom-dropdown-trigger')?.focus();
     }
   });
 }
 
-/**
- * Sync the custom preset dropdown UI with the hidden <select> options.
- * Called after filterAndDisplayPresets() or updatePresetSelector() populates options.
- */
-function syncCustomPresetDropdown() {
-  const hiddenSelect = document.getElementById('preset-select');
-  const menu = document.getElementById('custom-preset-menu');
-  const triggerName = document.querySelector('#custom-preset-trigger .cpd-name');
-  if (!hiddenSelect || !menu) return;
-
-  // Clear existing custom options
-  menu.innerHTML = '';
-
-  // Build options from the hidden <select>
-  Array.from(hiddenSelect.options).forEach((opt) => {
-    const div = document.createElement('div');
-    div.className = 'cpd-option';
-    if (opt.value === hiddenSelect.value) div.classList.add('selected');
-    div.dataset.value = opt.value;
-
-    const name = document.createElement('span');
-    name.className = 'cpd-opt-name';
-    name.textContent = opt.textContent;
-    div.appendChild(name);
-
-    div.addEventListener('click', () => {
-      // Update hidden select
-      hiddenSelect.value = opt.value;
-      // Fire change event so existing handlers pick it up
-      hiddenSelect.dispatchEvent(new Event('change', { bubbles: true }));
-      // Update trigger display
-      if (triggerName) triggerName.textContent = name.textContent;
-      // Update selected state
-      menu.querySelectorAll('.cpd-option').forEach(o => o.classList.remove('selected'));
-      div.classList.add('selected');
-      // Close dropdown
-      document.getElementById('custom-preset-dropdown')?.classList.remove('open');
-    });
-
-    menu.appendChild(div);
-  });
-
-  // Update trigger to reflect current selection
-  const currentOpt = hiddenSelect.options[hiddenSelect.selectedIndex];
-  if (currentOpt && triggerName) {
-    triggerName.textContent = currentOpt.textContent;
-  }
-}
-
-let presetSelectWatcherInitialized = false;
-/**
- * Watch the hidden <select> for programmatic value changes (e.g. from last-analysis-settings.js)
- * and sync the custom dropdown trigger display.
- */
-function watchHiddenPresetSelect() {
-  if (presetSelectWatcherInitialized) return;
-  const hiddenSelect = document.getElementById('preset-select');
-  if (!hiddenSelect) return;
-  presetSelectWatcherInitialized = true;
-
-  hiddenSelect.addEventListener('change', () => {
-    const triggerName = document.querySelector('#custom-preset-trigger .cpd-name');
-    const menu = document.getElementById('custom-preset-menu');
-    if (!triggerName) return;
-
-    const currentOpt = hiddenSelect.options[hiddenSelect.selectedIndex];
-    if (currentOpt) {
-      triggerName.textContent = currentOpt.textContent;
-    }
-    // Update selected highlight in menu
-    if (menu) {
-      menu.querySelectorAll('.cpd-option').forEach(o => {
-        o.classList.toggle('selected', o.dataset.value === hiddenSelect.value);
-      });
-    }
-  });
-}
-
-// Expose globally for other modules
-window.syncCustomPresetDropdown = syncCustomPresetDropdown;
-window.watchHiddenPresetSelect = watchHiddenPresetSelect;
+// NOTE: The legacy helpers `syncCustomPresetDropdown` and `watchHiddenPresetSelect`
+// were removed. Their responsibilities (rendering the menu, keeping the trigger
+// label in sync, propagating programmatic <select>.value changes) all live inside
+// PresetController.bindToView() now. PresetController re-binds on every
+// page-loaded, so listeners can never become stale or duplicated.
 
 // Manual refresh function for categories (useful for admin/debug)
 async function refreshCategories() {
@@ -2634,97 +2504,16 @@ window.setupFolderDragAndDrop = setupFolderDragAndDrop;
 window.toggleAdvancedOptions = toggleAdvancedOptions;
 window.loadDynamicCategories = loadDynamicCategories;
 
-/**
- * Load participant presets into the preset selector dropdown
- * Called by router when analysis page loads
- * Filters presets by the currently selected sport category
- */
-async function loadPresetsForSelector() {
-  try {
-    const presetSelect = document.getElementById('preset-select');
-    if (!presetSelect) {
-      console.log('[Renderer] preset-select element not found');
-      return;
-    }
-
-    // Check if user is admin to use appropriate endpoint
-    let isAdmin = false;
-    try {
-      const adminCheck = await window.api.invoke('auth-is-admin');
-      isAdmin = adminCheck === true || adminCheck?.isAdmin === true;
-    } catch (e) {
-      console.log('[Renderer] Admin check failed, using regular endpoint');
-    }
-
-    // Use appropriate endpoint based on admin status (same logic as participants-manager.js)
-    const channel = isAdmin
-      ? 'supabase-get-all-participant-presets-admin'
-      : 'supabase-get-participant-presets';
-
-    console.log(`[Renderer] Loading presets with channel: ${channel} (isAdmin: ${isAdmin})`);
-    const response = await window.api.invoke(channel);
-
-    // API returns { success, data } structure
-    if (!response || !response.success || !response.data) {
-      console.log('[Renderer] No presets returned from API:', response);
-      return;
-    }
-
-    // Cache all presets for filtering
-    cachedAllPresets = response.data;
-    console.log(`[Renderer] Cached ${cachedAllPresets.length} total presets`);
-
-    // Filter and display presets based on selected category
-    filterAndDisplayPresets();
-  } catch (error) {
-    console.error('[Renderer] Error loading presets for selector:', error);
-  }
+// Thin compatibility wrappers — the actual fetching and filtering live in
+// PresetController. We expose these on window because router.js + a handful of
+// older callers still invoke them by name.
+function loadPresetsForSelector() {
+  if (!window.presetController) return Promise.resolve();
+  return window.presetController.refresh();
 }
-
-/**
- * Filter cached presets by selected sport category and update the dropdown
- */
 function filterAndDisplayPresets() {
-  const presetSelect = document.getElementById('preset-select');
-  if (!presetSelect) {
-    return;
-  }
-
-  // Get the category ID for the selected category code
-  const selectedCategoryId = categoryCodeToIdMap[selectedCategory];
-
-  // Filter presets by category_id (also include presets with no category assigned)
-  let filteredPresets = cachedAllPresets;
-  if (selectedCategoryId) {
-    filteredPresets = cachedAllPresets.filter(preset =>
-      preset.category_id === selectedCategoryId || !preset.category_id
-    );
-    console.log(`[Renderer] Filtered presets for category '${selectedCategory}' (${selectedCategoryId}): ${filteredPresets.length}/${cachedAllPresets.length} (includes uncategorized)`);
-  } else {
-    console.log(`[Renderer] No category mapping for '${selectedCategory}', showing all ${cachedAllPresets.length} presets`);
-  }
-
-  // Clear existing options except first placeholder
-  while (presetSelect.options.length > 1) {
-    presetSelect.remove(1);
-  }
-
-  // Reset selection to placeholder
-  presetSelect.value = '';
-
-  // Add filtered preset options
-  filteredPresets.forEach(preset => {
-    const option = document.createElement('option');
-    option.value = preset.id;
-    const count = preset.participant_count || preset.participants?.length || 0;
-    option.textContent = `${preset.name} (${count} participants)`;
-    presetSelect.appendChild(option);
-  });
-
-  console.log(`[Renderer] Displayed ${filteredPresets.length} presets for category '${selectedCategory}'`);
-
-  // Sync custom dropdown UI with updated <select> options
-  syncCustomPresetDropdown();
+  if (!window.presetController) return;
+  window.presetController.applyCategoryFilter(selectedCategory);
 }
 
 window.loadPresetsForSelector = loadPresetsForSelector;
@@ -2764,42 +2553,32 @@ function initProjectSelector() {
 }
 
 /**
- * Initialize metadata overwrite options visibility based on preset selection
+ * Show/hide the "Overwrite description" checkbox based on whether a preset is selected.
+ * Subscribes once to PresetController and reads the source of truth from there.
+ * Idempotent — safe to call from every page-loaded; the guard prevents listener leaks.
  */
+let metadataOverwriteOptionsInitialized = false;
 function initMetadataOverwriteOptions() {
-  const descriptionOverwriteContainer = document.getElementById('description-overwrite-container');
-
-  if (!descriptionOverwriteContainer) {
-    return;
+  // Compute visibility from the controller's authoritative state. We keep this
+  // function reusable so the very first call (before bindToView populates the
+  // <select>) still does the right thing.
+  function updateVisibility() {
+    const container = document.getElementById('description-overwrite-container');
+    if (!container) return;
+    const hasPreset = !!(window.presetController && window.presetController.selected);
+    container.style.display = hasPreset ? 'block' : 'none';
   }
 
-  // Function to toggle description overwrite visibility
-  function updateDescriptionOverwriteVisibility() {
-    const presetSelect = document.getElementById('preset-select');
-    const hasPresetSelected = presetSelect && presetSelect.value && presetSelect.value !== '';
+  // Always run an initial pass so the UI matches state on (re-)entry to the page,
+  // even though the listener is only wired once.
+  updateVisibility();
 
-    if (hasPresetSelected) {
-      descriptionOverwriteContainer.style.display = 'block';
-    } else {
-      descriptionOverwriteContainer.style.display = 'none';
-    }
+  if (metadataOverwriteOptionsInitialized) return;
+  metadataOverwriteOptionsInitialized = true;
+
+  if (window.presetController) {
+    window.presetController.addEventListener('selection-changed', updateVisibility);
   }
-
-  // Listen for preset selection changes
-  window.addEventListener('presetSelected', (event) => {
-    updateDescriptionOverwriteVisibility();
-  });
-
-  // Listen for direct preset selector changes
-  const presetSelect = document.getElementById('preset-select');
-  if (presetSelect) {
-    presetSelect.addEventListener('change', () => {
-      updateDescriptionOverwriteVisibility();
-    });
-  }
-
-  // Initial visibility check
-  updateDescriptionOverwriteVisibility();
 }
 
 // Expose for router initialization

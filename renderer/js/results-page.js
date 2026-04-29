@@ -282,6 +282,16 @@ class ResultsPageManager {
         results.push({
           fileName: entry.fileName,
           originalFileName: entry.originalFileName, // Preserve original filename for thumbnail lookup
+          // BUGFIX: propagate originalPath from the IMAGE_ANALYSIS log entry so that
+          // Export & IPTC features (Export to Folder, Write to Originals) operate on
+          // the full-resolution source file rather than silently falling back to the
+          // local thumbnail in `imagePath`. Without this field, buildUnifiedImages()
+          // in unified-export-iptc-modal.js (and the analogous helpers in
+          // results-export.js / results-iptc.js) compute
+          //   filePath = r.originalPath || r.imagePath
+          // and end up exporting the thumbnail saved under
+          // ~/.racetagger-temp/thumbnails/.
+          originalPath: entry.originalPath,
           analysis: analysis,
           confidence: vehicles[0]?.confidence || 0,
           csvMatch: (vehicles[0]?.participantMatch && vehicles[0].participantMatch.entry) ? vehicles[0].participantMatch : null,

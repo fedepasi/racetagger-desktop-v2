@@ -13,7 +13,8 @@ import { authService } from '../auth-service';
 import {
   cacheSupabaseData,
   saveCsvToSupabase,
-  getSportCategories
+  getSportCategories,
+  clearAllCaches
 } from '../database-service';
 import {
   getMainWindow,
@@ -150,6 +151,14 @@ export function registerAuthHandlers(): void {
       csvData = [];
       setGlobalCsvData([]);
 
+      // Clear all in-memory caches (categories, presets) so the next login
+      // starts with fresh data and never reuses the previous user's state.
+      try {
+        clearAllCaches();
+      } catch (cacheError) {
+        console.error('[Auth] Error clearing in-memory caches:', cacheError);
+      }
+
       // Cleanup temp files
       try {
         const thumbnailDir = path.join(os.tmpdir(), 'racetagger-thumbnails');
@@ -164,6 +173,35 @@ export function registerAuthHandlers(): void {
         }
       } catch (tempError) {
         console.error('[Auth] Error cleaning temp files:', tempError);
+      }
+
+      // Cleanup persisted session/optimization state in userData so that
+      // re-login does not pick up stale paths/progress from the previous user.
+      try {
+        const userDataPath = app.getPath('userData');
+        const filesToRemove = [
+          path.join(userDataPath, '.optimization-progress.json'),
+          path.join(userDataPath, '.optimization-progress.backup.json')
+        ];
+        await Promise.all(
+          filesToRemove.map(f => fsPromises.unlink(f).catch(() => {}))
+        );
+
+        // Remove the session-archive directory contents (created by SessionManager)
+        const archiveDir = path.join(userDataPath, 'session-archive');
+        try {
+          await fsPromises.access(archiveDir, fs.constants.F_OK);
+          const archived = await fsPromises.readdir(archiveDir);
+          await Promise.all(
+            archived
+              .filter(f => f.startsWith('session-') && f.endsWith('.json'))
+              .map(f => fsPromises.unlink(path.join(archiveDir, f)).catch(() => {}))
+          );
+        } catch {
+          // Archive dir doesn't exist — nothing to clean
+        }
+      } catch (sessionError) {
+        console.error('[Auth] Error cleaning persisted session state:', sessionError);
       }
 
       event.sender.send('logout-result', result);

@@ -198,6 +198,7 @@ const validInvokeChannels: string[] = [
   'check-learned-data-exists',
   'get-local-executions',
   'rename-execution',
+  'delete-local-execution',
 
   // Local Thumbnail Operations
   'find-local-thumbnails',

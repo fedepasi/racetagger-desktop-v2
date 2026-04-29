@@ -526,27 +526,116 @@ class LogVisualizer {
     document.addEventListener('keydown', (e) => {
       if (!this.isGalleryOpen) return;
 
-      const isInputFocused = document.activeElement &&
-        ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
+      const active = document.activeElement;
+      const isInputFocused = active &&
+        ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName);
 
       if (!isInputFocused && this.zoomController && this.zoomController.handleKeyDown(e)) {
         e.preventDefault();
         return;
       }
 
+      // Numeric shortcuts for the needs-review candidate picker.
+      //   1-9 → select the candidate whose visible rank badge matches the digit
+      //         (the badge already shows i+1, so the mapping is direct);
+      //   0   → "None of these".
+      // Both branches simulate a click on the existing DOM element, which
+      // means resolveReview, autoFillVehicleEditorFromCandidate and
+      // navigateToNextReview all run exactly as in the mouse path — no
+      // duplication and no risk of drift.
+      // Skipped when:
+      //   - an input/select/textarea is focused (so typing "0" in the Race
+      //     Number field works as expected);
+      //   - any modifier (Ctrl/Cmd/Alt) is held, to avoid colliding with
+      //     browser shortcuts;
+      //   - no review panel is currently rendered (only needs_review images
+      //     have one — on other images the digit is ignored).
+      if (!isInputFocused && /^[0-9]$/.test(e.key) &&
+          !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const reviewPanelVisible = !!document.querySelector('.lv-review-panel, .lv-review-bar');
+        if (reviewPanelVisible) {
+          const num = parseInt(e.key, 10);
+          if (num === 0) {
+            const noneBtn = document.querySelector('[data-review-action="none"]');
+            if (noneBtn) {
+              e.preventDefault();
+              noneBtn.click();
+              return;
+            }
+          } else {
+            // querySelector returns the first match; both layouts (sidebar +
+            // horizontal bar) share the same data-candidate-index, and their
+            // click handlers update both, so picking the first is correct.
+            const candidateOption = document.querySelector(
+              `.lv-candidate-option[data-candidate-index="${num - 1}"]`
+            );
+            if (candidateOption) {
+              e.preventDefault();
+              candidateOption.click();
+              return;
+            }
+            // Digit pressed but no candidate at that position (e.g. "5" with
+            // only 3 candidates) → silently ignore so the user gets no
+            // accidental side-effect.
+          }
+        }
+      }
+
+      // Position-aware arrow navigation: when an input is focused, only
+      // intercept ← / → if the caret is at the edge (or the field is empty).
+      // This lets the user freely move the caret inside text while still
+      // allowing fast image navigation when there's nothing in the way.
+      const caretAtStart = (el) => {
+        if (!el) return false;
+        if (!el.value) return true;
+        return el.selectionStart === 0 && el.selectionEnd === 0;
+      };
+      const caretAtEnd = (el) => {
+        if (!el) return false;
+        const len = el.value ? el.value.length : 0;
+        if (len === 0) return true;
+        return el.selectionStart === len && el.selectionEnd === len;
+      };
+
       switch (e.key) {
         case 'Escape':
           if (isInputFocused) {
-            document.activeElement.blur();
+            active.blur();
           } else {
             this.closeGallery();
           }
           break;
+
         case 'ArrowLeft':
-          if (!isInputFocused) this.navigateGallery(-1);
+          if (!isInputFocused) {
+            this.navigateGallery(-1);
+          } else if (caretAtStart(active)) {
+            e.preventDefault();
+            this.navigateGallery(-1);
+          }
+          // otherwise: let the browser move the caret inside the text
           break;
+
         case 'ArrowRight':
-          if (!isInputFocused) this.navigateGallery(1);
+          if (!isInputFocused) {
+            this.navigateGallery(1);
+          } else if (caretAtEnd(active)) {
+            e.preventDefault();
+            this.navigateGallery(1);
+          }
+          // otherwise: let the browser move the caret inside the text
+          break;
+
+        case 'Enter':
+          // Shift+Enter goes back one image (handy if Enter advanced too eagerly).
+          // Plain Enter on the Race Number input is handled by its own listener
+          // in setupVehicleEditorEvents.
+          if (e.shiftKey && isInputFocused && active.dataset && active.dataset.field === 'raceNumber') {
+            e.preventDefault();
+            if (this.currentImageIndex > 0) {
+              this.navigateGallery(-1);
+            }
+          }
           break;
       }
     });
@@ -1184,6 +1273,66 @@ class LogVisualizer {
     // No action needed - all items are already rendered
   }
 
+  // ============================================================
+  // Result-classification predicates — single source of truth used by
+  // both the filter switch (filterResults) and updateStatistics().
+  //
+  // Issue #125: previously the filter case 'no-match' only matched
+  // results with empty `analysis`, while the counter computed noMatch
+  // by subtraction (total - matched - needsReview), so images where
+  // Gemini detected a vehicle but couldn't read a valid raceNumber
+  // were counted as no-match but hidden by the no-match filter.
+  // Centralising the predicates eliminates that drift.
+  // ============================================================
+
+  /**
+   * True when the user has manually corrected this photo.
+   * `hasCorrection` is set by extractResultsFromLogs from MANUAL_CORRECTION
+   * events in the JSONL (durable). The in-session Map is the fallback for
+   * changes not yet flushed to the log. A corrected photo is always a
+   * Matched + Correction, and never a No-Match (its raceNumber was set
+   * by the user).
+   */
+  _hasCorrection(r) {
+    return r.hasCorrection === true || this.manualCorrections.has(r.fileName);
+  }
+
+  /**
+   * True when the AI returned a vehicle with `matchStatus === 'needs_review'`
+   * that the user hasn't resolved yet.
+   */
+  _isNeedsReview(r) {
+    return r.analysis && r.analysis.length > 0 &&
+           r.analysis.some(v => v.matchStatus === 'needs_review') &&
+           !r._reviewResolved;
+  }
+
+  /**
+   * True when the result has at least one vehicle with a usable raceNumber
+   * (or has been manually corrected). Excludes unresolved needs_review.
+   */
+  _isMatched(r) {
+    if (this._hasCorrection(r)) return true;                  // manual correction wins
+    if (!r.analysis || r.analysis.length === 0) return false;
+    const hasRaceNumber = r.analysis.some(v => v.raceNumber && v.raceNumber !== 'N/A');
+    if (!hasRaceNumber) return false;
+    if (this._isNeedsReview(r)) return false;                 // needs_review is its own bucket
+    return true;
+  }
+
+  /**
+   * True when the result is neither matched nor needs_review nor corrected.
+   * Includes both "Gemini saw nothing" (analysis empty) AND "Gemini saw a
+   * vehicle but couldn't read the number" (analysis non-empty, raceNumber
+   * missing or 'N/A').
+   */
+  _isNoMatch(r) {
+    if (this._hasCorrection(r)) return false;                 // user touched it → not no-match
+    if (this._isMatched(r)) return false;
+    if (this._isNeedsReview(r)) return false;
+    return true;
+  }
+
   /**
    * Filter results based on search and filter criteria
    */
@@ -1199,32 +1348,17 @@ class LogVisualizer {
 
       if (!matchesSearch) return false;
 
-      // Type filter.
-      //
-      // B1/B5 — `hasCorrection` is set by extractResultsFromLogs based on
-      // MANUAL_CORRECTION events in the JSONL (single source of truth). A
-      // photo with a manual correction:
-      //   * is a "Correction" (always visible in the corrections filter)
-      //   * is NOT a "No Match" (its raceNumber was set by the user)
-      //   * IS a "Matched" (manual matches count as matches)
-      // Treating in-memory `manualCorrections` as the gate misclassified
-      // no-match-corrected and matched-edited photos.
-      const hasCorrection = result.hasCorrection === true ||
-                            this.manualCorrections.has(result.fileName);
-
+      // Type filter — uses the shared predicates so the rendered list
+      // always agrees with the counters in updateStatistics().
       switch (filterType) {
         case 'matched':
-          if (hasCorrection) return true;
-          return result.analysis && result.analysis.length > 0 &&
-                 !result.analysis.some(v => v.matchStatus === 'needs_review' && !result._reviewResolved);
+          return this._isMatched(result);
         case 'no-match':
-          if (hasCorrection) return false; // user touched it → no longer no-match
-          return !result.analysis || result.analysis.length === 0;
+          return this._isNoMatch(result);
         case 'needs-review':
-          return result.analysis && result.analysis.length > 0 &&
-                 result.analysis.some(v => v.matchStatus === 'needs_review') && !result._reviewResolved;
+          return this._isNeedsReview(result);
         case 'corrected':
-          return hasCorrection;
+          return this._hasCorrection(result);
         case 'high-confidence':
           return this.getAverageConfidence(result) >= 0.9;
         case 'low-confidence':
@@ -1317,33 +1451,24 @@ class LogVisualizer {
     const allResults = this.imageResults || [];
     const total = allResults.length;
 
-    // Per-result helper — same semantics as the filter switch above. Kept
-    // local so it stays in lockstep when either side changes.
-    const isCorrected = (r) =>
-      r.hasCorrection === true || this.manualCorrections.has(r.fileName);
+    // Issue #125 — counters and the filter switch must use the same
+    // predicates, otherwise the user sees a discrepancy between the
+    // header strip and the rendered list (e.g. counter shows 4 no-match
+    // but filter only renders 2). Predicates are defined once on the
+    // class so there is a single source of truth.
+    const matched      = allResults.filter(r => this._isMatched(r)).length;
+    const needsReview  = allResults.filter(r => this._isNeedsReview(r)).length;
+    const noMatch      = allResults.filter(r => this._isNoMatch(r)).length;
+    const corrections  = allResults.filter(r => this._hasCorrection(r)).length;
 
-    // Count needs_review: has a match but ambiguous (not yet resolved by user)
-    const needsReview = allResults.filter(r => {
-      return r.analysis && r.analysis.length > 0 &&
-             r.analysis.some(v => v.matchStatus === 'needs_review') &&
-             !r._reviewResolved;
-    }).length;
-
-    const matched = allResults.filter(r => {
-      // Manual correction always counts as matched, regardless of original AI state.
-      if (isCorrected(r)) return true;
-      if (!r.analysis || r.analysis.length === 0) return false;
-      const hasRaceNumber = r.analysis.some(vehicle => vehicle.raceNumber && vehicle.raceNumber !== 'N/A');
-      if (!hasRaceNumber) return false;
-      // Exclude needs_review (unless resolved)
-      const isUnresolvedReview = r.analysis.some(v => v.matchStatus === 'needs_review') && !r._reviewResolved;
-      return !isUnresolvedReview;
-    }).length;
-
-    const noMatch = total - matched - needsReview;
-    // B1/B5 — corrections count derives from the JSONL via `hasCorrection`,
-    // with a fallback to the in-session Map for changes not yet flushed.
-    const corrections = allResults.filter(isCorrected).length;
+    // Sanity-check invariant (dev only): matched + noMatch + needsReview === total.
+    // If this ever fails it means a result fell through every bucket — bug to fix.
+    if (typeof window !== 'undefined' && window.DEBUG_MODE === true &&
+        matched + noMatch + needsReview !== total) {
+      console.warn('[LogVisualizer] Stats invariant violated', {
+        total, matched, noMatch, needsReview
+      });
+    }
 
     if (totalEl) totalEl.textContent = total.toLocaleString();
     if (matchedEl) matchedEl.textContent = matched.toLocaleString();
@@ -1820,8 +1945,13 @@ class LogVisualizer {
       const r = this.filteredResults[idx];
       if (!r) continue;
       if (wantsUnresolvedReview) {
-        if (r._reviewResolved) continue;
-        if (r.analysis?.[0]?.matchStatus !== 'needs_review') continue;
+        // Use the SAME predicate that built filteredResults so we never
+        // exhaust prematurely. The previous strict check on
+        // `analysis[0].matchStatus` skipped multi-vehicle photos where the
+        // needs_review status sits on a later vehicle, even though they're
+        // present in filteredResults. _isNeedsReview also folds in the
+        // _reviewResolved flag, so we don't need a separate check.
+        if (!this._isNeedsReview(r)) continue;
       }
       // Found the next actionable photo.
       this.currentImageIndex = idx;
@@ -2549,8 +2679,9 @@ class LogVisualizer {
     // Keyboard shortcuts on the Race Number input:
     //   Enter → apply best match (exact or prefix), save async, navigate to next image
     //   Empty Enter → save async, navigate to next image
+    //   Shift+Enter is handled by the gallery-level listener (goes back), so we ignore it here.
     newContainer.addEventListener('keydown', (event) => {
-      if (event.key !== 'Enter') return;
+      if (event.key !== 'Enter' || event.shiftKey) return;
       const input = event.target;
       if (input.tagName !== 'INPUT' || input.dataset.field !== 'raceNumber') return;
 
@@ -2581,7 +2712,21 @@ class LogVisualizer {
    * advances to the next image so the user keeps moving without waiting.
    */
   _handleRaceNumberEnter(input) {
+    // Re-entry guard: while a save+navigate cycle is already in flight,
+    // ignore further Enter keystrokes against the SAME editor. Without this,
+    // a second keydown (auto-repeat, double-tap, focus shifting back onto
+    // the rebuilt input within the same tick) would queue another save IPC
+    // for the same correction — exactly what we saw in the logs where the
+    // first image got "Wrote USER_MANUAL" twice.
     const vehicleEditor = input.closest('.lv-vehicle-editor');
+    const guardKey = vehicleEditor
+      ? `${vehicleEditor.dataset.fileName || ''}_${vehicleEditor.dataset.vehicleIndex || ''}`
+      : '';
+    if (guardKey && this._enterInFlight === guardKey) {
+      return;
+    }
+    this._enterInFlight = guardKey || true;
+
     const value = input.value.trim();
 
     // 1) If the user typed something, apply the first useful match
@@ -2601,8 +2746,21 @@ class LogVisualizer {
       const fileName = vehicleEditor.dataset.fileName;
       if (!Number.isNaN(vehicleIndex) && fileName) {
         Promise.resolve(this.saveVehicleChangesByFileName(fileName, vehicleIndex))
-          .catch(err => console.error('[LogVisualizer] Async save on Enter failed:', err));
+          .catch(err => console.error('[LogVisualizer] Async save on Enter failed:', err))
+          .finally(() => {
+            // Clear the guard once the save settles. Navigation may have
+            // already advanced past this image, but we keep the guard tied
+            // to the editor key so a second Enter on the SAME editor can't
+            // double-fire while the IPC is still in flight.
+            if (this._enterInFlight === (guardKey || true)) {
+              this._enterInFlight = null;
+            }
+          });
+      } else {
+        this._enterInFlight = null;
       }
+    } else {
+      this._enterInFlight = null;
     }
 
     // 3) Auto-advance using the unified logic. This respects the active
@@ -2939,6 +3097,17 @@ class LogVisualizer {
 
       // Set confidence to 100% for manual corrections
       result.analysis[vehicleIndex].confidence = 1.0;
+
+      // Force-resolve the review locally. Without this, _isNeedsReview()
+      // still returns true for this image (matchStatus stays 'needs_review'
+      // until the JSONL refreshes) and a subsequent re-filter would put it
+      // back in the queue — causing navigateToNextReview to bounce back to
+      // it instead of advancing.
+      if (result.analysis[vehicleIndex].matchStatus === 'needs_review') {
+        result.analysis[vehicleIndex].matchStatus = 'matched';
+        result.analysis[vehicleIndex].matchedBy = 'user_manual';
+      }
+      result._reviewResolved = true;
 
       // Update UI - find the current index if in gallery
       let currentIndex = -1;

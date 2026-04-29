@@ -220,9 +220,16 @@
         }
         break;
 
-      case 'analysis':
-        // Analysis page - initialize all dynamic content
-        // Re-bind critical event listeners for dynamically loaded elements
+      case 'analysis': {
+        // Analysis page — re-bind event listeners after the router has rebuilt
+        // the page DOM. Order matters:
+        //   1) Bind static UI buttons + category change.
+        //   2) Hand the fresh DOM to PresetController.bindToView(); it tears
+        //      down any previous binding via AbortController, kicks off a list
+        //      refresh if needed, and renders the dropdown from its own state.
+        //   3) Restore last-analysis settings. PresetController.select()
+        //      queues until the list is loaded — no polling required.
+
         const folderBtn = document.getElementById('folder-select-button');
         const uploadBtn = document.getElementById('upload-button');
         const advToggle = document.getElementById('advanced-toggle');
@@ -237,43 +244,38 @@
         if (advToggle && typeof window.toggleAdvancedOptions === 'function') {
           advToggle.addEventListener('click', window.toggleAdvancedOptions);
         }
-        // Bind category selection change handler
         if (categorySelect && typeof window.handleCategorySelection === 'function') {
           categorySelect.addEventListener('change', window.handleCategorySelection);
         }
 
-        // Register IPC listener for folder selection response
+        // IPC listener for folder selection response.
         if (window.api && typeof window.handleFolderSelected === 'function') {
           window.api.receive('folder-selected', window.handleFolderSelected);
         }
 
-        // Initialize drag & drop on folder selector
+        // Drag & drop on folder selector.
         if (typeof window.setupFolderDragAndDrop === 'function') {
           window.setupFolderDragAndDrop();
         }
 
-        // Load dynamic sport categories from database
+        // Dynamic sport categories (cached when fresh).
         if (typeof window.loadDynamicCategories === 'function') {
-          window.loadDynamicCategories(false); // use cache if valid
+          window.loadDynamicCategories(false);
         }
 
-        // Load presets for the preset selector
-        if (typeof window.loadPresetsForSelector === 'function') {
-          window.loadPresetsForSelector();
+        // Wire the preset dropdown to the freshly rendered DOM. This is the
+        // ONLY place preset wiring happens for this page.
+        if (window.presetController && pageContainer) {
+          window.presetController.bindToView(pageContainer);
         }
 
-        // Setup custom preset dropdown watcher (syncs trigger on programmatic changes)
-        if (typeof window.watchHiddenPresetSelect === 'function') {
-          window.watchHiddenPresetSelect();
-        }
-
-        // Initialize metadata overwrite options
+        // Show/hide the "Overwrite description" checkbox based on selection.
         if (typeof window.initMetadataOverwriteOptions === 'function') {
           window.initMetadataOverwriteOptions();
         }
 
-        // Initialize EnhancedFileBrowser if not already done
-        // This is critical for preset selection to work properly
+        // EnhancedFileBrowser handles file/folder pickers — preset logic has
+        // moved out of it. Lazy-instantiate once on first visit.
         if (typeof window.EnhancedFileBrowser !== 'undefined' && !window.enhancedFileBrowser) {
           try {
             window.enhancedFileBrowser = new window.EnhancedFileBrowser();
@@ -281,20 +283,16 @@
           } catch (e) {
             console.error('[Router] Failed to initialize EnhancedFileBrowser:', e);
           }
-        } else if (window.enhancedFileBrowser) {
-          // Re-initialize presets if browser already exists
-          console.log('[Router] EnhancedFileBrowser already exists, reloading presets');
-          window.enhancedFileBrowser.loadAvailablePresets();
         }
 
-        // Load last analysis settings to restore previous configuration
-        // This runs after a short delay to ensure all UI elements are ready
+        // Restore last analysis settings. applyPresetSetting() goes through
+        // PresetController.select(), which queues the call internally if the
+        // list refresh is still in flight — no setTimeout required.
         if (typeof window.loadLastAnalysisSettings === 'function') {
-          setTimeout(() => {
-            window.loadLastAnalysisSettings();
-          }, 100);
+          window.loadLastAnalysisSettings();
         }
         break;
+      }
     }
   }
 

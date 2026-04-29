@@ -632,6 +632,8 @@ import {
   YOLO_MODEL_REGISTRY,
   getModelConfig,
   YoloModelConfig,
+  parseSegmentationConfig,
+  getDefaultModelId,
 } from './yolo-model-registry';
 
 /**
@@ -790,6 +792,109 @@ ModelManager.prototype.getGenericModelPath = function(
   return null;
 };
 
+/**
+ * Determine which YOLO models from the registry need to be downloaded for the
+ * sport categories enabled for the current user.
+ *
+ * The existing `getModelsToDownload()` covers the legacy "code-based" model
+ * registry stored in the `model_registry` Supabase table (used by categories
+ * with `use_local_onnx=true`). It does NOT cover the YOLO segmenter models
+ * defined in `yolo-model-registry.ts` (`yolo26-detector-v1`, etc.) — those are
+ * downloaded lazily by `ensureGenericModelAvailable()` the first time
+ * `initializeGenericSegmenter()` runs, which adds ~30s of blocking wait at the
+ * first "Avvia analisi" click for any category with `crop_config.enabled`.
+ *
+ * This method closes that gap: it queries the user's enabled sport categories,
+ * collects the YOLO model IDs needed (segmenter via crop_config / detector via
+ * use_local_onnx), deduplicates them, and returns those that are not already on
+ * disk so they can be pre-downloaded at app startup with the existing progress UI.
+ *
+ * Failure mode: if the DB query fails for any reason, falls back to "all models
+ * in YOLO_MODEL_REGISTRY" so the lazy-download regression cannot resurface.
+ *
+ * Related: issue #124 (Verifica lentezza allo start).
+ */
+ModelManager.prototype.getYoloModelsToDownload = async function(
+  this: ModelManager
+): Promise<{ models: { modelId: string; sizeMB: number }[]; totalSizeMB: number }> {
+  const neededModelIds = new Set<string>();
+
+  // Step 1 — collect the model_ids needed by the user's enabled sport categories.
+  try {
+    const supabase = (this as any).getSupabase() as SupabaseClient;
+    const { data, error } = await supabase
+      .from('sport_categories')
+      .select('code, use_local_onnx, crop_config, segmentation_config')
+      .eq('is_active', true);
+
+    if (error || !data) {
+      console.warn(
+        '[ModelManager] getYoloModelsToDownload: failed to fetch sport_categories, falling back to full registry',
+        error?.message
+      );
+      // Safety net: ensure all registered YOLO models are downloaded so the
+      // lazy-download bug (#124) cannot resurface even on a DB query failure.
+      Object.keys(YOLO_MODEL_REGISTRY).forEach(id => neededModelIds.add(id));
+    } else {
+      for (const cat of data as Array<{
+        code: string;
+        use_local_onnx: boolean | null;
+        crop_config: any;
+        segmentation_config: any;
+      }>) {
+        // crop_config.enabled triggers the segmenter (e.g. motorsport_v3 uses
+        // yolo26-detector-v1 to extract crops + masks before sending to Gemini).
+        let cropConfig: any = cat.crop_config;
+        if (typeof cropConfig === 'string') {
+          try { cropConfig = JSON.parse(cropConfig); } catch (_e) { cropConfig = null; }
+        }
+        if (cropConfig?.enabled) {
+          const segConfig = parseSegmentationConfig(cat.segmentation_config);
+          neededModelIds.add(segConfig?.model_id || getDefaultModelId());
+        }
+
+        // use_local_onnx categories also use a YOLO model for local detection.
+        // The legacy code-based downloader (getModelsToDownload) already covers
+        // these, but adding the registry default here is harmless and protects
+        // against a future migration where detector model_id moves to the
+        // yolo-model-registry as well.
+        if (cat.use_local_onnx) {
+          neededModelIds.add(getDefaultModelId());
+        }
+      }
+    }
+  } catch (error) {
+    console.error(
+      '[ModelManager] getYoloModelsToDownload: unexpected error, falling back to full registry',
+      error
+    );
+    Object.keys(YOLO_MODEL_REGISTRY).forEach(id => neededModelIds.add(id));
+  }
+
+  // Step 2 — skip the ones already on disk (bundled or cached); collect the rest.
+  const models: { modelId: string; sizeMB: number }[] = [];
+  let totalSizeMB = 0;
+
+  for (const modelId of neededModelIds) {
+    if (this.getGenericModelPath(modelId)) {
+      // Already bundled or cached locally — nothing to download.
+      continue;
+    }
+
+    const config = getModelConfig(modelId);
+    if (!config) {
+      console.warn(`[ModelManager] getYoloModelsToDownload: unknown modelId "${modelId}" — skipping`);
+      continue;
+    }
+
+    const sizeMB = config.sizeBytes / (1024 * 1024);
+    models.push({ modelId, sizeMB });
+    totalSizeMB += sizeMB;
+  }
+
+  return { models, totalSizeMB };
+};
+
 // Extend type declarations
 declare module './model-manager' {
   interface ModelManager {
@@ -798,6 +903,10 @@ declare module './model-manager' {
       onProgress?: DownloadProgressCallback
     ): Promise<string>;
     getGenericModelPath(modelId: string): string | null;
+    getYoloModelsToDownload(): Promise<{
+      models: { modelId: string; sizeMB: number }[];
+      totalSizeMB: number;
+    }>;
   }
 }
 
