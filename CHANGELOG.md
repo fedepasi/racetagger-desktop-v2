@@ -1,5 +1,98 @@
 # Changelog - RaceTagger Desktop
 
+## [1.2.0] - 2026-04-29
+
+### 🎯 Major Features
+
+#### **Custom Folders Redesign — chips, autocomplete, no more 3-slot limit**
+- Per-participant custom folders are now an unbounded array, edited inline
+  with chips and a `+ Add folder` button.
+- Autocomplete suggests folder names already in use elsewhere in the
+  preset (case- and punctuation-insensitive) so duplicates like
+  "Sponsor BMW" / "BMW-sponsor" don't drift apart.
+- Each chip can pin an absolute filesystem path via the 🔗 icon — useful
+  for direct delivery to external drives or sponsor folders.
+- Replaces the legacy `folder_1` / `folder_2` / `folder_3` dropdowns.
+  Schema is dual-written for full 1.1.4 backward compatibility (the first
+  three folders of every participant are still mirrored to the legacy
+  columns so 1.1.4 clients keep working on the same Supabase data).
+
+#### **Additive default folder, per-participant**
+- New per-**participant** toggle inside the participant edit modal:
+  *"Also export to the default folder (e.g. `{number}`)"*. Default
+  checked.
+- When checked, photos of THAT participant go to BOTH the custom
+  folders AND the default pattern-based folder. When unchecked, they
+  go ONLY to the custom folders (legacy 1.1.4 "all-or-nothing"
+  behaviour).
+- Per-participant rather than per-preset because real-world delivery
+  setups differ per driver (sponsor + numerical archive for some, only
+  sponsor folder for others). Each chip area shows the toggle right
+  below it, so the decision is autoexplicative when looking at a
+  single participant.
+- Default `true` on the DB column applies to legacy migrated
+  participants too — i.e. participants who in 1.1.4 had custom folders
+  + "all-or-nothing" will now ALSO get the `{number}` folder. Anyone
+  who needs the strict 1.1.4 behaviour on a specific participant can
+  uncheck the toggle in the edit modal.
+- Honored by both the analysis-time FolderOrganizer (Flusso A) and the
+  Export & IPTC modal (Flusso B), so the two flows stay coherent.
+
+#### **Export & IPTC honors preset folder assignments**
+- New toggle in the Export & IPTC modal: *"Follow preset folder
+  assignments"*. Default ON when the preset has folders configured;
+  disabled with an explanatory hint when it doesn't.
+- Sub-toggle *"Also include default subfolder"* mirrors the per-preset
+  flag but is override-able for one-off exports (e.g. send only to
+  sponsor folders this time).
+- Multi-destination copy + IPTC write per photo, with the existing
+  `fileConflictStrategy` (rename/overwrite/skip) and
+  `metadataStrategy` (merge/replace) toggles applied independently to
+  each destination.
+
+### 🛠 Infrastructure
+
+- SQL migration `20260429120000_consolidate_participant_folders.sql`
+  adds `folders jsonb` to `preset_participants`. Migration is purely
+  additive — legacy `folder_1/2/3` columns are kept for 1.1.4 backward
+  compatibility.
+- Follow-up SQL migration `20260430080000_move_include_default_to_participant.sql`
+  moves the additive-default-folder flag to a per-participant column
+  (`preset_participants.include_default_folder boolean DEFAULT true`)
+  and removes the short-lived per-preset column added by the previous
+  migration. Per-participant gives the granularity real delivery
+  workflows need.
+- New normalization layer in `database-service.ts` reconciles legacy
+  folder slots vs the canonical `folders[]` array on every preset
+  fetch. Handles three cases: lazy migration (first 1.2.0 fetch of an
+  unmigrated row), drift (1.1.4 modified the legacy columns after
+  1.2.0's last write), and steady-state. Auto-heals all three with a
+  single fire-and-forget DB consolidation per fetch.
+
+### 🐛 Bug fixes carried from the in-flight 1.1.x debugging
+
+The fixes previously shipped to a small audience under 1.1.4 are
+included here for the broader 1.2.0 rollout:
+
+- **IPTC CreatorContactInfo**: address, city, state/province, postal
+  code, country, phone, email and website now actually land in the file.
+  Previous syntax produced silent ExifTool warnings and the entire
+  contact block was dropped.
+- **`XMP-iptcCore:ProvinceState`** (legacy mistake) replaced with the
+  correct `XMP-photoshop:State` + `IPTC:Province-State` pair.
+- **`XMP-plus:ModelReleaseStatus`** writes the canonical PLUS URI with
+  the `#` no-print-conv suffix, no more "Can't convert" warnings.
+- **Original-path resolution after re-open**: the results page no
+  longer drops `originalPath` from the result objects; Export to Folder
+  copies the full-resolution original instead of the local thumbnail.
+- **Async match save**: clicking a candidate match advances to the
+  next photo immediately; persistence runs in background. Coalesces
+  rapid clicks into a single trailing save.
+- **Write Behavior toggles** in Export & IPTC: file conflict strategy
+  (rename / overwrite / skip) and metadata strategy (merge / replace).
+
+---
+
 ## [1.1.0] - 2026-02-11
 
 ### 🎯 Major Features

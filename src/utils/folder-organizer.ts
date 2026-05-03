@@ -50,6 +50,11 @@ export interface FolderOrganizerConfig {
   conflictStrategy?: 'rename' | 'skip' | 'overwrite'; // How to handle file conflicts
   renamePattern?: string; // Optional filename pattern (e.g. "{number}_{name}_{team}-{seq:2}")
 
+  // (1.2.0 note: the per-preset "include default folder with custom"
+  // flag has been moved to a per-participant flag on CsvParticipantData
+  // — see `include_default_folder` below. The decision is now made
+  // per-participant, not per-preset.)
+
   // --- Issue #105 hardening (defense-in-depth) ---
   // When a participant preset is active, caller SHOULD pass the list of legitimate
   // race numbers so that organizeImage can detect (and reject) any phantom number
@@ -94,12 +99,24 @@ export interface CsvParticipantData {
   categoria?: string;
   squadra?: string;
   metatag?: string;
-  folder_1?: string; // Custom folder 1
-  folder_2?: string; // Custom folder 2
-  folder_3?: string; // Custom folder 3
-  folder_1_path?: string; // Absolute filesystem path for folder 1
-  folder_2_path?: string; // Absolute filesystem path for folder 2
-  folder_3_path?: string; // Absolute filesystem path for folder 3
+  // 1.2.0 canonical folder array. Populated by normalizeParticipantPresetFolders
+  // upstream, so by the time we read it here it's already reconciled with the
+  // legacy slots. Read this instead of folder_1/2/3.
+  folders?: { name: string; path?: string }[];
+  // 1.2.0 per-participant flag. true = additive (custom folders + default
+  // pattern-based folder), false = legacy "all-or-nothing" (custom replaces
+  // default). When undefined, treated as true (default-on behavior).
+  include_default_folder?: boolean;
+  // ⚠️ Legacy fields — kept ONLY as a defensive fallback for any code path
+  // that hands us a CsvParticipantData without going through the preset
+  // normalizer (e.g. raw CSV imports). Do not read these in business logic
+  // when `folders[]` is set.
+  folder_1?: string;
+  folder_2?: string;
+  folder_3?: string;
+  folder_1_path?: string;
+  folder_2_path?: string;
+  folder_3_path?: string;
 }
 
 // Resolved folder target with optional absolute path
@@ -319,23 +336,45 @@ export class FolderOrganizer {
         };
       }
 
-      // NEW LOGIC: Collect custom folders from ALL csvData entries
+      // 1.2.0 — collect custom folders from each participant's canonical
+      // `folders[]` array. Falls back to the legacy folder_1/2/3 slots only
+      // when `folders` is not present (defensive: this path should be
+      // unreachable in production once the preset normalizer has run, but
+      // protects raw-CSV imports and any code path that hasn't been
+      // migrated yet).
       const customFolderTargets: FolderTarget[] = [];
 
       if (csvDataArray.length > 0) {
-        // Iterate through ALL participant matches
         csvDataArray.forEach(csvData => {
-          if (csvData?.folder_1?.trim()) {
-            const parsedFolder1 = this.parseFolderName(csvData.folder_1.trim(), csvData);
-            customFolderTargets.push({ name: parsedFolder1, absolutePath: csvData.folder_1_path?.trim() || undefined });
-          }
-          if (csvData?.folder_2?.trim()) {
-            const parsedFolder2 = this.parseFolderName(csvData.folder_2.trim(), csvData);
-            customFolderTargets.push({ name: parsedFolder2, absolutePath: csvData.folder_2_path?.trim() || undefined });
-          }
-          if (csvData?.folder_3?.trim()) {
-            const parsedFolder3 = this.parseFolderName(csvData.folder_3.trim(), csvData);
-            customFolderTargets.push({ name: parsedFolder3, absolutePath: csvData.folder_3_path?.trim() || undefined });
+          if (Array.isArray(csvData?.folders) && csvData.folders.length > 0) {
+            for (const f of csvData.folders) {
+              if (!f || typeof f.name !== 'string' || !f.name.trim()) continue;
+              const parsed = this.parseFolderName(f.name.trim(), csvData);
+              customFolderTargets.push({
+                name: parsed,
+                absolutePath: f.path?.trim() || undefined,
+              });
+            }
+          } else {
+            // Legacy fallback for un-normalized inputs.
+            if (csvData?.folder_1?.trim()) {
+              customFolderTargets.push({
+                name: this.parseFolderName(csvData.folder_1.trim(), csvData),
+                absolutePath: csvData.folder_1_path?.trim() || undefined,
+              });
+            }
+            if (csvData?.folder_2?.trim()) {
+              customFolderTargets.push({
+                name: this.parseFolderName(csvData.folder_2.trim(), csvData),
+                absolutePath: csvData.folder_2_path?.trim() || undefined,
+              });
+            }
+            if (csvData?.folder_3?.trim()) {
+              customFolderTargets.push({
+                name: this.parseFolderName(csvData.folder_3.trim(), csvData),
+                absolutePath: csvData.folder_3_path?.trim() || undefined,
+              });
+            }
           }
         });
       }
@@ -349,16 +388,51 @@ export class FolderOrganizer {
         return true;
       });
 
-      // DECISION TREE:
-      // - If NO custom folders -> use race numbers (default behavior for ALL numbers)
-      // - If AT LEAST ONE custom folder -> use ONLY custom folders (copy to all)
-      const foldersToCreate: FolderTarget[] = uniqueFolderTargets.length > 0
-        ? uniqueFolderTargets
-        : numbers.map(num => {
-            // Find matching csvData for this race number to support number_name pattern
-            const matchingCsv = csvDataArray.find(csv => csv.numero === num);
-            return { name: this.generateFolderName(num, matchingCsv) };
-          });
+      // Build the default pattern-based targets (one per detected race number).
+      // We use them in two scenarios:
+      //   - no custom folders at all → these are the only destinations (legacy)
+      //   - at least one matching participant has include_default_folder !== false → additive
+      const defaultTargets: FolderTarget[] = numbers.map(num => {
+        const matchingCsv = csvDataArray.find(csv => csv.numero === num);
+        return { name: this.generateFolderName(num, matchingCsv) };
+      });
+
+      // 1.2.0 — per-participant decision. The flag lives on each
+      // CsvParticipantData (`include_default_folder`); default true when
+      // the field is undefined (i.e. participants from un-normalized
+      // sources or pre-flag rows). For multi-match images (e.g. a photo
+      // with two cars), if AT LEAST ONE matched participant wants the
+      // default folder, we include it — being inclusive is the safer
+      // choice and matches the user's mental model ("if any of these
+      // drivers wants the {number} folder, copy the photo there too").
+      const wantsDefault = csvDataArray.length === 0
+        ? true
+        : csvDataArray.some(c => c?.include_default_folder !== false);
+
+      // 1.2.0 DECISION TREE:
+      //   - no custom folders                    → default targets only (legacy)
+      //   - custom folders + wantsDefault=true   → custom + default (additive)
+      //   - custom folders + wantsDefault=false  → custom only (legacy behavior)
+      let foldersToCreate: FolderTarget[];
+      if (uniqueFolderTargets.length === 0) {
+        foldersToCreate = defaultTargets;
+      } else if (wantsDefault) {
+        // Union: custom folders first (so the user-configured destinations
+        // are processed before the auto-generated default), default
+        // appended at the end. Deduplicate again because a custom folder
+        // could happen to share a name with the default (e.g. a chip
+        // called "{number}").
+        const merged = [...uniqueFolderTargets, ...defaultTargets];
+        const mergedSeen = new Set<string>();
+        foldersToCreate = merged.filter(ft => {
+          const key = ft.absolutePath ? `path:${ft.absolutePath}` : `name:${ft.name}`;
+          if (mergedSeen.has(key)) return false;
+          mergedSeen.add(key);
+          return true;
+        });
+      } else {
+        foldersToCreate = uniqueFolderTargets;
+      }
 
       const baseDir = this.config.destinationPath || sourceDir || path.dirname(imagePath);
 

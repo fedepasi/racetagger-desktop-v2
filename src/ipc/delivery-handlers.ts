@@ -24,8 +24,6 @@ import {
   getUserPlanLimits,
   sendExecutionToGallery,
   getUserRecentExecutions,
-  getImagesForR2Upload,
-  markImagesUploadQueued,
   submitFeatureInterestSurvey,
   checkFeatureInterestSurvey,
   getGalleryExecutions,
@@ -44,6 +42,7 @@ import {
   updateExecutionSourceFolder,
 } from '../database-service';
 import { r2UploadService } from '../r2-upload-service';
+import { triggerR2UploadForExecution } from '../r2-upload-trigger';
 import { DEBUG_MODE } from '../config';
 import { getBatchConfig } from './context';
 import { dialog, BrowserWindow } from 'electron';
@@ -83,78 +82,15 @@ export function registerDeliveryHandlers(): void {
   createHandler('delivery-get-recent-executions', () => getUserRecentExecutions());
 
   // ==================== R2 UPLOAD ====================
+  // Explicit user-initiated HD upload for an execution. Falls back to the
+  // currently-active batch folder if `executions.source_folder` is missing.
+  // The actual logic lives in `r2-upload-trigger.ts` so it can be shared with
+  // the post-execution auto-routing block in main.ts (project_id flow).
   createHandler('delivery-r2-upload-start', async (executionId: string) => {
-    const images = await getImagesForR2Upload(executionId);
-    if (images.length === 0) return { queued: 0 };
-
-    // Get execution source_folder to resolve original file paths
-    const { getExecutionByIdOnline, updateExecutionOnline } = await import('../database-service');
-    const execution = await getExecutionByIdOnline(executionId);
-    let sourceFolder = execution?.source_folder || '';
-
-    // Fallback: if source_folder is missing, try using the current batch folder
-    if (!sourceFolder) {
-      const currentBatch = getBatchConfig();
-      if (currentBatch && currentBatch.folderPath) {
-        console.log(`[R2 Upload] source_folder missing for ${executionId}, using current batch folder: ${currentBatch.folderPath}`);
-        sourceFolder = currentBatch.folderPath;
-        // Auto-repair: save it to the database for future use
-        try {
-          await updateExecutionOnline(executionId, { source_folder: sourceFolder });
-          console.log(`[R2 Upload] Auto-repaired source_folder for execution ${executionId}`);
-        } catch (e) {
-          console.warn('[R2 Upload] Could not auto-repair source_folder:', e);
-        }
-      }
-    }
-
-    if (!sourceFolder) {
-      console.warn(`[R2 Upload] Execution ${executionId} has no source_folder and no active batch folder.`);
-      return { queued: 0, error: 'Cannot locate original files. Please re-open the source folder and try again.' };
-    }
-
-    const path = require('path');
-    const fs = require('fs');
-
-    // Verify source folder still exists
-    if (!fs.existsSync(sourceFolder)) {
-      console.warn(`[R2 Upload] Source folder not found: ${sourceFolder}`);
-      return { queued: 0, error: `Source folder not found: ${sourceFolder}. Was it moved or deleted?` };
-    }
-
-    const items = images.map((img: any) => {
-      // Resolve the original file path from source_folder + original_filename
-      let localPath = '';
-      if (img.original_filename) {
-        const candidate = path.join(sourceFolder, img.original_filename);
-        if (fs.existsSync(candidate)) {
-          localPath = candidate;
-        } else {
-          console.warn(`[R2 Upload] File not found: ${candidate}`);
-        }
-      }
-      return {
-        imageId: img.id,
-        executionId,
-        localPath,
-        filename: img.original_filename || `${img.id}.jpg`,
-        fileSize: img.original_file_size || 0,
-      };
-    }).filter((item: any) => item.localPath); // Skip files that can't be found
-
-    if (items.length === 0) {
-      return { queued: 0, error: `Could not locate original files in: ${sourceFolder}` };
-    }
-
-    // Only mark images as queued after we've confirmed we can find the files
-    const imageIds = items.map((item: any) => item.imageId);
-    await markImagesUploadQueued(imageIds);
-
-    // Allow retry for this execution (clears dedup guard from previous attempts)
-    r2UploadService.allowRetry(executionId);
-    r2UploadService.queueExecution(executionId, items);
-    r2UploadService.start();
-    return { queued: items.length };
+    const currentBatch = getBatchConfig();
+    return triggerR2UploadForExecution(executionId, {
+      fallbackSourceFolder: currentBatch?.folderPath,
+    });
   });
   createHandler('delivery-r2-upload-progress', () => r2UploadService.getProgress());
   createHandler('delivery-r2-upload-cancel', () => { r2UploadService.cancel(); return { cancelled: true }; });

@@ -81,12 +81,20 @@ export interface PresetParticipant {
   metatag?: string;
   categoria?: string;        // Category (GT3, F1, MotoGP, etc.)
   plate_number?: string;     // License plate for future car recognition
-  folder_1?: string;         // Custom folder 1
-  folder_2?: string;         // Custom folder 2
-  folder_3?: string;         // Custom folder 3
-  folder_1_path?: string;    // Absolute filesystem path for folder 1
-  folder_2_path?: string;    // Absolute filesystem path for folder 2
-  folder_3_path?: string;    // Absolute filesystem path for folder 3
+  // 1.2.0+ canonical: array of {name, path?} objects, no length limit.
+  // Populated by normalizeParticipantPresetFolders() at fetch time. Legacy
+  // folder_1/2/3 columns below are kept dual-written for 1.1.4 backward
+  // compatibility. See POST-1.1.4-BACKLOG.md for the full strategy.
+  folders?: { name: string; path?: string }[];
+  // ⚠️ Legacy columns (pre-1.2.0) — do NOT read these directly in business
+  // logic. Always go through `participant.folders[]` (already normalized
+  // at fetch). They exist solely so 1.1.4 clients keep working.
+  folder_1?: string;         // Custom folder 1 (legacy slot 1)
+  folder_2?: string;         // Custom folder 2 (legacy slot 2)
+  folder_3?: string;         // Custom folder 3 (legacy slot 3)
+  folder_1_path?: string;    // Absolute path (legacy slot 1)
+  folder_2_path?: string;    // Absolute path (legacy slot 2)
+  folder_3_path?: string;    // Absolute path (legacy slot 3)
   delivery_to_client_id?: string | null; // FK to projects (client) for auto-delivery routing
   created_at?: string;
   // v1.1.4 — Preset Participant Toggle: soft-disable flag. When false, the
@@ -990,6 +998,16 @@ export interface PresetParticipantSupabase {
   sponsor?: string;
   metatag?: string;
   plate_number?: string;     // License plate for car recognition
+  // 1.2.0+ canonical folder array — see PresetParticipantSupabase note above.
+  folders?: { name: string; path?: string }[];
+  // 1.2.0 — when true (default), photos of this participant go to BOTH
+  // the custom folders[] above AND the default pattern-based folder
+  // (e.g. {number}). When false, custom folders REPLACE the default
+  // (legacy 1.1.4 behavior). Per-participant override; both the
+  // FolderOrganizer (analysis time) and Export & IPTC honor it.
+  include_default_folder?: boolean;
+  // ⚠️ Legacy slots — kept for 1.1.4 backward compatibility, do not read
+  // directly. Always use `folders[]` after normalization.
   folder_1?: string;
   folder_2?: string;
   folder_3?: string;
@@ -1116,6 +1134,12 @@ export async function cacheSupabaseData(): Promise<void> {
           ...preset,
           participants: preset.preset_participants || []
         }));
+        // 1.2.0 — normalize folders[] eagerly at startup pre-warm so the
+        // cache is already in canonical shape by the time any consumer
+        // reads it. Without this, the very first cache-hit fetch returns
+        // un-normalized data, and the lazy-migration UPDATEs never fire
+        // for presets that are touched only via the cache.
+        presetsCache.forEach(p => normalizeParticipantPresetFolders(p));
         console.log('[Cache] Cached', presetsCache.length, 'presets with participants');
       }
     } else {
@@ -1305,6 +1329,179 @@ export async function createParticipantPresetSupabase(presetData: Omit<Participa
  * Get user participant presets from Supabase
  * @param includeAllForAdmin - If true and user is admin, returns all presets (not just user's own)
  */
+// ============================================================================
+// FOLDER NORMALIZATION (1.1.4 → 1.2.0 compatibility layer)
+// ============================================================================
+//
+// Background:
+//   Pre-1.2.0 stored a participant's custom folders in three rigid columns
+//   (folder_1/2/3 + folder_*_path). 1.2.0 introduces a canonical jsonb
+//   array `folders` with no length limit. Migration is purely additive
+//   in SQL — no backfill — so the 1.1.4 column stays as the source of
+//   truth for clients that don't know about `folders`. This function
+//   reconciles the two representations every time a preset is fetched
+//   from the DB (or read from cache, before being handed to a 1.2.0
+//   consumer).
+//
+// Three states per participant:
+//
+//   1. lazy migration — folders[] empty + at least one legacy column
+//      populated. Happens to (a) every participant the first time this
+//      function sees them post-migration, (b) any new participant a
+//      1.1.4 client creates after migration. We rebuild folders[] from
+//      legacy and remember the row in `needsUpdate` so we can push the
+//      consolidation to the DB once for the whole preset.
+//
+//   2. drift — folders[] populated but its first three entries differ
+//      from the legacy columns. Signal: a 1.1.4 client modified the
+//      legacy columns after our last 1.2.0 write. We rebuild folders[]
+//      as `[legacy[0..2], ...folders[3..]]` (legacy wins for slots
+//      0/1/2, anything beyond is preserved from folders[]) and queue a
+//      DB push.
+//
+//   3. steady state — folders[] populated and first three entries match
+//      legacy. Nothing to do, return as-is.
+//
+// After processing all participants, if any of them needed an update we
+// fire-and-forget a single `UPDATE` for each (parallelized via
+// Promise.all but not awaited) so the consumer call returns immediately.
+// This means the very next fetch will hit the steady-state branch and
+// the lazy migration is a one-shot per row.
+//
+// Consumers (Export & IPTC, FolderOrganizer, the 1.2.0 preset editor)
+// only ever read participant.folders[]. They have no awareness that
+// folder_1/2/3 exist. Single source of truth, single point of test.
+// ============================================================================
+
+interface ParticipantFolderEntry {
+  name: string;
+  path?: string;
+}
+
+/**
+ * Compare legacy slots vs the first three entries of folders[].
+ * Returns true if they describe the same three folders in the same order.
+ */
+function legacyMatchesFirstThree(
+  participant: PresetParticipantSupabase,
+  folders: ParticipantFolderEntry[]
+): boolean {
+  const legacyTriple: Array<ParticipantFolderEntry | null> = [
+    participant.folder_1?.trim()
+      ? { name: participant.folder_1.trim(), path: participant.folder_1_path?.trim() || undefined }
+      : null,
+    participant.folder_2?.trim()
+      ? { name: participant.folder_2.trim(), path: participant.folder_2_path?.trim() || undefined }
+      : null,
+    participant.folder_3?.trim()
+      ? { name: participant.folder_3.trim(), path: participant.folder_3_path?.trim() || undefined }
+      : null,
+  ];
+  const firstThree: Array<ParticipantFolderEntry | null> = [
+    folders[0] || null,
+    folders[1] || null,
+    folders[2] || null,
+  ];
+  for (let i = 0; i < 3; i++) {
+    const a = legacyTriple[i];
+    const b = firstThree[i];
+    if (!a && !b) continue;
+    if (!a || !b) return false;
+    if (a.name !== b.name) return false;
+    if ((a.path || undefined) !== (b.path || undefined)) return false;
+  }
+  return true;
+}
+
+/**
+ * Build a folders[] array from the legacy folder_1/2/3 columns.
+ * Skips slots whose name is empty after trim.
+ */
+function foldersFromLegacy(participant: PresetParticipantSupabase): ParticipantFolderEntry[] {
+  const out: ParticipantFolderEntry[] = [];
+  if (participant.folder_1?.trim()) {
+    out.push({ name: participant.folder_1.trim(), path: participant.folder_1_path?.trim() || undefined });
+  }
+  if (participant.folder_2?.trim()) {
+    out.push({ name: participant.folder_2.trim(), path: participant.folder_2_path?.trim() || undefined });
+  }
+  if (participant.folder_3?.trim()) {
+    out.push({ name: participant.folder_3.trim(), path: participant.folder_3_path?.trim() || undefined });
+  }
+  return out;
+}
+
+/**
+ * Reconcile folders[] vs legacy folder_1/2/3 across all participants of a
+ * preset. Mutates `participant.folders` in place where needed. Schedules
+ * a fire-and-forget DB consolidation for every participant whose state
+ * changed. Safe to call on already-normalized presets (becomes a no-op).
+ */
+export function normalizeParticipantPresetFolders(preset: ParticipantPresetSupabase | null | undefined): void {
+  if (!preset || !Array.isArray(preset.participants) || preset.participants.length === 0) return;
+
+  const needsUpdate: Array<{ id: string; folders: ParticipantFolderEntry[] }> = [];
+
+  for (const participant of preset.participants) {
+    const existing: ParticipantFolderEntry[] = Array.isArray(participant.folders)
+      ? participant.folders.filter((f: any) => f && typeof f === 'object' && typeof f.name === 'string' && f.name.trim() !== '')
+      : [];
+    const fromLegacy = foldersFromLegacy(participant);
+
+    let canonical: ParticipantFolderEntry[];
+    let stateChanged = false;
+
+    if (existing.length === 0 && fromLegacy.length > 0) {
+      // Lazy migration — never normalized before, take legacy as-is.
+      canonical = fromLegacy;
+      stateChanged = true;
+    } else if (existing.length > 0 && !legacyMatchesFirstThree(participant, existing)) {
+      // Drift — a 1.1.4 client wrote to legacy after our last write.
+      // Treat legacy as authoritative for slots 0/1/2, preserve the
+      // tail (folders beyond the third) that 1.1.4 cannot represent.
+      const tail = existing.slice(3);
+      canonical = [...fromLegacy, ...tail];
+      stateChanged = true;
+    } else {
+      // Steady state.
+      canonical = existing;
+    }
+
+    participant.folders = canonical;
+
+    if (stateChanged && participant.id) {
+      needsUpdate.push({ id: participant.id, folders: canonical });
+    }
+  }
+
+  if (needsUpdate.length > 0) {
+    // Fire-and-forget: don't block the read on the consolidation write.
+    // Each row is updated independently because Supabase's `update` filtered
+    // by `eq('id', ...)` is the simplest path and we typically have a
+    // small number of rows that need consolidation per fetch (often 0 for
+    // already-migrated presets). Errors are logged but never thrown.
+    Promise.allSettled(
+      needsUpdate.map(({ id, folders }) =>
+        supabase
+          .from('preset_participants')
+          .update({ folders })
+          .eq('id', id)
+          .then(({ error }: any) => {
+            if (error) {
+              console.warn(`[DB] Background folder consolidation failed for participant ${id}:`, error.message);
+            }
+          })
+      )
+    ).catch(() => {
+      // Promise.allSettled never rejects, but safe-guard anyway.
+    });
+
+    if (DEBUG_MODE) {
+      console.log(`[DB] Background-consolidating folders for ${needsUpdate.length} participant(s) of preset "${preset.name}"`);
+    }
+  }
+}
+
 export async function getUserParticipantPresetsSupabase(includeAllForAdmin: boolean = false): Promise<ParticipantPresetSupabase[]> {
   try {
     const userId = getCurrentUserId();
@@ -1326,12 +1523,19 @@ export async function getUserParticipantPresetsSupabase(includeAllForAdmin: bool
       // In admin mode, return all cached presets without filtering
       if (includeAllForAdmin) {
         const result = ensureParticipants(presetsCache);
+        // 1.2.0 — normalize on the cache hit path too. Idempotent: if the
+        // cache entry was already normalized on a previous call, this is
+        // a steady-state O(1) check. Without this, presets cached by an
+        // earlier app session (or by the startup pre-warm) would never
+        // get their `folders[]` populated.
+        result.forEach(p => normalizeParticipantPresetFolders(p));
         console.log('[DB] Returning cached presets (admin mode):', result.length);
         return result;
       }
       // For regular users, filter by ownership or public access
       const filtered = presetsCache.filter(p => p.user_id === userId || p.is_public);
       const result = ensureParticipants(filtered);
+      result.forEach(p => normalizeParticipantPresetFolders(p));
       console.log('[DB] Returning cached presets (filtered):', result.length, 'of', presetsCache.length);
       return result;
     }
@@ -1397,6 +1601,10 @@ export async function getUserParticipantPresetsSupabase(includeAllForAdmin: bool
     // Update cache only if we got results OR if cache was empty
     // This prevents overwriting valid cache with empty results due to timing issues
     if (mappedData.length > 0 || presetsCache.length === 0) {
+      // Reconcile legacy folder_1/2/3 vs canonical folders[] for every
+      // preset before they hit the cache + downstream consumers. Idempotent
+      // so the cache hit path can call it again safely.
+      mappedData.forEach(p => normalizeParticipantPresetFolders(p));
       presetsCache = mappedData;
       cacheLastUpdated = Date.now();
       console.log('[DB] Cache updated with', mappedData.length, 'presets');
@@ -1444,6 +1652,9 @@ export async function getParticipantPresetByIdSupabase(presetId: string): Promis
         if (!cached.participants) {
           cached.participants = cachedParticipants;
         }
+        // Idempotent — if the cached preset was already normalized on a
+        // previous fetch this becomes a no-op steady-state pass.
+        normalizeParticipantPresetFolders(cached);
         return cached;
       }
     }
@@ -1490,6 +1701,9 @@ export async function getParticipantPresetByIdSupabase(presetId: string): Promis
           `#${p.numero}: ${p.preset_participant_drivers?.length} drivers`
         ).join(', '));
       }
+      // Reconcile legacy folder_1/2/3 vs canonical folders[] before any
+      // 1.2.0 consumer reads this preset. See normalizeParticipantPresetFolders.
+      normalizeParticipantPresetFolders(data);
     }
 
     return data;
@@ -1498,6 +1712,47 @@ export async function getParticipantPresetByIdSupabase(presetId: string): Promis
     console.error(`[DB] Error getting participant preset ${presetId} from Supabase:`, error);
     return null;
   }
+}
+
+/**
+ * Dual-write helper: derive the legacy folder_1/2/3 + folder_*_path columns
+ * from a participant's canonical folders[] array, so 1.1.4 clients keep
+ * seeing the first three folders. Mutates and returns the same record.
+ *
+ * Folders beyond the third position are 1.2.0-exclusive (1.1.4 has no slots
+ * for them). When folders[] is empty/missing, the legacy columns are
+ * cleared. When the caller already set the legacy columns explicitly
+ * (e.g. legacy code path from 1.1.4 UI we haven't migrated yet), we leave
+ * them alone — only override when folders[] is the source of truth.
+ *
+ * See POST-1.1.4-BACKLOG.md for the full strategy.
+ */
+function applyDualWriteFolders<T extends Partial<PresetParticipantSupabase>>(record: T): T {
+  if (!Array.isArray(record.folders)) {
+    // Caller didn't set folders[] — assume they're using the legacy
+    // path, leave folder_1/2/3 alone.
+    return record;
+  }
+
+  const cleaned = record.folders.filter(
+    (f: any) => f && typeof f === 'object' && typeof f.name === 'string' && f.name.trim() !== ''
+  ) as Array<{ name: string; path?: string }>;
+
+  // Always rewrite folders[] with the cleaned subset — this is what gets
+  // persisted as the canonical source.
+  (record as any).folders = cleaned;
+
+  // Derive legacy slots from the first three entries. Slots beyond the
+  // cleaned length are explicitly cleared so we don't leak stale data
+  // from a previous save.
+  (record as any).folder_1 = cleaned[0]?.name ?? null;
+  (record as any).folder_2 = cleaned[1]?.name ?? null;
+  (record as any).folder_3 = cleaned[2]?.name ?? null;
+  (record as any).folder_1_path = cleaned[0]?.path ?? null;
+  (record as any).folder_2_path = cleaned[1]?.path ?? null;
+  (record as any).folder_3_path = cleaned[2]?.path ?? null;
+
+  return record;
 }
 
 /**
@@ -1576,6 +1831,11 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
         const { id, ...participantData } = participant as any;
         console.log(`[DB Save]   ↻ Updating participant #${participantData.numero} (ID: ${id?.substring(0, 8)}...)`);
 
+        // Dual-write: when the caller provided canonical folders[], also
+        // populate the legacy folder_1/2/3 columns so 1.1.4 clients see
+        // a valid subset.
+        applyDualWriteFolders(participantData);
+
         const { data: updated, error: updateError } = await supabase
           .from('preset_participants')
           .update({ ...participantData, preset_id: presetId })
@@ -1606,6 +1866,9 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
         const record: any = { ...cleanData, preset_id: presetId };
         delete record.id;
         delete record.created_at;
+        // Dual-write: derive legacy folder_1/2/3 from canonical folders[]
+        // when the caller used the new shape. See applyDualWriteFolders.
+        applyDualWriteFolders(record);
         return record;
       });
 

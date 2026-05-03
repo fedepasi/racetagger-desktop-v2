@@ -330,6 +330,29 @@ function createUnifiedModal() {
               </div>
             </div>
           </div>
+
+          <!--
+            Preset folder assignments — when ON, the export honours the
+            per-participant custom folders configured in the preset
+            (participants.html → "📁 Personalize your Folder Organization").
+            Whether each photo ALSO ends up in the default subfolder
+            pattern destination is decided per-participant by the
+            "Also export to the default folder" toggle on each
+            participant — no global override needed here.
+            Default ON when the preset has folders; disabled otherwise.
+          -->
+          <div class="export-section" id="unified-preset-folders-section">
+            <div class="export-section-head">
+              <label>
+                <input type="checkbox" id="unified-chk-preset-folders" checked>
+                📁 Follow preset folder assignments
+              </label>
+              <span class="export-section-hint" id="unified-preset-folders-hint">
+                Photos go to each participant's custom folders. Whether they ALSO go to the
+                default <code>{number}</code> subfolder is decided per-participant in the preset.
+              </span>
+            </div>
+          </div>
         </div>
 
         <!-- Write to Originals Warning (hidden by default) -->
@@ -629,6 +652,29 @@ function wireUnifiedEvents(matchedCount, totalCount) {
     });
   }
 
+  // ----------------------------------------------------------------------
+  // Preset folder assignments toggle.
+  // We compute "preset has folders configured?" by scanning all participants
+  // for at least one entry in `folders[]`. If none, the toggle is disabled
+  // with a hint, since enabling it would be a no-op.
+  // The default ON state was already set in HTML; here we downgrade it
+  // when the preset has nothing to honour. The "include default" decision
+  // is per-participant on the participant edit modal, not here.
+  // ----------------------------------------------------------------------
+  const presetFoldersChk = document.getElementById('unified-chk-preset-folders');
+  const presetFoldersHint = document.getElementById('unified-preset-folders-hint');
+
+  const hasAnyFolders = !!(unifiedPresetData?.participants || [])
+    .some(p => Array.isArray(p.folders) && p.folders.length > 0);
+
+  if (!hasAnyFolders && presetFoldersChk) {
+    presetFoldersChk.checked = false;
+    presetFoldersChk.disabled = true;
+    if (presetFoldersHint) {
+      presetFoldersHint.textContent = 'No custom folders configured in this preset';
+    }
+  }
+
   // Placeholder chips
   document.querySelectorAll('.export-ph').forEach(chip => {
     chip.addEventListener('click', () => {
@@ -912,6 +958,21 @@ function buildUnifiedImages(scope) {
                 ? presetMatch.sponsor.split(',').map(s => s.trim())
                 : presetMatch.sponsor;
             }
+
+            // 1.2.0 — propagate the canonical folders[] array from the
+            // preset down to the IPC layer, so the multi-destination
+            // copy logic in unified-export-handler can replicate the
+            // photo into each of the participant's custom folders.
+            if (Array.isArray(presetMatch.folders) && presetMatch.folders.length > 0) {
+              participant.folders = presetMatch.folders.map(f => ({
+                name: typeof f === 'string' ? f : (f?.name || ''),
+                path: typeof f === 'string' ? undefined : (f?.path || undefined),
+              })).filter(f => f.name && f.name.trim());
+            }
+            // 1.2.0 — per-participant additive-default flag. Default true
+            // when the field is missing (legacy participants). Sent to
+            // unified-export-handler which reads it per-photo.
+            participant.include_default_folder = presetMatch.include_default_folder !== false;
           }
 
           if (r.csvMatch && vehicle === r.analysis[0]) {
@@ -973,6 +1034,14 @@ async function startUnifiedExport() {
   const subfolderEnabled = document.getElementById('unified-chk-subfolder')?.checked;
   const subfolderPattern = subfolderEnabled ? (document.getElementById('unified-subfolder-pattern')?.value || '') : null;
 
+  // 1.2.0 — preset folder assignments (multi-destination per participant).
+  // When ON and a participant has folders[], the export duplicates copy +
+  // IPTC write into each of those folders. Whether the photo ALSO goes
+  // into the modal's `subfolderPattern` destination is decided per-image
+  // by the participant's `include_default_folder` flag (default true) —
+  // see unified-export-handler.ts.
+  const followPresetFolders = !!document.getElementById('unified-chk-preset-folders')?.checked;
+
   // Collect IPTC — check if any IPTC fields have values
   const iptcMetadata = collectUnifiedIptcFormData();
   const hasAnyIptc = Object.keys(iptcMetadata).some(k => k !== 'appendKeywords');
@@ -1032,7 +1101,10 @@ async function startUnifiedExport() {
       keywordsMode: writeIptc ? kwMode : null,
       eventName: unifiedPresetData?.name || '',
       fileConflictStrategy: fileConflictStrategy,
-      metadataStrategy: metadataStrategy
+      metadataStrategy: metadataStrategy,
+      // 1.2.0 — multi-destination toggle. The per-photo "also include
+      // default subfolder" decision is on `participant.include_default_folder`.
+      followPresetFolders: followPresetFolders
     });
 
     if (response.success) {

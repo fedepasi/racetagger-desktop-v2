@@ -111,7 +111,13 @@
           <div class="folder-organization-section">
             <div class="section-header">
               <h3>📁 Personalize your Folder Organization</h3>
-              <p class="form-text">Create custom folders to organize photos. You can assign each participant to one or more folders.</p>
+              <p class="form-text">
+                <strong>1.2.0 update:</strong> custom folders are now created on the fly — open a participant
+                and use the <code>+ Add folder</code> button under <em>Custom Folders</em>. The list below shows
+                what's currently in use across this preset.<br>
+                Each participant individually decides whether their photos also go into the default
+                <code>{number}</code> folder, via the toggle in their edit modal.
+              </p>
             </div>
 
             <div class="custom-folders-manager">
@@ -821,39 +827,63 @@
             </div>
 
             <div class="column-content">
-              <!-- Folder 1 -->
+              <!--
+                1.2.0 — Folders are now an unbounded list managed inline.
+                Click "+ Add folder" to type a new name (autocomplete on names
+                already in use elsewhere in this preset) or pick an existing
+                one. Each chip can also have an absolute path via the 🔗 icon.
+                The legacy 3-slot dropdowns (folder_1/2/3) are kept hidden in
+                the DOM as fallback inputs so 1.1.4-aware code keeps working
+                until we fully retire them.
+              -->
               <div class="form-group">
                 <label>
-                  Primary Folder
+                  Custom Folders
                   <span class="field-destination field-destination-folder">→ Export</span>
                 </label>
-                <select id="edit-folder-1" class="form-input form-input-folder">
-                  <option value="">None</option>
-                </select>
-                <small class="form-hint">Main output folder for this participant</small>
+                <div id="edit-folder-chips-area" class="folder-chips-area" data-empty-text="No folders yet">
+                  <!-- chips injected by participants-manager.js -->
+                </div>
+                <button type="button"
+                  id="edit-folder-add-btn"
+                  class="folder-chip-add-btn"
+                  title="Add folder">
+                  + Add folder
+                </button>
+                <small class="form-hint">Photos of this participant will be copied to each folder. Use 🔗 on a chip to pin it to an absolute path.</small>
+
+                <!-- 1.2.0 — per-participant additive-default toggle.
+                     Default checked. When checked, photos go to BOTH the
+                     custom folders above AND the default {number}/pattern
+                     folder. When unchecked, they go ONLY to the custom
+                     folders (legacy 1.1.4 "all-or-nothing" behavior). -->
+                <div class="participant-default-folder-toggle">
+                  <div class="toggle-row">
+                    <input type="checkbox" id="edit-include-default-folder" checked>
+                    <label for="edit-include-default-folder">
+                      <span class="toggle-title">Also export to the default folder</span>
+                      <span class="toggle-meta">(e.g. <code>{number}</code>)</span>
+                    </label>
+                  </div>
+                  <span class="toggle-hint">
+                    Uncheck if photos of this participant should go ONLY to the custom folders
+                    above, not also to the standard <code>{number}</code> folder.
+                  </span>
+                </div>
               </div>
 
-              <!-- Folder 2 -->
-              <div class="form-group">
-                <label>
-                  Secondary Folder
-                  <span class="field-destination field-destination-folder">→ Export</span>
-                </label>
-                <select id="edit-folder-2" class="form-input form-input-folder">
-                  <option value="">None</option>
-                </select>
-              </div>
-
-              <!-- Folder 3 -->
-              <div class="form-group">
-                <label>
-                  Additional Folder
-                  <span class="field-destination field-destination-folder">→ Export</span>
-                </label>
-                <select id="edit-folder-3" class="form-input form-input-folder">
-                  <option value="">None</option>
-                </select>
-              </div>
+              <!-- Hidden legacy dropdowns (kept so existing code paths in
+                   1.1.4 worktrees continue to work; populated by JS from
+                   the chip list at save time via dual-write). -->
+              <select id="edit-folder-1" class="form-input form-input-folder" style="display:none;">
+                <option value="">None</option>
+              </select>
+              <select id="edit-folder-2" class="form-input form-input-folder" style="display:none;">
+                <option value="">None</option>
+              </select>
+              <select id="edit-folder-3" class="form-input form-input-folder" style="display:none;">
+                <option value="">None</option>
+              </select>
 
               <!-- Info box -->
               <div class="folder-info-box-enhanced">
@@ -959,6 +989,100 @@
         <button class="btn btn-primary" onclick="saveEditedFolderName()">
           <span class="btn-icon">💾</span>
           Save
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!--
+    1.2.0 — Per-participant Add Folder modal.
+    Dedicated modal (separate from #folder-name-modal) so the stacking
+    order works correctly when opened from inside the participant edit
+    modal. Two sections:
+      1. "Pick existing" — clickable list of folders already used in
+         this preset (collected from custom_folders + every other
+         participant's folders[]). Empty state when there are none.
+      2. "Or create new" — name + optional absolute path with auto-fill
+         from the chosen folder's basename when the name field is empty.
+    Wired in participants-manager.js (openAddParticipantFolderModal,
+    closeParticipantFolderModal, confirmAddParticipantFolder).
+  -->
+  <div id="participant-folder-modal" class="modal" style="z-index: 10500;">
+    <div class="modal-content folder-name-modal">
+      <div class="modal-header">
+        <h2>Add Folder</h2>
+        <button class="modal-close" onclick="closeParticipantFolderModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+
+        <!-- Existing folders (clickable cards) -->
+        <div class="form-group">
+          <label class="text-white">Pick from existing folders</label>
+          <div class="participant-folder-search-row">
+            <input type="text"
+                   id="participant-folder-search"
+                   class="participant-folder-search"
+                   placeholder="🔍 Filter by name or path…"
+                   autocomplete="off">
+          </div>
+          <div id="participant-folder-existing-list" class="participant-folder-existing-list"
+               data-empty-text="No folders defined yet in this preset. Use the form below to create one.">
+            <!-- items injected by JS -->
+          </div>
+          <div id="participant-folder-no-match" class="participant-folder-no-match" style="display:none;">
+            <span></span>
+            <button type="button" class="btn btn-link" onclick="copySearchToCreateName()">Create it below ↓</button>
+          </div>
+        </div>
+
+        <!-- Divider -->
+        <div class="participant-folder-divider"><span>OR CREATE A NEW ONE</span></div>
+
+        <!-- Create new -->
+        <div class="form-group">
+          <label for="participant-folder-name-input">Folder Name *</label>
+          <input type="text" id="participant-folder-name-input" class="form-input"
+                 placeholder="e.g., Ferrari  or  {number}-{name}" autocomplete="off">
+        </div>
+
+        <div class="form-group" style="margin-top: 1rem;">
+          <label for="participant-folder-path-input">Destination Path <span style="opacity: 0.6;">(optional)</span></label>
+          <div class="folder-path-picker">
+            <input type="text" id="participant-folder-path-input" class="form-input"
+                   placeholder="No path set — will use default output folder" readonly>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="browseParticipantFolderPath()">Browse</button>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="clearParticipantFolderPath()">Clear</button>
+          </div>
+          <small class="form-hint">
+            When set, photos are saved to this absolute path. Selecting a folder via Browse will
+            auto-fill the Name field with the folder's name (if Name is still empty).
+          </small>
+        </div>
+
+        <div class="folder-modal-tip">
+          <span class="tip-icon">💡</span>
+          <div class="tip-content">
+            <strong>Make the folder name dynamic per photo</strong> by inserting one of these
+            placeholders. They get replaced with the actual participant data when photos are
+            organized — for example <code>{number}-{name}</code> becomes <code>50-A. Pier Guidi</code>.
+            <div class="participant-folder-placeholder-row">
+              <button type="button" class="placeholder-pill" data-placeholder="{number}">+ {number}</button>
+              <button type="button" class="placeholder-pill" data-placeholder="{name}">+ {name}</button>
+              <button type="button" class="placeholder-pill" data-placeholder="{surname}">+ {surname}</button>
+              <button type="button" class="placeholder-pill" data-placeholder="{team}">+ {team}</button>
+              <button type="button" class="placeholder-pill" data-placeholder="{car_model}">+ {car_model}</button>
+              <button type="button" class="placeholder-pill" data-placeholder="{nationality}">+ {nationality}</button>
+              <button type="button" class="placeholder-pill" data-placeholder="{category}">+ {category}</button>
+              <button type="button" class="placeholder-pill" data-placeholder="{tag}">+ {tag}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeParticipantFolderModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="confirmAddParticipantFolder()">
+          <span class="btn-icon">+</span>
+          Add Folder
         </button>
       </div>
     </div>

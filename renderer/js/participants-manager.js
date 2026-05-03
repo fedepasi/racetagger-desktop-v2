@@ -7,6 +7,20 @@ var currentPreset = null;
 var participantsData = [];
 var isEditingPreset = false;
 var customFolders = []; // Array of {name, path?} objects for custom folders
+
+// 1.2.0 — chip-based folder editor for the per-participant edit modal.
+// Each entry: { name: string, path?: string }. Replaces the legacy
+// folder_1/2/3 dropdowns. The modal works on a fresh COPY (so the user
+// can cancel without mutating the underlying participant) and the values
+// are pushed back into the participant on save.
+var editingParticipantFolders = [];
+
+// 1.2.0 — controls where the existing folder-name-modal commits its
+// result. 'preset' = legacy behavior (push into the global customFolders
+// array of the preset). 'participant' = push into editingParticipantFolders
+// (the chip editor of the participant being edited). The modal HTML is
+// the same in both cases, only the dispatch in confirmAddFolder differs.
+var addFolderContext = 'preset';
 var deliveryClientsCache = []; // Cached list of clients (projects) for "Delivery to" dropdown
 var deliveryFeatureEnabled = false; // Feature gate for delivery_enabled
 var faceRecFeatureEnabled = false; // Feature gate for face_recognition_enabled
@@ -931,6 +945,9 @@ function createNewPreset() {
     allowExternalEl.disabled = false;
   }
 
+  // (1.2.0 — the additive-default-folder flag has been moved to a
+  // per-participant toggle inside the participant edit modal.)
+
   // Populate sport category dropdown (no selection)
   populateSportCategoryDropdown(null);
 
@@ -952,9 +969,315 @@ function createNewPreset() {
 }
 
 /**
- * Add a custom folder - Opens modal for input
+ * Add a custom folder to the GLOBAL preset list - opens the
+ * folder-name-modal. Legacy entry point used by the "Personalize your
+ * Folder Organization" section.
  */
 function addCustomFolder() {
+  addFolderContext = 'preset';
+  openAddFolderModal();
+}
+
+/**
+ * 1.2.0 — Add a custom folder to the CURRENT PARTICIPANT being edited.
+ *
+ * Opens #participant-folder-modal, a dedicated modal (NOT the global
+ * #folder-name-modal) that:
+ *   - lists folders already used elsewhere in the preset, clickable to
+ *     assign instantly without retyping the name
+ *   - has a name+path form to create a new folder, with auto-fill of
+ *     the name from the basename of the picked path
+ *
+ * Why a separate modal: the global one lives behind the participant
+ * edit modal in stacking order, so opening it from inside the
+ * participant flow ended up invisible. This one has its own z-index
+ * (set on the .modal element in HTML) so it stacks correctly.
+ */
+function addParticipantFolder() {
+  openAddParticipantFolderModal();
+}
+
+/**
+ * Open the dedicated participant Add Folder modal. Renders the
+ * "existing folders" picker with the current set of folders used
+ * elsewhere in the preset.
+ */
+function openAddParticipantFolderModal() {
+  // Reset form fields
+  const nameInput = document.getElementById('participant-folder-name-input');
+  const pathInput = document.getElementById('participant-folder-path-input');
+  const searchInput = document.getElementById('participant-folder-search');
+  if (nameInput) nameInput.value = '';
+  if (pathInput) pathInput.value = '';
+  if (searchInput) searchInput.value = '';
+
+  // Render the existing-folders picker (unfiltered)
+  renderParticipantFolderExistingList('');
+
+  // Wire the live-filter input. Use a fresh handler each time the modal
+  // opens to avoid leaks. Removing first guards against multiple binds
+  // if the user opens/closes the modal repeatedly.
+  if (searchInput) {
+    searchInput.removeEventListener('input', _onParticipantFolderSearchInput);
+    searchInput.addEventListener('input', _onParticipantFolderSearchInput);
+  }
+
+  // Show modal
+  const modal = document.getElementById('participant-folder-modal');
+  if (modal) modal.classList.add('show');
+
+  // Focus the search input first — this is where the user is most
+  // likely to start typing if they're looking for an existing folder.
+  setTimeout(() => {
+    if (searchInput) searchInput.focus();
+  }, 100);
+}
+
+/** Throttled input handler for the search bar — re-renders the picker
+ *  with the typed query on every keystroke. */
+function _onParticipantFolderSearchInput(e) {
+  renderParticipantFolderExistingList(e.target.value || '');
+}
+
+/** Copy the search query into the Folder Name input below and focus
+ *  it, so the user can immediately tweak / pick a path / submit. */
+function copySearchToCreateName() {
+  const searchInput = document.getElementById('participant-folder-search');
+  const nameInput = document.getElementById('participant-folder-name-input');
+  if (!searchInput || !nameInput) return;
+  const q = (searchInput.value || '').trim();
+  if (!q) return;
+  nameInput.value = q;
+  nameInput.focus();
+  nameInput.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+/**
+ * Close the dedicated participant Add Folder modal.
+ */
+function closeParticipantFolderModal() {
+  const modal = document.getElementById('participant-folder-modal');
+  if (modal) modal.classList.remove('show');
+  const nameInput = document.getElementById('participant-folder-name-input');
+  const pathInput = document.getElementById('participant-folder-path-input');
+  if (nameInput) nameInput.value = '';
+  if (pathInput) pathInput.value = '';
+}
+
+/**
+ * Render the list of folders already in use elsewhere in this preset.
+ * Sources (in priority order):
+ *   1. preset.custom_folders (legacy global list)
+ *   2. every other participant's folders[]
+ *   3. fallback to legacy folder_1/2/3 slots from non-normalized rows
+ *
+ * Folders the current participant already has are shown disabled so
+ * the user doesn't add duplicates.
+ *
+ * @param {string} [filterQuery] Live-filter substring (case-insensitive,
+ *   matches against name and path). Empty/missing = no filtering.
+ */
+function renderParticipantFolderExistingList(filterQuery) {
+  const list = document.getElementById('participant-folder-existing-list');
+  if (!list) return;
+  list.innerHTML = '';
+  const query = (filterQuery || '').trim().toLowerCase();
+
+  // Build a deduplicated map: lower-cased name → { name, path? }
+  const seen = new Map();
+  const upsert = (name, path) => {
+    const trimmed = (name || '').trim();
+    if (!trimmed) return;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) {
+      // Prefer the version that has a path, if any.
+      const existing = seen.get(key);
+      if (!existing.path && path) existing.path = path;
+      return;
+    }
+    seen.set(key, { name: trimmed, path: (path || '').trim() || undefined });
+  };
+
+  // Source 1: preset-level legacy custom_folders array.
+  const presetFolders = currentPreset?.custom_folders || [];
+  for (const f of presetFolders) {
+    if (typeof f === 'string') upsert(f);
+    else if (f && typeof f === 'object') upsert(f.name, f.path);
+  }
+  // Source 2: every participant's normalized folders[] (the canonical store).
+  for (const p of (participantsData || [])) {
+    if (Array.isArray(p?.folders)) {
+      for (const f of p.folders) upsert(f?.name, f?.path);
+    }
+    // Source 3: legacy slots fallback (un-normalized rows).
+    upsert(p?.folder_1, p?.folder_1_path);
+    upsert(p?.folder_2, p?.folder_2_path);
+    upsert(p?.folder_3, p?.folder_3_path);
+  }
+
+  // Set of folders already on the participant being edited (so we
+  // can disable them in the picker).
+  const alreadyAdded = new Set(
+    editingParticipantFolders.map(f => (f.name || '').trim().toLowerCase())
+  );
+
+  // Apply live filter (case-insensitive, matches name OR path).
+  // Pass-through when the query is empty.
+  let visible = Array.from(seen.values());
+  if (query) {
+    visible = visible.filter(f => {
+      const hay = (f.name + ' ' + (f.path || '')).toLowerCase();
+      return hay.includes(query);
+    });
+  }
+
+  // Build cards.
+  const sorted = visible
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+
+  // Update the "no matches" hint visibility. Shown only when the user
+  // typed something AND nothing matched in the universe of existing
+  // folders. Hidden when the universe is empty (the list shows its own
+  // empty-state message in that case).
+  const noMatch = document.getElementById('participant-folder-no-match');
+  if (noMatch) {
+    if (query && sorted.length === 0 && seen.size > 0) {
+      const span = noMatch.querySelector('span');
+      if (span) span.textContent = `No matches for "${filterQuery.trim()}".`;
+      noMatch.style.display = '';
+    } else {
+      noMatch.style.display = 'none';
+    }
+  }
+
+  for (const f of sorted) {
+    const card = document.createElement('div');
+    card.className = 'participant-folder-existing-item';
+    const isDup = alreadyAdded.has(f.name.toLowerCase());
+    if (isDup) card.classList.add('is-already-added');
+
+    const icon = document.createElement('span');
+    icon.className = 'folder-icon';
+    icon.textContent = '📁';
+    card.appendChild(icon);
+
+    const name = document.createElement('span');
+    name.className = 'folder-name';
+    name.textContent = f.name;
+    card.appendChild(name);
+
+    if (f.path) {
+      const pathSpan = document.createElement('span');
+      pathSpan.className = 'folder-path';
+      pathSpan.textContent = f.path;
+      card.appendChild(pathSpan);
+    }
+
+    if (isDup) {
+      const badge = document.createElement('span');
+      badge.className = 'added-badge';
+      badge.textContent = 'Already added';
+      card.appendChild(badge);
+    } else {
+      card.addEventListener('click', () => {
+        editingParticipantFolders.push({
+          name: f.name,
+          ...(f.path ? { path: f.path } : {})
+        });
+        renderEditFolderChips();
+        closeParticipantFolderModal();
+      });
+    }
+
+    list.appendChild(card);
+  }
+}
+
+/**
+ * Browse for a folder path inside the participant Add-Folder modal.
+ * Auto-fills the Name field from the chosen folder's basename when the
+ * Name field is still empty.
+ */
+async function browseParticipantFolderPath() {
+  const result = await window.api.invoke('dialog-show-open', {
+    properties: ['openDirectory', 'createDirectory'],
+    title: 'Select Destination Folder'
+  });
+  if (!(result && result.filePaths && result.filePaths.length > 0)) return;
+  const chosenPath = result.filePaths[0];
+  const pathInput = document.getElementById('participant-folder-path-input');
+  if (pathInput) pathInput.value = chosenPath;
+
+  const nameInput = document.getElementById('participant-folder-name-input');
+  if (nameInput && !nameInput.value.trim()) {
+    const segments = chosenPath.split(/[\\/]/).filter(s => s.length > 0);
+    const basename = segments.length > 0 ? segments[segments.length - 1] : '';
+    if (basename) nameInput.value = basename;
+  }
+}
+
+function clearParticipantFolderPath() {
+  const pathInput = document.getElementById('participant-folder-path-input');
+  if (pathInput) pathInput.value = '';
+}
+
+/**
+ * Confirm the "Create new" form of the participant Add Folder modal.
+ * Pushes onto editingParticipantFolders, re-renders chips, closes modal.
+ *
+ * 1.2.0 uniqueness rule — a folder name must be unique within the
+ * preset. If a folder with that name already exists anywhere (preset
+ * legacy list or another participant), creation is blocked and the
+ * user is pointed to the "Pick from existing folders" list above.
+ */
+function confirmAddParticipantFolder() {
+  const nameInput = document.getElementById('participant-folder-name-input');
+  const pathInput = document.getElementById('participant-folder-path-input');
+  const folderName = (nameInput?.value || '').trim();
+  const folderPath = (pathInput?.value || '').trim();
+
+  if (!folderName) {
+    alert('Please enter a folder name (or pick one from the existing list above).');
+    if (nameInput) nameInput.focus();
+    return;
+  }
+
+  // Per-participant duplicate (the chip is already on this participant).
+  const dupOnThisParticipant = editingParticipantFolders.some(
+    f => f.name && f.name.toLowerCase() === folderName.toLowerCase()
+  );
+  if (dupOnThisParticipant) {
+    alert('This participant already has a folder with this name.');
+    if (nameInput) nameInput.focus();
+    return;
+  }
+
+  // Per-preset duplicate (same name on a different participant or in
+  // the preset-global list). The user should pick from existing
+  // instead of creating a duplicate, otherwise we'd end up with two
+  // distinct entries that happen to share a display name.
+  if (folderNameExistsInPreset(folderName)) {
+    alert(
+      `A folder named "${folderName}" already exists elsewhere in this preset.\n\n` +
+      `Use the "Pick from existing folders" list above to add it to this participant, ` +
+      `or pick a different name.`
+    );
+    if (nameInput) nameInput.focus();
+    return;
+  }
+
+  const folderObj = { name: folderName };
+  if (folderPath) folderObj.path = folderPath;
+  editingParticipantFolders.push(folderObj);
+  renderEditFolderChips();
+  closeParticipantFolderModal();
+}
+
+/**
+ * Shared modal opener — clears inputs, shows the modal, refocuses input.
+ * The dispatch on save is decided by `addFolderContext` in confirmAddFolder.
+ */
+function openAddFolderModal() {
   // Clear previous input
   document.getElementById('folder-name-input').value = '';
   const pathInput = document.getElementById('folder-path-input');
@@ -988,7 +1311,40 @@ function closeFolderNameModal() {
 }
 
 /**
- * Confirm and add folder
+ * 1.2.0 — Check whether a folder name is already in use ANYWHERE in
+ * the current preset (preset-global list + every participant's folders[]
+ * + legacy folder_1/2/3 slots). Case-insensitive. Used to enforce the
+ * "one preset = one namespace of folders" rule on add and rename.
+ *
+ * Two presets can coexist with a folder of the same name (the check
+ * only looks at the in-memory state of the currently-edited preset).
+ */
+function folderNameExistsInPreset(folderName) {
+  const target = (folderName || '').trim().toLowerCase();
+  if (!target) return false;
+
+  // Preset-global legacy list
+  if (customFolders.some(f => getFolderDisplayName(f).toLowerCase() === target)) return true;
+
+  // Every participant's folders[] and legacy slots
+  for (const p of (participantsData || [])) {
+    if (Array.isArray(p?.folders)) {
+      for (const f of p.folders) {
+        if (f?.name && f.name.trim().toLowerCase() === target) return true;
+      }
+    }
+    if ((p?.folder_1 || '').trim().toLowerCase() === target) return true;
+    if ((p?.folder_2 || '').trim().toLowerCase() === target) return true;
+    if ((p?.folder_3 || '').trim().toLowerCase() === target) return true;
+  }
+
+  return false;
+}
+
+/**
+ * Confirm and add folder. Dispatches based on `addFolderContext` set
+ * by addCustomFolder() (preset-level) or addParticipantFolder()
+ * (participant-level — see editingParticipantFolders).
  */
 function confirmAddFolder() {
   const folderNameInput = document.getElementById('folder-name-input');
@@ -1000,25 +1356,50 @@ function confirmAddFolder() {
     return;
   }
 
-  // Check for duplicates
-  if (customFolders.some(f => getFolderDisplayName(f) === folderName)) {
-    alert('A folder with this name already exists');
-    folderNameInput.focus();
-    return;
-  }
-
   // Read optional path
   const pathInput = document.getElementById('folder-path-input');
   const folderPath = pathInput ? pathInput.value.trim() : '';
 
-  // Add folder as object
+  if (addFolderContext === 'participant') {
+    // 1.2.0 — commit to the participant being edited, not the global list.
+    // Uniqueness is enforced PER PRESET (not per participant): a folder
+    // name that already exists anywhere in the preset must not be
+    // re-created here. The user should instead pick it from the
+    // "Pick from existing folders" list at the top of the modal.
+    if (folderNameExistsInPreset(folderName)) {
+      alert(
+        `A folder named "${folderName}" already exists in this preset.\n\n` +
+        `Use the "Pick from existing folders" list above to add it to this participant, ` +
+        `or pick a different name.`
+      );
+      folderNameInput.focus();
+      return;
+    }
+    const folderObj = { name: folderName };
+    if (folderPath) folderObj.path = folderPath;
+    editingParticipantFolders.push(folderObj);
+    renderEditFolderChips();
+    closeFolderNameModal();
+    // Reset context so the next direct invocation defaults to preset.
+    addFolderContext = 'preset';
+    return;
+  }
+
+  // Preset-level flow. Same uniqueness rule applies: the folder must
+  // not already exist anywhere in the preset.
+  if (folderNameExistsInPreset(folderName)) {
+    alert(
+      `A folder named "${folderName}" already exists in this preset ` +
+      `(either here or on a participant). Pick a different name.`
+    );
+    folderNameInput.focus();
+    return;
+  }
   const folderObj = { name: folderName };
   if (folderPath) folderObj.path = folderPath;
   customFolders.push(folderObj);
   renderCustomFolders();
   updateFolderSelects();
-
-  // Close modal
   closeFolderNameModal();
 }
 
@@ -1218,11 +1599,42 @@ async function openParticipantEditModal(rowIndex = -1) {
       console.log('[Participants] No driver records in DB, using nome field fallback');
     }
 
-    // Populate folder selects
+    // Populate hidden legacy dropdowns (kept for any code paths still reading them).
     populateFolderSelects();
     document.getElementById('edit-folder-1').value = participant.folder_1 || '';
     document.getElementById('edit-folder-2').value = participant.folder_2 || '';
     document.getElementById('edit-folder-3').value = participant.folder_3 || '';
+
+    // 1.2.0 — initialize the chip-based folder editor with a defensive
+    // deep copy so cancel doesn't mutate the source participant. Reads
+    // from `folders[]` (canonical, populated by normalizeParticipantPresetFolders
+    // upstream) with a fallback to the legacy slots for the rare case
+    // where this modal is opened on an unnormalized object.
+    if (Array.isArray(participant.folders) && participant.folders.length > 0) {
+      editingParticipantFolders = participant.folders
+        .filter(f => f && typeof f.name === 'string' && f.name.trim())
+        .map(f => ({ name: f.name.trim(), path: f.path?.trim() || undefined }));
+    } else {
+      editingParticipantFolders = [];
+      if (participant.folder_1?.trim()) {
+        editingParticipantFolders.push({ name: participant.folder_1.trim(), path: participant.folder_1_path?.trim() || undefined });
+      }
+      if (participant.folder_2?.trim()) {
+        editingParticipantFolders.push({ name: participant.folder_2.trim(), path: participant.folder_2_path?.trim() || undefined });
+      }
+      if (participant.folder_3?.trim()) {
+        editingParticipantFolders.push({ name: participant.folder_3.trim(), path: participant.folder_3_path?.trim() || undefined });
+      }
+    }
+    renderEditFolderChips();
+
+    // 1.2.0 per-participant additive-default toggle. Default true when
+    // the field is missing (legacy participants pre-flag, or new ones
+    // before they're persisted), matching the DB column default.
+    const includeDefaultElEdit = document.getElementById('edit-include-default-folder');
+    if (includeDefaultElEdit) {
+      includeDefaultElEdit.checked = participant.include_default_folder !== false;
+    }
 
     // Load driver face panels (replaces old presetFaceManager)
     if (typeof driverFaceManagerMulti !== 'undefined' && currentPreset) {
@@ -1266,6 +1678,16 @@ async function openParticipantEditModal(rowIndex = -1) {
     document.getElementById('edit-folder-1').value = '';
     document.getElementById('edit-folder-2').value = '';
     document.getElementById('edit-folder-3').value = '';
+
+    // 1.2.0 — reset the chip editor for a brand-new participant.
+    editingParticipantFolders = [];
+    renderEditFolderChips();
+    // Default the per-participant additive-default toggle to checked for
+    // new participants — this matches what most users want out of the box.
+    const includeDefaultElNew = document.getElementById('edit-include-default-folder');
+    if (includeDefaultElNew) {
+      includeDefaultElNew.checked = true;
+    }
 
     // Show driver face panels for new participants
     if (typeof driverFaceManagerMulti !== 'undefined' && currentPreset) {
@@ -1362,9 +1784,28 @@ async function saveParticipantEdit(closeAfterSave = true) {
     plate_number: document.getElementById('edit-plate-number').value.trim().toUpperCase(),
     sponsor: document.getElementById('edit-sponsor').value.trim(),
     metatag: document.getElementById('edit-metatag').value.trim(),
-    folder_1: document.getElementById('edit-folder-1').value,
-    folder_2: document.getElementById('edit-folder-2').value,
-    folder_3: document.getElementById('edit-folder-3').value,
+    // 1.2.0 — canonical folders[] from the chip editor. The DB layer
+    // (savePresetParticipantsSupabase) dual-writes the first three into
+    // folder_1/2/3 + folder_*_path automatically, so we don't set those
+    // fields here. Empty array is fine.
+    folders: editingParticipantFolders.map(f => ({
+      name: f.name,
+      ...(f.path ? { path: f.path } : {})
+    })),
+    // 1.2.0 — per-participant additive-default flag. Default true when
+    // the checkbox is missing from the DOM (defensive).
+    include_default_folder: (() => {
+      const chk = document.getElementById('edit-include-default-folder');
+      return chk ? !!chk.checked : true;
+    })(),
+    // Keep these explicitly cleared so the dual-write at the DB layer is
+    // the only source of truth for the legacy slots.
+    folder_1: null,
+    folder_2: null,
+    folder_3: null,
+    folder_1_path: null,
+    folder_2_path: null,
+    folder_3_path: null,
     delivery_to_client_id: deliveryToClientId
   };
 
@@ -1389,6 +1830,12 @@ async function saveParticipantEdit(closeAfterSave = true) {
 
   // Refresh table display
   loadParticipantsIntoTable(participantsData);
+
+  // 1.2.0 — keep the global "Personalize your Folder Organization"
+  // section in sync with the chip area. A new folder created inside
+  // the participant modal must show up immediately in the unified
+  // preset-level view.
+  renderCustomFolders();
 
   // Ri-applica l'ordinamento salvato
   if (sortState) {
@@ -1664,36 +2111,127 @@ function scrollToParticipant(numero) {
 }
 
 /**
- * Remove a custom folder
+ * 1.2.0 — Count how many participants currently reference a folder
+ * by name (case-insensitive). Looks at both folders[] and the legacy
+ * folder_1/2/3 slots. Used to surface "this affects N participants"
+ * confirmations on rename / remove.
  */
-function removeCustomFolder(folderName) {
-  const index = customFolders.findIndex(f => (getFolderDisplayName(f)) === folderName);
-  if (index > -1) {
-    customFolders.splice(index, 1);
-    renderCustomFolders();
-    updateFolderSelects();
+function countParticipantsUsingFolder(folderName) {
+  const target = (folderName || '').trim().toLowerCase();
+  if (!target) return 0;
+  let count = 0;
+  for (const p of (participantsData || [])) {
+    let matched = false;
+    if (Array.isArray(p?.folders)) {
+      for (const f of p.folders) {
+        if (f?.name && f.name.trim().toLowerCase() === target) { matched = true; break; }
+      }
+    }
+    if (!matched) {
+      if ((p?.folder_1 || '').trim().toLowerCase() === target) matched = true;
+      else if ((p?.folder_2 || '').trim().toLowerCase() === target) matched = true;
+      else if ((p?.folder_3 || '').trim().toLowerCase() === target) matched = true;
+    }
+    if (matched) count++;
   }
+  return count;
 }
 
 /**
- * Edit a custom folder name
+ * Remove a folder from EVERYWHERE — preset-global list AND every
+ * participant's folders[] AND legacy folder_1/2/3 slots. Asks for
+ * confirmation when participants are affected so the user knows the
+ * blast radius.
  */
-let editingFolderIndex = -1;
+function removeCustomFolder(folderName) {
+  const target = (folderName || '').trim();
+  if (!target) return;
+  const targetLower = target.toLowerCase();
 
-function editCustomFolder(index) {
-  if (index < 0 || index >= customFolders.length) {
-    return;
+  const usageCount = countParticipantsUsingFolder(target);
+  if (usageCount > 0) {
+    const ok = confirm(
+      `Remove "${target}"?\n\n` +
+      `This folder is used by ${usageCount} participant${usageCount === 1 ? '' : 's'}. ` +
+      `Removing it here will also remove it from each of them.`
+    );
+    if (!ok) return;
   }
 
-  editingFolderIndex = index;
-  const folder = customFolders[index];
-  const oldFolderName = getFolderDisplayName(folder);
-  const oldFolderPath = typeof folder === 'string' ? '' : (folder.path || '');
+  // 1. Remove from preset-global legacy list (if present).
+  const idx = customFolders.findIndex(f => getFolderDisplayName(f).toLowerCase() === targetLower);
+  if (idx > -1) customFolders.splice(idx, 1);
+
+  // 2. Remove from every participant's folders[] and legacy slots.
+  participantsData.forEach(p => {
+    if (Array.isArray(p?.folders)) {
+      p.folders = p.folders.filter(f => !f?.name || f.name.trim().toLowerCase() !== targetLower);
+    }
+    if ((p?.folder_1 || '').trim().toLowerCase() === targetLower) {
+      p.folder_1 = ''; p.folder_1_path = '';
+    }
+    if ((p?.folder_2 || '').trim().toLowerCase() === targetLower) {
+      p.folder_2 = ''; p.folder_2_path = '';
+    }
+    if ((p?.folder_3 || '').trim().toLowerCase() === targetLower) {
+      p.folder_3 = ''; p.folder_3_path = '';
+    }
+  });
+
+  renderCustomFolders();
+  updateFolderSelects();
+  loadParticipantsIntoTable(participantsData);
+}
+
+/**
+ * 1.2.0 — Edit a folder by NAME (not by index). The folder may exist
+ * only at preset-level, only on participants, or both — this function
+ * doesn't care: it pre-fills the modal with the current name+path,
+ * and saveEditedFolderName() propagates the change everywhere.
+ */
+let editingFolderOriginalName = null;
+
+function editCustomFolder(folderNameOrLegacyIndex) {
+  // Backward-compatibility: some chip onclick handlers still pass an
+  // index into customFolders. Resolve to a name first.
+  let oldFolderName, oldFolderPath;
+  if (typeof folderNameOrLegacyIndex === 'number') {
+    const idx = folderNameOrLegacyIndex;
+    if (idx < 0 || idx >= customFolders.length) return;
+    const folder = customFolders[idx];
+    oldFolderName = getFolderDisplayName(folder);
+    oldFolderPath = typeof folder === 'string' ? '' : (folder.path || '');
+  } else {
+    oldFolderName = (folderNameOrLegacyIndex || '').trim();
+    if (!oldFolderName) return;
+    // Try to find the canonical {name, path} from any source.
+    const targetLower = oldFolderName.toLowerCase();
+    const fromPreset = customFolders.find(f => getFolderDisplayName(f).toLowerCase() === targetLower);
+    if (fromPreset && typeof fromPreset === 'object') {
+      oldFolderPath = fromPreset.path || '';
+    } else {
+      // Look in participants for a path on this folder name.
+      oldFolderPath = '';
+      outer:
+      for (const p of (participantsData || [])) {
+        if (Array.isArray(p?.folders)) {
+          for (const f of p.folders) {
+            if (f?.name && f.name.trim().toLowerCase() === targetLower && f.path) {
+              oldFolderPath = f.path;
+              break outer;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  editingFolderOriginalName = oldFolderName;
 
   // Open modal and populate with current name and path
   document.getElementById('edit-folder-name-input').value = oldFolderName;
   const pathInput = document.getElementById('edit-folder-path-input');
-  if (pathInput) pathInput.value = oldFolderPath;
+  if (pathInput) pathInput.value = oldFolderPath || '';
   document.getElementById('edit-folder-modal').classList.add('show');
 
   // Focus on input
@@ -1706,7 +2244,7 @@ function editCustomFolder(index) {
 
 function closeEditFolderModal() {
   document.getElementById('edit-folder-modal').classList.remove('show');
-  editingFolderIndex = -1;
+  editingFolderOriginalName = null;
 }
 
 /**
@@ -1731,12 +2269,25 @@ async function browseFolderPath() {
     title: 'Select Destination Folder'
   });
   if (result && result.filePaths && result.filePaths.length > 0) {
+    const chosenPath = result.filePaths[0];
     const pathInput = document.getElementById('folder-path-input');
-    if (pathInput) pathInput.value = result.filePaths[0];
-    // Also save to localStorage for this device
+    if (pathInput) pathInput.value = chosenPath;
+
+    // 1.2.0 — auto-fill the name field with the basename of the chosen
+    // folder when the user hasn't typed anything yet. Saves them from
+    // having to repeat the same string twice.
     const nameInput = document.getElementById('folder-name-input');
+    if (nameInput && !nameInput.value.trim()) {
+      // Take the last non-empty segment from the path. Works for both
+      // POSIX (/foo/bar) and Windows-style (C:\foo\bar) separators.
+      const segments = chosenPath.split(/[\\/]/).filter(s => s.length > 0);
+      const basename = segments.length > 0 ? segments[segments.length - 1] : '';
+      if (basename) nameInput.value = basename;
+    }
+
+    // Also save to localStorage for this device.
     if (nameInput && nameInput.value.trim() && currentPreset && currentPreset.id) {
-      updateLocalFolderPath(currentPreset.id, nameInput.value.trim(), result.filePaths[0]);
+      updateLocalFolderPath(currentPreset.id, nameInput.value.trim(), chosenPath);
     }
   }
 }
@@ -1895,51 +2446,118 @@ function markPresetCardInvalid(presetId, invalidPaths) {
   }
 }
 
+/**
+ * 1.2.0 — Save the edited folder. Identified by `editingFolderOriginalName`
+ * (set by editCustomFolder), the change propagates to:
+ *   - the preset-global customFolders list (if the entry was there)
+ *   - every participant's folders[] that referenced the old name
+ *   - every participant's legacy folder_1/2/3 slots that still hold it
+ *
+ * Asks for confirmation if the rename would affect more than zero
+ * participants, so the user is aware of the blast radius. A merge case
+ * is rejected explicitly: if the new name collides with another
+ * existing folder (case-insensitive), we stop and tell the user — they
+ * should instead remove the duplicate first.
+ */
 function saveEditedFolderName() {
-  if (editingFolderIndex < 0 || editingFolderIndex >= customFolders.length) {
+  const oldFolderName = (editingFolderOriginalName || '').trim();
+  if (!oldFolderName) {
+    closeEditFolderModal();
     return;
   }
 
   const newFolderName = document.getElementById('edit-folder-name-input').value.trim();
-
   if (!newFolderName) {
     alert('Folder name cannot be empty!');
     document.getElementById('edit-folder-name-input').focus();
     return;
   }
 
-  const oldFolder = customFolders[editingFolderIndex];
-  const oldFolderName = getFolderDisplayName(oldFolder);
+  const oldLower = oldFolderName.toLowerCase();
+  const newLower = newFolderName.toLowerCase();
+  const isRename = oldLower !== newLower;
 
-  // Check if the new name already exists (and it's not the same folder)
-  if (customFolders.some(f => (getFolderDisplayName(f)) === newFolderName) && newFolderName !== oldFolderName) {
-    alert('A folder with this name already exists!');
-    document.getElementById('edit-folder-name-input').focus();
-    return;
+  // Reject collisions with another folder (rename case only). We don't
+  // attempt a silent merge — that would lose the path of one of the two.
+  if (isRename) {
+    const collisionInPreset = customFolders.some(
+      f => getFolderDisplayName(f).toLowerCase() === newLower
+    );
+    const collisionInParticipants = (participantsData || []).some(p => {
+      if (Array.isArray(p?.folders) && p.folders.some(f => f?.name && f.name.trim().toLowerCase() === newLower)) return true;
+      if ((p?.folder_1 || '').trim().toLowerCase() === newLower) return true;
+      if ((p?.folder_2 || '').trim().toLowerCase() === newLower) return true;
+      if ((p?.folder_3 || '').trim().toLowerCase() === newLower) return true;
+      return false;
+    });
+    if (collisionInPreset || collisionInParticipants) {
+      alert(
+        `A folder named "${newFolderName}" already exists in this preset. ` +
+        `Pick a different name, or remove the duplicate first if you want to merge them.`
+      );
+      document.getElementById('edit-folder-name-input').focus();
+      return;
+    }
   }
 
   // Read optional path
   const pathInput = document.getElementById('edit-folder-path-input');
   const newFolderPath = pathInput ? pathInput.value.trim() : '';
 
-  // Update folder as object
+  // Confirm if the change touches participants. Skip the prompt if
+  // nothing is going to change semantically (same name, same path).
+  const usageCount = countParticipantsUsingFolder(oldFolderName);
+  const pathChanged = (() => {
+    // Compare with current path stored on the preset-global entry, if any.
+    const presetEntry = customFolders.find(f => getFolderDisplayName(f).toLowerCase() === oldLower);
+    const oldPath = (presetEntry && typeof presetEntry === 'object') ? (presetEntry.path || '') : '';
+    return oldPath !== newFolderPath;
+  })();
+  if (usageCount > 0 && (isRename || pathChanged)) {
+    const verb = isRename ? `Renaming "${oldFolderName}" to "${newFolderName}"` : `Updating the path of "${oldFolderName}"`;
+    const ok = confirm(
+      `${verb} will update ${usageCount} participant${usageCount === 1 ? '' : 's'} that ` +
+      `currently use${usageCount === 1 ? 's' : ''} this folder. Proceed?`
+    );
+    if (!ok) return;
+  }
+
   const updatedFolder = { name: newFolderName };
   if (newFolderPath) updatedFolder.path = newFolderPath;
-  customFolders[editingFolderIndex] = updatedFolder;
 
-  // Update all participants that have this folder assigned (name AND path)
-  participantsData.forEach(participant => {
-    if (participant.folder_1 === oldFolderName) {
-      participant.folder_1 = newFolderName;
-      participant.folder_1_path = newFolderPath;
+  // 1. Preset-global list: replace existing entry (if any), or insert.
+  const presetIdx = customFolders.findIndex(
+    f => getFolderDisplayName(f).toLowerCase() === oldLower
+  );
+  if (presetIdx > -1) {
+    customFolders[presetIdx] = updatedFolder;
+  }
+  // (We don't auto-insert into customFolders for participant-only
+  //  folders. The merged view in renderCustomFolders shows them either
+  //  way, and saving the preset persists them via participants.folders[].)
+
+  // 2. Every participant: rewrite folders[] entries that match, and
+  //    rewrite legacy slots so 1.1.4 dual-write stays in sync.
+  participantsData.forEach(p => {
+    if (Array.isArray(p?.folders)) {
+      p.folders = p.folders.map(f => {
+        if (f?.name && f.name.trim().toLowerCase() === oldLower) {
+          return { name: newFolderName, ...(newFolderPath ? { path: newFolderPath } : {}) };
+        }
+        return f;
+      });
     }
-    if (participant.folder_2 === oldFolderName) {
-      participant.folder_2 = newFolderName;
-      participant.folder_2_path = newFolderPath;
+    if ((p?.folder_1 || '').trim().toLowerCase() === oldLower) {
+      p.folder_1 = newFolderName;
+      p.folder_1_path = newFolderPath;
     }
-    if (participant.folder_3 === oldFolderName) {
-      participant.folder_3 = newFolderName;
-      participant.folder_3_path = newFolderPath;
+    if ((p?.folder_2 || '').trim().toLowerCase() === oldLower) {
+      p.folder_2 = newFolderName;
+      p.folder_2_path = newFolderPath;
+    }
+    if ((p?.folder_3 || '').trim().toLowerCase() === oldLower) {
+      p.folder_3 = newFolderName;
+      p.folder_3_path = newFolderPath;
     }
   });
 
@@ -1957,50 +2575,138 @@ function saveEditedFolderName() {
 }
 
 /**
- * Render custom folders list
+ * 1.2.0 — Collect every distinct folder used in this preset, merging:
+ *   1. customFolders (legacy global preset list)
+ *   2. each participant's folders[]
+ *   3. legacy folder_1/2/3 slots from un-normalized participant rows
+ *
+ * Returns an array of:
+ *   { name, path?, sourceIndex, source: 'preset'|'participant',
+ *     usageCount }
+ * sorted by name. Duplicate names (case-insensitive) collapse into one
+ * entry; if a folder appears both as a preset-global and as a
+ * participant assignment, source is 'preset' (so the user keeps the
+ * direct edit/remove controls). usageCount counts how many participants
+ * currently reference the folder.
+ */
+function collectAllPresetFolders() {
+  const lower = (s) => (s || '').toLowerCase();
+  const map = new Map(); // lowercased name → entry
+
+  // 1. Preset-global list (legacy). Keep the index so editCustomFolder
+  // can still resolve the right slot when clicked.
+  customFolders.forEach((f, idx) => {
+    const name = getFolderDisplayName(f);
+    if (!name) return;
+    const path = typeof f === 'object' && f !== null ? (f.path || '') : '';
+    map.set(lower(name), {
+      name,
+      path,
+      source: 'preset',
+      sourceIndex: idx,
+      usageCount: 0,
+    });
+  });
+
+  // 2 + 3. Walk every participant's folders[] and legacy slots.
+  (participantsData || []).forEach(p => {
+    const seenForThisParticipant = new Set();
+
+    const upsert = (rawName, rawPath) => {
+      const name = (rawName || '').trim();
+      if (!name) return;
+      const key = lower(name);
+      // Each participant counts once per distinct folder, even if it
+      // appears in both folders[] and a legacy slot (defensive against
+      // un-migrated rows that still have folder_1 + folders[]).
+      if (seenForThisParticipant.has(key)) return;
+      seenForThisParticipant.add(key);
+
+      const path = (rawPath || '').trim() || '';
+      const existing = map.get(key);
+      if (existing) {
+        existing.usageCount += 1;
+        // Inherit a path if the preset-global entry didn't have one.
+        if (!existing.path && path) existing.path = path;
+      } else {
+        map.set(key, {
+          name,
+          path,
+          source: 'participant',
+          sourceIndex: -1,
+          usageCount: 1,
+        });
+      }
+    };
+
+    if (Array.isArray(p?.folders)) {
+      for (const f of p.folders) {
+        if (f && typeof f === 'object') upsert(f.name, f.path);
+      }
+    }
+    upsert(p?.folder_1, p?.folder_1_path);
+    upsert(p?.folder_2, p?.folder_2_path);
+    upsert(p?.folder_3, p?.folder_3_path);
+  });
+
+  return Array.from(map.values()).sort((a, b) =>
+    a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+  );
+}
+
+/**
+ * Render custom folders list. 1.2.0 — shows the unified view: folders
+ * declared at preset level (legacy customFolders) PLUS folders
+ * referenced by any participant's chip area. Preset-level entries keep
+ * the inline edit/remove controls; participant-derived entries are
+ * read-only here and show a "In use by N" badge — to remove them the
+ * user opens the participant and removes the chip.
  */
 function renderCustomFolders() {
   const foldersList = document.getElementById('custom-folders-list');
   const emptyMessage = document.getElementById('empty-folders-message');
 
-  if (customFolders.length === 0) {
-    if (emptyMessage) {
-      emptyMessage.style.display = 'block';
-    }
-    // Clear folder chips
+  // Clear existing chips first so we can rebuild from scratch each call.
+  if (foldersList) {
     const existingChips = foldersList.querySelectorAll('.folder-chip');
     existingChips.forEach(chip => chip.remove());
+  }
+
+  const all = collectAllPresetFolders();
+
+  if (all.length === 0) {
+    if (emptyMessage) emptyMessage.style.display = 'block';
     return;
   }
+  if (emptyMessage) emptyMessage.style.display = 'none';
 
-  if (emptyMessage) {
-    emptyMessage.style.display = 'none';
-  }
-
-  // Clear existing chips
-  const existingChips = foldersList.querySelectorAll('.folder-chip');
-  existingChips.forEach(chip => chip.remove());
-
-  // Add folder chips
-  customFolders.forEach((folder, index) => {
-    const folderName = getFolderDisplayName(folder);
-    const folderPath = typeof folder === 'string' ? '' : (folder.path || '');
+  // Render each merged entry.
+  all.forEach(entry => {
+    const folderPath = entry.path;
     const chip = document.createElement('div');
     chip.className = 'folder-chip';
     const pathHtml = folderPath
       ? `<span class="folder-chip-path" title="${escapeHtml(folderPath)}">${escapeHtml(shortenPath(folderPath))}</span>`
       : '';
+    const usageBadge = entry.usageCount > 0
+      ? `<span class="folder-chip-usage" title="Used by ${entry.usageCount} participant(s)">${entry.usageCount} 🏎️</span>`
+      : '';
+    // 1.2.0 — every folder is editable/removable from here, regardless
+    // of where it was originally created. editCustomFolder() and
+    // removeCustomFolder() are by-name and propagate across every
+    // participant that references the folder, so the user can manage
+    // the whole preset's folder catalog from this single section.
+    const actionsHtml = `
+      <button type="button" class="folder-chip-edit" onclick="editCustomFolder('${escapeHtml(entry.name)}')" title="Edit folder name and path">✏️</button>
+      <button type="button" class="folder-chip-remove" onclick="removeCustomFolder('${escapeHtml(entry.name)}')" title="Remove folder from preset and every participant">×</button>
+    `;
     chip.innerHTML = `
       <div class="folder-chip-info">
-        <span class="folder-chip-name">📁 ${escapeHtml(folderName)}</span>
+        <span class="folder-chip-name">📁 ${escapeHtml(entry.name)}</span>
         ${pathHtml}
       </div>
-      <button type="button" class="folder-chip-edit" onclick="editCustomFolder(${index})" title="Edit folder">
-        ✏️
-      </button>
-      <button type="button" class="folder-chip-remove" onclick="removeCustomFolder('${escapeHtml(folderName)}')" title="Remove folder">
-        ×
-      </button>
+      ${usageBadge}
+      ${actionsHtml}
     `;
     foldersList.appendChild(chip);
   });
@@ -2084,6 +2790,10 @@ async function editPreset(presetId) {
       allowExternalElEdit.checked = currentPreset.allow_external_person_recognition === true;
       allowExternalElEdit.disabled = false;
     }
+
+    // (1.2.0 — the additive-default-folder flag is now per-participant,
+    // loaded from `participant.include_default_folder` inside the edit
+    // modal — see openParticipantEditModal.)
 
     // Populate sport category dropdown with current preset's category
     populateSportCategoryDropdown(currentPreset.category_id);
@@ -3017,23 +3727,48 @@ async function savePreset() {
 
     // Use participants data from memory (already updated via modal)
     // ⚠️ CRITICAL FIX: Include ID to enable UPSERT (UPDATE existing instead of INSERT new)
-    const participants = participantsData.map(p => ({
-      id: p.id || undefined, // ✅ Include ID for UPSERT logic
-      numero: p.numero || '',
-      nome: getDriverNamesFromParticipant(p).join(', ') || p.nome || '',
-      categoria: p.categoria || '',
-      squadra: p.squadra || '',
-      plate_number: p.plate_number || '',
-      sponsor: p.sponsor || '',
-      metatag: p.metatag || '',
-      folder_1: p.folder_1 || '',
-      folder_2: p.folder_2 || '',
-      folder_3: p.folder_3 || '',
-      folder_1_path: getFolderPath(p.folder_1) || p.folder_1_path || '',
-      folder_2_path: getFolderPath(p.folder_2) || p.folder_2_path || '',
-      folder_3_path: getFolderPath(p.folder_3) || p.folder_3_path || '',
-      delivery_to_client_id: p.delivery_to_client_id || null
-    }));
+    //
+    // 1.2.0 — Forward both the canonical `folders` array (set by the
+    // chip editor) AND the per-participant `include_default_folder`
+    // flag. The DB layer (savePresetParticipantsSupabase →
+    // applyDualWriteFolders) will derive folder_1/2/3 from folders[]
+    // for 1.1.4 backward compatibility, so we no longer need to
+    // populate the legacy slots here. Falling back to the legacy
+    // fields only when folders[] is missing protects rows that
+    // haven't been opened in the new chip editor yet.
+    const participants = participantsData.map(p => {
+      const hasNewFolders = Array.isArray(p.folders);
+      return {
+        id: p.id || undefined, // ✅ Include ID for UPSERT logic
+        numero: p.numero || '',
+        nome: getDriverNamesFromParticipant(p).join(', ') || p.nome || '',
+        categoria: p.categoria || '',
+        squadra: p.squadra || '',
+        plate_number: p.plate_number || '',
+        sponsor: p.sponsor || '',
+        metatag: p.metatag || '',
+
+        // 1.2.0 canonical folder array — drives the dual-write at the DB layer.
+        folders: hasNewFolders ? p.folders : undefined,
+        // 1.2.0 per-participant additive-default flag. Default true
+        // when the field is missing (matches the DB column default).
+        include_default_folder: p.include_default_folder !== false,
+
+        // Legacy slots: only forward when folders[] is absent (i.e. the
+        // user hasn't touched the new chip editor yet). When folders[]
+        // IS present, the DB layer derives these from it via
+        // applyDualWriteFolders, so we leave them undefined to avoid
+        // overwriting that derivation with stale renderer state.
+        folder_1: hasNewFolders ? undefined : (p.folder_1 || ''),
+        folder_2: hasNewFolders ? undefined : (p.folder_2 || ''),
+        folder_3: hasNewFolders ? undefined : (p.folder_3 || ''),
+        folder_1_path: hasNewFolders ? undefined : (getFolderPath(p.folder_1) || p.folder_1_path || ''),
+        folder_2_path: hasNewFolders ? undefined : (getFolderPath(p.folder_2) || p.folder_2_path || ''),
+        folder_3_path: hasNewFolders ? undefined : (getFolderPath(p.folder_3) || p.folder_3_path || ''),
+
+        delivery_to_client_id: p.delivery_to_client_id || null
+      };
+    });
 
     // Disable save button during operation
     const saveBtn = document.getElementById('save-preset-btn');
@@ -3052,7 +3787,7 @@ async function savePreset() {
         category_id: sportCategoryId,
         custom_folders: customFolders,
         // Issue #104 — preset-scope driver filter flag
-        allow_external_person_recognition: allowExternalPersons
+        allow_external_person_recognition: allowExternalPersons,
       };
 
       const updateResponse = await window.api.invoke('supabase-update-participant-preset', {
@@ -3071,7 +3806,7 @@ async function savePreset() {
         category_id: sportCategoryId,
         custom_folders: customFolders,
         // Issue #104 — preset-scope driver filter flag
-        allow_external_person_recognition: allowExternalPersons
+        allow_external_person_recognition: allowExternalPersons,
       };
 
       const createResponse = await window.api.invoke('supabase-create-participant-preset', presetData);
@@ -4723,6 +5458,13 @@ window.importCsvPreset = importCsvPreset;
 window.navigateToParticipants = navigateToParticipants;
 window.downloadCsvTemplate = downloadCsvTemplate;
 window.addCustomFolder = addCustomFolder;
+window.addParticipantFolder = addParticipantFolder; // 1.2.0
+window.openAddParticipantFolderModal = openAddParticipantFolderModal; // 1.2.0
+window.closeParticipantFolderModal = closeParticipantFolderModal;     // 1.2.0
+window.confirmAddParticipantFolder = confirmAddParticipantFolder;     // 1.2.0
+window.browseParticipantFolderPath = browseParticipantFolderPath;     // 1.2.0
+window.clearParticipantFolderPath = clearParticipantFolderPath;       // 1.2.0
+window.copySearchToCreateName = copySearchToCreateName;               // 1.2.0
 window.removeCustomFolder = removeCustomFolder;
 window.closeFolderNameModal = closeFolderNameModal;
 window.confirmAddFolder = confirmAddFolder;
@@ -4787,4 +5529,166 @@ document.addEventListener('DOMContentLoaded', function() {
   window.api.receive('csv-template-saved', (filePath) => {
     showNotification('CSV template saved successfully', 'success');
   });
+
+  // (Note: the "+ Add folder" click delegate is registered at module
+  // top-level, NOT inside this DOMContentLoaded callback — see the
+  // block right after this DOMContentLoaded handler closes. Otherwise
+  // it would never register if DOMContentLoaded had already fired by
+  // the time this script ran.)
 });
+
+// ----------------------------------------------------------------
+// 1.2.0 — chip-based folder editor (per participant) wiring.
+// The "+ Add folder" button opens the SAME folder-name-modal used by
+// the global "Personalize your Folder Organization" section. That
+// modal lets the user type a name AND optionally pick an absolute
+// path (handy when the folder physically exists on disk already and
+// the user wants to deliver into it). The dispatch is governed by
+// `addFolderContext` — see addParticipantFolder() / confirmAddFolder.
+//
+// Event-delegation registered at top-level (not gated on DOMContentLoaded):
+// `document.addEventListener('click', ...)` works regardless of whether
+// the DOM is ready, because the bubble path traverses elements that
+// don't need to exist yet. Putting the registration inside a
+// DOMContentLoaded callback would silently fail if the event had
+// already fired by the time the script ran (race condition on hot
+// reload or async script loading), which is the bug we ran into.
+// ----------------------------------------------------------------
+document.addEventListener('click', (e) => {
+  const target = e.target;
+  if (!target || !target.closest) return;
+  const addBtn = target.closest('#edit-folder-add-btn');
+  if (!addBtn) return;
+  e.preventDefault();
+  e.stopPropagation();
+  console.log('[Folders] + Add folder clicked → opening modal');
+  if (typeof addParticipantFolder === 'function') {
+    addParticipantFolder();
+  } else {
+    console.error('[Folders] addParticipantFolder is not defined');
+  }
+});
+
+// 1.2.0 — placeholder pills inside the participant Add Folder modal.
+// Click a pill ({number}, {name}, etc.) to insert it into the Folder
+// Name input at the current caret position. Mirrors the Photo Mechanic
+// / IPTC Pro template-shortcut pattern. Top-level delegate for the
+// same robustness reasons as the "+ Add folder" delegate above.
+document.addEventListener('click', (e) => {
+  const target = e.target;
+  if (!target || !target.closest) return;
+  const pill = target.closest(
+    '#participant-folder-modal .placeholder-pill[data-placeholder]'
+  );
+  if (!pill) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const placeholder = pill.getAttribute('data-placeholder');
+  if (!placeholder) return;
+
+  const nameInput = document.getElementById('participant-folder-name-input');
+  if (!nameInput) return;
+
+  // Insert at caret position; if no selection is set (input never
+  // focused), append to the end. Browsers preserve the focus through
+  // mousedown→click on the pill button only if we don't preventDefault
+  // mousedown, so we read the selection BEFORE refocusing.
+  const start = typeof nameInput.selectionStart === 'number' ? nameInput.selectionStart : nameInput.value.length;
+  const end = typeof nameInput.selectionEnd === 'number' ? nameInput.selectionEnd : start;
+  const before = nameInput.value.substring(0, start);
+  const after = nameInput.value.substring(end);
+  nameInput.value = before + placeholder + after;
+
+  // Move caret to just after the inserted placeholder, then refocus.
+  const caret = before.length + placeholder.length;
+  nameInput.focus();
+  try { nameInput.setSelectionRange(caret, caret); } catch (_) { /* some inputs don't support selection */ }
+});
+
+/**
+ * Render the chip list inside #edit-folder-chips-area, reading from
+ * `editingParticipantFolders` (the modal-local state). Each chip exposes
+ * a name, a 🔗 button (path picker), and a × button (remove).
+ */
+function renderEditFolderChips() {
+  const area = document.getElementById('edit-folder-chips-area');
+  if (!area) return;
+  area.innerHTML = '';
+
+  editingParticipantFolders.forEach((folder, index) => {
+    const chip = document.createElement('span');
+    chip.className = 'folder-chip';
+    chip.dataset.index = String(index);
+    if (folder.path) {
+      chip.title = folder.path;
+    }
+
+    const nameEl = document.createElement('span');
+    nameEl.className = 'folder-chip-name';
+    nameEl.textContent = folder.name;
+    chip.appendChild(nameEl);
+
+    if (folder.path) {
+      const pathEl = document.createElement('span');
+      pathEl.className = 'folder-chip-path';
+      pathEl.textContent = shortenPath ? shortenPath(folder.path) : folder.path;
+      chip.appendChild(pathEl);
+    }
+
+    // Pin/path-picker button (🔗). Highlights when a path is set.
+    const pinBtn = document.createElement('button');
+    pinBtn.type = 'button';
+    pinBtn.className = 'folder-chip-pin-btn';
+    pinBtn.textContent = '🔗';
+    pinBtn.dataset.hasPath = folder.path ? 'true' : 'false';
+    pinBtn.title = folder.path ? `Path: ${folder.path}` : 'Set absolute path';
+    pinBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      pickPathForEditingFolder(index);
+    });
+    chip.appendChild(pinBtn);
+
+    // Remove button.
+    const rmBtn = document.createElement('button');
+    rmBtn.type = 'button';
+    rmBtn.className = 'folder-chip-remove';
+    rmBtn.textContent = '×';
+    rmBtn.title = 'Remove this folder';
+    rmBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      editingParticipantFolders.splice(index, 1);
+      renderEditFolderChips();
+    });
+    chip.appendChild(rmBtn);
+
+    area.appendChild(chip);
+  });
+}
+
+/**
+ * Open the path picker dialog for the chip at the given index. Reuses
+ * the existing `select-organization-destination` IPC channel, which
+ * shows a native folder picker. A small confirm() lets the user clear
+ * the pinned path without re-picking.
+ */
+async function pickPathForEditingFolder(index) {
+  const folder = editingParticipantFolders[index];
+  if (!folder) return;
+  // If a path is already set, give the user the option to clear it
+  // (clearer than having to re-open and somehow cancel).
+  if (folder.path) {
+    const action = confirm(
+      `Folder "${folder.name}" is currently pinned to:\n${folder.path}\n\nClick OK to pick a different path, or Cancel to leave it as-is.\n\n` +
+      `(To remove the pin entirely, click Cancel and use the × on the chip, then re-add the folder without a path.)`
+    );
+    if (!action) return;
+  }
+  try {
+    const newPath = await window.api.invoke('select-organization-destination');
+    if (!newPath) return; // user cancelled the native dialog
+    folder.path = newPath;
+    renderEditFolderChips();
+  } catch (err) {
+    console.warn('[Folders] Path picker failed:', err);
+  }
+}

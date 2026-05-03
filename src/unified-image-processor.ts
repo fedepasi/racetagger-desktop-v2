@@ -9,7 +9,7 @@ import { authService } from './auth-service';
 import { getSharp, createImageProcessor } from './utils/native-modules';
 import { rawPreviewExtractor } from './utils/raw-preview-native';
 import { createXmpSidecar } from './utils/xmp-manager';
-import { writeDescriptionToImage, writeKeywordsToImage, writeSpecialInstructions, writeExtendedDescription, writePersonInImage, buildPersonShownString, buildStructuredData, writeStructuredData, writeFullMetadata, ExportDestinationMetadata } from './utils/metadata-writer';
+import { writeDescriptionToImage, writeKeywordsToImage, writeSpecialInstructions, writeExtendedDescription, writePersonInImage, buildPersonShownString, writeFullMetadata, ExportDestinationMetadata } from './utils/metadata-writer';
 import { CleanupManager, getCleanupManager } from './utils/cleanup-manager';
 import { SmartMatcher, MatchResult, AnalysisResult as SmartMatcherAnalysisResult, getParticipantDriverNames, getPrimaryDriverName, normalizeRaceNumber } from './matching/smart-matcher';
 import { CacheManager } from './matching/cache-manager';
@@ -5409,18 +5409,17 @@ class UnifiedImageWorker extends EventEmitter {
       }
     }
 
-    // Write structured RaceTagger data to XMP:Instructions (works for both RAW and JPEG)
-    // This enables metadata-based folder re-organization without depending on JSONL
-    if (analysis && analysis.length > 0) {
-      const structuredData = buildStructuredData(
-        analysis,
-        csvMatch ? (Array.isArray(csvMatch) ? csvMatch : [csvMatch]) : null,
-        this.category,
-        getParticipantDriverNames,
-        this.config.presetId ? { id: this.config.presetId } : undefined
-      );
-      await writeStructuredData(imageFile.originalPath, structuredData);
-    }
+    // ─────────────────────────────────────────────────────────────────────
+    // Privacy fix (April 2026): the legacy XMP:Instructions payload
+    // (`RACETAGGER_V1:{...}`) used to be written here. It included absolute
+    // folder paths from the user's filesystem, which leaked the
+    // photographer's home directory and client folder names into delivered
+    // photos. The payload is no longer written; folder re-organization now
+    // relies on JSONL (primary) + DB (fallback, see execution-log-loader.ts).
+    // The buildStructuredData/writeStructuredData functions are kept as
+    // @deprecated in metadata-writer.ts and will be removed in a later
+    // cleanup. Do NOT re-introduce a write here.
+    // ─────────────────────────────────────────────────────────────────────
 
     // IPTC Pro Safety Net: write global "safe" metadata fields during processing
     // These fields don't depend on participant match and are correct regardless

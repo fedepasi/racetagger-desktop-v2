@@ -93,10 +93,9 @@ import {
   // Delivery & Gallery - post-execution auto-routing
   autoRouteImagesToGalleries,
   getUserPlanLimits,
-  getImagesForR2Upload,
-  markImagesUploadQueued,
 } from './database-service';
 import { r2UploadService } from './r2-upload-service';
+import { triggerR2UploadForExecution } from './r2-upload-trigger';
 // Determine if we're in development mode - will be set after app is ready
 let isDev = true; // Default to true for safety during initialization
 // Don't import @electron/remote at top level - it will be required when needed
@@ -107,7 +106,7 @@ import { authService } from './auth-service';
 import * as piexif from 'piexifjs';
 import { createImageProcessor, initializeImageProcessor } from './utils/native-modules';
 import { createXmpSidecar, xmpSidecarExists } from './utils/xmp-manager';
-import { writeKeywordsToImage, readStructuredData, writeStructuredData, RaceTaggerStructuredData } from './utils/metadata-writer';
+import { writeKeywordsToImage } from './utils/metadata-writer';
 import { rawConverter } from './utils/raw-converter'; // Import for temp cleanup only
 import { rawPreviewExtractor } from './utils/raw-preview-native'; // Native RAW preview extraction
 import { unifiedImageProcessor, UnifiedImageFile, UnifiedProcessingResult, UnifiedProcessorConfig } from './unified-image-processor';
@@ -132,6 +131,23 @@ function safeSend(channel: string, ...args: any[]) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, ...args);
   }
+}
+
+// R2 upload progress listeners are wired exactly once per process lifetime.
+// Previously they were attached inside the post-execution auto-upload block,
+// which (a) leaked listeners on every analysis and (b) only worked when that
+// block ran. With auto-upload removed, listeners are registered up-front so
+// any upload trigger (Deliver button, project_id auto-routing) emits progress
+// events to the renderer.
+let __r2ListenersBound = false;
+function bindR2UploadListenersOnce() {
+  if (__r2ListenersBound) return;
+  r2UploadService.on('upload-progress', (data: any) => safeSend('r2-upload-progress', data));
+  r2UploadService.on('all-uploads-complete', (data: any) => {
+    console.log(`[R2 Upload] Complete: ${data.completed}/${data.total} uploaded, ${data.failed} failed`);
+    safeSend('r2-upload-complete', data);
+  });
+  __r2ListenersBound = true;
 }
 
 // Safe IPC message sending utility with event sender fallback
@@ -478,6 +494,9 @@ function createWindow() {
 
   // Set main window reference for face detection bridge (for IPC communication)
   getFaceDetectionBridge().setMainWindow(mainWindow);
+
+  // Wire R2 upload progress events to renderer (idempotent across reopens)
+  bindR2UploadListenersOnce();
 
   // Enable @electron/remote for this window
   if (remoteEnable) {
@@ -1451,7 +1470,10 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
           unknownFolderName: config.folderOrganization.unknownFolderName || 'Unknown_Numbers',
           includeXmpFiles: config.folderOrganization.includeXmpFiles !== false,
           destinationPath: destinationPath,
-          conflictStrategy: config.folderOrganization.conflictStrategy || 'rename'
+          conflictStrategy: config.folderOrganization.conflictStrategy || 'rename',
+          // (1.2.0 — the "include default folder with custom" flag is now
+          // per-participant on CsvParticipantData; FolderOrganizer reads
+          // it directly at organize time.)
         };
       } catch (error) {
         // Could not get folder organization config, feature disabled
@@ -1617,13 +1639,25 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
           });
         }
 
-        // ==================== POST-EXECUTION: Delivery Auto-Routing ====================
-        // If execution has a project_id, auto-route photos to galleries via delivery rules
+        // ==================== POST-EXECUTION: Delivery (project_id only) ====================
+        //
+        // Rule (decided 2026-04-30): HD upload + delivery routing must NEVER
+        // fire automatically. They run only when:
+        //   1. The user clicks "Deliver" in the results modal (handled by
+        //      `delivery-r2-upload-start` IPC), OR
+        //   2. The execution is bound to a client via the participant preset
+        //      (`executions.project_id` is non-null), in which case the
+        //      gallery auto-routing AND the HD R2 upload run as a coupled
+        //      action — that's the explicit opt-in encoded in the preset.
+        //
+        // The previous implementation also fired R2 uploads whenever the user
+        // simply had `r2_storage_enabled` on their plan. That blanket trigger
+        // is gone: see git history for `// POST-EXECUTION: R2 Original Upload`.
         if (currentExecutionId && !wasCancelled) {
           try {
-            // Check if execution has a project_id
             const executionData = await getExecutionByIdOnline(currentExecutionId);
             if (executionData && executionData.project_id) {
+              // 1) Gallery auto-routing via delivery_rules
               console.log(`[Delivery] Auto-routing photos for project ${executionData.project_id}...`);
               const routingResult = await autoRouteImagesToGalleries(executionData.project_id, currentExecutionId);
               console.log(`[Delivery] Auto-routing complete: ${routingResult.routed} routed to ${routingResult.galleriesCount} galleries, ${routingResult.unmatched} unmatched`);
@@ -1634,99 +1668,35 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
                 unmatched: routingResult.unmatched,
                 galleriesCount: routingResult.galleriesCount,
               });
+
+              // 2) Coupled HD R2 upload — only if routing actually placed
+              // something in a gallery and the plan allows R2.
+              if (routingResult.routed > 0) {
+                try {
+                  const planLimits = await getUserPlanLimits();
+                  if (planLimits.r2_storage_enabled) {
+                    // Use the just-finished batch folder as fallback if the
+                    // execution row hasn't persisted source_folder yet.
+                    const batchFolder = config?.folderPath as string | undefined;
+                    const r2Result = await triggerR2UploadForExecution(currentExecutionId, {
+                      fallbackSourceFolder: batchFolder,
+                    });
+                    if (r2Result.error) {
+                      console.warn(`[R2 Upload] Auto-trigger reported issue: ${r2Result.error}`);
+                    } else {
+                      console.log(`[R2 Upload] Auto-trigger queued ${r2Result.queued} originals for execution ${currentExecutionId}`);
+                    }
+                  } else {
+                    console.log('[R2 Upload] R2 storage not enabled for user, skipping coupled upload');
+                  }
+                } catch (r2Error: any) {
+                  console.warn(`[R2 Upload] Coupled upload failed (non-blocking): ${r2Error.message || r2Error}`);
+                }
+              }
             }
           } catch (routingError: any) {
-            console.warn(`[Delivery] Auto-routing failed (non-blocking): ${routingError.message || routingError}`);
+            console.warn(`[Delivery] Post-execution delivery failed (non-blocking): ${routingError.message || routingError}`);
           }
-        }
-
-        // ==================== POST-EXECUTION: R2 Original Upload ====================
-        // Queue high-res originals for R2 upload in background (fire-and-forget)
-        // Uses originalPath from processing results (real local filesystem paths)
-        if (currentExecutionId && !wasCancelled && results.length > 0) {
-          (async () => {
-            try {
-              const planLimits = await getUserPlanLimits();
-              if (!planLimits.r2_storage_enabled) {
-                console.log('[R2 Upload] R2 storage not enabled for user, skipping');
-                return;
-              }
-
-              // Build a map of DB imageId → local originalPath from processing results
-              // Each result has pendingUpdate.imageId (DB UUID) and originalPath (local filesystem)
-              const localPathMap = new Map<string, { path: string; filename: string; fileSize: number }>();
-              for (const result of results) {
-                const dbImageId = (result as any).pendingUpdate?.imageId;
-                const localPath = (result as any).originalPath;
-                if (dbImageId && localPath) {
-                  localPathMap.set(dbImageId, {
-                    path: localPath,
-                    filename: (result as any).fileName || `${dbImageId}.jpg`,
-                    fileSize: 0, // Will be read from filesystem
-                  });
-                }
-              }
-
-              console.log(`[R2 Upload] Local path map: ${localPathMap.size}/${results.length} results have DB imageId + localPath`);
-
-              if (localPathMap.size === 0) {
-                console.log('[R2 Upload] No images with local paths available — check pendingUpdate.imageId and originalPath on results');
-                return;
-              }
-
-              // Get DB records that need upload (status is null/pending/failed)
-              const imagesToUpload = await getImagesForR2Upload(currentExecutionId!);
-              if (imagesToUpload.length === 0) {
-                console.log('[R2 Upload] No images pending R2 upload in DB (all already uploaded or queued)');
-                return;
-              }
-
-              // Match DB records with local paths — only upload those we have local files for
-              const uploadItems = [];
-              let filesNotAccessible = 0;
-              for (const img of imagesToUpload) {
-                const localInfo = localPathMap.get(img.id);
-                if (localInfo) {
-                  // Get actual file size from filesystem
-                  let actualSize = 0;
-                  try {
-                    const stat = require('fs').statSync(localInfo.path);
-                    actualSize = stat.size;
-                  } catch { filesNotAccessible++; /* file may have been moved */ }
-
-                  if (actualSize > 0) {
-                    uploadItems.push({
-                      imageId: img.id,
-                      executionId: currentExecutionId!,
-                      localPath: localInfo.path,
-                      filename: localInfo.filename,
-                      fileSize: actualSize,
-                    });
-                  }
-                }
-              }
-
-              if (uploadItems.length === 0) {
-                console.log(`[R2 Upload] No original files accessible on disk (${filesNotAccessible} files not found, ${imagesToUpload.length - localPathMap.size} without local path)`);
-                return;
-              }
-
-              console.log(`[R2 Upload] Queueing ${uploadItems.length} originals for R2 upload...`);
-              const imageIds = uploadItems.map((item) => item.imageId);
-              await markImagesUploadQueued(imageIds);
-              r2UploadService.queueExecution(currentExecutionId!, uploadItems);
-              r2UploadService.start();
-
-              // Forward R2 upload progress to renderer
-              r2UploadService.on('upload-progress', (data: any) => safeSend('r2-upload-progress', data));
-              r2UploadService.on('all-uploads-complete', (data: any) => {
-                console.log(`[R2 Upload] Complete: ${data.completed}/${data.total} uploaded, ${data.failed} failed`);
-                safeSend('r2-upload-complete', data);
-              });
-            } catch (r2Error: any) {
-              console.warn(`[R2 Upload] Failed to start (non-blocking): ${r2Error.message || r2Error}`);
-            }
-          })();
         }
 
         // Automatic export to destinations (if configured)
@@ -3315,24 +3285,13 @@ app.whenReady().then(async () => { // Added async here
           throw new Error('Folder organization feature not available');
         }
 
-        // Read JSONL log file
-        const logsDir = path.join(app.getPath('userData'), '.analysis-logs');
-        const logFilePath = path.join(logsDir, `exec_${executionId}.jsonl`);
-
-        if (!fs.existsSync(logFilePath)) {
-          throw new Error(`Log file not found for execution ${executionId}`);
-        }
-
-        // Parse JSONL file
-        const logContent = fs.readFileSync(logFilePath, 'utf-8');
-        const logLines = logContent.trim().split('\n').filter(line => line.trim());
-        const logEvents = logLines.map(line => {
-          try {
-            return JSON.parse(line);
-          } catch (error) {
-            return null;
-          }
-        }).filter(Boolean);
+        // Load the execution event stream via the unified loader.
+        // Today: reads the local JSONL. Future (Phase 3): falls back to
+        // DB reconstruction for cross-machine support — see contract in
+        // src/utils/execution-log-loader.ts. Call sites here do NOT need
+        // to change when that lands.
+        const { loadExecutionLog } = require('./utils/execution-log-loader');
+        const { events: logEvents, logFilePath } = await loadExecutionLog(executionId);
 
         // Block repeated "move" operations - files are no longer at original paths
         if (folderOrganizationConfig.mode === 'move') {
@@ -3346,13 +3305,13 @@ app.whenReady().then(async () => { // Added async here
         }
 
         // Extract image analysis events
-        const imageAnalysisEvents = logEvents.filter(event => event.type === 'IMAGE_ANALYSIS');
+        const imageAnalysisEvents = logEvents.filter((event: any) => event.type === 'IMAGE_ANALYSIS');
 
         // Build correction map from MANUAL_CORRECTION events
         const correctionMap = new Map();
         logEvents
-          .filter(event => event.type === 'MANUAL_CORRECTION')
-          .forEach(event => {
+          .filter((event: any) => event.type === 'MANUAL_CORRECTION')
+          .forEach((event: any) => {
             const key = `${event.fileName}_${event.vehicleIndex}`;
             correctionMap.set(key, event.changes);
           });
@@ -3393,7 +3352,7 @@ app.whenReady().then(async () => { // Added async here
         //      restrictToAllowedNumbers=true, so any leaked phantom number is
         //      filtered into Unknown_Numbers instead of creating a phantom folder.
         // =====================================================================
-        const executionStartEvent: any = logEvents.find(ev => ev.type === 'EXECUTION_START');
+        const executionStartEvent: any = logEvents.find((ev: any) => ev.type === 'EXECUTION_START');
         const presetIdFromStart: string | null =
           executionStartEvent?.participantPreset?.id || executionStartEvent?.participantPresetId || null;
         const presetWasActive = !!presetIdFromStart;
@@ -3468,16 +3427,22 @@ app.whenReady().then(async () => { // Added async here
           destinationPath: resolvedDestinationPath,
           conflictStrategy: folderOrganizationConfig.conflictStrategy || 'rename',
           renamePattern: folderOrganizationConfig.renamePattern || undefined,
+          // (1.2.0 — flag moved to per-participant; FolderOrganizer reads
+          // csvData.include_default_folder at organize time.)
           // Issue #105 Point 2 hardening (defense-in-depth)
           allowedNumbers: allowedNumbersFromPreset,
           restrictToAllowedNumbers: allowedNumbersFromPreset !== undefined,
         });
 
-        // Process each image — try structured metadata first, JSONL as fallback
+        // Process each image — JSONL is the authoritative source.
+        // Note: prior to April 2026 this loop also tried to read a structured
+        // payload (`RACETAGGER_V1:{...}`) from XMP:Instructions as a "primary"
+        // source. That payload leaked absolute folder paths (privacy issue)
+        // and has been removed. JSONL — already the existing fallback — is
+        // now the only source. Cross-machine re-organization will be served
+        // by a DB-reconstruction path (see execution-log-loader.ts).
         const results = [];
         const errors = [];
-        let metadataHits = 0;
-        let jsonlFallbacks = 0;
         const totalImages = imageAnalysisEvents.length;
         let processedCount = 0;
 
@@ -3519,48 +3484,11 @@ app.whenReady().then(async () => { // Added async here
               continue;
             }
 
-            // === PRIMARY: Try structured metadata from XMP:Instructions ===
+            // === Build raceNumbers + csvDataList from JSONL ===
             let raceNumbers: string[] = [];
             let csvDataList: any[] = [];
-            let usedMetadata = false;
 
-            try {
-              const structuredData = await readStructuredData(originalPath);
-              if (structuredData && structuredData.numbers.length > 0) {
-                // Use metadata as primary source
-                raceNumbers = [...structuredData.numbers];
-
-                // Build csvDataList from structured metadata
-                for (let i = 0; i < structuredData.numbers.length; i++) {
-                  const csvEntry: any = {
-                    numero: structuredData.numbers[i],
-                    nome: structuredData.drivers[i]?.[0] || '',
-                    squadra: structuredData.teams[i] || '',
-                    metatag: structuredData.metatag,
-                  };
-                  // Add folder assignments from structured data
-                  if (structuredData.folders) {
-                    csvEntry.folder_1 = structuredData.folders.folder_1;
-                    csvEntry.folder_2 = structuredData.folders.folder_2;
-                    csvEntry.folder_3 = structuredData.folders.folder_3;
-                    csvEntry.folder_1_path = structuredData.folders.folder_1_path;
-                    csvEntry.folder_2_path = structuredData.folders.folder_2_path;
-                    csvEntry.folder_3_path = structuredData.folders.folder_3_path;
-                  }
-                  csvDataList.push(csvEntry);
-                }
-
-                usedMetadata = true;
-                metadataHits++;
-              }
-            } catch (metaErr) {
-              // Metadata read failed — fall through to JSONL
-            }
-
-            // === FALLBACK: Use JSONL data if metadata unavailable ===
-            if (!usedMetadata) {
-              jsonlFallbacks++;
-
+            {
               // Get final race numbers (apply corrections if any)
               //
               // Issue #105 Point 2: when a participant preset is active we must NOT
@@ -3633,6 +3561,16 @@ app.whenReady().then(async () => { // Added async here
                       categoria: entry.categoria,
                       squadra: entry.squadra,
                       metatag: entry.metatag,
+                      // 1.2.0 — propagate the canonical folders[] coming from
+                      // the preset (normalized upstream). Legacy slots stay
+                      // alongside as a defensive fallback for code paths
+                      // that bypass normalization.
+                      folders: Array.isArray(entry.folders) ? entry.folders : undefined,
+                      // 1.2.0 — per-participant additive-default flag.
+                      // Defaults to true when the column is missing
+                      // (legacy participants pre-migration), matching the
+                      // DB DEFAULT.
+                      include_default_folder: entry.include_default_folder !== false,
                       folder_1: entry.folder_1,
                       folder_2: entry.folder_2,
                       folder_3: entry.folder_3,
@@ -3675,7 +3613,7 @@ app.whenReady().then(async () => { // Added async here
           }
         }
 
-        console.log(`[Main Process] Folder organization sources: ${metadataHits} from metadata, ${jsonlFallbacks} from JSONL fallback`);
+        console.log(`[Main Process] Folder organization processed ${totalImages} images from JSONL`);
 
         // Issue #105 Point 2 telemetry: surface any phantom-number events the
         // FolderOrganizer's defensive filter caught, so we can spot silent
@@ -3732,24 +3670,15 @@ app.whenReady().then(async () => { // Added async here
     // Check if a move organization was already completed for an execution
     ipcMain.handle('check-organization-move-completed', async (_, executionId: string) => {
       try {
-        const logsDir = path.join(app.getPath('userData'), '.analysis-logs');
-        const logFilePath = path.join(logsDir, `exec_${executionId}.jsonl`);
-
-        if (!fs.existsSync(logFilePath)) {
+        const { loadExecutionLogIfExists } = require('./utils/execution-log-loader');
+        const result = await loadExecutionLogIfExists(executionId);
+        if (!result) {
           return { completed: false };
         }
 
-        const logContent = fs.readFileSync(logFilePath, 'utf-8');
-        const logLines = logContent.trim().split('\n').filter(line => line.trim());
-
-        for (const line of logLines) {
-          try {
-            const event = JSON.parse(line);
-            if (event.type === 'ORGANIZATION_MOVE_COMPLETED') {
-              return { completed: true, timestamp: event.timestamp };
-            }
-          } catch {
-            // Skip malformed lines
+        for (const event of result.events) {
+          if (event.type === 'ORGANIZATION_MOVE_COMPLETED') {
+            return { completed: true, timestamp: event.timestamp };
           }
         }
 
@@ -3835,24 +3764,14 @@ app.whenReady().then(async () => { // Added async here
         return { success: true, data: mockLogData };
       }
 
-      const logsDir = path.join(app.getPath('userData'), '.analysis-logs');
-      const logFilePath = path.join(logsDir, `exec_${executionId}.jsonl`);
+      const { loadExecutionLogIfExists } = require('./utils/execution-log-loader');
+      const result = await loadExecutionLogIfExists(executionId);
 
-      if (!fs.existsSync(logFilePath)) {
+      if (!result) {
         return { success: true, data: [] }; // Return empty array if no log file
       }
 
-      const logContent = fs.readFileSync(logFilePath, 'utf-8');
-      const logLines = logContent.trim().split('\n').filter(line => line.trim());
-      const logEvents = logLines.map(line => {
-        try {
-          return JSON.parse(line);
-        } catch (error) {
-          return null;
-        }
-      }).filter(Boolean);
-
-      return { success: true, data: logEvents };
+      return { success: true, data: result.events };
 
     } catch (error) {
       console.error('[Main Process] Error reading execution log:', error);
@@ -3966,6 +3885,12 @@ app.whenReady().then(async () => { // Added async here
         // Either branch additionally writes `matchStatus`/`matchedBy` so the
         // renderer can transition the photo to "matched" + "corrections"
         // bucket without re-deriving anything.
+        //
+        // `valuesActuallyChanged` is hoisted to this outer scope so the
+        // `image_corrections` insert below can also gate on it — without the
+        // gate the feedback-learning table accumulates the same dedup-noise
+        // we filter out of the JSONB array.
+        let valuesActuallyChanged = true;
         if (imageAnalysisEvent) {
           imageAnalysisEvent.aiResponse = imageAnalysisEvent.aiResponse || {};
           imageAnalysisEvent.aiResponse.vehicles = imageAnalysisEvent.aiResponse.vehicles || [];
@@ -4027,15 +3952,43 @@ app.whenReady().then(async () => { // Added async here
           vehicle.confidence = 1.0;
 
           // Append correction metadata for audit trail / training data.
+          // Dedup guard: if `originalValues` deep-equals `correction.changes`,
+          // the user is just re-saving an already-persisted state (e.g. via
+          // the renderer's autosave loop replaying entries it forgot to drop
+          // from `manualCorrections`, or a back-and-forth nav that re-fires
+          // the same Enter handler). Without this check the same vehicle
+          // accumulates dozens of identical USER_MANUAL records, inflating
+          // the management portal's correction counter and polluting the
+          // training-data feedback loop. We only record an entry when at
+          // least one tracked field actually changed.
           if (!vehicle.corrections) {
             vehicle.corrections = [];
           }
-          vehicle.corrections.push({
-            type: 'USER_MANUAL',
-            timestamp: correction.timestamp,
-            originalValues,
-            newValues: correction.changes,
-          });
+          valuesActuallyChanged = Object.entries(correction.changes).some(
+            ([key, newVal]) => {
+              const oldVal = originalValues[key];
+              // Use JSON.stringify for deep equality on arrays (drivers).
+              // Treat undefined/null as the same "absence" so a save that
+              // explicitly sets a field to null after it was undefined is
+              // not classified as a change.
+              const oldNorm = oldVal === undefined ? null : oldVal;
+              const newNorm = newVal === undefined ? null : newVal;
+              return JSON.stringify(oldNorm) !== JSON.stringify(newNorm);
+            }
+          );
+          if (valuesActuallyChanged) {
+            vehicle.corrections.push({
+              type: 'USER_MANUAL',
+              timestamp: correction.timestamp,
+              originalValues,
+              newValues: correction.changes,
+            });
+          } else if (DEBUG_MODE) {
+            console.log(
+              `[Main Process] Skipping no-op USER_MANUAL record for ${correction.fileName} ` +
+              `vehicle ${correction.vehicleIndex} (originalValues == newValues)`
+            );
+          }
         }
 
         // Update image metadata using exiftool
@@ -4143,7 +4096,20 @@ app.whenReady().then(async () => { // Added async here
         // When a user corrects a race number, we capture the Vehicle DNA
         // (sponsors, team, make, model, livery) that Gemini detected for that crop.
         // The learned-data-enricher will later aggregate these to enrich the preset.
-        try {
+        //
+        // Skip the insert when nothing actually changed — same dedup logic as
+        // the JSONB `vehicle.corrections` array above. Without the gate the
+        // training-data feedback loop sees dozens of "user corrected X to X"
+        // rows per real correction, which (a) skews any learning weights and
+        // (b) wastes RLS-checked DB writes on every autosave tick.
+        if (!valuesActuallyChanged) {
+          if (DEBUG_MODE) {
+            console.log(
+              `[Main Process] Skipping image_corrections insert for ${correction.fileName} ` +
+              `vehicle ${correction.vehicleIndex} (no-op save)`
+            );
+          }
+        } else try {
           const { getSupabaseClient } = await import('./database-service');
           const supabase = getSupabaseClient();
           const userId = authService.getAuthState().user?.id;
@@ -4279,6 +4245,8 @@ app.whenReady().then(async () => { // Added async here
               destinationPath: resolvedDestinationPath,
               conflictStrategy: folderOrgConfig.conflictStrategy || 'rename',
               renamePattern: folderOrgConfig.renamePattern || undefined,
+              // (1.2.0 — flag moved to per-participant; FolderOrganizer
+              // reads csvData.include_default_folder at organize time.)
               // No restriction on allowed numbers for re-org of a manual correction —
               // the user is the source of truth here.
             });
@@ -4744,102 +4712,17 @@ app.whenReady().then(async () => { // Added async here
         await writeKeywordsToImage(effectivePath, keywords, true, 'overwrite');
       }
 
-      // === FIX: Also update XMP:Instructions structured data ===
-      // Folder organization reads XMP:Instructions as PRIMARY source.
-      // Without this update, manual corrections are invisible to folder org
-      // because it finds the old structured data and never falls back to JSONL.
-      //
-      // FIX 2 (missing XMP creation): when the initial analysis wrote no
-      // metadata (metadataWritten=false / metadataSkipReason="no_preset_match",
-      // e.g. ONNX returned 0 vehicles or the number wasn't in the preset),
-      // readStructuredData() returns null. The previous implementation then
-      // silently skipped the XMP update, leaving the file with no structured
-      // data. Folder organization's PRIMARY path therefore could not see the
-      // correction, fell through to the JSONL fallback, and — combined with
-      // the field-name bug in that fallback — routed the image to
-      // Unknown_Numbers even though the user had corrected it. Now we CREATE
-      // a fresh structured-data payload when none exists so the correction is
-      // persisted on the file and picked up by all downstream readers.
-      try {
-        let existingData = await readStructuredData(effectivePath);
-        let created = false;
-
-        if (!existingData && correction.changes.raceNumber) {
-          existingData = {
-            v: 1,
-            numbers: [],
-            drivers: [],
-            teams: [],
-            // We don't have the sport category in scope here — the field is
-            // informational for folder-organizer (numbers/drivers/teams/folders
-            // are what drives routing). Use 'unknown' as a safe placeholder.
-            category: 'unknown',
-            ts: new Date().toISOString(),
-          };
-          created = true;
-        }
-
-        if (existingData && correction.changes.raceNumber) {
-          const idx = correction.vehicleIndex;
-
-          // Update the race number at the correct vehicle index
-          if (idx < existingData.numbers.length) {
-            existingData.numbers[idx] = correction.changes.raceNumber;
-          } else {
-            // Vehicle index beyond current array — pad and set
-            while (existingData.numbers.length <= idx) {
-              existingData.numbers.push('');
-              existingData.drivers.push([]);
-              existingData.teams.push('');
-            }
-            existingData.numbers[idx] = correction.changes.raceNumber;
-          }
-
-          // Update drivers if provided
-          if (correction.changes.drivers) {
-            const driversList = Array.isArray(correction.changes.drivers)
-              ? correction.changes.drivers
-              : [correction.changes.drivers];
-            if (idx < existingData.drivers.length) {
-              existingData.drivers[idx] = driversList;
-            }
-          }
-
-          // Update team if provided
-          if (correction.changes.team) {
-            if (idx < existingData.teams.length) {
-              existingData.teams[idx] = correction.changes.team;
-            }
-          }
-
-          // Update folders from participant match if available
-          if (correction.changes.participantMatch?.entry) {
-            const entry = correction.changes.participantMatch.entry;
-            if (entry.folder_1 || entry.folder_2 || entry.folder_3) {
-              existingData.folders = {
-                folder_1: entry.folder_1 || undefined,
-                folder_2: entry.folder_2 || undefined,
-                folder_3: entry.folder_3 || undefined,
-                folder_1_path: entry.folder_1_path || undefined,
-                folder_2_path: entry.folder_2_path || undefined,
-                folder_3_path: entry.folder_3_path || undefined,
-              };
-            }
-            if (entry.metatag) {
-              existingData.metatag = entry.metatag;
-            }
-          }
-
-          // Update timestamp to reflect the correction
-          existingData.ts = new Date().toISOString();
-
-          await writeStructuredData(effectivePath, existingData);
-          console.log(`[Main Process] ${created ? 'Created' : 'Updated'} XMP:Instructions for ${correction.fileName} (vehicle ${idx} → #${correction.changes.raceNumber})`);
-        }
-      } catch (structuredErr) {
-        // Non-critical: IPTC keywords were already written, JSONL fallback still works
-        if (DEBUG_MODE) console.warn(`[Main Process] Failed to update XMP:Instructions for ${correction.fileName}:`, structuredErr);
-      }
+      // ─────────────────────────────────────────────────────────────────────
+      // Privacy fix (April 2026): the legacy block here used to read-merge-
+      // write the XMP:Instructions `RACETAGGER_V1:{...}` payload to keep
+      // manual corrections in sync with the on-file metadata used by folder
+      // organization. The payload has been removed (it leaked absolute folder
+      // paths). Folder organization now reads MANUAL_CORRECTION events
+      // directly from the JSONL (see correctionMap, ~main.ts:3360+), so the
+      // XMP merge is no longer needed. The IPTC keywords above are still
+      // written normally for the file to remain self-describing for
+      // photo-management software.
+      // ─────────────────────────────────────────────────────────────────────
 
       return { success: true };
 

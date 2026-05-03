@@ -1024,6 +1024,442 @@
   max-width: 200px;
 }
 
+/* 1.2.0 — usage badge on the merged-view folder chips. Shows how many
+   participants reference the folder. */
+.folder-chip-usage {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(34, 197, 94, 0.15);
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  color: #86efac;
+  font-size: 0.7rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Inline label shown instead of edit/remove on participant-derived
+   folders — reminds the user they edit those from inside the
+   participant modal, not here. */
+.folder-chip-readonly-hint {
+  margin-left: 6px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.16);
+  color: var(--text-secondary, #94a3b8);
+  font-size: 0.7rem;
+  font-style: italic;
+  letter-spacing: 0.02em;
+}
+
+/* 1.2.0 — chip + autocomplete UI for the per-participant folders editor */
+.folder-chips-area {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px;
+  border: 1px dashed var(--border-color, #444);
+  border-radius: 6px;
+  min-height: 42px;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.02);
+  margin-bottom: 8px;
+}
+.folder-chips-area:empty::before {
+  content: attr(data-empty-text);
+  color: var(--text-secondary, #94a3b8);
+  font-size: 0.8125rem;
+  font-style: italic;
+  opacity: 0.7;
+}
+
+.folder-chip-add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  border-radius: 16px;
+  color: #60a5fa;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.folder-chip-add-btn:hover {
+  background: rgba(59, 130, 246, 0.22);
+  border-color: #60a5fa;
+  color: #93c5fd;
+}
+
+.folder-chip-pin-btn {
+  background: transparent;
+  border: none;
+  padding: 0 2px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.15s;
+  color: inherit;
+}
+.folder-chip-pin-btn:hover {
+  opacity: 1;
+}
+.folder-chip-pin-btn[data-has-path="true"] {
+  opacity: 1;
+  color: #fbbf24;
+}
+
+/* (1.2.0 — the .folder-autocomplete-* popup styles were removed: the
+   participant Add-folder flow now reuses the existing folder-name-modal
+   instead of a custom autocomplete popup. See participants-manager.js
+   `addParticipantFolder` and `confirmAddFolder`.) */
+
+/*
+ * 1.2.0 — Per-participant Add Folder modal.
+ * Distinct from the global #folder-name-modal (which lives behind the
+ * participant edit modal in stacking order). This modal is dedicated
+ * to the participant edit flow and lets the user pick from existing
+ * preset folders OR create a new one with an optional absolute path.
+ */
+
+/* Force normal block stacking inside the body. Without this override,
+   inherited rules (the same ones that needed `#folder-name-modal
+   .modal-body { display: block }` higher up) collapse the form into
+   ridiculous narrow columns side-by-side. */
+#participant-folder-modal .modal-body {
+  display: block;
+}
+#participant-folder-modal .modal-body > .form-group {
+  display: block;
+  width: 100%;
+  margin-bottom: 1rem;
+}
+#participant-folder-modal .form-group label {
+  color: #fff;
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+}
+#participant-folder-modal .modal-body .folder-modal-tip {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  margin-top: 1rem;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  border-radius: 6px;
+  color: var(--text-secondary, #cbd5e1);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+#participant-folder-modal .modal-body .folder-modal-tip .tip-icon {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(59, 130, 246, 0.18);
+  font-size: 0.95rem;
+}
+#participant-folder-modal .modal-body .folder-modal-tip .tip-content {
+  flex: 1;
+  min-width: 0;
+}
+#participant-folder-modal .modal-body .folder-modal-tip code {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+  font-size: 0.78rem;
+  color: #93c5fd;
+}
+/* Wrap of clickable placeholder pills under the tip text. Each pill
+   inserts its `data-placeholder` value into the Folder Name input at
+   the current caret position when clicked — wired in
+   participants-manager.js (top-level click delegate). */
+.participant-folder-placeholder-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.placeholder-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(59, 130, 246, 0.45);
+  background: rgba(59, 130, 246, 0.12);
+  color: #93c5fd;
+  font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, transform 0.1s ease;
+  user-select: none;
+}
+.placeholder-pill:hover {
+  background: rgba(59, 130, 246, 0.25);
+  border-color: rgba(96, 165, 250, 0.7);
+  color: #bfdbfe;
+}
+.placeholder-pill:active {
+  transform: scale(0.96);
+}
+/* Path picker row: input takes the space, Browse and Clear stay
+   compact next to it. Same layout as the global folder-name-modal. */
+#participant-folder-modal .folder-path-picker {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+#participant-folder-modal .folder-path-picker .form-input {
+  flex: 1;
+  min-width: 0;
+}
+#participant-folder-modal .folder-path-picker .btn {
+  flex-shrink: 0;
+}
+#participant-folder-modal .form-input {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border: 2px solid var(--border-color, #334155);
+  border-radius: 6px;
+  font-size: 1rem;
+  background: var(--input-bg, #fff);
+  color: var(--text-primary, #000);
+  box-sizing: border-box;
+}
+#participant-folder-modal .form-input:focus {
+  outline: none;
+  border-color: var(--accent-color, #3b82f6);
+  box-shadow: 0 0 0 3px var(--accent-color-20, rgba(59, 130, 246, 0.2));
+}
+
+/* Live filter input above the list. Always visible — even short lists
+   are easier to scan with a filter than without one once you've used
+   it twice. The input mirrors the styling of other form-inputs but
+   compactly. */
+.participant-folder-search-row {
+  margin-bottom: 8px;
+}
+.participant-folder-search {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color, #334155);
+  border-radius: 6px;
+  background: var(--input-bg, #fff);
+  color: var(--text-primary, #000);
+  font-size: 0.875rem;
+  box-sizing: border-box;
+}
+.participant-folder-search:focus {
+  outline: none;
+  border-color: var(--accent-color, #3b82f6);
+  box-shadow: 0 0 0 3px var(--accent-color-20, rgba(59, 130, 246, 0.18));
+}
+
+/* Hint shown when the filter matches no existing folder. Offers a
+   one-click bridge to the "Create new" form below by copying the
+   typed text into the Name input. */
+.participant-folder-no-match {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px solid rgba(251, 191, 36, 0.25);
+  border-radius: 6px;
+  color: #fbbf24;
+  font-size: 0.8125rem;
+}
+.participant-folder-no-match .btn-link {
+  background: none;
+  border: none;
+  color: #93c5fd;
+  cursor: pointer;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  padding: 0;
+  text-decoration: underline;
+  white-space: nowrap;
+}
+.participant-folder-no-match .btn-link:hover {
+  color: #bfdbfe;
+}
+
+/* List of existing folders presented as clickable cards. */
+.participant-folder-existing-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 8px;
+  border: 1px solid var(--border-color, #334155);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.participant-folder-existing-list:empty::before {
+  content: attr(data-empty-text);
+  display: block;
+  padding: 12px;
+  color: var(--text-secondary, #94a3b8);
+  font-size: 0.8125rem;
+  font-style: italic;
+  text-align: center;
+}
+.participant-folder-existing-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: rgba(59, 130, 246, 0.06);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+  font-size: 0.875rem;
+  color: #e2e8f0;
+}
+.participant-folder-existing-item:hover {
+  background: rgba(59, 130, 246, 0.16);
+  border-color: rgba(59, 130, 246, 0.4);
+}
+.participant-folder-existing-item.is-already-added {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.participant-folder-existing-item.is-already-added:hover {
+  background: rgba(59, 130, 246, 0.06);
+  border-color: transparent;
+}
+.participant-folder-existing-item .folder-icon {
+  font-size: 1rem;
+}
+.participant-folder-existing-item .folder-name {
+  font-weight: 500;
+  color: #f8fafc;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.participant-folder-existing-item .folder-path {
+  font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+  font-size: 0.7rem;
+  color: var(--text-secondary, #94a3b8);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 240px;
+}
+.participant-folder-existing-item .added-badge {
+  font-size: 0.7rem;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.2);
+  color: #cbd5e1;
+}
+
+/* Divider between "pick existing" and "create new" sections. */
+.participant-folder-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 14px;
+  color: var(--text-secondary, #94a3b8);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+.participant-folder-divider::before,
+.participant-folder-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border-color, #334155);
+}
+
+/*
+ * 1.2.0 — Per-participant "Also export to the default folder" toggle.
+ * Stacked layout: row 1 = [checkbox + title + meta inline], row 2 =
+ * helper text spanning full width. Avoids any odd wrapping caused by
+ * inherited text-align centering and keeps the helper readable on
+ * narrow column widths.
+ */
+.participant-default-folder-toggle {
+  display: block;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: rgba(59, 130, 246, 0.06);
+  border: 1px solid rgba(59, 130, 246, 0.18);
+  text-align: left;
+}
+.participant-default-folder-toggle .toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.participant-default-folder-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: #3b82f6;
+  cursor: pointer;
+}
+.participant-default-folder-toggle label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  margin: 0;
+  text-align: left;
+  flex: 1;
+}
+.participant-default-folder-toggle .toggle-title {
+  font-weight: 600;
+  color: var(--text-primary, #f8fafc);
+}
+.participant-default-folder-toggle .toggle-meta {
+  color: var(--text-secondary, #94a3b8);
+  font-size: 0.8rem;
+  font-weight: 400;
+}
+.participant-default-folder-toggle .toggle-meta code,
+.participant-default-folder-toggle .toggle-hint code {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+  font-size: 0.78rem;
+  color: #93c5fd;
+}
+.participant-default-folder-toggle .toggle-hint {
+  display: block;
+  margin-top: 8px;
+  padding-left: 26px; /* indent under the checkbox to keep visual rhythm */
+  color: var(--text-secondary, #94a3b8);
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
 /* Folder path picker row (input + Browse + Clear) */
 .folder-path-picker {
   display: flex;

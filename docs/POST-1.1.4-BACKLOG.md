@@ -133,16 +133,118 @@ that needs to follow. Three additions worth keeping:
    "subfolder under wherever the user chose as export destination".
    Most users won't ever need the absolute path.
 
+### Sub-issue: "all-or-nothing" custom folder behavior
+
+A user surfaced this on 2026-04-29: today, if a participant has at
+least one custom folder, the photo goes ONLY to that custom folder
+and NOT to the default `{number}` folder. So a photographer who
+wants both an organized-by-number archive AND delivery-targeted
+folders has no clean way to do it (must add a custom folder named
+literally "{number}", brittle).
+
+The current "all or nothing" branch lives in
+`src/utils/folder-organizer.ts:352-361`.
+
+**Decision (2026-04-29):** add `include_default_folder_with_custom`
+boolean column to `participant_presets` table.
+- Default `false` for legacy migrated presets → preserves current
+  "all or nothing" behavior, no surprise.
+- Default `true` for newly-created presets in 1.2.0 → matches the
+  natural expectation users describe.
+- Editable via a checkbox at the top of the participants section in
+  the preset editor: "Always include the default `{number}` folder
+  for participants that have custom folders".
+- One-time non-blocking banner the first time a 1.2.0 client opens
+  a legacy preset whose flag is still `false`: "Tip: photos of
+  participants with custom folders currently go ONLY to those
+  folders. Want them also in the default `{number}` folder?
+  [Enable] [Keep as-is]". Click sets the flag to `true`.
+
+Both Flusso A (FolderOrganizer) and Flusso B (Export & IPTC) honor
+the flag:
+- Flusso A: when the flag is true AND `customFolderTargets.length > 0`,
+  union the default pattern-based folder into `foldersToCreate`.
+- Flusso B: same logic in `unified-export-handler.ts`. The modal
+  exposes a per-export override (checkbox seeded from the preset
+  flag, user can flip it for one-off "only-special-destinations"
+  exports).
+
 ### Coupling with item #1
 The Export & IPTC fix from item 1 should be implemented AFTER this
 redesign so it consumes the new `folders: jsonb` array directly,
 not the legacy `folder_1/2/3` columns. Otherwise we'd write that
 code, then immediately rewrite it post-migration.
 
+### Backward compatibility with 1.1.4 clients (decided 2026-04-29)
+
+The DB is shared between all client versions, so anything we change
+on the schema must coexist with 1.1.4 in the wild. Strategy chosen:
+**dual-write + convergence-on-read with lazy migration** (no forced
+update, no SQL backfill).
+
+1. **Migration is additive AND empty.** Add `folders: jsonb` column
+   with default `[]`. **Do NOT backfill from legacy in SQL** and
+   **do NOT drop the legacy columns**. The migration is a single
+   `ALTER TABLE ADD COLUMN` — atomic, fast, zero risk.
+   The actual fold from `folder_1/2/3` into `folders[]` happens
+   client-side, lazily, the first time a 1.2.0 client fetches each
+   preset. Rationale: we have to write that client-side code anyway
+   for the convergence path (1.1.4 modifies legacy after a 1.2.0
+   write — see point 3 below), so we use it for the initial
+   migration too. Same code, less SQL surface, self-healing.
+
+2. **1.2.0 dual-writes.** Whenever we save a participant's folders,
+   write to BOTH:
+   - `folders[]` (full, unlimited) — the canonical store going forward
+   - `folder_1/2/3` (+ `_path`) — populated from the FIRST THREE
+     entries of `folders[]`, in order, so 1.1.4 keeps seeing a valid
+     subset.
+   Folders beyond position 3 are 1.2.0-exclusive but don't break
+   1.1.4 because 1.1.4 can't render them anyway.
+
+3. **1.2.0 convergence-on-read with first-fetch DB sync.**
+   Convergence runs ONCE per fetch of the whole preset, NOT per
+   consumer. Concretely: `getParticipantPresetByIdSupabase` (and its
+   handful of cousins) loops over all participants of the loaded
+   preset, classifies each one into one of the three states below,
+   batches all needed DB updates into a single fire-and-forget
+   UPDATE, and returns a fully normalized preset to the caller.
+   Downstream consumers (Export & IPTC, FolderOrganizer, the preset
+   editor UI of 1.2.0) only read `folders[]`. They have no awareness
+   that `folder_1/2/3` exist. Single source of truth, single point
+   of test.
+   - **Lazy migration case** — `folders[]` empty + legacy populated
+     (a row never touched by 1.2.0 yet, OR a row created by 1.1.4
+     after the migration): rebuild `folders[]` from legacy AND fire
+     a silent `UPDATE folders = ...` to the DB. Cost: one extra
+     write per preset, exactly once in its lifetime. After that the
+     DB has `folders[]` populated and lazy migration won't trigger
+     again.
+   - **Drift case** — first 3 entries of `folders[]` differ from
+     legacy columns (signal: a 1.1.4 client wrote to legacy after
+     last 1.2.0 write): treat legacy as source of truth for those 3,
+     rebuild `folders[]` as `[legacy[0..2], ...folders[3..]]`, push
+     back to DB on next save. Auto-heals any drift.
+   - **Steady state** — `folders[]` populated and first 3 match
+     legacy: nothing to do, return as-is. O(1) check.
+
+4. **No DB triggers.** We rejected the bidirectional Postgres trigger
+   approach (option D in the discussion) because it adds DB-level
+   complexity that's hard to debug. The client-side normalize is
+   simpler, observable in code, and rollback-safe.
+
+5. **When can we drop the legacy columns?** Only after we are sure no
+   1.1.4 client is in the wild — practically, after we bump
+   `minimum_version` to 1.2.0 in the version_check feed. Keep that
+   for a separate cleanup release (1.3.0 candidate).
+
 ### Suggested release plan
 - **1.1.5 patch** — pure bug fixes if any (none open right now).
-- **1.2.0** — schema migration + UX redesign of custom folders +
-  Export & IPTC honoring `folders[]`. Single coherent release.
+- **1.2.0** — schema migration (additive) + UX redesign + Export &
+  IPTC honoring `folders[]` + dual-write + convergence-on-read.
+  Coexists with 1.1.4 indefinitely.
+- **1.3.0** (later, after 1.2.0 adoption) — drop legacy columns,
+  bump minimum_version to 1.2.0.
 
 ---
 

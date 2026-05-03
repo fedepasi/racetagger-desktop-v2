@@ -1565,6 +1565,15 @@
           var st = statusResult.data;
           if (st.total === 0) continue;
 
+          // Skip executions for which the user has never actually triggered
+          // an upload. `getR2UploadStatus` reports every image in the
+          // execution and labels images with NULL `original_upload_status`
+          // as 'pending' — without this guard, the panel listed every
+          // recent execution with a "○ Pending" badge even when the user
+          // never clicked Deliver. Only show executions that have at least
+          // one image touched by an actual upload action.
+          if (!st.completed && !st.failed && !st.queued) continue;
+
           var pct = st.total > 0 ? Math.round((st.completed / st.total) * 100) : 0;
           var hasIssues = st.failed > 0 || st.queued > 0;
           var allDone = st.completed === st.total;

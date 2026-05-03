@@ -78,9 +78,11 @@
     if (hdSection) hdSection.style.display = hasR2 ? 'block' : 'none';
     if (divider) divider.style.display = (hasGallery && hasR2) ? 'block' : 'none';
 
-    // Default: HD toggle checked when available
+    // Default: HD toggle UNCHECKED. Per product decision (2026-04-30) HD
+    // upload must always be an explicit user opt-in for each delivery —
+    // never default-on. The user has to flag it intentionally.
     var hdToggle = document.getElementById('deliver-hd-toggle');
-    if (hdToggle) hdToggle.checked = true;
+    if (hdToggle) hdToggle.checked = false;
 
     // Update confirm button text based on visible options
     updateConfirmButtonText();

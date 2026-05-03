@@ -37,7 +37,7 @@ const SettingsManager = {
   async loadSettings() {
     try {
       this.settings = await window.api.invoke('get-full-settings');
-      this.renderSettings();
+      await this.renderSettings();
     } catch (error) {
       console.error('[Settings] Error loading settings:', error);
       this.renderError();
@@ -64,7 +64,7 @@ const SettingsManager = {
   /**
    * Render settings data to the UI
    */
-  renderSettings() {
+  async renderSettings() {
     if (!this.settings) {
       this.renderError();
       return;

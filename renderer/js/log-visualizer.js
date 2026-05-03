@@ -3854,8 +3854,19 @@ class LogVisualizer {
 
         // Snapshot what we're about to persist. Anything added to
         // manualCorrections after this point belongs to the next save.
+        //
+        // BUG FIX: snapshot the actual MAP KEYS (`${fileName}_${vehicleIndex}`),
+        // not bare fileNames. Earlier code did `corrections.map(c => c.fileName)`
+        // and then `manualCorrections.delete(fn)`, but the entries are stored
+        // under `${fileName}_${vehicleIndex}` keys (see saveVehicleChangesByFileName
+        // around line 3159). The mismatch meant `delete()` never matched any key
+        // and the Map kept growing forever — every subsequent autosave tick
+        // (3s debounce) re-sent every entry, generating a fresh USER_MANUAL
+        // record on the backend for each photo over and over.
         const corrections = Array.from(this.manualCorrections.values());
-        const persistedFileNames = corrections.map(c => c.fileName);
+        const persistedKeys = corrections.map(
+          c => `${c.fileName}_${c.vehicleIndex}`
+        );
 
         const result = await window.api.invoke('update-analysis-log', {
           executionId: this.executionId,
@@ -3873,8 +3884,8 @@ class LogVisualizer {
 
         // Targeted removal — only drop the snapshot we just persisted, not
         // anything the user has added in the meantime.
-        for (const fn of persistedFileNames) {
-          this.manualCorrections.delete(fn);
+        for (const key of persistedKeys) {
+          this.manualCorrections.delete(key);
         }
         // Only clear the unsaved flag if no other corrections snuck in.
         if (this.manualCorrections.size === 0) {

@@ -522,6 +522,72 @@ export function readExecutionSummary(jsonlPath: string): ExecutionSummary | null
   }
 }
 
+// ===========================================================================
+// Privacy/portability sanitizer
+// ===========================================================================
+//
+// Vehicles produced by the smart-matcher carry a `participantMatch.entry`
+// payload that, in turn, may include `folder_1_path` / `folder_2_path` /
+// `folder_3_path` — absolute paths from the photographer's filesystem
+// (e.g. "/Users/<name>/Desktop/Client X/...").
+//
+// These absolute paths leak personal info (computer name, home directory,
+// client folder structure) into:
+//   - the JSONL log we keep on disk and sync to Supabase Storage,
+//   - downstream `analysis_results.raw_response` rows that mirror the
+//     vehicles array,
+//   - any future cross-machine reconstruction (paths from machine A would
+//     never resolve on machine B anyway).
+//
+// We strip them at the boundary between in-memory state (where they're
+// useful at runtime) and any persistence layer. Folder NAMES (`folder_1`,
+// `folder_2`, `folder_3`) and `folders[]` are kept — they're enough to
+// reconstruct the destination on any machine.
+
+const ABSOLUTE_PATH_KEYS = ['folder_1_path', 'folder_2_path', 'folder_3_path'] as const;
+
+/**
+ * Returns a shallow-cloned vehicles array with `participantMatch.entry`'s
+ * absolute path fields removed. Inputs are NOT mutated. Safe to pass any
+ * shape — non-objects are returned as-is.
+ *
+ * @internal exported for use by persistence sites that bypass logImageAnalysis
+ *           (e.g. direct `analysis_results` inserts that build their own
+ *           payload). Most callers should not need this — go through
+ *           `logImageAnalysis` instead.
+ */
+export function stripAbsolutePathsFromVehicles<T = any>(vehicles: T[] | undefined): T[] {
+  if (!Array.isArray(vehicles)) return vehicles as any;
+  return vehicles.map(stripAbsolutePathsFromVehicle);
+}
+
+function stripAbsolutePathsFromVehicle<T>(vehicle: T): T {
+  if (!vehicle || typeof vehicle !== 'object') return vehicle;
+  const v: any = vehicle;
+  if (!v.participantMatch || typeof v.participantMatch !== 'object') return vehicle;
+
+  const entry = v.participantMatch.entry;
+  if (!entry || typeof entry !== 'object') return vehicle;
+
+  let touched = false;
+  const cleanEntry: any = { ...entry };
+  for (const key of ABSOLUTE_PATH_KEYS) {
+    if (key in cleanEntry) {
+      delete cleanEntry[key];
+      touched = true;
+    }
+  }
+  if (!touched) return vehicle;
+
+  return {
+    ...v,
+    participantMatch: {
+      ...v.participantMatch,
+      entry: cleanEntry,
+    },
+  };
+}
+
 export class AnalysisLogger {
   private fileStream: fs.WriteStream;
   private executionId: string;
@@ -666,23 +732,43 @@ export class AnalysisLogger {
 
   /**
    * Log complete image analysis (now supports multi-vehicle scenarios)
+   *
+   * Privacy/portability: vehicle `participantMatch.entry` payloads are
+   * sanitized via `stripAbsolutePathsFromVehicles` before persistence so that
+   * (a) absolute filesystem paths from the user's home directory never enter
+   * the JSONL or downstream DB, and (b) the resulting payload is portable
+   * across machines (folder NAMES are kept; only the per-machine absolute
+   * resolution is stripped).
    */
   logImageAnalysis(data: Omit<ImageAnalysisEvent, 'type' | 'timestamp' | 'executionId'>): void {
+    const sanitizedData = {
+      ...data,
+      aiResponse: data.aiResponse
+        ? {
+            ...data.aiResponse,
+            vehicles: stripAbsolutePathsFromVehicles(data.aiResponse.vehicles),
+          }
+        : data.aiResponse,
+      primaryVehicle: data.primaryVehicle
+        ? stripAbsolutePathsFromVehicles([data.primaryVehicle as any])[0]
+        : data.primaryVehicle,
+    };
+
     const event: ImageAnalysisEvent = {
       type: 'IMAGE_ANALYSIS',
       timestamp: new Date().toISOString(),
       executionId: this.executionId,
-      ...data
+      ...sanitizedData,
     };
 
     // Update stats (aggregate confidence from all vehicles)
-    if (data.aiResponse.vehicles && data.aiResponse.vehicles.length > 0) {
-      const totalConfidence = data.aiResponse.vehicles.reduce((sum, vehicle) => sum + (vehicle.confidence || 0), 0);
-      const avgConfidence = totalConfidence / data.aiResponse.vehicles.length;
+    if (sanitizedData.aiResponse?.vehicles && sanitizedData.aiResponse.vehicles.length > 0) {
+      const totalConfidence = sanitizedData.aiResponse.vehicles.reduce((sum, vehicle) => sum + (vehicle.confidence || 0), 0);
+      const avgConfidence = totalConfidence / sanitizedData.aiResponse.vehicles.length;
       this.stats.totalConfidence += avgConfidence;
-    } else if (data.primaryVehicle?.confidence) {
+    } else if (sanitizedData.primaryVehicle?.confidence) {
       // Fallback for backward compatibility
-      this.stats.totalConfidence += data.primaryVehicle.confidence;
+      this.stats.totalConfidence += sanitizedData.primaryVehicle.confidence;
     }
 
     this.writeLine(event);

@@ -1230,12 +1230,38 @@ export function buildMetadataFromPresetIptc(
 // ============================================================================
 // STRUCTURED RACETAGGER DATA (machine-readable metadata for re-organization)
 // ============================================================================
+//
+// @deprecated as of v1.2.x — DO NOT USE for new code paths.
+//
+// Historical context: this module wrote a JSON payload (`RACETAGGER_V1:{...}`)
+// into XMP:Instructions on every analyzed photo, including absolute folder
+// paths from the user's filesystem. It was originally intended as a
+// "self-describing photo" mechanism so that re-organization could work without
+// the JSONL log. In practice the read path is invoked only inside flows that
+// already require the JSONL to exist, and the absolute paths leaked the
+// photographer's home directory and client folder names into delivered files
+// (privacy issue reported by beta testers in April 2026).
+//
+// Current state:
+//  - All call sites have been removed (writers in unified-image-processor.ts
+//    and main.ts; readers in main.ts).
+//  - The folder-organization flow now relies exclusively on JSONL + DB
+//    (the existing fallback path at main.ts:3573+).
+//  - Existing files on disk that already have the payload are NOT cleaned up;
+//    the data simply becomes inert (nothing reads it anymore).
+//
+// These functions are kept exported for one release cycle to avoid breaking
+// any out-of-tree imports we might have missed. They will be deleted in a
+// subsequent cleanup PR once we've confirmed nothing else references them.
+//
+// DO NOT add new call sites. If you need cross-machine re-organization, use
+// the DB-backed reconstruction path (see src/utils/execution-log-loader.ts).
 
 const RACETAGGER_DATA_PREFIX = 'RACETAGGER_V1:';
 
 /**
- * Structured data written to XMP:Instructions for machine-readable re-organization.
- * This enables folder organization from metadata without depending on JSONL files.
+ * @deprecated Structured data written to XMP:Instructions for machine-readable re-organization.
+ * No longer in use. See module-level deprecation note above.
  */
 export interface RaceTaggerStructuredData {
   /** Version identifier for forward compatibility */
@@ -1268,8 +1294,10 @@ export interface RaceTaggerStructuredData {
 }
 
 /**
+ * @deprecated No longer in use. See module-level deprecation note above.
+ *
  * Builds structured RaceTagger data from analysis results and CSV matches.
- * This data is written to XMP:Instructions for later re-organization.
+ * This data was written to XMP:Instructions for later re-organization.
  */
 export function buildStructuredData(
   analysis: any[],
@@ -1337,6 +1365,8 @@ export function buildStructuredData(
 }
 
 /**
+ * @deprecated No longer in use. See module-level deprecation note above.
+ *
  * Writes structured RaceTagger data to XMP:Instructions field.
  * Works for both JPEG (embedded XMP) and RAW (via ExifTool on sidecar).
  * Format: "RACETAGGER_V1:{json}"
@@ -1373,6 +1403,8 @@ export async function writeStructuredData(
 }
 
 /**
+ * @deprecated No longer in use. See module-level deprecation note above.
+ *
  * Reads structured RaceTagger data from a file's XMP:Instructions field.
  * Returns null if no structured data found or if parsing fails.
  *
