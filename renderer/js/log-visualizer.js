@@ -1627,7 +1627,7 @@ class LogVisualizer {
           ${needsReview && !isResolved ? '<div class="lv-needs-review-badge">⚠️ Review</div>' : ''}
           ${isResolved ? '<div class="lv-resolved-badge">✅ Resolved</div>' : ''}
           ${result.metadataWritten === false ? '<div class="lv-no-metadata-badge">No metadata</div>' : ''}
-          ${vehicles.length > 1 ? `<div class="lv-multi-badge">${vehicles.length} vehicles</div>` : ''}
+          ${vehicles.length > 1 ? `<div class="lv-multi-badge">${vehicles.length} detections</div>` : ''}
           ${otherPeople.length > 0 ? `<div class="lv-other-people-badge" title="${otherPeopleLabel}">★ ${otherPeople.length} VIP</div>` : ''}
         </div>
 
@@ -2573,7 +2573,7 @@ class LogVisualizer {
     vehiclesContainer.innerHTML = vehicles.length > 0 ?
       vehicles.map((vehicle, index) => this.createVehicleEditorHTML(vehicle, index, result.fileName, actualImageIndex)).join('') :
       `<div class="lv-no-vehicle">
-        <p>No vehicles detected in this image</p>
+        <p>No detections in this image</p>
         <button class="lv-add-vehicle-btn" data-action="add" data-file-name="${result.fileName}">
           + Add Manual Recognition
         </button>
@@ -2898,7 +2898,7 @@ class LogVisualizer {
     return `
       <div class="lv-vehicle-editor ${isModified ? 'modified' : ''}" data-vehicle-index="${vehicleIndex}" data-image-index="${imageIndex}" data-file-name="${fileName}">
         <div class="lv-vehicle-header">
-          <h5>Vehicle ${vehicleIndex + 1}</h5>
+          <h5>Detection ${vehicleIndex + 1}</h5>
           ${isModified ? '<span class="lv-modified-indicator">✏️ Modified</span>' : ''}
           ${hasPresetData ? '<span class="lv-autocomplete-indicator" title="Autocomplete enabled from participant preset">🎯</span>' : ''}
           <button class="lv-delete-vehicle" data-action="delete" data-vehicle-index="${vehicleIndex}" data-file-name="${fileName}">🗑️</button>
@@ -3094,7 +3094,7 @@ class LogVisualizer {
         console.log(`[LogVisualizer] Saved manual correction for ${fileName} vehicle ${vehicleIndex}:`, changes);
       } else {
         console.error(`[LogVisualizer] Invalid vehicle index ${vehicleIndex} for ${fileName}`);
-        this.showNotification('❌ Invalid vehicle data', 'error');
+        this.showNotification('❌ Invalid detection data', 'error');
       }
 
     } catch (error) {
@@ -3129,7 +3129,7 @@ class LogVisualizer {
       // Check if vehicle exists
       if (!result.analysis || !result.analysis[vehicleIndex]) {
         console.error(`[LogVisualizer] Vehicle ${vehicleIndex} not found for ${fileName}`);
-        this.showNotification('❌ Vehicle not found', 'error');
+        this.showNotification('❌ Detection not found', 'error');
         return;
       }
 
@@ -3531,7 +3531,7 @@ class LogVisualizer {
       console.log(`[LogVisualizer] deleteVehicleByFileName called:`, { fileName, vehicleIndex });
 
       // Ask for confirmation
-      const confirmDelete = confirm(`Are you sure you want to delete Vehicle ${vehicleIndex + 1} from ${fileName}?\n\nThis action cannot be undone.`);
+      const confirmDelete = confirm(`Are you sure you want to delete Detection ${vehicleIndex + 1} from ${fileName}?\n\nThis action cannot be undone.`);
       if (!confirmDelete) {
         console.log(`[LogVisualizer] Delete cancelled by user for ${fileName} vehicle ${vehicleIndex}`);
         return;
@@ -3549,13 +3549,13 @@ class LogVisualizer {
 
       if (!result.analysis || !Array.isArray(result.analysis)) {
         console.error(`[LogVisualizer] No analysis data found for ${fileName}`);
-        this.showNotification('❌ Error: No vehicle data found', 'error');
+        this.showNotification('❌ Error: No detection data found', 'error');
         return;
       }
 
       if (vehicleIndex < 0 || vehicleIndex >= result.analysis.length) {
         console.error(`[LogVisualizer] Invalid vehicleIndex ${vehicleIndex} for ${fileName} (has ${result.analysis.length} vehicles)`);
-        this.showNotification('❌ Error: Invalid vehicle index', 'error');
+        this.showNotification('❌ Error: Invalid detection index', 'error');
         return;
       }
 
@@ -3617,12 +3617,12 @@ class LogVisualizer {
       }
 
       // Show feedback
-      this.showNotification(`🗑️ Vehicle ${vehicleIndex + 1} deleted successfully`, 'success');
+      this.showNotification(`🗑️ Detection ${vehicleIndex + 1} deleted successfully`, 'success');
       console.log(`[LogVisualizer] Successfully deleted vehicle ${vehicleIndex} from ${fileName}`);
 
     } catch (error) {
       console.error('[LogVisualizer] Error deleting vehicle:', error);
-      this.showNotification('❌ Error deleting vehicle', 'error');
+      this.showNotification('❌ Error deleting detection', 'error');
     }
   }
 
@@ -3661,11 +3661,11 @@ class LogVisualizer {
       }
 
       this.updateStatistics();
-      this.showNotification('✅ Vehicle added successfully', 'success');
+      this.showNotification('✅ Detection added successfully', 'success');
 
     } catch (error) {
       console.error('[LogVisualizer] Error adding vehicle by fileName:', error);
-      this.showNotification('❌ Error adding vehicle', 'error');
+      this.showNotification('❌ Error adding detection', 'error');
     }
   }
 
@@ -3693,14 +3693,14 @@ class LogVisualizer {
     });
 
     this.updateVehicleEditor(result, actualImageIndex);
-    this.showNotification('✅ New vehicle added', 'success');
+    this.showNotification('✅ New detection added', 'success');
   }
 
   /**
    * Delete a vehicle recognition
    */
   deleteVehicle(imageIndex, vehicleIndex) {
-    if (!confirm('Are you sure you want to delete this vehicle recognition?')) {
+    if (!confirm('Are you sure you want to delete this detection?')) {
       return;
     }
 
@@ -3741,14 +3741,14 @@ class LogVisualizer {
 
     this.updateVehicleEditor(result, imageIndex);
     this.updateStatistics();
-    this.showNotification('✅ Vehicle deleted', 'success');
+    this.showNotification('✅ Detection deleted', 'success');
   }
 
   /**
    * Reset vehicle to original values
    */
   resetVehicle(imageIndex, vehicleIndex) {
-    if (!confirm('Reset this vehicle to original recognition?')) {
+    if (!confirm('Reset this detection to original recognition?')) {
       return;
     }
 
@@ -3787,7 +3787,7 @@ class LogVisualizer {
 
     // Refresh the UI to show original values
     this.updateVehicleEditor(result, imageIndex);
-    this.showNotification('🔄 Vehicle reset to original values', 'success');
+    this.showNotification('🔄 Detection reset to original values', 'success');
   }
 
   /**
