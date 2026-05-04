@@ -6344,10 +6344,13 @@ class UnifiedImageWorker extends EventEmitter {
         vehicleKeywords.push(analysis.teamName);
       }
 
-      // Altri testi rilevati (se presenti e non ridondanti) - aggiunti come keywords separati
+      // Altri testi rilevati (se presenti e non ridondanti) - aggiunti come keywords separati.
+      // Difensivo: Gemini occasionalmente restituisce null/non-string dentro otherText
+      // (più frequente nel ramo fullImage con N risultati per una singola foto), quindi
+      // verifichiamo il tipo prima di leggere .length per evitare TypeError.
       if (analysis.otherText && analysis.otherText.length > 0) {
         const relevantTexts = analysis.otherText
-          .filter((text: string) => text.length > 0); // Include tutti i testi non vuoti
+          .filter((text: any) => typeof text === 'string' && text.length > 0);
 
         if (relevantTexts.length > 0) {
           // Add each text as separate keyword without prefix
