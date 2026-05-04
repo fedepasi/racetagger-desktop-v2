@@ -1559,6 +1559,11 @@ class UnifiedImageWorker extends EventEmitter {
       const HIGH_THRESHOLD = recognitionConfig.highConfidence ?? 0.85;
       const MIN_THRESHOLD  = recognitionConfig.minConfidence  ?? 0.35;
 
+      // Cached ONNX detections from the full-image inference, reused later by the BBOX
+      // fallback to avoid running the same ONNX model twice on the same image when the
+      // fast-path doesn't short-circuit (e.g. all detections below HIGH threshold).
+      let cachedFullImageDetections: Array<{ boundingBox: CropBoundingBox; confidence: number; detectionId: string }> | null = null;
+
       if (currentRecognitionMethod === 'local-onnx' && this.onnxDetectorEnabled && this.onnxModelLoaded) {
         log.info(`[CropContext] Trying local ONNX on FULL IMAGE first (HIGH threshold: ${HIGH_THRESHOLD})`);
 
@@ -1566,6 +1571,15 @@ class UnifiedImageWorker extends EventEmitter {
           const fullImageStartTime = Date.now();
           const { results: detections, imageSize } = await this.onnxDetector!.detect(compressedBuffer);
           const inferenceMs = Date.now() - fullImageStartTime;
+
+          // Cache for potential BBOX fallback later (avoids a duplicate detect() call).
+          // Note: onnxDetector.detect() already applies the model's minConfidence filter
+          // internally, so this set is suitable for either fast-path or BBOX fallback.
+          cachedFullImageDetections = detections.map((r, idx) => ({
+            boundingBox: r.boundingBox || { x: 0, y: 0, width: 1, height: 1 },
+            confidence: r.confidence,
+            detectionId: `onnx-full_${idx}`
+          }));
 
           // Only HIGH-zone detections qualify for the "skip segmentation + Gemini" fast path.
           // Anything below HIGH_THRESHOLD falls through to the detailed pipeline where
@@ -1586,8 +1600,66 @@ class UnifiedImageWorker extends EventEmitter {
             // Reset circuit breaker on success
             this.onnxConsecutiveFailures = 0;
 
+            // ==================== SHARPNESS FILTER (multi-subject fast-path) ====================
+            // The ONNX full-image fast-path normally short-circuits before any crop extraction,
+            // which means the sharpness filter that lives in the segmentation/BBOX paths is
+            // never consulted. When multiple HIGH detections come back, we extract small crops
+            // from the bboxes we already have and run filterCropsBySharpness so that blurry /
+            // out-of-focus background subjects are dropped before being saved.
+            //
+            // Guard: only runs when validDetections.length >= 2. The single-subject case keeps
+            // the original behaviour (no crop extraction overhead, immediate save).
+            let filteredDetections = validDetections;
+            if (validDetections.length >= 2) {
+              const sharpnessStart = Date.now();
+              try {
+                const cropContextConfig = this.getCropContextConfig();
+                const bboxesWithIds = validDetections.map((d, idx) => ({
+                  ...(d.boundingBox || { x: 0, y: 0, width: 1, height: 1 }),
+                  detectionId: `onnx-full_${idx}`
+                }));
+                const cropExtractResult = await extractCropContext(
+                  uploadReadyPath || imageFile.originalPath,
+                  compressedBuffer,
+                  bboxesWithIds,
+                  cropContextConfig.crop,
+                  { enabled: false },  // negative not needed for sharpness scoring
+                  cropContextConfig.maxCrops
+                );
+
+                if (cropExtractResult.crops.length >= 2) {
+                  // Attach ONNX confidence so the composite scorer weights it (matches the
+                  // segmentation path, where MaskedCropResult carries the same field).
+                  cropExtractResult.crops.forEach((c, i) => {
+                    (c as any).segmentationMask = { confidence: validDetections[i].confidence };
+                  });
+
+                  const sharpnessConfig: SharpnessFilterConfig = {
+                    ...DEFAULT_SHARPNESS_FILTER_CONFIG,
+                    ...(this.currentSportCategory?.sharpness_filter_config || {}),
+                  };
+
+                  const sharpnessResult = await filterCropsBySharpness(
+                    cropExtractResult.crops,
+                    sharpnessConfig
+                  );
+
+                  if (sharpnessResult.filtered) {
+                    const keptIds = new Set(sharpnessResult.filteredCrops.map(c => c.detectionId));
+                    filteredDetections = validDetections.filter((_, idx) => keptIds.has(`onnx-full_${idx}`));
+                    log.info(`[CropContext-ONNX-Full] Sharpness filter: ${validDetections.length} → ${filteredDetections.length} detections (${sharpnessResult.reason}) in ${Date.now() - sharpnessStart}ms`);
+                  } else {
+                    log.info(`[CropContext-ONNX-Full] Sharpness filter: kept all ${validDetections.length} detections (${sharpnessResult.reason}) in ${Date.now() - sharpnessStart}ms`);
+                  }
+                }
+              } catch (sharpnessError) {
+                // Never break the fast-path on a sharpness failure: keep all detections.
+                log.warn(`[CropContext-ONNX-Full] Sharpness filter failed (non-fatal), keeping all detections: ${sharpnessError instanceof Error ? sharpnessError.message : sharpnessError}`);
+              }
+            }
+
             // Convert to edge function format
-            const analysis = validDetections.map((d, index) => ({
+            const analysis = filteredDetections.map((d, index) => ({
               raceNumber: d.raceNumber,
               confidence: d.confidence,
               drivers: [],
@@ -1855,9 +1927,20 @@ class UnifiedImageWorker extends EventEmitter {
       if (!cropsPayload || cropsPayload.length === 0) {
         log.info(`[CropContext] Using BBOX mode (fallback to ONNX detector)`);
 
-        phaseStart = Date.now();
-        const detections = await this.runGenericDetection(compressedBuffer);
-        aiTiming['onnxDetection'] = Date.now() - phaseStart;
+        // Reuse the ONNX detections produced by the full-image fast-path above when
+        // available (recognition_method='local-onnx' that didn't short-circuit). Falls
+        // back to a fresh runGenericDetection() call for Gemini categories or when the
+        // fast-path errored out before producing detections.
+        let detections: Array<{ boundingBox: CropBoundingBox; confidence: number; detectionId: string }>;
+        if (cachedFullImageDetections !== null) {
+          detections = cachedFullImageDetections;
+          aiTiming['onnxDetection'] = 0;
+          log.info(`[CropContext] Reusing ${detections.length} cached ONNX detections from full-image pass (no duplicate inference)`);
+        } else {
+          phaseStart = Date.now();
+          detections = await this.runGenericDetection(compressedBuffer);
+          aiTiming['onnxDetection'] = Date.now() - phaseStart;
+        }
 
         // If no detections, fallback to standard analysis or V6 fullImage
         if (detections.length === 0) {
