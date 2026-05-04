@@ -6,6 +6,7 @@
 
 import { ipcMain } from 'electron';
 import { authService } from '../auth-service';
+import { errorTelemetryService } from '../utils/error-telemetry-service';
 import {
   // Sport Categories
   getSportCategories,
@@ -401,19 +402,96 @@ export function registerSupabaseHandlers(): void {
       const supabase = getSupabaseClient();
       const userId = authService.getAuthState().user?.id;
 
-      console.log('[PDF Parser] Calling edge function...');
+      // Try to extract PDF text locally first (fast path).
+      //
+      // The edge function supports two ingestion paths:
+      //   1) `pdfText` (preferred) — we extract text here with pdf-parse and
+      //      send the plain-text dump. The edge function chunks on entry-header
+      //      boundaries and runs Gemini Flash-Lite in parallel; full 161-entry
+      //      lists complete in ~12s instead of 130-150s.
+      //   2) `pdfBase64` (legacy fallback) — we send the raw PDF; the edge
+      //      function uses Gemini Pro Vision. Slow on long lists but works
+      //      for any PDF, including image-only/scanned PDFs that pdf-parse
+      //      can't decode.
+      //
+      // We try (1) first; if pdf-parse fails (corrupted PDF, image-only PDF,
+      // edge case parse error), we silently fall back to (2). If text extraction
+      // succeeds but yields too little content (e.g. a scan with OCR'd text but
+      // missing structure), the edge function will detect the empty participant
+      // list and return its standard 400 error — no different from a vision-mode
+      // failure on the same document.
+      let pdfText: string | null = null;
+      try {
+        // Lazy require: avoid loading pdf-parse on app start. The dynamic
+        // form (vs. ES import) also keeps TypeScript out of the typecheck
+        // of pdf-parse's untyped JS.
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const pdfParse: (data: Buffer) => Promise<{ text: string }> = require('pdf-parse');
+        const pdfBuffer = Buffer.from(pdfBase64, 'base64');
+        const result = await pdfParse(pdfBuffer);
+        if (result?.text && result.text.trim().length >= 100) {
+          // Sanity threshold: a real entry list extracted as text always has
+          // hundreds of chars at minimum. Anything below 100 chars is almost
+          // certainly an image-only PDF where pdf-parse returned essentially
+          // nothing — fall back to vision so Gemini OCRs it.
+          pdfText = result.text;
+          console.log(`[PDF Parser] Text extracted locally: ${pdfText.length} chars (${result.text.split('\n').length} lines)`);
+        } else {
+          console.log(`[PDF Parser] Local extraction yielded too little text (${result?.text?.length ?? 0} chars), falling back to vision path`);
+        }
+      } catch (extractErr: any) {
+        // pdf-parse can fail on encrypted PDFs, malformed PDFs, or when the
+        // bundled pdfjs hits an unsupported feature. Don't surface this to
+        // the user — just fall back to vision mode.
+        console.warn(`[PDF Parser] Local text extraction failed (${extractErr?.message ?? extractErr}), falling back to vision path`);
+      }
+
+      const pathUsed = pdfText ? 'text' : 'vision';
+      console.log(`[PDF Parser] Calling edge function (path: ${pathUsed})...`);
+
+      // Friendly user-facing message that hides edge-function/Gemini stack traces.
+      // The detailed error is captured separately and reported via telemetry,
+      // which dedupes & opens a GitHub issue for us. The user sees the same
+      // message regardless of whether it was a network blip, a Gemini timeout,
+      // or a malformed response — they all need the same action: try again.
+      const FRIENDLY_USER_ERROR =
+        "We couldn't read your entry list right now. We've automatically reported the issue and are looking into it — please try again in a few minutes, or upload a different PDF.";
+
+      // Helper: report failure to telemetry so it lands as a GitHub issue,
+      // then return the generic message to the renderer.
+      const reportAndFailGracefully = (rawError: unknown, phase: string, extra?: Record<string, unknown>) => {
+        try {
+          const errObj = rawError instanceof Error
+            ? rawError
+            : new Error(typeof rawError === 'string' ? rawError : JSON.stringify(rawError));
+          // Tag the message with the phase so the GitHub issue title differentiates
+          // 'edge_call_failed' vs 'http_error_response' vs 'unexpected_exception'.
+          const taggedMsg = `[parsePdfEntryList:${phase}] ${errObj.message}`;
+          errorTelemetryService.reportCriticalError({
+            errorType: 'pdf_parser',
+            severity: 'recoverable',
+            error: Object.assign(new Error(taggedMsg), { stack: errObj.stack }),
+            batchPhase: `pdf_parser/${pathUsed}/${phase}`,
+            ...(extra ? {} : {})
+          });
+          console.error(`[PDF Parser] Reported to telemetry (${phase}):`, taggedMsg, extra ?? '');
+        } catch (telemetryErr) {
+          // Never let telemetry break the user's flow — even logging is best-effort.
+          console.warn('[PDF Parser] Telemetry reporting failed (safe):', telemetryErr);
+        }
+        return { success: false, error: FRIENDLY_USER_ERROR };
+      };
 
       const { data, error } = await supabase.functions.invoke('parsePdfEntryList', {
-        body: {
-          pdfBase64,
-          userId
-        }
+        body: pdfText
+          ? { pdfText, userId }
+          : { pdfBase64, userId }
       });
 
       if (error) {
-        // FunctionsHttpError on non-2xx responses hides the body, so the renderer ends up
-        // seeing `{"name":"FunctionsHttpError","context":{}}` with no clue why it failed.
-        // Read the response body manually and surface the real edge-function error message.
+        // FunctionsHttpError hides the response body. We still try to read it for
+        // the GitHub issue (so we know what Gemini actually said), but the user
+        // never sees the raw text.
         let bodyDetail: any = null;
         try {
           const resp: Response | undefined = (error as any)?.context;
@@ -429,16 +507,61 @@ export function registerSupabaseHandlers(): void {
           error.message ||
           'Unknown edge function error';
 
-        console.error('[PDF Parser] Edge function error:', detailMsg, bodyDetail || error);
-        return { success: false, error: detailMsg };
+        // Special case: 400 with "Document is not a valid entry list or start list"
+        // is a USER input issue (uploaded e.g. an invoice or random PDF), not a bug.
+        // Don't open a GitHub issue for those — but still hide the technical detail
+        // and show a clearer message.
+        const isInvalidDocument =
+          (typeof bodyDetail === 'object' && bodyDetail?.validation?.document_type === 'other') ||
+          (typeof detailMsg === 'string' && detailMsg.toLowerCase().includes('not a valid entry list'));
+
+        if (isInvalidDocument) {
+          console.log('[PDF Parser] Document rejected as not-an-entry-list (user-side issue, not reporting)');
+          return {
+            success: false,
+            error: "This document doesn't look like a race entry list or start list. Please upload an entry list, start list, or race results PDF.",
+          };
+        }
+
+        return reportAndFailGracefully(detailMsg, 'edge_invocation_error', {
+          httpStatus: (error as any)?.context?.status,
+          bodyDetail
+        });
       }
 
-      // The edge function returns its own success/error format
+      // The edge function returns its own { success, error/data } envelope.
+      // If the edge function itself reports success=false (e.g. internal Gemini
+      // crash bubbled up as 500), funnel that through the same telemetry path.
+      if (data && typeof data === 'object' && data.success === false) {
+        const isInvalidDocument = data?.validation?.document_type === 'other';
+        if (isInvalidDocument) {
+          return {
+            success: false,
+            error: "This document doesn't look like a race entry list or start list. Please upload an entry list, start list, or race results PDF.",
+          };
+        }
+        return reportAndFailGracefully(data.error || 'edge function returned success=false', 'edge_returned_failure', {
+          edgeResponse: data
+        });
+      }
+
       return data;
 
     } catch (e: any) {
-      console.error('[PDF Parser] Error:', e);
-      return { success: false, error: e.message };
+      // Catch-all for anything we missed (network errors, JSON parse errors, etc).
+      console.error('[PDF Parser] Unexpected error:', e);
+      try {
+        errorTelemetryService.reportCriticalError({
+          errorType: 'pdf_parser',
+          severity: 'recoverable',
+          error: e instanceof Error ? e : new Error(String(e?.message ?? e)),
+          batchPhase: 'pdf_parser/handler/unexpected_exception',
+        });
+      } catch { /* never let telemetry break things */ }
+      return {
+        success: false,
+        error: "We couldn't read your entry list right now. We've automatically reported the issue and are looking into it — please try again in a few minutes, or upload a different PDF.",
+      };
     }
   });
 }

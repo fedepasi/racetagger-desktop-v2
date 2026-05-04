@@ -79,7 +79,9 @@
       "node_modules/simple-get/**/*",
       "node_modules/tar-fs/**/*",
       "node_modules/tunnel-agent/**/*",
-      "node_modules/raw-preview-extractor/**/*"
+      "node_modules/raw-preview-extractor/**/*",
+      "node_modules/pdf-parse/**/*",
+      "node_modules/node-ensure/**/*"
     ],
     "icon": "racetagger-logo.icns",
     "mac": {
@@ -159,6 +161,7 @@
     "node-fetch": "^3.3.2",
     "onnxruntime-node": "^1.23.2",
     "p-limit": "^3.1.0",
+    "pdf-parse": "^1.1.1",
     "piexifjs": "^1.0.6",
     "raw-preview-extractor": "file:./vendor/raw-preview-extractor",
     "sharp": "^0.34.3"
@@ -180,12 +183,12 @@
     "typescript": "^5.9.2"
   },
   "optionalDependencies": {
-    "@img/sharp-win32-x64": "^0.34.3",
-    "@img/sharp-win32-arm64": "^0.34.3",
-    "@img/sharp-libvips-win32-x64": "^0.34.3",
+    "@img/sharp-libvips-linux-x64": "^0.34.3",
     "@img/sharp-libvips-win32-arm64": "^0.34.3",
+    "@img/sharp-libvips-win32-x64": "^0.34.3",
     "@img/sharp-linux-x64": "^0.34.3",
-    "@img/sharp-libvips-linux-x64": "^0.34.3"
+    "@img/sharp-win32-arm64": "^0.34.3",
+    "@img/sharp-win32-x64": "^0.34.3"
   },
   "cpu": [
     "x64",

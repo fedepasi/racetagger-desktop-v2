@@ -32,6 +32,7 @@ export type ErrorType =
   | 'zero_results'
   | 'ghost_images'
   | 'memory'
+  | 'pdf_parser'
   | 'uncaught';
 
 export type ErrorSeverity = 'fatal' | 'recoverable' | 'warning';
