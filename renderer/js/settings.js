@@ -22,11 +22,18 @@ const SettingsManager = {
       return;
     }
 
+    // Set the flag BEFORE the first await to prevent a race condition
+    // where two concurrent initialize() calls (e.g. router + section-changed event)
+    // both pass the isInitialized check during loadSettings() and end up
+    // attaching the change listeners twice — which makes the success modal fire twice.
+    this.isInitialized = true;
+
     try {
       await this.loadSettings();
       this.setupEventListeners();
-      this.isInitialized = true;
     } catch (error) {
+      // Reset on failure so a retry can succeed
+      this.isInitialized = false;
       console.error('[Settings] Error initializing settings:', error);
     }
   },

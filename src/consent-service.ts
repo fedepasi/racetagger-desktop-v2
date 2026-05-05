@@ -16,7 +16,11 @@ export interface ConsentStatus {
 class ConsentService {
   /**
    * Get the current training consent status for the authenticated user
-   * Returns true (consent given) by default if not explicitly set
+   * Returns true (consent given) by default if not explicitly set.
+   *
+   * Uses user_id (UUID) instead of email to be robust against case differences,
+   * "+alias" addresses, and email changes — and to align with the RLS policy
+   * "Users can update own training consent" which is keyed on auth.uid() = user_id.
    */
   async getTrainingConsent(): Promise<boolean> {
     const userId = authService.getCurrentUserId();
@@ -26,17 +30,11 @@ class ConsentService {
 
     try {
       const supabase = authService.getSupabaseClient();
-      const authState = authService.getAuthState();
-      const userEmail = authState.user?.email?.toLowerCase();
-
-      if (!userEmail) {
-        return true;
-      }
 
       const { data, error } = await supabase
         .from('subscribers')
         .select('training_consent')
-        .eq('email', userEmail)
+        .eq('user_id', userId)
         .single();
 
       if (error) {
@@ -53,7 +51,17 @@ class ConsentService {
   }
 
   /**
-   * Set the training consent status for the authenticated user
+   * Set the training consent status for the authenticated user.
+   *
+   * Important: Supabase returns `error: null` even when an UPDATE affects zero
+   * rows (e.g. RLS blocks it, row missing, predicate doesn't match). Without
+   * the row-count check below this method would silently return `true` while
+   * the value in DB never changes — which is exactly the bug that made the
+   * toggle "reactivate" itself in v1.1.6.
+   *
+   * We chain `.select('user_id')` so the returned `data` array contains the
+   * affected rows, and we treat 0 affected rows as a failure so the UI can
+   * surface the error and revert the toggle.
    */
   async setTrainingConsent(consent: boolean): Promise<boolean> {
     const userId = authService.getCurrentUserId();
@@ -63,25 +71,26 @@ class ConsentService {
 
     try {
       const supabase = authService.getSupabaseClient();
-      const authState = authService.getAuthState();
-      const userEmail = authState.user?.email?.toLowerCase();
-
-      if (!userEmail) {
-        return false;
-      }
-
       const now = new Date().toISOString();
 
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('subscribers')
         .update({
           training_consent: consent,
           training_consent_updated_at: now
         })
-        .eq('email', userEmail);
+        .eq('user_id', userId)
+        .select('user_id');
 
       if (error) {
         console.error('[ConsentService] Error updating consent:', error);
+        return false;
+      }
+
+      if (!data || data.length === 0) {
+        // 0 rows updated → likely RLS block or missing row.
+        // Do NOT report success — the caller will revert the toggle and notify the user.
+        console.error('[ConsentService] Update affected 0 rows for user:', userId);
         return false;
       }
 
@@ -106,20 +115,11 @@ class ConsentService {
 
     try {
       const supabase = authService.getSupabaseClient();
-      const authState = authService.getAuthState();
-      const userEmail = authState.user?.email?.toLowerCase();
-
-      if (!userEmail) {
-        return {
-          trainingConsent: true,
-          consentUpdatedAt: null
-        };
-      }
 
       const { data, error } = await supabase
         .from('subscribers')
         .select('training_consent, training_consent_updated_at')
-        .eq('email', userEmail)
+        .eq('user_id', userId)
         .single();
 
       if (error || !data) {
