@@ -109,18 +109,37 @@ function initTemplateShortcutButtons() {
     if (!btn) return;
 
     const targetId = btn.dataset.target;
-    const placeholder = btn.dataset.placeholder;
-    if (!targetId || !placeholder) return;
+    if (!targetId) return;
 
-    // Check for contenteditable editor first
+    // Resolve target editor / field once.
     const editor = document.getElementById(targetId + '-editor');
-    if (editor && editor.classList.contains('iptc-editable-template')) {
+    const isEditable = editor && editor.classList.contains('iptc-editable-template');
+    const field = isEditable ? null : document.getElementById(targetId);
+
+    // Action: "wrap" — wrap current selection in `before` … `after` markers.
+    // Used by the "Insert per-car block" button to add `[[ ]]` around a
+    // selection (or just insert the empty wrapper at cursor if no selection).
+    // Configured via `data-action="wrap"` plus `data-wrap-before` / `data-wrap-after`.
+    if (btn.dataset.action === 'wrap') {
+      const before = btn.dataset.wrapBefore || '';
+      const after = btn.dataset.wrapAfter || '';
+      if (isEditable) {
+        wrapSelectionInEditable(editor, before, after);
+      } else if (field) {
+        wrapSelectionInField(field, before, after);
+      }
+      return;
+    }
+
+    // Default action: "insert" — insert a placeholder at the cursor position.
+    const placeholder = btn.dataset.placeholder;
+    if (!placeholder) return;
+
+    if (isEditable) {
       insertIntoEditable(editor, placeholder);
       return;
     }
 
-    // Fallback: regular input/textarea
-    const field = document.getElementById(targetId);
     if (!field) return;
 
     const start = field.selectionStart ?? field.value.length;
@@ -135,6 +154,89 @@ function initTemplateShortcutButtons() {
 
     field.dispatchEvent(new Event('input', { bubbles: true }));
   });
+}
+
+/**
+ * Wrap the current selection inside a contenteditable editor with `before`
+ * and `after` markers. If nothing is selected, the markers are inserted at
+ * the cursor position (with cursor placed between them so the user can type
+ * the inner content immediately).
+ */
+function wrapSelectionInEditable(editor, before, after) {
+  editor.focus();
+
+  const sel = window.getSelection();
+  if (!sel.rangeCount || !editor.contains(sel.anchorNode)) {
+    // No active selection in this editor — drop cursor at end and just insert
+    // the empty wrapper, then move cursor between markers.
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  const selectedText = sel.toString();
+  // Use execCommand so the wrap participates in the editor's undo stack.
+  document.execCommand('insertText', false, before + selectedText + after);
+
+  // After insertion, move the cursor between `before` and `after` (only
+  // meaningful when nothing was selected — when there was selection, the
+  // selection is replaced by the wrapped text, cursor lands at the end).
+  if (!selectedText) {
+    // Move cursor back by `after.length` characters so the user types inside.
+    const sel2 = window.getSelection();
+    if (sel2.rangeCount > 0) {
+      const range = sel2.getRangeAt(0);
+      // Walk back across text nodes by `after.length` chars. For our use case
+      // (`after = "]]"`, 2 chars) this is fine; selection collapses inside the
+      // current text node which is ample.
+      try {
+        range.setStart(range.endContainer, Math.max(0, range.endOffset - after.length));
+        range.collapse(true);
+        sel2.removeAllRanges();
+        sel2.addRange(range);
+      } catch (e) {
+        // If anything goes wrong with the range manipulation, leave the
+        // cursor where it is — non-blocking, just slightly less ergonomic.
+      }
+    }
+  }
+
+  setTimeout(() => {
+    syncEditableToHidden(editor);
+    const fullText = getEditableText(editor);
+    const cursorOffset = saveCursorOffset(editor);
+    renderEditableHighlights(editor, fullText);
+    restoreCursorOffset(editor, cursorOffset);
+  }, 0);
+}
+
+/**
+ * Wrap the current selection in a regular <input>/<textarea> field with
+ * `before` and `after` markers. Mirrors {@link wrapSelectionInEditable} for
+ * the non-contenteditable case.
+ */
+function wrapSelectionInField(field, before, after) {
+  const start = field.selectionStart ?? field.value.length;
+  const end = field.selectionEnd ?? field.value.length;
+  const selected = field.value.substring(start, end);
+  const beforeText = field.value.substring(0, start);
+  const afterText = field.value.substring(end);
+
+  field.value = beforeText + before + selected + after + afterText;
+
+  // Cursor / selection placement:
+  // - With selection: select the wrapped text (excluding the markers)
+  // - Without selection: place cursor between `before` and `after`
+  if (selected) {
+    field.setSelectionRange(start + before.length, start + before.length + selected.length);
+  } else {
+    const newPos = start + before.length;
+    field.setSelectionRange(newPos, newPos);
+  }
+  field.focus();
+  field.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 /**
@@ -210,8 +312,10 @@ function updateTemplatePreview(inputId, previewId) {
   const preview = document.getElementById(previewId);
   if (!preview) return;
 
-  // No placeholders in template — nothing to preview
-  if (!template.includes('{')) {
+  // No placeholders AND no repeat blocks in template — nothing to preview
+  const hasPlaceholders = template.includes('{');
+  const hasRepeatBlock = template.includes('[[');
+  if (!hasPlaceholders && !hasRepeatBlock) {
     preview.innerHTML = '';
     preview.style.display = 'none';
     return;
@@ -220,41 +324,138 @@ function updateTemplatePreview(inputId, previewId) {
   const hasParticipants = typeof participantsData !== 'undefined' && participantsData.length > 0;
   let html = '';
 
-  // Show resolved example using first participant
-  if (hasParticipants) {
-    const resolved = resolveIptcTemplate(template);
-    html += '<div class="preview-example"><span class="preview-label">Example:</span> ' + escapeHtmlPreview(resolved) + '</div>';
-  } else {
+  if (!hasParticipants) {
     html += '<div class="preview-example"><span class="preview-hint">Add participants to see a live preview</span></div>';
+    preview.innerHTML = html;
+    preview.style.display = 'block';
+    return;
+  }
+
+  // Always render a "single participant" example using the first row.
+  const first = normalizeParticipantForTemplate(participantsData[0]);
+  const singleResolved = resolveIptcTemplate(template, [first]);
+  html += '<div class="preview-example"><span class="preview-label">Example (1 pilot):</span> ' +
+    escapeHtmlPreview(singleResolved) + '</div>';
+
+  // If the template uses [[ ]] AND we have at least 2 participants, also render
+  // a multi-pilot example so the user can see how the block expands. This is
+  // crucial for templates designed to handle multi-match images (e.g. WEC, IMSA,
+  // endurance racing where two cars frequently appear in the same frame).
+  if (hasRepeatBlock && participantsData.length >= 2) {
+    const second = normalizeParticipantForTemplate(participantsData[1]);
+    const multiResolved = resolveIptcTemplate(template, [first, second]);
+    html += '<div class="preview-example preview-example-multi">' +
+      '<span class="preview-label">Example (2 pilots):</span> ' +
+      escapeHtmlPreview(multiResolved) + '</div>';
+  } else if (hasRepeatBlock && participantsData.length < 2) {
+    // Friendly hint for users who used [[ ]] but only have 1 participant in the preset
+    html += '<div class="preview-example preview-example-hint">' +
+      '<span class="preview-hint">Add a second participant to preview how the [[ ]] block expands across multiple pilots</span></div>';
   }
 
   preview.innerHTML = html;
   preview.style.display = 'block';
 }
 
-function resolveIptcTemplate(template) {
-  const hasParticipants = typeof participantsData !== 'undefined' && participantsData.length > 0;
-  const sampleParticipant = hasParticipants
-    ? participantsData[0]
-    : null;
+/**
+ * Convert a row from participantsData (DB-shaped, Italian field names) into
+ * the participant shape consumed by template substitution. Centralized here
+ * so that the live preview uses the same field mapping as the backend.
+ */
+function normalizeParticipantForTemplate(row) {
+  if (!row) return null;
+  let driverName = row.nome || '';
+  if (Array.isArray(row.drivers) && row.drivers.length > 0) {
+    driverName = row.drivers[0];
+  }
+  return {
+    name: driverName,
+    surname: driverName ? driverName.split(' ').pop() : '',
+    number: row.numero || '',
+    team: row.squadra || '',
+    category: row.categoria || '',
+    nationality: row.nationality || '',
+    car_model: row.car_model || '',
+    tag: row.metatag || '',
+  };
+}
 
-  if (!sampleParticipant) return template;
+/**
+ * Substitute the participant variables in a string using a single participant.
+ * Used both inside [[ ]] block iterations and for top-level (non-block) text.
+ *
+ * Mirrors the renderer subset of the TS helper `renderBlockForParticipant`
+ * (with the renderer-specific extras `{category}` and `{tag}`). Unknown
+ * placeholders are left untouched for the outer cleanup pass.
+ */
+function substituteParticipantVarsForPreview(text, p) {
+  return text
+    .replace(/\{name\}/gi, p.name || '')
+    .replace(/\{surname\}/gi, p.surname || '')
+    .replace(/\{number\}/gi, p.number || '')
+    .replace(/\{team\}/gi, p.team || '')
+    .replace(/\{category\}/gi, p.category || '')
+    .replace(/\{nationality\}/gi, p.nationality || '')
+    .replace(/\{car_model\}/gi, p.car_model || '')
+    .replace(/\{tag\}/gi, p.tag || '')
+    // {persons} in preview falls back to driver name (the renderer doesn't
+    // build the full extended-name string here — keeps the preview light).
+    .replace(/\{persons\}/gi, p.name || '');
+}
 
-  let driverName = sampleParticipant.nome || '';
-  if (sampleParticipant.drivers && sampleParticipant.drivers.length > 0) {
-    driverName = sampleParticipant.drivers[0];
+/**
+ * Expand `[[ ... ]]` blocks in a template using the provided participant list.
+ * JS port of the TypeScript helper {@link expandPerParticipantBlocks} for the
+ * live preview. Behavior must stay aligned with the backend: same separator,
+ * same emptiness handling, same single-vs-multi semantics.
+ */
+function expandPerParticipantBlocksForPreview(template, participants, separator = ', ') {
+  if (!template || !template.includes('[[')) return template;
+
+  return template.replace(/\[\[([\s\S]*?)\]\]/g, (_match, blockContent) => {
+    if (!participants || participants.length === 0) return '';
+    return participants
+      .map(p => substituteParticipantVarsForPreview(blockContent, p))
+      .join(separator);
+  });
+}
+
+/**
+ * Resolve a template string for the preview.
+ *
+ * - If the template contains `[[ ... ]]` and we have a participant list, the
+ *   block is rendered once per provided participant (joined by ", ").
+ * - Variables OUTSIDE blocks are substituted with the FIRST participant's
+ *   values, mirroring the backend behavior in the single-match path. (For
+ *   the multi-pilot variant of the preview the caller passes 2 participants
+ *   and uses the first as the "outer" participant to keep the example
+ *   readable; this matches the backend's aggregated-participant convention
+ *   only approximately, but it's good enough for editor preview purposes.)
+ *
+ * @param {string} template
+ * @param {Array<object>} normalizedParticipants 1 or more normalized participants.
+ *        If omitted, falls back to `participantsData[0]` (legacy preview
+ *        behavior, single example).
+ */
+function resolveIptcTemplate(template, normalizedParticipants) {
+  // Resolve the participant list to use.
+  let list = normalizedParticipants;
+  if (!list || list.length === 0) {
+    const hasParticipants = typeof participantsData !== 'undefined' && participantsData.length > 0;
+    if (!hasParticipants) return template;
+    const single = normalizeParticipantForTemplate(participantsData[0]);
+    if (!single) return template;
+    list = [single];
   }
 
-  return template
-    .replace(/\{name\}/gi, driverName || '')
-    .replace(/\{number\}/gi, sampleParticipant.numero || '')
-    .replace(/\{team\}/gi, sampleParticipant.squadra || '')
-    .replace(/\{category\}/gi, sampleParticipant.categoria || '')
-    .replace(/\{nationality\}/gi, sampleParticipant.nationality || '')
-    .replace(/\{car_model\}/gi, sampleParticipant.car_model || '')
-    .replace(/\{surname\}/gi, (driverName ? driverName.split(' ').pop() : '') || '')
-    .replace(/\{tag\}/gi, sampleParticipant.metatag || '')
-    .replace(/\{persons\}/gi, driverName || '')
+  // Step 1: expand [[ ]] blocks per participant.
+  let result = expandPerParticipantBlocksForPreview(template, list);
+
+  // Step 2: substitute outer variables using the FIRST participant.
+  result = substituteParticipantVarsForPreview(result, list[0]);
+
+  // Step 3: cleanup
+  return result
     .replace(/\{[^}]+\}/g, '')  // Remove any unresolved placeholders
     .replace(/\s+/g, ' ')
     .trim();

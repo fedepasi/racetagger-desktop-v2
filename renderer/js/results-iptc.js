@@ -525,13 +525,52 @@ async function startIptcProWrite() {
     console.warn('[IPTC Pro] Error on file:', data.fileName, data.error);
   });
 
+  // Telemetry: legacy entry point to the same iptc-finalize-batch IPC. Same
+  // payload shape as the unified modal so dashboards don't have to special-
+  // case the two paths. Tagged with `entry: 'legacy-iptc-pro'` so we can
+  // measure how many users still come through here vs. the unified flow.
+  const __writeStartedAtLegacy = Date.now();
+  const __scopeLegacy = document.querySelector('input[name="ipf-scope"]:checked')?.value || 'matched';
+  const __kwModeLegacy = document.querySelector('input[name="ipf-kw-mode"]:checked')?.value || 'append';
+  if (window.logUserAction) {
+    const __vtAvailLegacy = results.filter(r =>
+      r && r.visualTags && typeof r.visualTags === 'object' &&
+      Object.values(r.visualTags).some(arr => Array.isArray(arr) && arr.length > 0)
+    ).length;
+    const __iptcFieldsFilledLegacy = Object.keys(iptcMetadata).filter(k => {
+      if (k === 'appendKeywords' || k === 'personShownFormat') return false;
+      const v = iptcMetadata[k];
+      if (v === undefined || v === null || v === '') return false;
+      if (Array.isArray(v) && v.length === 0) return false;
+      return true;
+    });
+    window.logUserAction('WRITE_ORIGINALS_STARTED', 'EXECUTE', {
+      entry: 'legacy-iptc-pro',
+      scope: __scopeLegacy,
+      fileCount: results.length,
+      keywordsMode: __kwModeLegacy,
+      includeVisualTags: !!iptcMetadata.includeVisualTags,
+      visualTagsAvailablePct: results.length > 0 ? +(__vtAvailLegacy / results.length).toFixed(2) : 0,
+      iptcFieldsFilled: __iptcFieldsFilledLegacy,
+      iptcFieldsFilledCount: __iptcFieldsFilledLegacy.length
+    });
+  }
+
   try {
-    const kwMode = document.querySelector('input[name="ipf-kw-mode"]:checked')?.value || 'append';
+    const kwMode = __kwModeLegacy;
 
     const response = await window.api.invoke('iptc-finalize-batch', iptcMetadata, results, kwMode);
 
     if (response.success) {
       const summary = response.data;
+      if (window.logUserAction) {
+        window.logUserAction('WRITE_ORIGINALS_COMPLETED', 'EXECUTE', {
+          entry: 'legacy-iptc-pro',
+          successCount: summary.successCount ?? 0,
+          errorCount: summary.errorCount ?? 0,
+          durationMs: summary.durationMs ?? (Date.now() - __writeStartedAtLegacy)
+        });
+      }
       const title = document.getElementById('iptc-pro-progress-title');
       const text = document.getElementById('iptc-pro-progress-text');
       const fill = document.getElementById('iptc-pro-progress-fill');
@@ -554,6 +593,15 @@ async function startIptcProWrite() {
     }
   } catch (error) {
     console.error('[IPTC Pro] Finalization error:', error);
+    if (window.logUserAction) {
+      window.logUserAction('WRITE_ORIGINALS_COMPLETED', 'EXECUTE', {
+        entry: 'legacy-iptc-pro',
+        successCount: 0,
+        errorCount: 1,
+        failed: true,
+        durationMs: Date.now() - __writeStartedAtLegacy
+      });
+    }
     const title = document.getElementById('iptc-pro-progress-title');
     if (title) title.textContent = 'Error: ' + error.message;
     iptcProIsWriting = false;

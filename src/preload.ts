@@ -71,6 +71,8 @@ const validSendReceiveChannels: string[] = [
   'delivery-routing-complete',
   'r2-upload-progress',
   'r2-upload-complete',
+  // Preset participants save progress
+  'preset-save-progress',
 ];
 
 const validInvokeChannels: string[] = [
@@ -199,6 +201,9 @@ const validInvokeChannels: string[] = [
   'get-local-executions',
   'rename-execution',
   'delete-local-execution',
+  // Post-analysis user-action telemetry. Wrapper:
+  // window.logUserAction(action, category, data) — see user-action-logger.js.
+  'log-user-action',
 
   // Local Thumbnail Operations
   'find-local-thumbnails',

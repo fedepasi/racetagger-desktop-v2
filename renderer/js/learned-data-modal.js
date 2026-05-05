@@ -416,27 +416,55 @@ class LearnedDataModal {
     const checkboxes = modal.querySelectorAll('.learned-field-checkbox');
     checkboxes.forEach(cb => cb.checked = true);
 
+    // Telemetry: LEARNED_DATA_PROPOSED — fires when the modal opens with
+    // suggestions. Track which fields the system surfaced so we can
+    // measure proposal quality vs. acceptance rate (low acceptance =
+    // bad proposals = tune the aggregation logic).
+    const __proposedFieldTypes = new Set();
+    for (const p of proposals) {
+      if (p && p.fields && typeof p.fields === 'object') {
+        for (const k of Object.keys(p.fields)) __proposedFieldTypes.add(k);
+      }
+    }
+    if (window.logUserAction) {
+      window.logUserAction('LEARNED_DATA_PROPOSED', 'CORRECT', {
+        proposalCount: proposals.length,
+        totalFieldCount: totalFields,
+        fieldTypes: Array.from(__proposedFieldTypes)
+      });
+    }
+
     // Event listeners
     const closeBtn = modal.querySelector('#learned-data-close');
     const skipBtn = modal.querySelector('#learned-data-skip');
     const acceptBtn = modal.querySelector('#learned-data-accept');
 
-    const dismiss = () => {
+    const dismiss = (via) => {
+      // Telemetry: LEARNED_DATA_DISMISSED — user closed without accepting.
+      // The `via` field lets us distinguish "explicit Skip click" from
+      // "clicked the X" from "clicked outside" — different intents.
+      if (window.logUserAction) {
+        window.logUserAction('LEARNED_DATA_DISMISSED', 'CORRECT', {
+          via: via || 'unknown',
+          proposalCount: proposals.length,
+          totalFieldCount: totalFields
+        });
+      }
       modal.remove();
       this.modalElement = null;
       resolvePromise(false);
     };
 
-    closeBtn.addEventListener('click', dismiss);
-    skipBtn.addEventListener('click', dismiss);
-    modal.addEventListener('click', (e) => { if (e.target === modal) dismiss(); });
+    closeBtn.addEventListener('click', () => dismiss('close-x'));
+    skipBtn.addEventListener('click', () => dismiss('skip-button'));
+    modal.addEventListener('click', (e) => { if (e.target === modal) dismiss('outside-click'); });
 
     acceptBtn.addEventListener('click', async () => {
       // Collect accepted fields
       const acceptedData = this._collectAcceptedData(modal);
 
       if (acceptedData.length === 0) {
-        dismiss();
+        dismiss('accept-but-empty');
         return;
       }
 
@@ -455,6 +483,24 @@ class LearnedDataModal {
           const count = result.data?.updated || acceptedData.length;
           acceptBtn.textContent = `✅ ${count} participant${count === 1 ? '' : 's'} updated`;
           acceptBtn.classList.add('learned-data-btn-success');
+
+          // Telemetry: LEARNED_DATA_SAVED. This is the heartbeat of the
+          // SmartMatcher "learn from corrections" loop — what % of users
+          // who SEE the proposal actually accept it.
+          if (window.logUserAction) {
+            const acceptedFieldTypes = new Set();
+            for (const p of acceptedData) {
+              if (p && p.fields && typeof p.fields === 'object') {
+                for (const k of Object.keys(p.fields)) acceptedFieldTypes.add(k);
+              }
+            }
+            window.logUserAction('LEARNED_DATA_SAVED', 'CORRECT', {
+              participantCount: acceptedData.length,
+              acceptedFieldTypes: Array.from(acceptedFieldTypes),
+              proposedCount: proposals.length,
+              partialAcceptance: acceptedData.length < proposals.length
+            });
+          }
 
           // Clear aggregated data and mark execution as processed
           // so _checkLearnedDataAvailability() won't re-propose the same data

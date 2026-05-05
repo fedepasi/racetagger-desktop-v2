@@ -90,12 +90,8 @@ import {
   ExportDestination,
   getActiveExportDestinations,
   getExportDestinationById,
-  // Delivery & Gallery - post-execution auto-routing
-  autoRouteImagesToGalleries,
-  getUserPlanLimits,
 } from './database-service';
 import { r2UploadService } from './r2-upload-service';
-import { triggerR2UploadForExecution } from './r2-upload-trigger';
 // Determine if we're in development mode - will be set after app is ready
 let isDev = true; // Default to true for safety during initialization
 // Don't import @electron/remote at top level - it will be required when needed
@@ -1639,65 +1635,25 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
           });
         }
 
-        // ==================== POST-EXECUTION: Delivery (project_id only) ====================
+        // ==================== POST-EXECUTION: NO automatic delivery ====================
         //
-        // Rule (decided 2026-04-30): HD upload + delivery routing must NEVER
-        // fire automatically. They run only when:
-        //   1. The user clicks "Deliver" in the results modal (handled by
-        //      `delivery-r2-upload-start` IPC), OR
-        //   2. The execution is bound to a client via the participant preset
-        //      (`executions.project_id` is non-null), in which case the
-        //      gallery auto-routing AND the HD R2 upload run as a coupled
-        //      action — that's the explicit opt-in encoded in the preset.
+        // Rule (decided 2026-05-04 by product owner): nothing — neither
+        // gallery routing nor HD R2 upload — runs automatically at the end
+        // of an analysis. Reason: the user must always be able to review
+        // results first, because an analysis can contain mistakes. Pushing
+        // photos to galleries or to R2 before review risks delivering
+        // wrong tags to clients.
         //
-        // The previous implementation also fired R2 uploads whenever the user
-        // simply had `r2_storage_enabled` on their plan. That blanket trigger
-        // is gone: see git history for `// POST-EXECUTION: R2 Original Upload`.
-        if (currentExecutionId && !wasCancelled) {
-          try {
-            const executionData = await getExecutionByIdOnline(currentExecutionId);
-            if (executionData && executionData.project_id) {
-              // 1) Gallery auto-routing via delivery_rules
-              console.log(`[Delivery] Auto-routing photos for project ${executionData.project_id}...`);
-              const routingResult = await autoRouteImagesToGalleries(executionData.project_id, currentExecutionId);
-              console.log(`[Delivery] Auto-routing complete: ${routingResult.routed} routed to ${routingResult.galleriesCount} galleries, ${routingResult.unmatched} unmatched`);
-              safeSend('delivery-routing-complete', {
-                executionId: currentExecutionId,
-                projectId: executionData.project_id,
-                routed: routingResult.routed,
-                unmatched: routingResult.unmatched,
-                galleriesCount: routingResult.galleriesCount,
-              });
-
-              // 2) Coupled HD R2 upload — only if routing actually placed
-              // something in a gallery and the plan allows R2.
-              if (routingResult.routed > 0) {
-                try {
-                  const planLimits = await getUserPlanLimits();
-                  if (planLimits.r2_storage_enabled) {
-                    // Use the just-finished batch folder as fallback if the
-                    // execution row hasn't persisted source_folder yet.
-                    const batchFolder = config?.folderPath as string | undefined;
-                    const r2Result = await triggerR2UploadForExecution(currentExecutionId, {
-                      fallbackSourceFolder: batchFolder,
-                    });
-                    if (r2Result.error) {
-                      console.warn(`[R2 Upload] Auto-trigger reported issue: ${r2Result.error}`);
-                    } else {
-                      console.log(`[R2 Upload] Auto-trigger queued ${r2Result.queued} originals for execution ${currentExecutionId}`);
-                    }
-                  } else {
-                    console.log('[R2 Upload] R2 storage not enabled for user, skipping coupled upload');
-                  }
-                } catch (r2Error: any) {
-                  console.warn(`[R2 Upload] Coupled upload failed (non-blocking): ${r2Error.message || r2Error}`);
-                }
-              }
-            }
-          } catch (routingError: any) {
-            console.warn(`[Delivery] Post-execution delivery failed (non-blocking): ${routingError.message || routingError}`);
-          }
-        }
+        // The ONLY trigger for delivery is an explicit click on the
+        // "Deliver" button in the results modal. When the user clicks it,
+        // the modal will:
+        //   - Apply preset delivery_rules if `executions.project_id` is set
+        //     (the user has explicitly bound the preset to a client).
+        //   - Otherwise let the user pick a gallery manually.
+        //   - HD R2 upload is opt-in via the toggle (default OFF).
+        //
+        // A future iteration may add a per-user setting to opt back into
+        // automatic post-execution delivery; for now there is none.
 
         // Automatic export to destinations (if configured)
         let exportResult = null;

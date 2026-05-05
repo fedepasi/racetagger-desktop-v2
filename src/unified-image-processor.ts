@@ -7687,12 +7687,24 @@ export class UnifiedImageProcessor extends EventEmitter {
       );
 
       if (!preAuth.authorized) {
-        // Insufficient tokens - emit event and bail out
+        // Pre-auth failed. Distinguish the two main paths so the UI can
+        // render a dedicated message:
+        //   - MACHINE_BLOCKED: the device is on the admin blacklist. Token
+        //     balance is irrelevant; refuse to start the batch.
+        //   - INSUFFICIENT_TOKENS / others: original "not enough credit" path.
         this.emit('preAuthFailed', {
           error: preAuth.error,
           available: preAuth.available,
-          needed: preAuth.needed
+          needed: preAuth.needed,
+          reason: preAuth.reason,
+          blockedAt: preAuth.blockedAt
         });
+
+        if (preAuth.error === 'MACHINE_BLOCKED') {
+          const reason = preAuth.reason ? ` (${preAuth.reason})` : '';
+          throw new Error(`This device has been blocked from running analyses${reason}. Contact support if you believe this is a mistake.`);
+        }
+
         throw new Error(`Insufficient tokens: ${preAuth.available || 0} available, ${tokensNeeded} needed`);
       }
 

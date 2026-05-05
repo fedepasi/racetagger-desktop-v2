@@ -126,6 +126,13 @@ document.addEventListener('DOMContentLoaded', () => {
     folderSelectButton.addEventListener('click', handleFolderSelection);
   }
 
+  // Files selection (alternative to folder picker for Windows users
+  // who can't see files in the native folder dialog)
+  const filesSelectButton = document.getElementById('files-select-button');
+  if (filesSelectButton) {
+    filesSelectButton.addEventListener('click', handleFilesSelection);
+  }
+
   // Advanced options
   if (advancedToggle) {
     advancedToggle.addEventListener('click', toggleAdvancedOptions);
@@ -644,6 +651,52 @@ function handleFolderSelection() {
     window.api.send('select-folder');
   } else {
     console.error('[Renderer] window.api not available!');
+  }
+}
+
+// Handle "Select Files" button — opens a native file picker that SHOWS files
+// (Windows folder picker hides files, which confuses some users). We pick the
+// parent folder of the first selected file and reuse the existing
+// `select-folder-by-path` IPC, so the rest of the pipeline is untouched.
+async function handleFilesSelection() {
+  console.log('[Renderer] handleFilesSelection called');
+  if (!window.api) {
+    console.error('[Renderer] window.api not available!');
+    return;
+  }
+
+  try {
+    const result = await window.api.invoke('dialog-show-open', {
+      properties: ['openFile', 'multiSelections'],
+      title: 'Select image files (the entire folder will be analyzed)',
+      filters: [
+        { name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp', 'nef', 'arw', 'cr2', 'cr3', 'orf', 'raw', 'rw2', 'dng'] },
+        { name: 'All Files', extensions: ['*'] }
+      ]
+    });
+
+    if (!result || result.canceled || !result.filePaths || result.filePaths.length === 0) {
+      console.log('[Renderer] File selection canceled');
+      return;
+    }
+
+    const firstFile = result.filePaths[0];
+    const lastSep = Math.max(firstFile.lastIndexOf('/'), firstFile.lastIndexOf('\\'));
+    if (lastSep < 0) {
+      console.warn('[Renderer] Could not derive parent folder from path:', firstFile);
+      showError('Could not determine the folder of the selected files');
+      return;
+    }
+    const parentFolder = firstFile.substring(0, lastSep);
+    console.log('[Renderer] Derived parent folder:', parentFolder);
+
+    const folderResult = await window.api.invoke('select-folder-by-path', parentFolder);
+    if (typeof window.handleFolderSelected === 'function') {
+      window.handleFolderSelected(folderResult);
+    }
+  } catch (err) {
+    console.error('[Renderer] handleFilesSelection error:', err);
+    showError('Error selecting files');
   }
 }
 
@@ -2499,6 +2552,7 @@ window.refreshCategories = refreshCategories;
 
 // Expose functions for router/dynamic page initialization
 window.handleFolderSelection = handleFolderSelection;
+window.handleFilesSelection = handleFilesSelection;
 window.handleFolderSelected = handleFolderSelected;
 window.setupFolderDragAndDrop = setupFolderDragAndDrop;
 window.toggleAdvancedOptions = toggleAdvancedOptions;

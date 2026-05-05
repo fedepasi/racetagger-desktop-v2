@@ -8,6 +8,198 @@ var participantsData = [];
 var isEditingPreset = false;
 var customFolders = []; // Array of {name, path?} objects for custom folders
 
+// =====================================================================
+// Preset Save Progress Overlay
+// Unified UI for save progress + success/error feedback. Replaces the
+// previous loading silence and the system success/error toasts for
+// preset-participants saves.
+// =====================================================================
+var __presetSaveOverlay = {
+  el: null,
+  unsubscribe: null,
+  autoCloseTimer: null,
+  active: false,
+  expectedPresetId: null,
+};
+
+function __ensurePresetSaveOverlay() {
+  if (__presetSaveOverlay.el) return __presetSaveOverlay.el;
+
+  var overlay = document.createElement('div');
+  overlay.className = 'preset-save-overlay';
+  overlay.id = 'preset-save-overlay';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-live', 'polite');
+  overlay.innerHTML = [
+    '<div class="preset-save-card">',
+    '  <div class="preset-save-icon" data-role="icon">',
+    '    <div class="spinner-ring"></div>',
+    '  </div>',
+    '  <div class="preset-save-title" data-role="title">Saving participants…</div>',
+    '  <div class="preset-save-message" data-role="message">Preparing data…</div>',
+    '  <div class="preset-save-progress-track">',
+    '    <div class="preset-save-progress-fill" data-role="bar"></div>',
+    '  </div>',
+    '  <div class="preset-save-percent" data-role="percent">0%</div>',
+    '  <div class="preset-save-actions hidden" data-role="actions">',
+    '    <button type="button" data-role="dismiss">Close</button>',
+    '  </div>',
+    '</div>'
+  ].join('');
+
+  document.body.appendChild(overlay);
+
+  overlay.querySelector('[data-role="dismiss"]').addEventListener('click', function () {
+    hidePresetSaveOverlay();
+  });
+
+  __presetSaveOverlay.el = overlay;
+  return overlay;
+}
+
+function showPresetSaveOverlay(opts) {
+  opts = opts || {};
+  var overlay = __ensurePresetSaveOverlay();
+
+  if (__presetSaveOverlay.autoCloseTimer) {
+    clearTimeout(__presetSaveOverlay.autoCloseTimer);
+    __presetSaveOverlay.autoCloseTimer = null;
+  }
+
+  // Reset to running state
+  var icon = overlay.querySelector('[data-role="icon"]');
+  icon.innerHTML = '<div class="spinner-ring"></div>';
+
+  var bar = overlay.querySelector('[data-role="bar"]');
+  bar.classList.remove('success', 'error');
+  bar.style.width = '4%';
+
+  overlay.querySelector('[data-role="title"]').textContent = opts.title || 'Saving participants…';
+  overlay.querySelector('[data-role="message"]').textContent = opts.message || 'Preparing data…';
+  overlay.querySelector('[data-role="percent"]').textContent = '0%';
+  overlay.querySelector('[data-role="actions"]').classList.add('hidden');
+
+  overlay.classList.add('visible');
+  __presetSaveOverlay.active = true;
+  __presetSaveOverlay.expectedPresetId = opts.presetId || null;
+
+  // Subscribe to backend progress events (only once per show)
+  if (__presetSaveOverlay.unsubscribe) {
+    try { __presetSaveOverlay.unsubscribe(); } catch (e) { /* ignore */ }
+    __presetSaveOverlay.unsubscribe = null;
+  }
+  if (window.api && typeof window.api.receive === 'function') {
+    __presetSaveOverlay.unsubscribe = window.api.receive('preset-save-progress', function (payload) {
+      if (!__presetSaveOverlay.active) return;
+      if (__presetSaveOverlay.expectedPresetId &&
+          payload && payload.presetId &&
+          payload.presetId !== __presetSaveOverlay.expectedPresetId) {
+        return; // ignore events from another concurrent save
+      }
+      updatePresetSaveOverlay(payload);
+    });
+  }
+}
+
+function updatePresetSaveOverlay(payload) {
+  var overlay = __presetSaveOverlay.el;
+  if (!overlay) return;
+  if (!payload) return;
+
+  var bar = overlay.querySelector('[data-role="bar"]');
+  var pctEl = overlay.querySelector('[data-role="percent"]');
+  var msgEl = overlay.querySelector('[data-role="message"]');
+
+  var pct = Math.max(0, Math.min(100, Number(payload.percent) || 0));
+  bar.style.width = pct + '%';
+  pctEl.textContent = Math.round(pct) + '%';
+  if (payload.message) msgEl.textContent = payload.message;
+  if (payload.title) {
+    var titleEl = overlay.querySelector('[data-role="title"]');
+    if (titleEl) titleEl.textContent = payload.title;
+  }
+}
+
+/**
+ * Switch the overlay to a renderer-driven phase. Stops listening to backend
+ * progress events (so a leftover "complete 100%" from phase 1 cannot override
+ * phase 2 updates) and resets the bar to the given starting state.
+ */
+function setPresetSavePhase(opts) {
+  opts = opts || {};
+  if (__presetSaveOverlay.unsubscribe) {
+    try { __presetSaveOverlay.unsubscribe(); } catch (e) { /* ignore */ }
+    __presetSaveOverlay.unsubscribe = null;
+  }
+  updatePresetSaveOverlay({
+    percent: typeof opts.percent === 'number' ? opts.percent : 0,
+    message: opts.message,
+    title: opts.title
+  });
+}
+
+function showPresetSaveSuccess(message, autoCloseMs) {
+  var overlay = __ensurePresetSaveOverlay();
+  __presetSaveOverlay.active = true;
+
+  var icon = overlay.querySelector('[data-role="icon"]');
+  icon.innerHTML = '<div class="check-mark">✓</div>';
+
+  overlay.querySelector('[data-role="title"]').textContent = 'Saved successfully';
+  overlay.querySelector('[data-role="message"]').textContent = message || 'Participants saved.';
+  overlay.querySelector('[data-role="percent"]').textContent = '100%';
+
+  var bar = overlay.querySelector('[data-role="bar"]');
+  bar.classList.remove('error');
+  bar.classList.add('success');
+
+  overlay.querySelector('[data-role="actions"]').classList.add('hidden');
+  overlay.classList.add('visible');
+
+  if (__presetSaveOverlay.autoCloseTimer) clearTimeout(__presetSaveOverlay.autoCloseTimer);
+  var delay = typeof autoCloseMs === 'number' ? autoCloseMs : 1400;
+  __presetSaveOverlay.autoCloseTimer = setTimeout(hidePresetSaveOverlay, delay);
+}
+
+function showPresetSaveError(message) {
+  var overlay = __ensurePresetSaveOverlay();
+  __presetSaveOverlay.active = true;
+
+  var icon = overlay.querySelector('[data-role="icon"]');
+  icon.innerHTML = '<div class="error-mark">!</div>';
+
+  overlay.querySelector('[data-role="title"]').textContent = 'Save failed';
+  overlay.querySelector('[data-role="message"]').textContent = message || 'Could not save participants.';
+
+  var bar = overlay.querySelector('[data-role="bar"]');
+  bar.classList.remove('success');
+  bar.classList.add('error');
+
+  overlay.querySelector('[data-role="actions"]').classList.remove('hidden');
+  overlay.classList.add('visible');
+  // No auto-close on error: user must dismiss explicitly.
+  if (__presetSaveOverlay.autoCloseTimer) {
+    clearTimeout(__presetSaveOverlay.autoCloseTimer);
+    __presetSaveOverlay.autoCloseTimer = null;
+  }
+}
+
+function hidePresetSaveOverlay() {
+  if (__presetSaveOverlay.autoCloseTimer) {
+    clearTimeout(__presetSaveOverlay.autoCloseTimer);
+    __presetSaveOverlay.autoCloseTimer = null;
+  }
+  if (__presetSaveOverlay.unsubscribe) {
+    try { __presetSaveOverlay.unsubscribe(); } catch (e) { /* ignore */ }
+    __presetSaveOverlay.unsubscribe = null;
+  }
+  __presetSaveOverlay.active = false;
+  __presetSaveOverlay.expectedPresetId = null;
+  if (__presetSaveOverlay.el) {
+    __presetSaveOverlay.el.classList.remove('visible');
+  }
+}
+
 // 1.2.0 — chip-based folder editor for the per-participant edit modal.
 // Each entry: { name: string, path?: string }. Replaces the legacy
 // folder_1/2/3 dropdowns. The modal works on a fresh COPY (so the user
@@ -1900,6 +2092,12 @@ async function saveParticipantAndStay() {
       sort_order: index
     }));
 
+    showPresetSaveOverlay({
+      presetId: currentPreset.id,
+      title: 'Saving participant…',
+      message: 'Preparing data…'
+    });
+
     const saveResponse = await window.api.invoke('supabase-save-preset-participants', {
       presetId: currentPreset.id,
       participants: participants
@@ -1936,12 +2134,9 @@ async function saveParticipantAndStay() {
             await driverFaceManagerMulti.waitForSync();
             console.log('[Participants] ✅ Driver sync complete, IDs ready for photo upload');
           }
-
-          showNotification('Participant saved! You can now add face photos.', 'success');
         } else if (typeof presetFaceManager !== 'undefined') {
           // Fallback to old face manager if driver manager not available
           await presetFaceManager.loadPhotos(savedParticipant.id, currentPreset.id, currentUserId, isOfficial);
-          showNotification('Participant saved! You can now add face photos.', 'success');
         }
       }
     }
@@ -1953,9 +2148,11 @@ async function saveParticipantAndStay() {
       applySortState(sortState);
     }
 
+    showPresetSaveSuccess('Participant saved. You can now add face photos.');
+
   } catch (error) {
     console.error('[Participants] Error saving participant for face photos:', error);
-    showNotification('Error saving: ' + getErrorMessage(error), 'error');
+    showPresetSaveError(getErrorMessage(error));
   }
 }
 
@@ -3830,6 +4027,12 @@ async function savePreset() {
 
     // Save participants
     if (participants.length > 0) {
+      showPresetSaveOverlay({
+        presetId: presetId,
+        title: isEditingPreset ? 'Updating preset…' : 'Creating preset…',
+        message: `Saving ${participants.length} participants…`
+      });
+
       const saveResponse = await window.api.invoke('supabase-save-preset-participants', {
         presetId: presetId,
         participants: participants
@@ -3859,17 +4062,28 @@ async function savePreset() {
         .catch(err => console.warn('[Participants] Delivery rule sync failed (non-critical):', err));
     }
 
-    showNotification(
-      isEditingPreset ? 'Preset updated successfully!' : 'Preset created successfully!',
-      'success'
-    );
+    if (participants.length > 0) {
+      showPresetSaveSuccess(
+        isEditingPreset ? 'Preset updated successfully.' : 'Preset created successfully.'
+      );
+    } else {
+      // No participants — fall back to system notification (overlay never opened).
+      showNotification(
+        isEditingPreset ? 'Preset updated successfully!' : 'Preset created successfully!',
+        'success'
+      );
+    }
 
     closePresetEditor();
     await loadParticipantPresets(); // Refresh list
 
   } catch (error) {
     console.error('[Participants] Error saving preset:', error);
-    showNotification('Error saving preset: ' + getErrorMessage(error), 'error');
+    if (__presetSaveOverlay.active) {
+      showPresetSaveError(getErrorMessage(error));
+    } else {
+      showNotification('Error saving preset: ' + getErrorMessage(error), 'error');
+    }
   } finally {
     // Re-enable save button
     const saveBtn = document.getElementById('save-preset-btn');
@@ -4350,6 +4564,12 @@ async function importJsonPreset() {
     // Save participants
     let savedParticipants = [];
     if (participants.length > 0) {
+      showPresetSaveOverlay({
+        presetId: presetId,
+        title: 'Importing preset…',
+        message: `Saving ${participants.length} participants…`
+      });
+
       const saveResponse = await window.api.invoke('supabase-save-preset-participants', {
         presetId: presetId,
         participants: participants
@@ -4375,42 +4595,72 @@ async function importJsonPreset() {
         driversByParticipant[d.participant_numero].push(d);
       });
 
-      // Create driver records for each participant
-      for (const savedP of savedParticipants) {
-        const driversForP = driversByParticipant[savedP.numero] || [];
-        if (driversForP.length > 0) {
-          const batchResult = await window.api.invoke('preset-create-drivers-batch', {
-            participantId: savedP.id,
-            drivers: driversForP.map(d => ({
-              id: d.id,  // Preserve original ID
-              driver_name: d.driver_name,
-              driver_metatag: d.driver_metatag,
-              driver_nationality: d.driver_nationality || null,
-              driver_order: d.driver_order
-            }))
-          });
+      // Phase 2: renderer-driven progress while we create driver records.
+      // Only iterate over participants that actually have drivers in the JSON.
+      const participantsWithDrivers = savedParticipants.filter(
+        savedP => (driversByParticipant[savedP.numero] || []).length > 0
+      );
 
-          if (!batchResult.success) {
-            console.error(`[Participants] Failed to create drivers for #${savedP.numero}:`, batchResult.error);
-          } else {
-            console.log(`[Participants] Created ${batchResult.count} drivers for #${savedP.numero}`);
-          }
-        }
+      if (participantsWithDrivers.length > 0) {
+        setPresetSavePhase({
+          title: 'Creating driver records…',
+          message: `0 / ${participantsWithDrivers.length}`,
+          percent: 0
+        });
       }
 
-      showNotification(
-        `Successfully imported preset "${presetData.name}" with ${participants.length} participants and ${presetData.drivers.length} drivers!`,
-        'success'
-      );
+      for (let i = 0; i < participantsWithDrivers.length; i++) {
+        const savedP = participantsWithDrivers[i];
+        const driversForP = driversByParticipant[savedP.numero];
+
+        const batchResult = await window.api.invoke('preset-create-drivers-batch', {
+          participantId: savedP.id,
+          drivers: driversForP.map(d => ({
+            id: d.id,  // Preserve original ID
+            driver_name: d.driver_name,
+            driver_metatag: d.driver_metatag,
+            driver_nationality: d.driver_nationality || null,
+            driver_order: d.driver_order
+          }))
+        });
+
+        if (!batchResult.success) {
+          console.error(`[Participants] Failed to create drivers for #${savedP.numero}:`, batchResult.error);
+        } else {
+          console.log(`[Participants] Created ${batchResult.count} drivers for #${savedP.numero}`);
+        }
+
+        const done = i + 1;
+        updatePresetSaveOverlay({
+          percent: Math.round((done / participantsWithDrivers.length) * 100),
+          message: `${done} / ${participantsWithDrivers.length}`
+        });
+      }
+
+      const successMsg = `Imported "${presetData.name}" with ${participants.length} participants and ${presetData.drivers.length} drivers.`;
+      if (__presetSaveOverlay.active) {
+        showPresetSaveSuccess(successMsg);
+      } else {
+        showNotification(successMsg, 'success');
+      }
     } else {
-      showNotification(`Successfully imported preset "${presetData.name}" with ${participants.length} participants!`, 'success');
+      const successMsg = `Imported "${presetData.name}" with ${participants.length} participants.`;
+      if (__presetSaveOverlay.active) {
+        showPresetSaveSuccess(successMsg);
+      } else {
+        showNotification(successMsg, 'success');
+      }
     }
 
     closeJsonImportModal();
     await loadParticipantPresets(); // Refresh list
 
   } catch (error) {
-    showNotification('Error importing JSON: ' + error.message, 'error');
+    if (__presetSaveOverlay.active) {
+      showPresetSaveError(error.message || 'Failed to import preset.');
+    } else {
+      showNotification('Error importing JSON: ' + error.message, 'error');
+    }
   } finally {
     // Re-enable import button
     const importBtn = document.getElementById('import-json-btn');
@@ -5353,6 +5603,12 @@ async function importPdfPreset() {
     const presetId = createResponse.data.id;
 
     // Save participants
+    showPresetSaveOverlay({
+      presetId: presetId,
+      title: 'Importing from PDF…',
+      message: `Saving ${participants.length} participants…`
+    });
+
     const saveResponse = await window.api.invoke('supabase-save-preset-participants', {
       presetId: presetId,
       participants: participants
@@ -5364,9 +5620,20 @@ async function importPdfPreset() {
 
     const savedParticipants = saveResponse.participants || [];
 
-    // Auto-create driver records for all participants (multi-driver + single with nationality)
+    // Phase 2: Create driver records. This phase is renderer-driven (one IPC
+    // call per participant) and can take several seconds for large lists,
+    // so we switch the overlay to a dedicated progress phase.
+    if (savedParticipants.length > 0) {
+      setPresetSavePhase({
+        title: 'Creating driver records…',
+        message: `0 / ${savedParticipants.length}`,
+        percent: 0
+      });
+    }
+
     let driversCreated = 0;
-    for (const savedP of savedParticipants) {
+    for (let i = 0; i < savedParticipants.length; i++) {
+      const savedP = savedParticipants[i];
       const driverNames = savedP.nome ? savedP.nome.split(',').map(s => s.trim()).filter(Boolean) : [];
       const nationality = pdfNationalityByNumero[savedP.numero] || '';
 
@@ -5405,15 +5672,21 @@ async function importPdfPreset() {
           driversCreated += batchResult.count || 0;
         }
       }
+
+      const done = i + 1;
+      updatePresetSaveOverlay({
+        percent: Math.round((done / savedParticipants.length) * 100),
+        message: `${done} / ${savedParticipants.length}`
+      });
     }
 
-    if (driversCreated > 0) {
-      showNotification(
-        `Successfully imported ${participants.length} participants from PDF with ${driversCreated} driver records created!`,
-        'success'
-      );
+    const successMsg = driversCreated > 0
+      ? `Imported ${participants.length} participants from PDF with ${driversCreated} driver records.`
+      : `Imported ${participants.length} participants from PDF.`;
+    if (__presetSaveOverlay.active) {
+      showPresetSaveSuccess(successMsg);
     } else {
-      showNotification(`Successfully imported ${participants.length} participants from PDF!`, 'success');
+      showNotification(successMsg, 'success');
     }
 
     closePdfImportModal();
@@ -5421,7 +5694,11 @@ async function importPdfPreset() {
 
   } catch (error) {
     console.error('[Participants] PDF import error:', error);
-    showNotification('Error importing PDF: ' + error.message, 'error');
+    if (__presetSaveOverlay.active) {
+      showPresetSaveError(error.message || 'Failed to import PDF.');
+    } else {
+      showNotification('Error importing PDF: ' + error.message, 'error');
+    }
 
     // Re-enable button
     if (importBtn) {

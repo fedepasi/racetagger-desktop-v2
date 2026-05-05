@@ -36,7 +36,15 @@ export interface LogEvent {
     //                       show "N failed, M recovered" instead of just counting
     //                       failures.
     | 'PERSIST_FAILED'
-    | 'PERSIST_RECOVERED';
+    | 'PERSIST_RECOVERED'
+    // v1.2.x — post-analysis user-action telemetry. Emitted from the renderer
+    // (results page) AFTER the execution has finalized: button clicks, modal
+    // open/close, write/export/organize/delivery actions, exit. Used for
+    // product analytics and to debug user-reported issues like "I ticked the
+    // visual-tags box but nothing was written" without round-tripping with
+    // the user. Append-only via the static appendUserAction() helper since
+    // the AnalysisLogger instance is gone by then.
+    | 'USER_ACTION';
   timestamp: string;
   executionId: string;
 }
@@ -311,6 +319,52 @@ export interface ExecutionMetaUpdateEvent extends LogEvent {
   type: 'EXECUTION_META_UPDATE';
   /** Custom display name chosen by the user ("Giro di Lombardia 2026", etc.) */
   executionName?: string;
+}
+
+/**
+ * Emitted from the renderer (results page, post-analysis) when the user
+ * performs a tracked action: opens/closes a modal, clicks Write to Originals
+ * or Export, runs folder organization, sends a delivery, exits the page, etc.
+ *
+ * Pairing rule: every UserActionEvent is bound to the `executionId` the user
+ * is currently viewing — that's the whole point. The renderer reads
+ * `window.logVisualizer.executionId` and includes it in every emit so the
+ * event lives in the same JSONL/DB row as the analysis it describes.
+ *
+ * Privacy: payloads are sanitized at the call site (no absolute paths, no
+ * caption/copyright text content, no client names — only field names,
+ * counts, durations, IDs, and enum values). See user-action-logger.js for
+ * the canonical sanitization rules used by every emit site.
+ *
+ * Volume: typical session emits 30–80 events. High-frequency interactions
+ * (gallery navigation, keystrokes) are aggregated client-side at close/blur
+ * to avoid log bloat.
+ */
+export type UserActionCategory =
+  | 'VIEW'      // modal/panel/page opening, gallery, filter, search
+  | 'CONFIGURE' // changes to settings (export mode, IPTC fields, strategy toggles)
+  | 'EXECUTE'   // filesystem/DB mutations (write, export, organize, save corrections)
+  | 'CORRECT'   // review panel, manual correction, learned-data accept/dismiss
+  | 'EXPORT'    // csv/training-labels/data exports
+  | 'DELIVERY'  // gallery delivery, R2 HD upload
+  | 'EXIT';     // results page exited (done, new analysis, navigation away)
+
+export interface UserActionEvent extends LogEvent {
+  type: 'USER_ACTION';
+  /** Action key from the canonical taxonomy (e.g., 'WRITE_ORIGINALS_STARTED'). */
+  action: string;
+  category: UserActionCategory;
+  /** Sanitized event-specific payload. NEVER include: file paths, raw IPTC
+   *  field values, client/email addresses, search query text. DO include:
+   *  field names, counts, durations, enum values, IDs. */
+  data?: Record<string, unknown>;
+  /** Optional results-page session ID — correlates actions emitted between
+   *  the same RESULTS_PAGE_LOADED and RESULTS_PAGE_EXITED pair. Different
+   *  from the analysis executionId (which is stable across sessions). */
+  sessionId?: string;
+  /** App version at emit time. Helpful when correlating action patterns to
+   *  releases (e.g., "users on 1.2.3 stopped clicking Write to Originals"). */
+  appVersion?: string;
 }
 
 /**
@@ -726,6 +780,75 @@ export class AnalysisLogger {
       return true;
     } catch (error) {
       console.error('[AnalysisLogger] Failed to append EXECUTION_META_UPDATE:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Append a USER_ACTION event to the JSONL log.
+   *
+   * Static (and append-only) because user actions happen on the results page
+   * AFTER analysis has finalized — the AnalysisLogger instance is gone by
+   * then. Mirrors {@link appendExecutionMetaUpdate}: open the on-disk file in
+   * append mode, write one JSON line, close.
+   *
+   * Returns false (and logs a warning) if the JSONL doesn't exist yet —
+   * actions on a non-existent execution are dropped rather than creating a
+   * stub file. Callers can ignore the return value for fire-and-forget
+   * telemetry; the log line on failure is enough to diagnose breakage.
+   *
+   * Privacy/Sanitization: callers MUST sanitize `data` before invoking. This
+   * function does NOT inspect or strip the payload — it trusts the caller.
+   * See user-action-logger.js (renderer) for the canonical sanitization
+   * rules. Server-side parsing (Edge Function → execution_user_actions table)
+   * applies a second pass of validation as defense in depth.
+   */
+  static async appendUserAction(
+    executionId: string,
+    action: string,
+    category: UserActionCategory,
+    data?: Record<string, unknown>,
+    sessionId?: string
+  ): Promise<boolean> {
+    try {
+      // Defensive: action must be non-empty. Don't write garbage events.
+      if (!executionId || !action) {
+        if (DEBUG_MODE) {
+          console.warn('[AnalysisLogger] appendUserAction called with empty executionId/action — dropping');
+        }
+        return false;
+      }
+
+      const logsDir = path.join(app.getPath('userData'), '.analysis-logs');
+      const filePath = path.join(logsDir, `exec_${executionId}.jsonl`);
+
+      // Refuse to create the JSONL on first write — the execution must already
+      // exist. Without this guard a stale executionId in the renderer (e.g.
+      // user navigated home then back, results page rebuilt) would create
+      // empty stub logs that pollute the home page list.
+      if (!fs.existsSync(filePath)) {
+        if (DEBUG_MODE) {
+          console.warn(`[AnalysisLogger] appendUserAction: JSONL not found for execution ${executionId} — action ${action} dropped`);
+        }
+        return false;
+      }
+
+      const event: UserActionEvent = {
+        type: 'USER_ACTION',
+        timestamp: new Date().toISOString(),
+        executionId,
+        action,
+        category,
+        data: data && Object.keys(data).length > 0 ? data : undefined,
+        sessionId,
+        appVersion: app.getVersion()
+      };
+
+      await fs.promises.appendFile(filePath, JSON.stringify(event) + '\n', 'utf-8');
+      return true;
+    } catch (error) {
+      // Telemetry must never throw — log and swallow.
+      console.error('[AnalysisLogger] Failed to append USER_ACTION:', error);
       return false;
     }
   }

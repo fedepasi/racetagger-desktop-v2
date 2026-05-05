@@ -348,11 +348,16 @@ export function registerUnifiedExportHandler(): void {
                 };
               }
 
+              // Pass `allParticipants` so [[ ]] blocks in templates expand
+              // per-pilot, and {persons} resolves to the joined list of
+              // individual extended names in multi-match (mirrors the
+              // iptc-finalizer Write-to-Originals path).
               const metadata = buildMetadataFromPresetIptc(
                 iptcMetadata,
                 participant,
                 image.aiKeywords,
-                keywordsMode || 'append'
+                keywordsMode || 'append',
+                allParticipants
               );
 
               // Append AI visual tags (location/weather/scene/subjects/...) to

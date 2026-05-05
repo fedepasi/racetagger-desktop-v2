@@ -2,6 +2,7 @@ import * as crypto from 'crypto';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CONFIG, DEBUG_MODE } from './config';
 import { authService } from './auth-service'; // Per ottenere user_id
+import { safeSend } from './ipc/context';
 
 // --- Supabase Client Initialization ---
 // Inizializza il client Supabase direttamente invece di aspettare la chiamata lazy
@@ -1759,17 +1760,23 @@ function applyDualWriteFolders<T extends Partial<PresetParticipantSupabase>>(rec
  * Save preset participants to Supabase
  */
 export async function savePresetParticipantsSupabase(presetId: string, participants: Omit<PresetParticipantSupabase, 'id' | 'created_at'>[]): Promise<PresetParticipantSupabase[]> {
+  const sendProgress = (stage: string, percent: number, message: string, extra?: Record<string, unknown>) => {
+    safeSend('preset-save-progress', { presetId, stage, percent, message, ...extra });
+  };
+
   try {
     console.log('[DB Save] 🔵 START savePresetParticipantsSupabase:', {
       presetId,
       participantCount: participants.length,
       participantNumbers: participants.map(p => p.numero).join(', ')
     });
+    sendProgress('start', 2, `Starting save of ${participants.length} participants…`, { total: participants.length });
 
     const userId = getCurrentUserId();
     if (!userId) throw new Error('User not authenticated');
 
     // Verify preset ownership
+    sendProgress('verify', 8, 'Verifying preset access…');
     const { data: preset, error: presetError } = await supabase
       .from('participant_presets')
       .select('id, user_id')
@@ -1795,6 +1802,7 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
     console.log('[DB Save] 🔄 UPSERT mode: preserving existing participant IDs');
 
     // Get current participants from database
+    sendProgress('fetch', 18, 'Loading current participants…');
     const { data: currentInDb, error: fetchError } = await supabase
       .from('preset_participants')
       .select('id, numero')
@@ -1821,42 +1829,46 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
       insert: newParticipants.length,
       delete: toDelete.length
     });
+    sendProgress('analyze', 28,
+      `Update ${existingParticipants.length} · Insert ${newParticipants.length} · Delete ${toDelete.length}`,
+      { update: existingParticipants.length, insert: newParticipants.length, delete: toDelete.length }
+    );
 
     let savedParticipants: PresetParticipantSupabase[] = [];
 
     // 1. UPDATE existing participants (preserves IDs and associated data)
+    // Bulk UPSERT in a single round-trip instead of N sequential UPDATE calls.
     if (existingParticipants.length > 0) {
-      console.log('[DB Save] 🔄 Updating', existingParticipants.length, 'existing participants');
-      for (const participant of existingParticipants) {
-        const { id, ...participantData } = participant as any;
-        console.log(`[DB Save]   ↻ Updating participant #${participantData.numero} (ID: ${id?.substring(0, 8)}...)`);
+      console.log('[DB Save] 🔄 Bulk-upserting', existingParticipants.length, 'existing participants');
+      sendProgress('update', 40, `Updating ${existingParticipants.length} participants…`);
 
-        // Dual-write: when the caller provided canonical folders[], also
-        // populate the legacy folder_1/2/3 columns so 1.1.4 clients see
-        // a valid subset.
-        applyDualWriteFolders(participantData);
+      const updatePayload = existingParticipants.map(p => {
+        const data: any = { ...(p as any), preset_id: presetId };
+        // Dual-write: when the caller provided canonical folders[], also populate
+        // the legacy folder_1/2/3 columns so 1.1.4 clients see a valid subset.
+        applyDualWriteFolders(data);
+        return data;
+      });
 
-        const { data: updated, error: updateError } = await supabase
-          .from('preset_participants')
-          .update({ ...participantData, preset_id: presetId })
-          .eq('id', id)
-          .select()
-          .single();
+      const { data: updated, error: updateError } = await supabase
+        .from('preset_participants')
+        .upsert(updatePayload, { onConflict: 'id' })
+        .select();
 
-        if (updateError) {
-          console.error(`[DB Save] ❌ Error updating participant ${id}:`, updateError);
-          throw updateError;
-        }
-
-        if (updated) {
-          savedParticipants.push(updated);
-        }
+      if (updateError) {
+        console.error('[DB Save] ❌ Error bulk-updating participants:', updateError);
+        throw updateError;
       }
-      console.log('[DB Save] ✅ Updated', existingParticipants.length, 'participants');
+
+      if (updated) {
+        savedParticipants.push(...updated);
+      }
+      console.log('[DB Save] ✅ Updated', existingParticipants.length, 'participants in 1 round-trip');
     }
 
     // 2. INSERT new participants
     if (newParticipants.length > 0) {
+      sendProgress('insert', 60, `Inserting ${newParticipants.length} new participants…`);
       console.log('[DB Save] 💾 Inserting', newParticipants.length, 'new participants');
       const insertPayload = newParticipants.map(p => {
         const { id, created_at, ...cleanData } = p as any;
@@ -1898,6 +1910,7 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
 
     // 3. DELETE removed participants (surgical delete, not nuclear)
     if (toDelete.length > 0) {
+      sendProgress('delete', 75, `Removing ${toDelete.length} obsolete participants…`);
       console.log('[DB Save] 🗑️  Deleting', toDelete.length, 'removed participants');
       const { error: deleteError } = await supabase
         .from('preset_participants')
@@ -1934,6 +1947,7 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
     // ⚠️ NEW: Reload preset with complete driver data
     // savedParticipants from UPSERT doesn't include preset_participant_drivers
     // Do fresh query with drivers included to return complete data
+    sendProgress('reload', 88, 'Reloading complete driver data…');
     console.log('[DB Save] 🔄 Reloading preset with complete driver data');
     const { data: reloadedPreset, error: reloadError } = await supabase
       .from('participant_presets')
@@ -1951,20 +1965,25 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
       console.error('[DB Save] ⚠️  Error reloading preset (returning basic data):', reloadError);
       // Fall back to returning what we have
       console.log('[DB Save] 🟢 COMPLETE savePresetParticipantsSupabase - returning', savedParticipants.length, 'participants (basic data)');
+      sendProgress('complete', 100, `Saved ${savedParticipants.length} participants`, { count: savedParticipants.length });
       return savedParticipants;
     }
 
     if (reloadedPreset?.participants) {
       console.log('[DB Save] ✅ Reloaded', reloadedPreset.participants.length, 'participants with complete driver data');
       console.log('[DB Save] 🟢 COMPLETE savePresetParticipantsSupabase - returning complete data with drivers');
+      sendProgress('complete', 100, `Saved ${reloadedPreset.participants.length} participants`, { count: reloadedPreset.participants.length });
       return reloadedPreset.participants;
     }
 
     console.log('[DB Save] 🟢 COMPLETE savePresetParticipantsSupabase - returning', savedParticipants.length, 'participants');
+    sendProgress('complete', 100, `Saved ${savedParticipants.length} participants`, { count: savedParticipants.length });
     return savedParticipants;
 
   } catch (error) {
     console.error('[DB] Error saving preset participants to Supabase:', error);
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    safeSend('preset-save-progress', { presetId, stage: 'error', percent: 100, message, error: message });
     throw error;
   }
 }

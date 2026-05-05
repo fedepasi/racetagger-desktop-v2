@@ -21,9 +21,14 @@
               <span class="folder-icon">📂</span>
               Select Images Folder
             </label>
-            <button id="folder-select-button" class="btn btn-secondary folder-btn">
-              📂 Select Folder
-            </button>
+            <div class="folder-btn-group" style="display: flex; gap: 8px; flex-wrap: wrap;">
+              <button id="folder-select-button" class="btn btn-secondary folder-btn">
+                📂 Select Folder
+              </button>
+              <button id="files-select-button" class="btn btn-secondary folder-btn" title="Select one or more image files — the entire folder containing them will be analyzed">
+                🖼️ Select Files
+              </button>
+            </div>
             <div class="form-text folder-hint folder-drop-hint">or drag & drop a folder here</div>
             <div id="selected-folder" class="form-text folder-selected"></div>
             <div id="image-count" class="form-text folder-hint">No images selected</div>

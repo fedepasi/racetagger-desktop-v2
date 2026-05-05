@@ -170,6 +170,8 @@
               <span class="info-icon">💡</span>
               <div class="info-text">
                 Configure IPTC/XMP metadata to embed into your photos when you use the <strong>Export & IPTC</strong> button in the results page. Use placeholders like <code>{name}</code>, <code>{number}</code>, <code>{team}</code>, <code>{car_model}</code>, <code>{nationality}</code>, <code>{category}</code> in <strong>Caption Template</strong>, <strong>Base Keywords</strong>, and <strong>Person Shown</strong> — they will be replaced with each participant's actual data from the table below.
+                <br><br>
+                <strong>Multi-pilot photos</strong> (WEC, IMSA, endurance, etc.): wrap the per-pilot section in <code>[[ ]]</code> to repeat it for each matched pilot. Example: <code>Race 2026 [[#{number} {name}]]</code> becomes <code>Race 2026 #1 Driver A, #2 Driver B</code> when two pilots are detected in the same frame.
               </div>
             </div>
 
@@ -198,6 +200,7 @@
                       <button type="button" class="template-shortcut-btn" data-target="iptc-description" data-placeholder="{car_model}">{car_model}</button>
                       <button type="button" class="template-shortcut-btn" data-target="iptc-description" data-placeholder="{nationality}">{nationality}</button>
                       <button type="button" class="template-shortcut-btn" data-target="iptc-description" data-placeholder="{category}">{category}</button>
+                      <button type="button" class="template-shortcut-btn template-shortcut-btn-block" data-target="iptc-description" data-action="wrap" data-wrap-before="[[" data-wrap-after="]]" title="Wrap the selected text in a per-car block. The block is repeated once per matched pilot when a photo contains multiple participants (e.g. WEC, IMSA, endurance racing).">[[ per-car ]]</button>
                     </div>
                     <input type="hidden" id="iptc-description">
                     <div id="iptc-description-editor" class="form-input form-input-iptc iptc-textarea iptc-editable-template" contenteditable="true" data-target="iptc-description" data-placeholder="{name} during the Formula 1 Grande Premio..." role="textbox" aria-multiline="true"></div>

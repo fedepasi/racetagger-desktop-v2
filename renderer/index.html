@@ -318,6 +318,10 @@
 
   <script src="js/streaming-view.js"></script>
   <script src="js/gallery-zoom.js"></script>
+  <!-- Post-analysis user-action telemetry (window.logUserAction).
+       MUST load before log-visualizer.js and the results modals so they
+       can call window.logUserAction() during their own initialization. -->
+  <script src="js/user-action-logger.js"></script>
   <script src="js/log-visualizer.js"></script>
   <script src="js/renderer.js"></script>
   <script src="js/auth.js"></script>

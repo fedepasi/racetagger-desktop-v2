@@ -50,6 +50,32 @@
   `metadataStrategy` (merge/replace) toggles applied independently to
   each destination.
 
+#### **Multi-pilot caption support — per-car repeat blocks `[[ ]]`**
+
+- New `[[ ]]` syntax available in every IPTC template field (Caption,
+  Headline, Title, Event, and Base Keywords): the wrapped section is
+  repeated once per matched pilot when a photo contains multiple
+  participants, joined by `, `.
+- Example: a Caption template like
+  `DTM 2026 [[#{number}; {team}: {name}]] - photo by GC` produces
+  `DTM 2026 #90; Manthey: Feller, #7; Comtoyou: Thiim - photo by GC`
+  for a photo with two pilots in frame, instead of the previous
+  `DTM 2026 #90, 7; Manthey, Comtoyou: Feller and Thiim` mess.
+- Solves the multi-pilot caption problem common to WEC, IMSA,
+  endurance racing, podiums, team cycling and any sport where
+  multiple subjects appear in the same shot.
+- New **"Insert per-car block"** button in the Caption Template editor
+  (turquoise tint to signal it's a structural action, distinct from
+  the existing placeholder buttons): wraps the current selection in
+  `[[ ]]`, or inserts an empty wrapper at the cursor if no selection.
+- **Live preview enhanced** — when a template uses `[[ ]]`, the editor
+  shows BOTH a single-pilot example AND a 2-pilot example side-by-side,
+  so users immediately see how the block expands. Falls back to a hint
+  prompting to add a second participant when only one is in the preset.
+- Backward compatible: any preset without `[[ ]]` keeps the previous
+  rendering unchanged. Single-match images render the block once
+  without a separator.
+
 ### 🛠 Infrastructure
 
 - SQL migration `20260429120000_consolidate_participant_folders.sql`
@@ -90,6 +116,13 @@ included here for the broader 1.2.0 rollout:
   rapid clicks into a single trailing save.
 - **Write Behavior toggles** in Export & IPTC: file conflict strategy
   (rename / overwrite / skip) and metadata strategy (merge / replace).
+- **`{persons}` placeholder in multi-match**: previously produced
+  nonsensical output like `(90, 7) Feller and Thiim - Manthey,
+  Comtoyou - Porsche, Aston Martin` — built from the aggregated
+  participant's joined fields. Now correctly resolves to the joined
+  list of individual extended names per pilot:
+  `(90) Feller (SUI) - Manthey - Porsche, (7) Thiim (DEN) - Comtoyou
+  - Aston Martin`. Single-match behavior is unchanged.
 
 ---
 

@@ -121,6 +121,27 @@ async function openUnifiedExportModal() {
     }
   }
 
+  // Telemetry: UNIFIED_EXPORT_MODAL_OPENED. Captures whether the user
+  // had any IPTC profile pre-configured (presetHasIptc) — funnels users
+  // who hit the modal expecting IPTC to "just work" vs. those starting
+  // from zero. fileCount snapshots the matched-vs-all population at
+  // open time so we can correlate with the eventual scope choice.
+  if (window.logUserAction) {
+    const allResults = lv.imageResults || [];
+    const matchedCount = allResults.filter(r =>
+      r && (r.csvMatch || (r.allMatchedParticipants && r.allMatchedParticipants.length > 0))
+    ).length;
+    window.logUserAction('UNIFIED_EXPORT_MODAL_OPENED', 'VIEW', {
+      presetHasIptc: !!unifiedIptcMetadata,
+      includeVisualTagsInPreset: !!(unifiedIptcMetadata && unifiedIptcMetadata.includeVisualTags),
+      totalCount: allResults.length,
+      matchedCount
+    });
+    // Snapshot for the close-without-action event.
+    window.__unifiedModalOpenedAt = Date.now();
+    window.__unifiedModalFieldsEditedAt = 0;
+  }
+
   createUnifiedModal();
 }
 
@@ -592,6 +613,43 @@ function createUnifiedModal() {
 
   // Wire events
   wireUnifiedEvents(matchedCount, totalCount);
+
+  // Telemetry: count IPTC field edits via a delegated listener on the
+  // overlay. We bump the counter once per field per session — if a user
+  // types many characters in the same field, we count it as ONE edit.
+  // This keeps the metric meaningful (not skewed by typing speed) and
+  // gives us a fields-touched count to pair with the close-without-
+  // action event for abandonment analysis.
+  if (window.logUserAction) {
+    const editedFields = new Set();
+    overlay.addEventListener('input', (e) => {
+      const id = e.target && e.target.id;
+      if (!id || editedFields.has(id)) return;
+      // Skip non-IPTC inputs (search box, scope radios, etc.). All IPTC
+      // inputs in this modal are prefixed with `unified-` and live in the
+      // form region; the most specific filter is the `unified-` prefix.
+      if (!id.startsWith('unified-')) return;
+      editedFields.add(id);
+      window.__unifiedModalFieldsEditedAt = editedFields.size;
+    }, true);
+    // Also debounced IPTC_FIELD_EDITED for high-volume telemetry: one
+    // event per field on blur (or 800ms after last keystroke). Captures
+    // WHICH fields the user fills in, not the values.
+    overlay.addEventListener('blur', (e) => {
+      const t = e.target;
+      if (!t || !t.id || !t.id.startsWith('unified-')) return;
+      const isFormField = t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT';
+      if (!isFormField) return;
+      const value = (t.value || '');
+      if (window.logUserActionDebounced) {
+        window.logUserActionDebounced('IPTC_FIELD_EDITED', 'CONFIGURE', {
+          fieldId: t.id,
+          valueLength: value.length,
+          hadPlaceholders: /\{[^}]+\}/.test(value)
+        }, 0);  // 0ms because the blur event already debounces naturally
+      }
+    }, true);
+  }
 }
 
 // ============================================================
@@ -786,6 +844,22 @@ function updateUnifiedPreview() {
 // ============================================================
 function closeUnifiedModal() {
   if (unifiedIsProcessing) return;
+  // Telemetry: UNIFIED_EXPORT_MODAL_CLOSED_WITHOUT_ACTION — fires only
+  // when we close mid-flight (i.e., NOT after a successful EXPORT/WRITE).
+  // We detect that by the absence of `unifiedIsProcessing`, which the
+  // success path keeps true until after the close timeout. timeInModalMs
+  // and fieldsEditedCount are the abandonment signals: long time +
+  // many edits but no submit = friction in the flow.
+  if (window.logUserAction && unifiedModal) {
+    const openedAt = window.__unifiedModalOpenedAt || 0;
+    window.logUserAction('UNIFIED_EXPORT_MODAL_CLOSED_WITHOUT_ACTION', 'VIEW', {
+      timeInModalMs: openedAt > 0 ? Date.now() - openedAt : 0,
+      fieldsEditedCount: window.__unifiedModalFieldsEditedAt || 0,
+      mode: unifiedCurrentMode || null
+    });
+    window.__unifiedModalOpenedAt = 0;
+    window.__unifiedModalFieldsEditedAt = 0;
+  }
   if (unifiedModal) {
     unifiedModal.remove();
     unifiedModal = null;
@@ -1078,6 +1152,42 @@ async function startUnifiedExport() {
   unifiedIsProcessing = true;
   showUnifiedProgress('Exporting files...');
 
+  // Telemetry: EXPORT_STARTED — captures the user's exact configuration at
+  // click time (scope, file count, IPTC fields filled, includeVisualTags,
+  // strategies). Helps debug "I configured X but it didn't apply" reports
+  // without needing the user to reproduce. visualTagsAvailablePct tells
+  // us whether the data was even there to write — separates an
+  // "extracted but not embedded" bug from a "never extracted" bug.
+  const __exportStartedAt = Date.now();
+  if (window.logUserAction) {
+    const __vtAvail = images.filter(img =>
+      img && img.visualTags && typeof img.visualTags === 'object' &&
+      Object.values(img.visualTags).some(arr => Array.isArray(arr) && arr.length > 0)
+    ).length;
+    const __iptcFieldsFilled = writeIptc ? Object.keys(iptcMetadata).filter(k => {
+      if (k === 'appendKeywords' || k === 'personShownFormat') return false;
+      const v = iptcMetadata[k];
+      if (v === undefined || v === null || v === '') return false;
+      if (Array.isArray(v) && v.length === 0) return false;
+      return true;
+    }) : [];
+    window.logUserAction('EXPORT_STARTED', 'EXECUTE', {
+      scope,
+      fileCount: images.length,
+      renamePatternUsed: !!renamePattern,
+      subfolderPatternUsed: !!subfolderPattern,
+      followPresetFolders,
+      writeIptc,
+      includeVisualTags: !!iptcMetadata.includeVisualTags,
+      visualTagsAvailablePct: images.length > 0 ? +(__vtAvail / images.length).toFixed(2) : 0,
+      keywordsMode: writeIptc ? kwMode : null,
+      fileConflictStrategy,
+      metadataStrategy,
+      iptcFieldsFilled: __iptcFieldsFilled,
+      iptcFieldsFilledCount: __iptcFieldsFilled.length
+    });
+  }
+
   const cleanupProgress = window.api.receive('unified-export-progress', (data) => {
     const { current, total, phase, fileName } = data;
     const fill = document.getElementById('unified-progress-fill');
@@ -1109,6 +1219,19 @@ async function startUnifiedExport() {
 
     if (response.success) {
       const summary = response.data;
+      // Telemetry: EXPORT_COMPLETED with the per-file outcomes so we can
+      // detect partial-success patterns ("most users see iptcWritten <
+      // copiedFiles for X% of exports").
+      if (window.logUserAction) {
+        window.logUserAction('EXPORT_COMPLETED', 'EXECUTE', {
+          copiedFiles: summary.copiedFiles ?? 0,
+          renamedFiles: summary.renamedFiles ?? 0,
+          skippedFiles: summary.skippedFiles ?? 0,
+          iptcWritten: summary.iptcWritten ?? 0,
+          errors: summary.errors ?? 0,
+          durationMs: summary.durationMs ?? (Date.now() - __exportStartedAt)
+        });
+      }
       showUnifiedSuccess(
         '✅ Export Complete!',
         `${summary.copiedFiles} files exported` +
@@ -1124,6 +1247,16 @@ async function startUnifiedExport() {
     }
   } catch (error) {
     console.error('[Unified Export] Export error:', error);
+    // Telemetry: failure is just as informative as success — captures
+    // when users hit errors but never retry.
+    if (window.logUserAction) {
+      window.logUserAction('EXPORT_COMPLETED', 'EXECUTE', {
+        copiedFiles: 0,
+        errors: 1,
+        failed: true,
+        durationMs: Date.now() - __exportStartedAt
+      });
+    }
     showUnifiedError(error.message);
     unifiedIsProcessing = false;
   } finally {
@@ -1181,6 +1314,37 @@ async function startUnifiedWriteOriginals() {
   unifiedIsProcessing = true;
   showUnifiedProgress('Writing IPTC metadata...', true);
 
+  // Telemetry: WRITE_ORIGINALS_STARTED — same shape as EXPORT_STARTED but
+  // for the in-place IPTC write path. visualTagsAvailablePct + the
+  // includeVisualTags flag are the two fields needed to tell apart "user
+  // didn't enable the checkbox" from "checkbox enabled but no tags
+  // extracted to write" — the exact ambiguity that surfaced in the Lisa
+  // case we couldn't reproduce.
+  const __writeStartedAt = Date.now();
+  if (window.logUserAction) {
+    const __vtAvailW = results.filter(r =>
+      r && r.visualTags && typeof r.visualTags === 'object' &&
+      Object.values(r.visualTags).some(arr => Array.isArray(arr) && arr.length > 0)
+    ).length;
+    const __iptcFieldsFilledW = Object.keys(iptcMetadata).filter(k => {
+      if (k === 'appendKeywords' || k === 'personShownFormat') return false;
+      const v = iptcMetadata[k];
+      if (v === undefined || v === null || v === '') return false;
+      if (Array.isArray(v) && v.length === 0) return false;
+      return true;
+    });
+    window.logUserAction('WRITE_ORIGINALS_STARTED', 'EXECUTE', {
+      scope,
+      fileCount: results.length,
+      keywordsMode: kwMode,
+      metadataStrategy,
+      includeVisualTags: !!iptcMetadata.includeVisualTags,
+      visualTagsAvailablePct: results.length > 0 ? +(__vtAvailW / results.length).toFixed(2) : 0,
+      iptcFieldsFilled: __iptcFieldsFilledW,
+      iptcFieldsFilledCount: __iptcFieldsFilledW.length
+    });
+  }
+
   const cleanupProgress = window.api.receive('iptc-finalize-progress', (data) => {
     const { current, total, fileName } = data;
     const fill = document.getElementById('unified-progress-fill');
@@ -1203,6 +1367,13 @@ async function startUnifiedWriteOriginals() {
 
     if (response.success) {
       const summary = response.data;
+      if (window.logUserAction) {
+        window.logUserAction('WRITE_ORIGINALS_COMPLETED', 'EXECUTE', {
+          successCount: summary.successCount ?? 0,
+          errorCount: summary.errorCount ?? 0,
+          durationMs: summary.durationMs ?? (Date.now() - __writeStartedAt)
+        });
+      }
       showUnifiedSuccess(
         '✅ IPTC Write Complete!',
         `${summary.successCount} files written successfully` +
@@ -1215,6 +1386,14 @@ async function startUnifiedWriteOriginals() {
     }
   } catch (error) {
     console.error('[Unified Export] Write originals error:', error);
+    if (window.logUserAction) {
+      window.logUserAction('WRITE_ORIGINALS_COMPLETED', 'EXECUTE', {
+        successCount: 0,
+        errorCount: 1,
+        failed: true,
+        durationMs: Date.now() - __writeStartedAt
+      });
+    }
     showUnifiedError(error.message);
     unifiedIsProcessing = false;
   } finally {

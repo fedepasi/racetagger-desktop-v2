@@ -113,6 +113,76 @@ class LogVisualizer {
       // Non-critical
     }
 
+    // Telemetry: RESULTS_PAGE_EXITED — fires once when the page is being
+    // unloaded (window close, refresh, navigation away, "Done" button
+    // that ultimately changes the URL). pagehide is preferred over
+    // beforeunload because it also fires for back/forward cache cases
+    // and is more reliable on Electron.
+    //
+    // We emit synchronously into the queue (window.api.invoke is the
+    // only async hop and the IPC layer queues it on the main process —
+    // even if the renderer process exits a moment later, the JSONL
+    // append usually completes because it's a tiny disk write). The
+    // direct DB insert may not complete in time, which is why the JSONL
+    // is the durable record; reconciliation can backfill missing rows.
+    //
+    // Guard: emit at most once per page lifetime. Multiple fires
+    // (e.g. visibilitychange→hidden THEN pagehide) would create
+    // duplicate exit rows, polluting funnel analyses.
+    this._exitEmitted = false;
+    const __emitExit = (exitMethod) => {
+      if (this._exitEmitted) return;
+      this._exitEmitted = true;
+      if (!window.logUserAction) return;
+      const sessionDurationMs = this._sessionStartedAt
+        ? Date.now() - this._sessionStartedAt
+        : null;
+      window.logUserAction('RESULTS_PAGE_EXITED', 'EXIT', {
+        exitMethod,                            // 'pagehide' | 'beforeunload' | 'manual'
+        sessionDurationMs,
+        correctionsUnsaved: !!this.hasUnsavedChanges,
+        correctionsCount: this.manualCorrections?.size ?? 0
+      });
+    };
+    // Both listeners — whichever fires first wins, the second is no-op.
+    window.addEventListener('pagehide', () => __emitExit('pagehide'));
+    window.addEventListener('beforeunload', () => __emitExit('beforeunload'));
+    // Stash the emitter on the instance so external "Done" buttons can
+    // call it deterministically without waiting for the unload event
+    // (this gives the IPC a few extra ms to complete).
+    this._emitExit = __emitExit;
+
+    // Telemetry: RESULTS_PAGE_LOADED. This is the boundary event that
+    // begins a new sessionId — see user-action-logger.js. Payload includes
+    // the headline counters so dashboards can correlate "users with X
+    // unmatched per N total" patterns to subsequent actions (write,
+    // export, delivery).
+    if (window.logUserAction) {
+      const matched = this.imageResults.filter(r =>
+        r && (r.csvMatch || (r.allMatchedParticipants && r.allMatchedParticipants.length > 0))
+      ).length;
+      const hasVisualTags = this.imageResults.some(r =>
+        r && (
+          (r.visualTags && Object.values(r.visualTags).some(arr => Array.isArray(arr) && arr.length > 0)) ||
+          (r.logEvent && r.logEvent.visualTags && Object.values(r.logEvent.visualTags).some(arr => Array.isArray(arr) && arr.length > 0))
+        )
+      );
+      const recognitionMethod = (this.logData || [])
+        .find(e => e && e.type === 'IMAGE_ANALYSIS' && e.recognitionMethod)?.recognitionMethod || null;
+      window.logUserAction('RESULTS_PAGE_LOADED', 'VIEW', {
+        resultCount: this.imageResults.length,
+        matchedCount: matched,
+        unmatchedCount: this.imageResults.length - matched,
+        hasVisualTags,
+        recognitionMethod,
+        wasAlreadyOrganized: !!this.wasAlreadyOrganized,
+        moveOrganizationCompleted: !!this.moveOrganizationCompleted
+      });
+      // Mark a fresh page-session start time so RESULTS_PAGE_EXITED can
+      // report sessionDurationMs without storing wall-clock anywhere else.
+      this._sessionStartedAt = Date.now();
+    }
+
     console.log('[LogVisualizer] Initialization complete');
   }
 
@@ -426,6 +496,21 @@ class LogVisualizer {
         clearTimeout(this.searchDebounceTimer);
         this.searchDebounceTimer = setTimeout(() => {
           this.filterResults();
+          // Telemetry: SEARCH_QUERY_ENTERED. Privacy: only the LENGTH and
+          // the matchCount — never the query text (could contain plate
+          // numbers, names, sponsors).
+          if (window.logUserAction) {
+            const queryLength = (searchInput.value || '').length;
+            // Only emit when the user actually typed something — empty
+            // input fires the same listener as backspacing back to empty
+            // and we don't want to log "user typed nothing".
+            if (queryLength > 0) {
+              window.logUserAction('SEARCH_QUERY_ENTERED', 'VIEW', {
+                queryLength,
+                matchCount: this.filteredResults?.length ?? 0
+              });
+            }
+          }
         }, 300);
       });
     }
@@ -435,6 +520,15 @@ class LogVisualizer {
     if (filterSelect) {
       filterSelect.addEventListener('change', () => {
         this.filterResults();
+        // Telemetry: FILTER_CHANGED. Track which filter the user spent
+        // time on — the dominant ones inform UX priorities (if 80% of
+        // filter use is "needs-review", the default tab should be that).
+        if (window.logUserAction) {
+          window.logUserAction('FILTER_CHANGED', 'VIEW', {
+            filterType: filterSelect.value,
+            resultCountAfterFilter: this.filteredResults?.length ?? 0
+          });
+        }
       });
     }
 
@@ -445,6 +539,12 @@ class LogVisualizer {
         searchInput.value = '';
         filterSelect.value = 'all';
         this.filterResults();
+        if (window.logUserAction) {
+          window.logUserAction('FILTER_CHANGED', 'VIEW', {
+            filterType: 'all',
+            via: 'clear-filters'
+          });
+        }
       });
     }
 
@@ -468,6 +568,17 @@ class LogVisualizer {
             const newValue = filterSelect.value === filterValue ? 'all' : filterValue;
             filterSelect.value = newValue;
             this.filterResults();
+            // Telemetry: STAT_ITEM_CLICKED. Tracked as a separate event
+            // (not just FILTER_CHANGED) so we can tell the difference
+            // between "user used the dropdown" and "user clicked the big
+            // counter card" — different UI affordances, same outcome.
+            if (window.logUserAction) {
+              window.logUserAction('STAT_ITEM_CLICKED', 'VIEW', {
+                statId: elId,
+                filterApplied: newValue,
+                toggleOff: newValue === 'all' && filterValue !== 'all'
+              });
+            }
           }
         });
       }
@@ -2059,11 +2170,36 @@ class LogVisualizer {
       if (chosenCandidate.team) {
         primaryVehicle.team = chosenCandidate.team;
       }
+
+      // Telemetry: REVIEW_CANDIDATE_ACCEPTED — picked a specific candidate
+      // from the ambiguous-match panel. We log the candidate's confidence
+      // and rank info that drove the pick, never the participant name.
+      if (window.logUserAction) {
+        window.logUserAction('REVIEW_CANDIDATE_ACCEPTED', 'CORRECT', {
+          confidence: typeof chosenCandidate.confidence === 'number'
+            ? +chosenCandidate.confidence.toFixed(2)
+            : null,
+          candidateScore: typeof chosenCandidate.score === 'number'
+            ? chosenCandidate.score
+            : null,
+          isBurstMode: !!chosenCandidate.isBurstMode
+        });
+      }
     } else {
       // User said "none" — mark as no match
       primaryVehicle.raceNumber = 'N/A';
       primaryVehicle.matchedBy = 'none';
       primaryVehicle.confidence = 0;
+
+      // Telemetry: same event, with `dismissed: true` to distinguish
+      // "user picked a candidate" from "user explicitly rejected all".
+      // The latter is a stronger signal that something was wrong with
+      // the candidates we surfaced — useful for tuning the matcher.
+      if (window.logUserAction) {
+        window.logUserAction('REVIEW_CANDIDATE_ACCEPTED', 'CORRECT', {
+          dismissed: true
+        });
+      }
     }
 
     // Mark status as resolved
@@ -2271,6 +2407,34 @@ class LogVisualizer {
       document.body.style.overflow = 'hidden'; // Prevent background scrolling
     }
 
+    // Telemetry: GALLERY_OPENED + start an aggregate that the close
+    // handler flushes. Per the explicit anti-pattern note in the design:
+    // we DO NOT log per-navigation events here. Instead, navigation is
+    // tracked in this in-memory aggregate and reported once at close as
+    // GALLERY_CLOSED with totals. See `_galleryAggregate` use in
+    // updateGalleryContent + closeGallery.
+    if (window.logUserAction) {
+      const filterAtOpen = document.getElementById('lv-filter-type')?.value || 'all';
+      const totalImages = (this.filteredResults?.length || this.imageResults?.length || 0);
+      window.logUserAction('GALLERY_OPENED', 'VIEW', {
+        startImageIndex: index,
+        totalImages,
+        entryFilter: filterAtOpen
+      });
+      // Begin the aggregate (uses the helper from user-action-logger.js).
+      // Track viewed indices as a Set, count navigations, remember
+      // deepestIndex. discard()/flush() are called in closeGallery.
+      if (window.beginUserActionAggregate) {
+        this._galleryAggregate = window.beginUserActionAggregate('gallery');
+        this._galleryAggregate.set('entryFilter', filterAtOpen);
+        this._galleryAggregate.track('viewed', index);
+        this._galleryAggregate.maxOf('deepestIndex', index);
+      }
+      // Snapshot how many corrections existed before the gallery opened
+      // so we can compute "corrections made while in the gallery" at close.
+      this._galleryCorrectionsAtOpen = this.manualCorrections?.size ?? 0;
+    }
+
     await this.updateGalleryContent();
     console.log(`[LogVisualizer] Opened gallery at index ${index}`);
   }
@@ -2290,6 +2454,23 @@ class LogVisualizer {
   async closeGallery() {
     this.isGalleryOpen = false;
     if (this.zoomController) this.zoomController.reset(false);
+
+    // Telemetry: GALLERY_CLOSED. Flushes the aggregate started in
+    // openGallery — emits ONE summary event with totals (imagesViewed,
+    // navigationCount, deepestIndex, durationMs) instead of one per
+    // arrow press. correctionsMadeInGallery is computed from the delta
+    // of manualCorrections.size, so we know whether the gallery was a
+    // browse session or an active correction session.
+    if (this._galleryAggregate) {
+      const correctionsDelta = (this.manualCorrections?.size ?? 0) -
+                               (this._galleryCorrectionsAtOpen ?? 0);
+      this._galleryAggregate.flush('GALLERY_CLOSED', 'VIEW', {
+        correctionsMadeInGallery: Math.max(0, correctionsDelta),
+        lastIndex: this.currentImageIndex
+      });
+      this._galleryAggregate = null;
+      this._galleryCorrectionsAtOpen = 0;
+    }
 
     // ---- Synchronous teardown (visible to the user) -----------------------
     document.body.style.overflow = '';
@@ -2376,6 +2557,16 @@ class LogVisualizer {
   async updateGalleryContent() {
     if (!this.isGalleryOpen || this.currentImageIndex < 0 || this.currentImageIndex >= this.filteredResults.length) {
       return;
+    }
+
+    // Telemetry aggregate: every navigation to a new image bumps the
+    // counter and tracks the index uniqueness. NO per-navigation event
+    // is emitted — the summary lands on close. See openGallery /
+    // closeGallery for begin/flush.
+    if (this._galleryAggregate) {
+      this._galleryAggregate.bump('navigationCount');
+      this._galleryAggregate.track('viewed', this.currentImageIndex);
+      this._galleryAggregate.maxOf('deepestIndex', this.currentImageIndex);
     }
 
     const result = this.filteredResults[this.currentImageIndex];
@@ -3849,6 +4040,7 @@ class LogVisualizer {
     }
 
     this._saveInFlight = (async () => {
+      const __saveStartedAt = Date.now();
       try {
         if (!silent) this.showNotification('💾 Saving all changes...', 'info');
 
@@ -3880,6 +4072,29 @@ class LogVisualizer {
 
         if (!silent) {
           this.showNotification(`✅ Successfully saved ${corrections.length} corrections`, 'success');
+        }
+
+        // Telemetry: CORRECTIONS_SAVED. We log unique field types so we can
+        // see which fields users actually correct (raceNumber dominates? or
+        // is team/driver also common?) without persisting the values.
+        if (window.logUserAction) {
+          const fieldTypes = new Set();
+          for (const c of corrections) {
+            if (c && c.changes && typeof c.changes === 'object') {
+              for (const k of Object.keys(c.changes)) {
+                // Skip bookkeeping fields, only track real field corrections.
+                if (k === 'deleted' || k === 'deletedAt' || k === 'originalData' ||
+                    k === 'resolvedFromReview' || k === 'chosenCandidate') continue;
+                fieldTypes.add(k);
+              }
+            }
+          }
+          window.logUserAction('CORRECTIONS_SAVED', 'CORRECT', {
+            correctionCount: corrections.length,
+            fieldTypes: Array.from(fieldTypes),
+            silent: !!silent,
+            durationMs: Date.now() - __saveStartedAt
+          });
         }
 
         // Targeted removal — only drop the snapshot we just persisted, not
@@ -4308,6 +4523,14 @@ class LogVisualizer {
 
       if (result.success) {
         if (result.count === 0) {
+          // Telemetry: also log the empty case — knowing how often users
+          // try to export tags when none exist is itself a UX signal.
+          if (window.logUserAction) {
+            window.logUserAction('CSV_TAGS_EXPORTED', 'EXPORT', {
+              count: 0,
+              empty: true
+            });
+          }
           this.showNotification('⚠️ No visual tags found for this execution', 'warning');
           return;
         }
@@ -4322,12 +4545,24 @@ class LogVisualizer {
         a.click();
 
         URL.revokeObjectURL(url);
+        if (window.logUserAction) {
+          window.logUserAction('CSV_TAGS_EXPORTED', 'EXPORT', {
+            count: result.count,
+            empty: false
+          });
+        }
         this.showNotification(`🏷️ Exported ${result.count} tagged images`, 'success');
       } else {
         this.showNotification(result.error || '❌ Failed to export tags', 'error');
       }
     } catch (error) {
       console.error('[LogVisualizer] Error exporting tags CSV:', error);
+      if (window.logUserAction) {
+        window.logUserAction('CSV_TAGS_EXPORTED', 'EXPORT', {
+          count: 0,
+          failed: true
+        });
+      }
       this.showNotification('❌ Failed to export visual tags: ' + error.message, 'error');
     }
   }
@@ -4376,11 +4611,17 @@ class LogVisualizer {
    * Trigger folder organization after analysis is complete
    */
   async triggerPostAnalysisOrganization() {
+    // Hoisted out of `try` so the `catch` block can reference them when
+    // emitting the FOLDER_ORGANIZATION_COMPLETED failure event. `let`
+    // (not `const`) because they're assigned inside the try and read
+    // from both branches; `const` would put them in TDZ for catch.
+    let folderOrgConfig = null;
+    let __orgStartedAt = 0;
     try {
       console.log('[LogVisualizer] Starting post-analysis folder organization...');
 
       // Get folder organization config from the post-organization form
-      const folderOrgConfig = this.getPostOrganizationConfig();
+      folderOrgConfig = this.getPostOrganizationConfig();
 
       if (!folderOrgConfig.enabled) {
         this.showNotification('ℹ️ Please configure folder organization first', 'info');
@@ -4441,6 +4682,21 @@ class LogVisualizer {
         if (detail) detail.textContent = `${data.current} of ${data.total} photos processed`;
       });
 
+      // Telemetry: FOLDER_ORGANIZATION_STARTED — captures the routing
+      // pattern and mode (copy/move) so we can answer "do users prefer
+      // copy or move?" and detect mid-flight cancellations vs. successful
+      // runs by pairing with the COMPLETED event below.
+      __orgStartedAt = Date.now();
+      if (window.logUserAction) {
+        window.logUserAction('FOLDER_ORGANIZATION_STARTED', 'EXECUTE', {
+          mode: folderOrgConfig.mode || 'copy',
+          conflictStrategy: folderOrgConfig.conflictStrategy || folderOrgConfig.conflict || null,
+          customDestination: !!folderOrgConfig.customDestinationEnabled,
+          createUnknownFolder: !!folderOrgConfig.createUnknownFolder,
+          includeXmpFiles: !!folderOrgConfig.includeXmpFiles
+        });
+      }
+
       // Call IPC handler
       const response = await window.api.invoke('organize-results-post-analysis', {
         executionId: this.executionId,
@@ -4456,6 +4712,17 @@ class LogVisualizer {
 
       if (response.success) {
         const summary = response.summary;
+        if (window.logUserAction) {
+          window.logUserAction('FOLDER_ORGANIZATION_COMPLETED', 'EXECUTE', {
+            mode: folderOrgConfig.mode || 'copy',
+            organizedFiles: summary.organizedFiles ?? 0,
+            foldersCreated: summary.foldersCreated ?? 0,
+            skippedFiles: summary.skippedFiles ?? 0,
+            unknownFiles: summary.unknownFiles ?? 0,
+            errorCount: (response.errors && response.errors.length) || 0,
+            durationMs: Date.now() - __orgStartedAt
+          });
+        }
         const modeLabel = folderOrgConfig.mode === 'move' ? 'moved' : 'copied';
 
         // Replace the entire section with completion state
@@ -4489,6 +4756,15 @@ class LogVisualizer {
 
     } catch (error) {
       console.error('[LogVisualizer] Error in post-analysis organization:', error);
+      if (window.logUserAction) {
+        window.logUserAction('FOLDER_ORGANIZATION_COMPLETED', 'EXECUTE', {
+          mode: (folderOrgConfig && folderOrgConfig.mode) || 'copy',
+          organizedFiles: 0,
+          errorCount: 1,
+          failed: true,
+          durationMs: __orgStartedAt > 0 ? Date.now() - __orgStartedAt : 0
+        });
+      }
       this.showNotification(`❌ Organization failed: ${error.message}`, 'error');
       // Restore buttons on error
       const startBtn = document.getElementById('lv-start-organization');

@@ -231,12 +231,16 @@
         //      queues until the list is loaded — no polling required.
 
         const folderBtn = document.getElementById('folder-select-button');
+        const filesBtn = document.getElementById('files-select-button');
         const uploadBtn = document.getElementById('upload-button');
         const advToggle = document.getElementById('advanced-toggle');
         const categorySelect = document.getElementById('category-select');
 
         if (folderBtn && typeof window.handleFolderSelection === 'function') {
           folderBtn.addEventListener('click', window.handleFolderSelection);
+        }
+        if (filesBtn && typeof window.handleFilesSelection === 'function') {
+          filesBtn.addEventListener('click', window.handleFilesSelection);
         }
         if (uploadBtn && typeof window.handleUploadAndAnalyze === 'function') {
           uploadBtn.addEventListener('click', window.handleUploadAndAnalyze);

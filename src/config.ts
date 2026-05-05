@@ -117,7 +117,7 @@ export const MAX_SUPPORTED_EDGE_FUNCTION_VERSION = 6;
 // Used to filter sport_categories by min_app_version field
 // Examples: v1.0.0 = 10000, v1.1.2 = 10102, v2.0.0 = 20000
 // IMPORTANT: Update this when changing version in package.json
-export const APP_VERSION_NUMBER = 10105; // v1.1.5
+export const APP_VERSION_NUMBER = 10106; // v1.1.6
 
 // Resize presets for image optimization before upload
 export enum ResizePreset {

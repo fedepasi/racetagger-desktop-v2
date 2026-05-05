@@ -126,18 +126,23 @@ function buildMetadataForResult(
   if (allParticipants.length <= 1) {
     // Single match or no match — standard path
     const participant = allParticipants[0];
+    const participantData = participant ? {
+      name: participant.name,
+      number: participant.number,
+      team: participant.team,
+      car_model: participant.car_model,
+      nationality: participant.nationality,
+      metatag: participant.metatag,
+    } : undefined;
+
     const metadata = buildMetadataFromPresetIptc(
       iptcMetadata,
-      participant ? {
-        name: participant.name,
-        number: participant.number,
-        team: participant.team,
-        car_model: participant.car_model,
-        nationality: participant.nationality,
-        metatag: participant.metatag,
-      } : undefined,
+      participantData,
       result.aiKeywords,
-      keywordsMode
+      keywordsMode,
+      // Pass the (possibly empty) list so templates with [[ ]] blocks expand
+      // correctly even in single-match. Empty list → blocks render as empty.
+      participantData ? [participantData] : []
     );
 
     // Include visual tags in keywords if enabled in IPTC profile
@@ -185,12 +190,17 @@ function buildMetadataForResult(
     nationality: nationalities.join(', '),
   };
 
-  // Build base metadata using aggregated participant
+  // Build base metadata using aggregated participant.
+  // The full list `allParticipants` is also passed so that any [[ ]] blocks
+  // in templates expand once per pilot, AND so that {persons} OUTSIDE blocks
+  // resolves to the joined list of individual extended names (instead of the
+  // broken "extended name of the aggregated mess" that resulted before).
   const metadata = buildMetadataFromPresetIptc(
     iptcMetadata,
     aggregatedParticipant,
     result.aiKeywords,
-    keywordsMode
+    keywordsMode,
+    allParticipants
   );
 
   // Override Person Shown with individual entries per participant (IPTC standard)

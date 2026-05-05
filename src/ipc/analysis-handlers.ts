@@ -488,5 +488,155 @@ export function registerAnalysisHandlers(): void {
     }
   });
 
-  if (DEBUG_MODE) console.log('[IPC] Analysis handlers registered (7 handlers)');
+  // ==================== User Action Telemetry ====================
+  //
+  // Append a USER_ACTION line to the active execution's JSONL when the user
+  // performs a tracked action on the results page (open/close modal, click
+  // Write to Originals or Export, organize folders, send a delivery, exit).
+  //
+  // Bridge to the renderer-side wrapper `window.logUserAction(...)` defined
+  // in renderer/js/user-action-logger.js. The wrapper is the canonical entry
+  // point — never call this channel directly from a button handler, route
+  // through the wrapper so debouncing and sanitization are applied.
+  //
+  // Fire-and-forget: failures (missing JSONL, malformed args, disk error)
+  // are logged but do NOT surface to the user. Telemetry must never break a
+  // workflow it's only there to observe.
+  //
+  // Validation is paranoid — payloads come from the renderer, which has been
+  // talking to this main process for an unknown amount of time. Reject
+  // anything that doesn't fit the contract rather than persist garbage.
+  const ALLOWED_CATEGORIES = new Set([
+    'VIEW', 'CONFIGURE', 'EXECUTE', 'CORRECT', 'EXPORT', 'DELIVERY', 'EXIT'
+  ]);
+  // Hard cap on serialized payload size. 8 KB is generous for our taxonomy
+  // (typical payload < 500 bytes); anything bigger is almost certainly a
+  // mistake (whole IPTC blob being passed in instead of just field names).
+  const MAX_DATA_BYTES = 8 * 1024;
+
+  ipcMain.handle('log-user-action', async (_, payload: {
+    executionId?: string;
+    action?: string;
+    category?: string;
+    data?: Record<string, unknown>;
+    sessionId?: string;
+  }) => {
+    try {
+      if (!payload || typeof payload !== 'object') {
+        return { success: false, error: 'Invalid payload' };
+      }
+      const { executionId, action, category, data, sessionId } = payload;
+
+      if (!executionId || typeof executionId !== 'string' || executionId.length > 64) {
+        return { success: false, error: 'Invalid executionId' };
+      }
+      if (!action || typeof action !== 'string' || action.length > 64) {
+        return { success: false, error: 'Invalid action' };
+      }
+      if (!category || typeof category !== 'string' || !ALLOWED_CATEGORIES.has(category)) {
+        return { success: false, error: 'Invalid category' };
+      }
+      if (sessionId !== undefined && (typeof sessionId !== 'string' || sessionId.length > 64)) {
+        return { success: false, error: 'Invalid sessionId' };
+      }
+
+      // Optional payload — when present must be a plain object that
+      // serializes cleanly within the size cap. Malformed payloads are
+      // dropped (event still logged with `data: undefined`) rather than
+      // failing the whole call, since the action key alone is useful.
+      let safeData: Record<string, unknown> | undefined;
+      if (data !== undefined) {
+        if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+          if (DEBUG_MODE) {
+            console.warn(`[Analysis] log-user-action: data must be a plain object — dropping payload for ${action}`);
+          }
+        } else {
+          try {
+            const serialized = JSON.stringify(data);
+            if (serialized.length > MAX_DATA_BYTES) {
+              if (DEBUG_MODE) {
+                console.warn(`[Analysis] log-user-action: data exceeds ${MAX_DATA_BYTES} bytes (${serialized.length}) — dropping payload for ${action}`);
+              }
+            } else {
+              safeData = data;
+            }
+          } catch {
+            // Circular refs etc. — drop payload, keep event.
+            if (DEBUG_MODE) {
+              console.warn(`[Analysis] log-user-action: data not JSON-serializable — dropping payload for ${action}`);
+            }
+          }
+        }
+      }
+
+      // Capture client_timestamp at the moment the renderer requested the
+      // log — closer to "when the action actually happened" than the
+      // eventual JSONL append or DB insert, both of which can be delayed.
+      const clientTimestamp = new Date().toISOString();
+
+      // Step 1: durable append to JSONL (fast, local, offline-safe).
+      const logged = await AnalysisLogger.appendUserAction(
+        executionId,
+        action,
+        category as any, // category was validated against ALLOWED_CATEGORIES above
+        safeData,
+        sessionId
+      );
+
+      // Step 2: fire-and-forget direct INSERT into execution_user_actions.
+      // The JSONL is the durable record; the DB row is the queryable view.
+      // We do BOTH because:
+      //   • The JSONL is auto-uploaded to Supabase Storage only at
+      //     execution finalize, and USER_ACTION events happen AFTER that.
+      //     Without the direct insert these rows would never reach the DB.
+      //   • If the insert fails (offline, RLS, transient 5xx), the JSONL
+      //     line on disk is the safety net for a later backfill pass.
+      //
+      // We don't await — RLS errors / network issues must not slow down
+      // the renderer. The catch block on the IIFE swallows everything;
+      // worst case the row is missing from the dashboard until backfill.
+      const userId = authService.getAuthState().user?.id;
+      if (userId && logged) {
+        (async () => {
+          try {
+            const supabase = getSupabaseClient();
+            // Lazy require to dodge the synchronous import cost on app boot
+            // for users who never reach the results page.
+            const { app: electronApp } = require('electron');
+            const { error: insertError } = await supabase
+              .from('execution_user_actions')
+              .insert({
+                execution_id: executionId,
+                user_id: userId,
+                session_id: sessionId ?? null,
+                action,
+                category,
+                data: safeData ?? {},
+                app_version: electronApp.getVersion(),
+                client_timestamp: clientTimestamp
+              });
+            if (insertError && DEBUG_MODE) {
+              // RLS denial on a stale executionId (cascade-deleted parent)
+              // is the most common cause; not a real error worth spamming
+              // about. Log only in debug.
+              console.warn('[Analysis] log-user-action DB insert failed (non-fatal):', insertError.message);
+            }
+          } catch (dbErr) {
+            if (DEBUG_MODE) {
+              console.warn('[Analysis] log-user-action DB insert threw (non-fatal):', dbErr);
+            }
+          }
+        })();
+      }
+
+      return { success: true, data: { logged } };
+    } catch (error) {
+      // Telemetry must never throw — log and report failure to caller.
+      // Caller is fire-and-forget and should ignore the error anyway.
+      console.error('[Analysis] log-user-action handler error:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  if (DEBUG_MODE) console.log('[IPC] Analysis handlers registered (8 handlers)');
 }

@@ -4,6 +4,7 @@ import { SUPABASE_CONFIG } from './config';
 import * as fs from 'fs';
 import * as path from 'path';
 import { errorTelemetryService } from './utils/error-telemetry-service';
+import { getMachineId } from './utils/system-info';
 
 // Tipi per lo stato dell'autenticazione e gestione token
 export interface AuthState {
@@ -30,6 +31,11 @@ export interface PreAuthResult {
   error?: string;
   available?: number;
   needed?: number;
+  // Populated when the RPC returns error: 'MACHINE_BLOCKED'. Surfaces the
+  // admin-supplied reason string so the UI can show a meaningful message
+  // instead of a generic "auth failed".
+  reason?: string;
+  blockedAt?: string;
 }
 
 export interface BatchTokenUsage {
@@ -1396,13 +1402,28 @@ export class AuthService {
       };
     }
 
+    // Anonymized device fingerprint (SHA-256 truncated). Forwarded to the
+    // RPC so the server-side machine_blacklist check can fire BEFORE we
+    // reserve any tokens. If the helper throws or returns empty (very
+    // unlikely — pure os.* calls) we fall back to undefined: the RPC then
+    // skips the blacklist check, so the worst case is "we forgot to enforce
+    // for this one batch", not "the user can't run anything".
+    let machineId: string | undefined;
+    try {
+      const id = getMachineId();
+      machineId = id && id.length > 0 ? id : undefined;
+    } catch {
+      machineId = undefined;
+    }
+
     try {
       const { data, error } = await this.supabase.rpc('pre_authorize_tokens', {
         p_user_id: this.authState.user.id,
         p_tokens_needed: tokenCount,
         p_batch_id: batchId,
         p_image_count: imageCount,
-        p_visual_tagging: visualTagging
+        p_visual_tagging: visualTagging,
+        p_machine_id: machineId ?? null
       });
 
       if (error) {
@@ -1419,7 +1440,11 @@ export class AuthService {
           authorized: false,
           error: data?.error || 'UNKNOWN_ERROR',
           available: data?.available,
-          needed: data?.needed
+          needed: data?.needed,
+          // MACHINE_BLOCKED specifics: forward verbatim so the UI layer can
+          // render a "your device has been blocked: <reason>" dialog.
+          reason: data?.reason,
+          blockedAt: data?.blockedAt
         };
       }
 

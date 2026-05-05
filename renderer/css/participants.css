@@ -4454,6 +4454,45 @@
   border-color: rgba(34, 197, 94, 0.3);
 }
 
+/* Per-car repeat block button — distinct turquoise tint to signal that this
+   is a STRUCTURAL action (wraps a section) rather than a placeholder insertion.
+   Differentiates it visually from the other quick-add buttons that just insert
+   text at the cursor. */
+.template-shortcut-btn.template-shortcut-btn-block {
+  background: rgba(20, 184, 166, 0.12);
+  color: #14b8a6;
+  border-color: rgba(20, 184, 166, 0.3);
+  font-weight: 600;
+}
+
+.template-shortcut-btn.template-shortcut-btn-block:hover {
+  background: rgba(20, 184, 166, 0.22);
+  border-color: #14b8a6;
+}
+
+/* Multi-pilot preview line — slightly emphasized to draw the user's eye when
+   they're previewing a [[ ]] template, so they immediately spot how the block
+   expands across multiple pilots. */
+.iptc-caption-preview .preview-example-multi,
+.iptc-person-preview .preview-example-multi {
+  margin-top: 0.25rem;
+  padding-top: 0.25rem;
+  border-top: 1px dashed rgba(148, 163, 184, 0.2);
+  color: #cbd5e1;
+}
+
+.iptc-caption-preview .preview-example-multi .preview-label,
+.iptc-person-preview .preview-example-multi .preview-label {
+  color: #14b8a6;
+}
+
+.iptc-caption-preview .preview-example-hint,
+.iptc-person-preview .preview-example-hint {
+  margin-top: 0.25rem;
+  padding-top: 0.25rem;
+  border-top: 1px dashed rgba(148, 163, 184, 0.2);
+}
+
 /* Visual tags feature card in Keywords section */
 .iptc-visual-tags-option {
   margin-top: 0.75rem;
@@ -4776,4 +4815,147 @@
 }
 .driver-active-toggle {
   margin-left: auto;
+}
+
+/* ===== Preset Save Progress Overlay ===== */
+.preset-save-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px) saturate(160%);
+  -webkit-backdrop-filter: blur(6px) saturate(160%);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 3000;
+  animation: presetSaveFadeIn 160ms ease-out;
+}
+.preset-save-overlay.visible {
+  display: flex;
+}
+.preset-save-card {
+  width: 92%;
+  max-width: 460px;
+  background: var(--bg-light, #1f2530);
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+  border-radius: 14px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+  padding: 28px 28px 24px;
+  color: var(--text-primary, #e6eaf2);
+  text-align: center;
+}
+.preset-save-icon {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.preset-save-icon .spinner-ring {
+  width: 48px;
+  height: 48px;
+  border: 4px solid rgba(125, 211, 252, 0.18);
+  border-top-color: var(--accent, #38bdf8);
+  border-radius: 50%;
+  animation: presetSaveSpin 0.9s linear infinite;
+}
+.preset-save-icon .check-mark,
+.preset-save-icon .error-mark {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 30px;
+  font-weight: 600;
+  color: #fff;
+  animation: presetSavePop 250ms ease-out;
+}
+.preset-save-icon .check-mark {
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  box-shadow: 0 8px 24px rgba(34, 197, 94, 0.35);
+}
+.preset-save-icon .error-mark {
+  background: linear-gradient(135deg, #ef4444, #b91c1c);
+  box-shadow: 0 8px 24px rgba(239, 68, 68, 0.35);
+}
+.preset-save-title {
+  font-size: 17px;
+  font-weight: 600;
+  margin: 0 0 6px;
+  letter-spacing: 0.2px;
+}
+.preset-save-message {
+  font-size: 13px;
+  color: var(--text-secondary, #94a3b8);
+  margin: 0 0 16px;
+  min-height: 18px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+.preset-save-progress-track {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+.preset-save-progress-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #38bdf8, #6366f1);
+  transition: width 220ms ease-out;
+}
+.preset-save-progress-fill.success {
+  background: linear-gradient(90deg, #22c55e, #16a34a);
+  width: 100% !important;
+}
+.preset-save-progress-fill.error {
+  background: linear-gradient(90deg, #ef4444, #b91c1c);
+  width: 100% !important;
+}
+.preset-save-percent {
+  font-size: 12px;
+  color: var(--text-secondary, #94a3b8);
+  letter-spacing: 0.3px;
+  margin-bottom: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.preset-save-actions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+.preset-save-actions button {
+  background: var(--accent, #38bdf8);
+  color: #0b1220;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 22px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 120ms ease;
+}
+.preset-save-actions button:hover {
+  filter: brightness(1.08);
+}
+.preset-save-actions.hidden {
+  display: none;
+}
+@keyframes presetSaveSpin {
+  to { transform: rotate(360deg); }
+}
+@keyframes presetSaveFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes presetSavePop {
+  0% { transform: scale(0.6); opacity: 0; }
+  60% { transform: scale(1.08); opacity: 1; }
+  100% { transform: scale(1); }
 }

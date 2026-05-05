@@ -1066,6 +1066,104 @@ export function buildMetadataFromDestination(
 }
 
 // ============================================================================
+// IPTC PRO — Per-participant repeat block expander
+// ============================================================================
+
+/**
+ * Minimal participant shape consumed by per-participant template substitution.
+ * Mirrors the optional fields used by all template placeholders.
+ */
+export type TemplateParticipant = {
+  name?: string;
+  surname?: string;
+  number?: string | number;
+  team?: string;
+  car_model?: string;
+  nationality?: string;
+  sponsors?: string[];
+  metatag?: string;
+};
+
+/**
+ * Render the variables inside ONE per-participant block iteration for ONE
+ * participant.
+ *
+ * Handles all participant-level placeholders, including {persons} which here
+ * resolves to THIS participant's extended name (NOT the joined list — that
+ * semantics is reserved for {persons} appearing OUTSIDE [[ ]] blocks, where
+ * it represents the aggregated cast of the whole image).
+ *
+ * Unknown placeholders are left as-is so the outer cleanup pass can scrub them.
+ *
+ * Internal helper for {@link expandPerParticipantBlocks}.
+ */
+function renderBlockForParticipant(
+  blockContent: string,
+  participant: TemplateParticipant
+): string {
+  const surname = participant.surname ||
+    (participant.name ? participant.name.split(' ').pop() : '');
+  const persons = participant.name ? buildExtendedName(participant) : '';
+
+  return blockContent
+    .replace(/\{name\}/g, participant.name || '')
+    .replace(/\{surname\}/g, surname || '')
+    .replace(/\{number\}/g, String(participant.number || ''))
+    .replace(/\{team\}/g, participant.team || '')
+    .replace(/\{car_model\}/g, participant.car_model || '')
+    .replace(/\{nationality\}/g, participant.nationality || '')
+    .replace(/\{persons\}/g, persons);
+}
+
+/**
+ * Expand per-participant repeat blocks `[[ ... ]]` in a template.
+ *
+ * Each `[[ ... ]]` block is rendered once per participant in the list (with
+ * that participant's variables substituted), and the renderings are joined
+ * with `separator` (default `", "`).
+ *
+ * Variables OUTSIDE `[[ ]]` are left untouched — they're resolved by the
+ * caller using its standard logic (typically the aggregated participant in
+ * multi-match, or the single participant otherwise).
+ *
+ * Templates that don't contain `[[` are returned unchanged (zero-cost passthrough),
+ * which preserves full backward compatibility for any caller / preset that
+ * does not use the new syntax.
+ *
+ * Behavior matrix:
+ * - 0 participants  → block becomes empty string
+ * - 1 participant   → block renders once (no separator needed)
+ * - N participants  → block renders N times, joined by `separator`
+ *
+ * Limitations (v1):
+ * - Nested blocks `[[ [[ ]] ]]` are NOT supported (outer match is non-greedy
+ *   and would close on the first `]]`).
+ * - Separator is fixed at construction time; per-block separators are not
+ *   yet supported.
+ *
+ * @example
+ *   expandPerParticipantBlocks(
+ *     "DTM 2026 [[#{number}; {team}: {name}]] - photo by GC",
+ *     [{number: "90", team: "Manthey", name: "Feller"}, {number: "7", team: "Comtoyou", name: "Thiim"}]
+ *   )
+ *   // → "DTM 2026 #90; Manthey: Feller, #7; Comtoyou: Thiim - photo by GC"
+ */
+export function expandPerParticipantBlocks(
+  template: string,
+  participants: TemplateParticipant[],
+  separator: string = ', '
+): string {
+  if (!template || !template.includes('[[')) return template;
+
+  return template.replace(/\[\[([\s\S]*?)\]\]/g, (_match, blockContent: string) => {
+    if (participants.length === 0) return '';
+    return participants
+      .map(p => renderBlockForParticipant(blockContent, p))
+      .join(separator);
+  });
+}
+
+// ============================================================================
 // IPTC PRO — Build metadata from preset IPTC profile + participant data
 // ============================================================================
 
@@ -1074,10 +1172,30 @@ export function buildMetadataFromDestination(
  * Resolves template placeholders ({name}, {number}, {team}, etc.) in description, headline, etc.
  * Used by the IPTC finalizer to produce per-image metadata ready for writeFullMetadata().
  *
- * @param iptcProfile The IPTC profile from the preset (PresetIptcMetadata)
- * @param participant Optional matched participant data (corrected by user review)
- * @param aiKeywords Optional AI-generated keywords from processing phase
- * @param keywordsMode 'append' to merge AI + base keywords, 'overwrite' for base only
+ * Multi-match handling:
+ * - When `allParticipants` is provided with N>1 entries, `[[ ... ]]` blocks in
+ *   templates are expanded once per participant (see {@link expandPerParticipantBlocks}).
+ * - The `{persons}` placeholder OUTSIDE blocks resolves to the joined list of
+ *   individual extended names (one per participant). This fixes prior behavior
+ *   where multi-match produced a single nonsensical extended name from the
+ *   aggregated participant.
+ * - Other placeholders ({name}, {number}, ...) OUTSIDE blocks continue to use
+ *   the aggregated participant's joined values, preserving backward-compat for
+ *   callers that already pass an aggregated `participant` for multi-match.
+ *
+ * Backward compatibility:
+ * - When `allParticipants` is omitted (or empty), behavior is identical to the
+ *   pre-multi-match-fix version, with one improvement: any `[[ ... ]]` block in
+ *   a template still gets expanded, using `participant` as a single-element list
+ *   if available. This makes the new syntax safe to use in single-match presets too.
+ *
+ * @param iptcProfile      The IPTC profile from the preset (PresetIptcMetadata)
+ * @param participant      Optional matched participant data (single or aggregated)
+ * @param aiKeywords       Optional AI-generated keywords from processing phase
+ * @param keywordsMode     'append' to merge AI + base keywords, 'overwrite' for base only
+ * @param allParticipants  Optional list of all matched participants (used for
+ *                         per-participant block expansion and multi-match
+ *                         {persons} resolution)
  */
 export function buildMetadataFromPresetIptc(
   iptcProfile: PresetIptcMetadata,
@@ -1092,14 +1210,47 @@ export function buildMetadataFromPresetIptc(
     metatag?: string;
   },
   aiKeywords?: string[],
-  keywordsMode: 'append' | 'overwrite' = 'append'
+  keywordsMode: 'append' | 'overwrite' = 'append',
+  allParticipants?: TemplateParticipant[]
 ): ExportDestinationMetadata {
+  // Normalize the participant list used for [[ ]] block expansion.
+  // - If callers provided an explicit list (multi-match path), use it.
+  // - Otherwise, fall back to wrapping the single `participant` if present, so
+  //   that `[[ ]]` blocks still work in single-participant templates.
+  const blockExpansionList: TemplateParticipant[] = (allParticipants && allParticipants.length > 0)
+    ? allParticipants
+    : (participant ? [participant] : []);
+
+  // Resolve the value substituted for {persons} OUTSIDE [[ ]] blocks.
+  // - Multi-match (N>1): joined list of individual extended names. Fixes prior
+  //   broken behavior where the aggregated participant produced nonsensical
+  //   output like "(90, 7) Feller and Thiim - Manthey, Comtoyou".
+  // - Single match (or no list): the legacy single extended name (UNCHANGED
+  //   for users who already rely on {persons} in single-match templates).
+  // - Inside [[ ]] blocks, {persons} is rendered per-participant by the block
+  //   expander itself; this value is irrelevant there.
+  const personsResolved = (allParticipants && allParticipants.length > 1)
+    ? allParticipants
+        .filter(p => p.name)
+        .map(p => buildExtendedName(p))
+        .join(', ')
+    : (participant?.name ? buildExtendedName(participant) : '');
+
   // Helper to resolve template placeholders
   const resolveTemplate = (template?: string): string | undefined => {
     if (!template) return undefined;
 
-    let result = template;
+    // Step 1: Expand per-participant repeat blocks `[[ ... ]]`.
+    //   - Backward compat: passthrough when the template contains no `[[`.
+    //   - Each block iteration uses the individual participant's variables;
+    //     {persons} inside a block is THIS participant's extended name.
+    let result = expandPerParticipantBlocks(template, blockExpansionList);
 
+    // Step 2: Substitute participant variables OUTSIDE blocks.
+    //   - In multi-match, `participant` is the aggregated participant (joined
+    //     values), so {name}/{number}/etc. produce comma-joined lists — this is
+    //     the legacy behavior, intentionally preserved for backward compat.
+    //   - Users who want per-pilot output should wrap that section in [[ ]].
     if (participant) {
       const surname = participant.surname ||
         (participant.name ? participant.name.split(' ').pop() : '');
@@ -1113,11 +1264,10 @@ export function buildMetadataFromPresetIptc(
         .replace(/\{nationality\}/g, participant.nationality || '');
     }
 
-    // {persons} → extended name format (Photo Mechanic convention)
-    // e.g. "(1) Lando Norris (GBR) - McLaren Mastercard F1 Team - McLaren MCL40"
-    result = result.replace(/\{persons\}/g, personsExtended);
+    // Step 3: {persons} OUTSIDE blocks — multi-match-aware (see personsResolved).
+    result = result.replace(/\{persons\}/g, personsResolved);
 
-    // Clean up empty placeholders, double spaces, empty parens
+    // Step 4: Clean up empty placeholders, double spaces, empty parens.
     result = result
       .replace(/\{[^}]+\}/g, '')  // Remove any unresolved placeholders
       .replace(/\(\s*\)/g, '')
@@ -1126,12 +1276,6 @@ export function buildMetadataFromPresetIptc(
 
     return result || undefined;
   };
-
-  // Build extended name for {persons} placeholder in descriptions/headlines
-  // MUST be before keywords block so resolveTemplate can use it for {persons}
-  const personsExtended = participant?.name
-    ? buildExtendedName(participant)
-    : '';
 
   // Build person shown string using the format setting
   let personShown: string | undefined;
