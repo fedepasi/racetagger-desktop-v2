@@ -171,6 +171,7 @@ const validInvokeChannels: string[] = [
   'supabase-get-participant-presets',
   'supabase-get-participant-preset-by-id',
   'supabase-save-preset-participants',
+  'supabase-bulk-assign-folders',
   'supabase-update-participant-preset',
   'supabase-update-preset-last-used',
   'supabase-delete-participant-preset',
