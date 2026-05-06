@@ -3218,7 +3218,20 @@ async function exportPresetJSON(presetId) {
 
     const preset = response.data;
 
-    // Fetch driver data for all participants
+    // Fetch driver data for all participants.
+    //
+    // The canonical source is the `preset_participant_drivers` table, but it
+    // is only populated for participants that have been opened/saved through
+    // the editor. PDF-imported presets land their multi-driver lineup in the
+    // legacy `nome` column (comma-separated) and never get individual driver
+    // rows until the user manually edits each row.
+    //
+    // Without the fallback below, exporting such a preset emits drivers only
+    // for the few participants that have been edited — for the rest, the
+    // top-level `drivers[]` array is empty and a round-trip silently loses
+    // drivers 2/3/4 even though the names are visible in the UI grid.
+    //
+    // See driver-helpers.js + PLAN_BULK_FOLDER_ASSIGN.md (PR1) for context.
     const allDrivers = [];
     for (const p of preset.participants || []) {
       const driversResult = await window.api.invoke('preset-get-drivers-for-participant', p.id);
@@ -3233,6 +3246,16 @@ async function exportPresetJSON(presetId) {
             driver_order: d.driver_order
           });
         });
+      } else if (p.nome && window.driverHelpers && window.driverHelpers.synthesizeDriversFromNome) {
+        // Legacy fallback: synthesize driver records by splitting `nome` on
+        // commas. Records get fresh UUIDs because they don't exist in the DB
+        // yet — on re-import, importJsonPreset will create them under these
+        // IDs. driver_metatag/nationality default to null/'' (PDF imports
+        // never have these for non-edited participants).
+        const synth = window.driverHelpers.synthesizeDriversFromNome(p.nome, p.numero);
+        for (const d of synth) {
+          allDrivers.push(d);
+        }
       }
     }
 
