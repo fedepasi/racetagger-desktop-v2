@@ -1988,6 +1988,262 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
   }
 }
 
+// ============================================================================
+// Bulk folder assignment (PR2 — foundation for the split-view UI in PR3)
+// ============================================================================
+
+/**
+ * Result shape for bulkAssignFoldersSupabase. Per-row reporting lets the
+ * renderer surface partial success when one of N participants fails RLS or
+ * a transient network blip while the others go through.
+ */
+export interface BulkAssignFoldersResult {
+  ok: number;
+  failed: { id: string; error: string }[];
+  /** Folder names from the input that didn't exist in the preset's
+   *  custom_folders pool. The handler refuses these silently — surfacing
+   *  them lets the UI show a clear "create folder X first" hint. */
+  unknownFolderNames: string[];
+}
+
+/**
+ * Pure helper: compute the new folders[] array for a single participant given
+ * their current folders, the requested folder objects (already resolved to
+ * {name, path}), and the merge mode. Extracted so it can be unit-tested in
+ * isolation without a Supabase mock.
+ *
+ * Append mode: keep existing folders, add only those whose name is not
+ * already present (case-insensitive name comparison). Path on the existing
+ * entry wins — we don't overwrite a path the user may have customised.
+ *
+ * Replace mode: drop everything, set to exactly the requested folders in the
+ * given order.
+ */
+export function computeFolderUpdate(
+  currentFolders: { name: string; path?: string }[] | undefined | null,
+  requestedFolders: { name: string; path?: string }[],
+  mode: 'append' | 'replace'
+): { name: string; path?: string }[] {
+  if (mode === 'replace') {
+    // Defensive copy + filter to drop blanks.
+    return requestedFolders
+      .filter((f) => f && typeof f.name === 'string' && f.name.trim() !== '')
+      .map((f) => ({ name: f.name.trim(), ...(f.path ? { path: f.path } : {}) }));
+  }
+
+  // Append: case-insensitive dedup against existing names.
+  const existing = (Array.isArray(currentFolders) ? currentFolders : []).filter(
+    (f) => f && typeof f.name === 'string' && f.name.trim() !== ''
+  );
+  const existingKeys = new Set(existing.map((f) => f.name.trim().toLowerCase()));
+  const merged: { name: string; path?: string }[] = existing.map((f) => ({
+    name: f.name.trim(),
+    ...(f.path ? { path: f.path } : {})
+  }));
+
+  for (const f of requestedFolders) {
+    if (!f || typeof f.name !== 'string') continue;
+    const trimmed = f.name.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (existingKeys.has(key)) continue;
+    existingKeys.add(key);
+    merged.push({ name: trimmed, ...(f.path ? { path: f.path } : {}) });
+  }
+  return merged;
+}
+
+/**
+ * Atomically assign one or more folder names to many preset participants in a
+ * single Supabase round-trip. Used by the bulk-edit UI (PR3) and by the
+ * auto-assign rules engine (PR4).
+ *
+ * Folder names are looked up in the preset's `custom_folders` pool to attach
+ * the canonical filesystem path. Names not found in the pool are reported in
+ * `unknownFolderNames` and skipped — the caller is expected to surface them
+ * as a "create folder first" hint rather than failing the whole request.
+ *
+ * The legacy folder_1/2/3 columns are kept dual-written via the existing
+ * `applyDualWriteFolders` helper so 1.1.4 clients reading the same DB still
+ * see a valid first-three subset.
+ *
+ * @param presetId         UUID of the participant_presets row.
+ * @param participantIds   UUIDs of the preset_participants rows to mutate.
+ *                         Must all belong to `presetId`; foreign IDs are
+ *                         filtered out and reported in `failed`.
+ * @param folderNames      Folder names to assign (lookup against the preset's
+ *                         custom_folders pool).
+ * @param mode             'append' merges with existing folders, 'replace'
+ *                         overwrites them. Append is the default for safety
+ *                         and is what PR3's UI defaults to.
+ * @throws when the user is unauthenticated, the preset doesn't exist, or
+ *         RLS rejects the read.
+ */
+export async function bulkAssignFoldersSupabase(
+  presetId: string,
+  participantIds: string[],
+  folderNames: string[],
+  mode: 'append' | 'replace'
+): Promise<BulkAssignFoldersResult> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+
+  if (!presetId) throw new Error('presetId is required');
+  if (mode !== 'append' && mode !== 'replace') {
+    throw new Error(`Invalid mode: ${mode} (expected 'append' or 'replace')`);
+  }
+
+  // Empty target set → no-op, return clean result so callers don't have to
+  // special-case it before invoking us.
+  if (!Array.isArray(participantIds) || participantIds.length === 0) {
+    return { ok: 0, failed: [], unknownFolderNames: [] };
+  }
+
+  const authenticatedClient = authService.getSupabaseClient();
+
+  // 1. Verify preset ownership and load custom_folders pool. The same query
+  //    serves two purposes: ownership check (404/403 if the user doesn't own
+  //    the preset) and folder-name → path lookup table for the assignment.
+  const { data: preset, error: presetError } = await authenticatedClient
+    .from('participant_presets')
+    .select('id, user_id, custom_folders')
+    .eq('id', presetId)
+    .single();
+
+  if (presetError) {
+    console.error('[DB BulkAssign] preset lookup failed:', presetError);
+    throw new Error(`Preset lookup failed: ${presetError.message}`);
+  }
+  if (!preset) {
+    throw new Error(`Preset ${presetId} not found`);
+  }
+  if (preset.user_id !== userId) {
+    console.error(`[DB BulkAssign] user mismatch: preset.user_id=${preset.user_id}, userId=${userId}`);
+    throw new Error('Access denied: preset belongs to another user');
+  }
+
+  // 2. Resolve folder names → {name, path} objects via the preset's pool.
+  //    Unknown names are reported back to the caller, not thrown — this lets
+  //    the UI show "Folder X doesn't exist yet, create it first" inline.
+  const pool: { name: string; path?: string }[] = Array.isArray(preset.custom_folders)
+    ? (preset.custom_folders as any[]).filter(
+        (f) => f && typeof f === 'object' && typeof f.name === 'string'
+      )
+    : [];
+  const poolByName = new Map<string, { name: string; path?: string }>();
+  for (const f of pool) {
+    poolByName.set(f.name.trim().toLowerCase(), { name: f.name.trim(), path: f.path });
+  }
+
+  const requestedFolders: { name: string; path?: string }[] = [];
+  const unknownFolderNames: string[] = [];
+  for (const raw of folderNames || []) {
+    if (typeof raw !== 'string') continue;
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    const resolved = poolByName.get(trimmed.toLowerCase());
+    if (resolved) {
+      requestedFolders.push(resolved);
+    } else {
+      unknownFolderNames.push(trimmed);
+    }
+  }
+
+  // Replace mode with no resolvable folders is a legitimate "clear all
+  // folders for these participants" action and proceeds. Append mode with
+  // nothing resolvable is a no-op — we return early to avoid an UPSERT that
+  // would just rewrite the same values.
+  if (mode === 'append' && requestedFolders.length === 0) {
+    return { ok: 0, failed: [], unknownFolderNames };
+  }
+
+  // 3. Load current folders for the target participants. The .in() filter
+  //    plus the preset_id check is our defense-in-depth: even if the caller
+  //    passes a participant ID from another preset, we don't touch it.
+  const { data: currentRows, error: currentError } = await authenticatedClient
+    .from('preset_participants')
+    .select('id, folders')
+    .eq('preset_id', presetId)
+    .in('id', participantIds);
+
+  if (currentError) {
+    console.error('[DB BulkAssign] current participants lookup failed:', currentError);
+    throw new Error(`Participant lookup failed: ${currentError.message}`);
+  }
+
+  const currentById = new Map<string, { folders?: { name: string; path?: string }[] }>();
+  for (const row of currentRows || []) {
+    currentById.set(row.id, { folders: (row as any).folders });
+  }
+
+  // Participants requested but not found under this preset → reported as
+  // failures rather than silently dropped. Either RLS hid them, or the
+  // caller passed a stale or cross-preset ID.
+  const failed: { id: string; error: string }[] = [];
+  for (const id of participantIds) {
+    if (!currentById.has(id)) {
+      failed.push({ id, error: 'Participant not found in this preset' });
+    }
+  }
+
+  // 4. Build the upsert payload. One row per resolvable participant, each
+  //    going through applyDualWriteFolders so the legacy folder_1/2/3
+  //    columns stay in sync for 1.1.4 clients.
+  const updatePayload = (currentRows || []).map((row) => {
+    const newFolders = computeFolderUpdate(
+      (row as any).folders,
+      requestedFolders,
+      mode
+    );
+    const record: any = {
+      id: row.id,
+      preset_id: presetId,
+      folders: newFolders
+    };
+    applyDualWriteFolders(record);
+    return record;
+  });
+
+  if (updatePayload.length === 0) {
+    return { ok: 0, failed, unknownFolderNames };
+  }
+
+  // 5. Single round-trip UPSERT. If Supabase returns a partial error we
+  //    cannot easily attribute it per-row, so we surface the global error
+  //    via thrown exception — the renderer can fall back to per-row updates
+  //    in the unlikely case this happens.
+  const { error: upsertError } = await authenticatedClient
+    .from('preset_participants')
+    .upsert(updatePayload, { onConflict: 'id' });
+
+  if (upsertError) {
+    console.error('[DB BulkAssign] bulk upsert failed:', upsertError);
+    throw new Error(`Bulk folder assignment failed: ${upsertError.message}`);
+  }
+
+  // 6. Cache invalidation — without this, a subsequent read inside the 30s
+  //    TTL window would return stale folders. Mirrors the pattern used by
+  //    togglePresetParticipantActive et al.
+  invalidatePresetCacheEntry(presetId);
+
+  // Bump preset updated_at so cache-by-timestamp consumers can detect it.
+  await authenticatedClient
+    .from('participant_presets')
+    .update({ updated_at: new Date().toISOString() })
+    .eq('id', presetId);
+
+  console.log(
+    `[DB BulkAssign] ✅ ${updatePayload.length} participants × ${requestedFolders.length} folders (${mode})` +
+    (unknownFolderNames.length > 0 ? ` · skipped unknown names: ${unknownFolderNames.join(', ')}` : '')
+  );
+
+  return {
+    ok: updatePayload.length,
+    failed,
+    unknownFolderNames
+  };
+}
+
 /**
  * Update preset last used timestamp in Supabase
  * Uses RPC function for atomic increment of usage_count
