@@ -136,7 +136,6 @@ export function registerSupabaseHandlers(): void {
       return { success: false, error: e.message };
     }
   });
-
   /**
    * Bulk-assign one or more folder names to many preset participants in a
    * single round-trip. Backbone of the split-view bulk UI (PR3) and the
