@@ -4959,3 +4959,603 @@
   60% { transform: scale(1.08); opacity: 1; }
   100% { transform: scale(1); }
 }
+
+
+/* ============================================================================
+ * PR3v2 — V1 design: bulk folder assignment + auto-rule editor
+ * ============================================================================
+ *
+ * Replaces the always-visible split-view of the previous PR3 with the V1
+ * pattern: slide-in side panels from the right, a rich sticky bulk-action
+ * bar above the table, removable inline folder pills, and a filter row
+ * with search + Team filter + Folder filter + Auto-rule trigger.
+ *
+ * Visual tokens taken from the design canvas (palette, radii, shadows).
+ * Defined as new variables prefixed `--v1-` so they don't collide with the
+ * legacy `--accent-color`, `--bg-card`, etc. used elsewhere in the app.
+ *
+ * Two slide-in panels share the same container layout but are offset on
+ * z-index so the auto-rule editor sits above the assign panel when both
+ * are momentarily mounted (the JS only opens one at a time, but defensive
+ * styling keeps it visually correct if the user trips a race).
+ *
+ * See PLAN_BULK_FOLDER_ASSIGN.md (PR3v2) for the design rationale.
+ */
+
+/* ----- V1 design tokens (additive, don't override legacy ones) -------------*/
+
+:root {
+  --v1-accent:        #3b82f6;
+  --v1-accent-hover:  #2563eb;
+  --v1-accent-soft:   rgba(59, 130, 246, 0.18);
+  --v1-accent-bar:    rgba(59, 130, 246, 0.14);
+  --v1-accent-border: rgba(59, 130, 246, 0.4);
+  --v1-amber:         #f59e0b;
+  --v1-amber-soft:    rgba(245, 158, 11, 0.18);
+  --v1-amber-border:  rgba(245, 158, 11, 0.4);
+  --v1-amber-text:    #fcd34d;
+  --v1-purple:        #a855f7;
+  --v1-purple-soft:   rgba(168, 85, 247, 0.04);
+  --v1-purple-border: rgba(168, 85, 247, 0.25);
+  --v1-bg-modal:      #111827;
+  --v1-bg-surface:    #1a2233;
+  --v1-bg-elevated:   #1f2940;
+  --v1-bg-row-alt:    rgba(0, 0, 0, 0.15);
+  --v1-text:          #f1f5f9;
+  --v1-text-secondary:#cbd5e1;
+  --v1-text-muted:    #94a3b8;
+  --v1-text-faint:    #64748b;
+  --v1-border:        #2a3650;
+  --v1-border-light:  #3a4663;
+  --v1-border-faint:  rgba(58, 70, 99, 0.5);
+  --v1-radius-sm:     6px;
+  --v1-radius:        8px;
+  --v1-shadow-panel:  -12px 0 32px rgba(0, 0, 0, 0.35);
+  --v1-mono:          ui-monospace, 'SF Mono', Menlo, monospace;
+  --v1-side-panel-w:  380px;
+}
+
+/* ----- Filter row (search + chip filters + auto-rule trigger) --------------*/
+
+.bulk-filter-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.bulk-filter-search {
+  position: relative;
+  flex: 1;
+  min-width: 220px;
+}
+
+.bulk-filter-search input {
+  width: 100%;
+  padding: 8px 10px 8px 36px;
+  background: var(--input-bg, var(--v1-bg-surface));
+  border: 1px solid var(--border-color, var(--v1-border));
+  border-radius: var(--v1-radius);
+  color: var(--text-primary, var(--v1-text));
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.bulk-filter-search input:focus {
+  border-color: var(--v1-accent);
+  box-shadow: 0 0 0 3px var(--v1-accent-soft);
+}
+
+.bulk-filter-search-icon {
+  position: absolute;
+  top: 50%;
+  left: 12px;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: var(--v1-text-faint);
+}
+
+.filter-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--input-bg, var(--v1-bg-surface));
+  border: 1px solid var(--border-color, var(--v1-border));
+  border-radius: var(--v1-radius);
+  color: var(--text-primary, var(--v1-text));
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+}
+
+.filter-pill:hover {
+  border-color: var(--v1-border-light);
+}
+
+.filter-pill .filter-pill-label {
+  color: var(--v1-text-muted);
+}
+
+.filter-pill .filter-pill-value {
+  font-weight: 500;
+}
+
+.btn-auto-rule {
+  border-style: dashed !important;
+  color: var(--v1-amber-text);
+  border-color: var(--v1-amber-border);
+}
+
+.btn-auto-rule:hover {
+  background: var(--v1-amber-soft);
+}
+
+/* ----- Sticky bulk action bar ----------------------------------------------*/
+
+.bulk-action-bar-v1 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--v1-accent-bar);
+  border: 1px solid var(--v1-accent-border);
+  border-radius: var(--v1-radius) var(--v1-radius) 0 0;
+  padding: 10px 14px;
+  margin-bottom: -1px;   /* sit flush against the table top */
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.bulk-action-bar-v1.is-hidden {
+  display: none;
+}
+
+.bulk-action-bar-v1 .selection-badge {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--v1-accent);
+  color: white;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.bulk-action-bar-v1 .selection-label {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.bulk-action-bar-v1 .selection-numbers {
+  color: var(--v1-text-faint);
+  font-size: 12px;
+  font-family: var(--v1-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.bulk-action-bar-v1 .spacer {
+  flex: 1;
+  min-width: 4px;
+}
+
+/* ----- Selection checkbox column -------------------------------------------*/
+
+.row-select-th-v1,
+.row-select-td-v1 {
+  width: 38px;
+  text-align: center;
+  padding: 8px 0 !important;
+}
+
+.row-select-input-v1 {
+  cursor: pointer;
+  accent-color: var(--v1-accent);
+  width: 16px;
+  height: 16px;
+}
+
+.row-select-input-v1:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+/* highlight selected rows in V1 blue */
+.participants-table tr.row-selected-v1 {
+  background: var(--v1-accent-soft) !important;
+}
+
+/* zebra rows for visual rhythm */
+.participants-table tr.zebra-alt {
+  background: var(--v1-bg-row-alt);
+}
+
+/* ----- Folder chips on each row (removable + add) --------------------------*/
+
+.folder-chip-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.folder-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--v1-accent-soft);
+  color: #93c5fd;
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.folder-chip-remove {
+  cursor: pointer;
+  opacity: 0.6;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0 2px;
+  background: none;
+  border: none;
+  color: inherit;
+}
+
+.folder-chip-remove:hover {
+  opacity: 1;
+}
+
+.folder-chip-add {
+  background: transparent;
+  color: var(--v1-text-muted);
+  border: 1px dashed var(--v1-border-light);
+  cursor: pointer;
+  font-style: italic;
+}
+
+.folder-chip-add:hover {
+  border-color: var(--v1-accent);
+  color: var(--v1-accent);
+}
+
+/* ----- Number plate (mono, plate-styled #) ---------------------------------*/
+
+.num-plate-v1 {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 22px;
+  padding: 0 6px;
+  background: var(--v1-bg-elevated);
+  border: 1px solid var(--v1-border-light);
+  border-radius: 4px;
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--v1-text);
+  font-family: var(--v1-mono);
+}
+
+/* ----- Slide-in side panels (assign + auto-rule, share base styling) -------*/
+
+.slide-panel {
+  position: absolute;
+  top: 60px;
+  bottom: 0;
+  right: 0;
+  width: var(--v1-side-panel-w);
+  background: var(--v1-bg-modal);
+  border-left: 1px solid var(--v1-border);
+  transform: translateX(100%);
+  transition: transform 0.25s ease;
+  display: flex;
+  flex-direction: column;
+  box-shadow: none;
+  z-index: 40;
+}
+
+.slide-panel.is-open {
+  transform: translateX(0);
+  box-shadow: var(--v1-shadow-panel);
+}
+
+.slide-panel-auto-rule {
+  z-index: 41;   /* above the assign panel if both ever mounted */
+}
+
+.slide-panel-header {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--v1-border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.slide-panel-header-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.slide-panel-header-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--v1-text);
+}
+
+.slide-panel-header-sub {
+  color: var(--v1-text-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slide-panel-close {
+  background: transparent;
+  border: none;
+  color: var(--v1-text-muted);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 4px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.slide-panel-close:hover {
+  background: var(--v1-bg-surface);
+  color: var(--v1-text);
+}
+
+.slide-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.slide-panel-footer {
+  padding: 12px 16px;
+  border-top: 1px solid var(--v1-border);
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ----- Modal body padding-right shifts when a side panel is open -----------*/
+
+.preset-editor-with-side-panel #preset-editor-modal .modal-body {
+  padding-right: calc(24px + var(--v1-side-panel-w)) !important;
+  transition: padding-right 0.25s ease;
+}
+
+/* ----- Assign panel — folder pool list with counts -------------------------*/
+
+.assign-folder-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.assign-folder-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--v1-bg-surface);
+  color: var(--v1-text);
+  border: 1px solid var(--v1-border-light);
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+  user-select: none;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.assign-folder-pill:hover {
+  border-color: var(--v1-accent);
+}
+
+.assign-folder-pill.has-some {
+  background: var(--v1-accent-soft);
+  border-color: var(--v1-accent-border);
+}
+
+.assign-folder-pill.has-all {
+  background: var(--v1-accent);
+  color: white;
+  border-color: var(--v1-accent);
+}
+
+.assign-folder-pill .count-fraction {
+  font-size: 10px;
+  opacity: 0.75;
+  font-family: var(--v1-mono);
+}
+
+.assign-mode-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  background: var(--v1-bg-surface);
+  border-radius: var(--v1-radius);
+  font-size: 13px;
+}
+
+.assign-mode-block label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.assign-section-label {
+  font-size: 11px;
+  color: var(--v1-text-muted);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+
+/* ----- Auto-rule editor — rule cards stacked vertically --------------------*/
+
+.rule-card {
+  background: var(--v1-bg-surface);
+  border: 1px solid var(--v1-border);
+  border-radius: var(--v1-radius);
+  padding: 12px;
+  margin-bottom: 10px;
+}
+
+.rule-card.is-disabled {
+  background: transparent;
+  border-color: var(--v1-border-faint);
+  opacity: 0.55;
+}
+
+.rule-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.rule-card-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--v1-text);
+}
+
+.rule-match-count {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 500;
+  border-radius: 999px;
+  background: var(--v1-amber-soft);
+  color: var(--v1-amber-text);
+  white-space: nowrap;
+}
+
+.rule-card-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.rule-card .input,
+.rule-card .select {
+  width: 100%;
+  padding: 5px 8px;
+  font-size: 12px;
+  background: var(--input-bg, var(--v1-bg-modal));
+  border: 1px solid var(--border-color, var(--v1-border));
+  border-radius: var(--v1-radius-sm);
+  color: var(--text-primary, var(--v1-text));
+  outline: none;
+  font-family: inherit;
+}
+
+.rule-card .input:focus,
+.rule-card .select:focus {
+  border-color: var(--v1-accent);
+}
+
+.rule-card-target {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rule-card-target-label {
+  color: var(--v1-text-muted);
+  font-size: 11px;
+}
+
+.rule-toggle {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  background: var(--v1-bg-elevated);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s;
+  border: none;
+  flex-shrink: 0;
+}
+
+.rule-toggle.on {
+  background: #22c55e;
+}
+
+.rule-toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: white;
+  transition: transform 0.15s;
+}
+
+.rule-toggle.on::after {
+  transform: translateX(16px);
+}
+
+.rule-add-cta {
+  border: 1px dashed var(--v1-border-light);
+  border-radius: var(--v1-radius);
+  padding: 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--v1-text-muted);
+  cursor: pointer;
+  background: transparent;
+  width: 100%;
+  font-family: inherit;
+}
+
+.rule-add-cta:hover {
+  border-color: var(--v1-accent);
+  color: var(--v1-accent);
+}
+
+/* ----- Mobile / narrow modal fallback --------------------------------------*/
+
+/* Below ~960px the side panel takes the full modal width; the assign action
+ * still works but the user has to dismiss the panel to see the table again.
+ * PR5 will swap to a centered modal at this width — for now this keeps the
+ * panel reachable rather than hiding it. */
+@media (max-width: 960px) {
+  .slide-panel {
+    width: 100%;
+  }
+  .preset-editor-with-side-panel #preset-editor-modal .modal-body {
+    padding-right: 24px !important;
+  }
+}
+
+/* end PR3v2 styles */

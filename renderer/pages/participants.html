@@ -549,11 +549,64 @@
             </div>
           </div>
 
+          <!-- PR3v2 — V1 design.
+               Filter row → bulk action bar (sticky) → table → slide-in
+               side panels for folder-assign and auto-rule editor. The two
+               panels share a common .slide-panel base class but live in
+               different containers so JS can toggle them independently. -->
+
+          <!-- Filter row -->
+          <div class="bulk-filter-row">
+            <div class="bulk-filter-search">
+              <span class="bulk-filter-search-icon" aria-hidden="true">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M11 4a7 7 0 105.65 11.18l3.59 3.58 1.41-1.41-3.58-3.59A7 7 0 0011 4zm0 2a5 5 0 110 10 5 5 0 010-10z"/></svg>
+              </span>
+              <input id="bulk-search-input" type="text" placeholder="Search number, driver, team…" oninput="onBulkSearchChange(this.value)" aria-label="Search participants">
+            </div>
+            <button type="button" id="filter-team-pill" class="filter-pill" onclick="onTeamFilterToggle()" title="Filter by team">
+              <span class="filter-pill-label">Team:</span>
+              <span class="filter-pill-value" id="filter-team-value">All</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="#94a3b8" aria-hidden="true"><path d="M5 8l7 8 7-8H5z"/></svg>
+            </button>
+            <button type="button" id="filter-folder-pill" class="filter-pill" onclick="onFolderFilterToggle()" title="Filter by folder presence">
+              <span class="filter-pill-label">Folder:</span>
+              <span class="filter-pill-value" id="filter-folder-value">Any</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="#94a3b8" aria-hidden="true"><path d="M5 8l7 8 7-8H5z"/></svg>
+            </button>
+            <button type="button" class="btn btn-sm btn-auto-rule" onclick="openAutoRulePanel()" title="Open auto-rule editor">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" style="margin-right: 4px;"><path d="M12 2l2.5 6.5L21 11l-6.5 2.5L12 20l-2.5-6.5L3 11l6.5-2.5L12 2z"/></svg>
+              Auto-assign by rule
+            </button>
+          </div>
+
+          <!-- Bulk action bar — only visible when ≥1 row selected -->
+          <div id="bulk-action-bar" class="bulk-action-bar-v1 is-hidden" role="toolbar" aria-label="Bulk actions for selected participants">
+            <span class="selection-badge" id="bulk-selection-badge">0</span>
+            <span class="selection-label">selected</span>
+            <span class="selection-numbers" id="bulk-selection-numbers"></span>
+            <span class="spacer"></span>
+            <button type="button" class="btn btn-primary btn-sm" onclick="openAssignPanelForSelected()" title="Assign one or more folders">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="margin-right: 4px;"><path d="M10 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-8l-2-2zm3 11h-2v-2H9v-2h2v-2h2v2h2v2h-2v2z"/></svg>
+              Assign folder…
+            </button>
+            <button type="button" class="btn btn-sm" onclick="bulkClearSelectedFolders()" title="Clear folders for selected rows">
+              Clear folders
+            </button>
+            <button type="button" class="btn btn-sm" onclick="bulkSetSelectedActive(false)" title="Mark selected rows inactive for AI matching">
+              Deactivate
+            </button>
+            <button type="button" class="btn btn-sm" onclick="bulkClearSelection()" title="Clear selection" style="margin-left: 4px;">
+              Clear
+            </button>
+          </div>
+
           <div class="participants-table-container">
             <table id="participants-table" class="participants-table sortable asc">
               <thead>
                 <tr>
-                  <!-- v1.1.4: soft-disable toggle column -->
+                  <th class="row-select-th-v1 no-sort" title="Select rows for bulk actions">
+                    <input type="checkbox" id="select-all-participants" class="row-select-input-v1" onchange="onSelectAllParticipantsToggle(this)" aria-label="Select all">
+                  </th>
                   <th id="th-active" class="no-sort" title="Disable/Re-enable participant for AI matching" style="width: 60px;">Active</th>
                   <th>Num</th>
                   <th>Person</th>
@@ -562,6 +615,7 @@
                   <th>Plate</th>
                   <th id="th-delivery-to" style="display: none;">Delivery to</th>
                   <th id="th-face-status" class="no-sort" style="display: none;" title="Face Recognition Status">Face</th>
+                  <th class="no-sort" title="Custom folders assigned to this participant">Folders</th>
                   <th class="no-sort">Actions</th>
                 </tr>
               </thead>
@@ -570,6 +624,21 @@
               </tbody>
             </table>
           </div>
+
+          <p style="font-size: 12px; color: var(--text-secondary, #94a3b8); margin-top: 10px; display: flex; align-items: center; gap: 6px;">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+            Click "+ assign" on any row, or select multiple rows to bulk-assign · use auto-rule to map team/category patterns.
+          </p>
+
+          <!-- Slide-in panel: Assign folders to selected -->
+          <aside id="assign-side-panel" class="slide-panel" aria-hidden="true" aria-label="Assign folders to selected participants">
+            <!-- header / body / footer rendered by renderAssignSidePanel() -->
+          </aside>
+
+          <!-- Slide-in panel: Auto-rule editor -->
+          <aside id="auto-rule-side-panel" class="slide-panel slide-panel-auto-rule" aria-hidden="true" aria-label="Auto-assign rules editor">
+            <!-- header / body / footer rendered by renderAutoRulePanel() -->
+          </aside>
 
           <!-- Face Recognition Interest Survey (shown when feature NOT enabled) -->
           <div id="face-rec-survey" style="display: none; margin-top: 16px;">
