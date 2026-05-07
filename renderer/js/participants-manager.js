@@ -3494,6 +3494,25 @@ function loadParticipantsIntoTable(participants) {
   // v1.1.4 — refresh the "X/Y active" counter whenever the table rerenders.
   updateActiveParticipantsSummary();
 
+  // PR3v2 — every full-table render is a chance for the selection set to
+  // drift out of sync with what's actually on screen (e.g. participants
+  // deleted on another tab). Drop selected IDs that no longer correspond
+  // to a row, then resync the bulk-action bar against the surviving set.
+  if (typeof selectedParticipantIds !== 'undefined') {
+    const liveIds = new Set(participantsData.map(p => p.id).filter(Boolean));
+    for (const id of Array.from(selectedParticipantIds)) {
+      if (!liveIds.has(id)) selectedParticipantIds.delete(id);
+    }
+    if (typeof updateBulkActionBar === 'function') {
+      updateBulkActionBar();
+    }
+    // Re-apply the visibility filter so search/team/folder choices survive
+    // a re-render. Without this, sortable.js shuffles can re-show hidden rows.
+    if (typeof applyVisibilityFilter === 'function') {
+      applyVisibilityFilter();
+    }
+  }
+
   // Note: Initial sort is handled by sortable.js with the 'asc' class on the table
   // The table will automatically sort by the first column (Num) in ascending order
 }
@@ -3598,16 +3617,50 @@ function addParticipantRow(participant, rowIndex) {
   // all cells can be styled in one rule.
   if (!isActive) row.classList.add('participant-row-inactive');
 
+  // PR3v2 — selection checkbox cell, V1 styling.
+  const selectionDisabled = !participant?.id || isReadOnly;
+  const selectionChecked = participant?.id && selectedParticipantIds.has(participant.id);
+  if (selectionChecked) row.classList.add('row-selected-v1');
+  // PR3v2 — zebra rows. Apply only on odd rendered indexes; rowIndex here is
+  // the source data index, but visual zebra works fine off it because the
+  // table renders in source order before sortable.js shuffles. After a sort
+  // the zebra may interleave — acceptable; we re-stripe on every load.
+  if (rowIndex % 2 === 1) row.classList.add('zebra-alt');
+
+  const selectTd = `
+    <td class="row-select-td-v1 no-sort" data-sort="${selectionChecked ? '1' : '0'}">
+      <input type="checkbox" class="row-select-input-v1"
+             data-participant-id="${participantIdAttr}"
+             ${selectionChecked ? 'checked' : ''}
+             ${selectionDisabled ? 'disabled' : ''}
+             onchange="onParticipantSelectChange(this)"
+             aria-label="Select participant ${numero}">
+    </td>`;
+
+  // PR3v2 — inline folders cell with V1 chips. Each assigned folder is a
+  // removable pill (×). Empty state is a dashed "+ assign" pill that opens
+  // the assign side panel scoped to just this row.
+  const foldersForRow = getParticipantFoldersList(participant);
+  const foldersDisplay = `<div class="folder-chip-cell">${
+    foldersForRow.map(f => `
+      <span class="folder-chip" title="${escapeHtml(f.path || f.name)}">${escapeHtml(f.name)}<button type="button" class="folder-chip-remove" onclick="onRemoveFolderFromRowChip(this, '${escapeAttr(participant.id || '')}', '${escapeAttr(f.name)}')" aria-label="Remove ${escapeHtml(f.name)} from this participant">×</button></span>
+    `).join('') +
+    `<span class="folder-chip folder-chip-add" onclick="openAssignPanelForRow('${escapeAttr(participant.id || '')}')" title="Assign a folder to this participant">+ assign</span>`
+  }</div>`;
+  const foldersSortKey = foldersForRow.map(f => f.name).join(',');
+
   // Add data-sort attributes for proper sorting by sortable.js
   row.innerHTML = `
+    ${selectTd}
     ${toggleTd}
-    <td data-sort="${numero}"><strong>${numero}</strong></td>
+    <td data-sort="${numero}"><span class="num-plate-v1">${numero}</span></td>
     <td data-sort="${nome}">${nome}</td>
     <td data-sort="${categoria}">${categoryDisplay}</td>
     <td data-sort="${squadra}">${squadra || '<span class="text-muted">-</span>'}</td>
     <td data-sort="${plateNumber}">${plateDisplay}</td>
     ${deliveryTd}
     ${faceTd}
+    <td class="no-sort folders-td" data-sort="${escapeHtml(foldersSortKey)}">${foldersDisplay}</td>
     <td class="no-sort">
       <button class="btn btn-sm btn-secondary" onclick="duplicateParticipantFromRow(this)" title="Duplicate participant">
         <span class="btn-icon">📋</span>
@@ -5731,6 +5784,622 @@ async function importPdfPreset() {
   }
 }
 
+// ================================================================
+// PR3v2 — V1 design: bulk folder UI + auto-rule editor
+// ----------------------------------------------------------------
+// Filter row → sticky bulk action bar → table → two slide-in side
+// panels (assign + auto-rule). Rules are in-memory; persistence on
+// the participant_presets row ships in PR4. Reuses the IPC handler
+// from PR2 (`supabase-bulk-assign-folders`). Each pill click in the
+// assign panel fires one IPC call. "Apply all rules" groups
+// participants by target folder and fires one IPC per group.
+//
+// Dependencies: currentPreset, participantsData, escapeHtml,
+// showNotification, getDriverNamesFromParticipant, loadPresetForEditing.
+// ================================================================
+
+const selectedParticipantIds = new Set();
+let bulkSearchQuery = '';
+let bulkTeamFilter = 'All';
+let bulkFolderFilter = 'Any';
+let openSidePanel = null;       // null | { kind, scope, ids? }
+let assignMode = 'append';
+let assignFilter = '';
+let folderRules = [];           // in-memory; persistence in PR4
+
+// ---- Helpers ----------------------------------------------------
+
+function getParticipantFoldersList(participant) {
+  if (!participant) return [];
+  if (Array.isArray(participant.folders) && participant.folders.length > 0) {
+    return participant.folders.filter(f => f && typeof f.name === 'string' && f.name.trim() !== '');
+  }
+  const out = [];
+  for (let i = 1; i <= 3; i++) {
+    const name = participant['folder_' + i];
+    const path = participant['folder_' + i + '_path'];
+    if (name && typeof name === 'string' && name.trim() !== '') {
+      out.push({ name: name.trim(), ...(path ? { path } : {}) });
+    }
+  }
+  return out;
+}
+
+function getFolderPoolSorted() {
+  const raw = (currentPreset && Array.isArray(currentPreset.custom_folders))
+    ? currentPreset.custom_folders : [];
+  const normalised = raw
+    .map(f => {
+      if (!f) return null;
+      if (typeof f === 'string') {
+        const name = f.trim();
+        return name ? { name } : null;
+      }
+      if (typeof f === 'object' && typeof f.name === 'string') {
+        const name = f.name.trim();
+        if (!name) return null;
+        return f.path ? { name, path: f.path } : { name };
+      }
+      return null;
+    })
+    .filter(Boolean);
+  normalised.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  return normalised;
+}
+
+function escapeAttr(str) {
+  if (typeof str !== 'string') return '';
+  return str.replace(/&/g, '&amp;').replace(/'/g, '&#39;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function ruleMatchesParticipant(participant, rule) {
+  if (!rule || !rule.value) return false;
+  let fieldVal = '';
+  if (rule.field === 'team') fieldVal = participant.squadra || '';
+  else if (rule.field === 'category') fieldVal = participant.categoria || '';
+  else if (rule.field === 'car') fieldVal = participant.car_model || '';
+  else return false;
+  const v = String(fieldVal).toLowerCase();
+  const q = rule.value.toLowerCase();
+  if (rule.op === 'contains') return v.includes(q);
+  if (rule.op === 'equals') return v === q;
+  if (rule.op === 'starts with') return v.startsWith(q);
+  return false;
+}
+
+function getVisibleParticipants() {
+  return (participantsData || []).filter(p => {
+    if (bulkSearchQuery) {
+      const q = bulkSearchQuery.toLowerCase();
+      const numStr = String(p.numero || '').toLowerCase();
+      const driverNames = (typeof getDriverNamesFromParticipant === 'function'
+        ? getDriverNamesFromParticipant(p) : []).join(' ').toLowerCase();
+      const team = (p.squadra || '').toLowerCase();
+      if (!numStr.includes(q) && !driverNames.includes(q) && !team.includes(q)) return false;
+    }
+    if (bulkTeamFilter !== 'All' && (p.squadra || '') !== bulkTeamFilter) return false;
+    const folderCount = getParticipantFoldersList(p).length;
+    if (bulkFolderFilter === 'Without folders' && folderCount > 0) return false;
+    if (bulkFolderFilter === 'With folders' && folderCount === 0) return false;
+    return true;
+  });
+}
+
+// ---- Selection handlers -----------------------------------------
+
+function onParticipantSelectChange(checkboxEl) {
+  if (!checkboxEl) return;
+  const id = checkboxEl.getAttribute('data-participant-id');
+  if (!id) return;
+  if (checkboxEl.checked) selectedParticipantIds.add(id);
+  else selectedParticipantIds.delete(id);
+  const row = checkboxEl.closest('tr');
+  if (row) row.classList.toggle('row-selected-v1', checkboxEl.checked);
+  updateBulkActionBar();
+}
+
+function onSelectAllParticipantsToggle(headerCheckbox) {
+  if (!headerCheckbox) return;
+  const tbody = document.getElementById('participants-tbody');
+  if (!tbody) return;
+  const rowBoxes = tbody.querySelectorAll('input.row-select-input-v1');
+  rowBoxes.forEach(cb => {
+    if (cb.disabled) return;
+    cb.checked = headerCheckbox.checked;
+    const id = cb.getAttribute('data-participant-id');
+    if (!id) return;
+    if (headerCheckbox.checked) selectedParticipantIds.add(id);
+    else selectedParticipantIds.delete(id);
+    const row = cb.closest('tr');
+    if (row) row.classList.toggle('row-selected-v1', headerCheckbox.checked);
+  });
+  updateBulkActionBar();
+}
+
+function bulkClearSelection() {
+  selectedParticipantIds.clear();
+  const tbody = document.getElementById('participants-tbody');
+  if (tbody) {
+    tbody.querySelectorAll('input.row-select-input-v1').forEach(cb => { cb.checked = false; });
+    tbody.querySelectorAll('tr.row-selected-v1').forEach(r => r.classList.remove('row-selected-v1'));
+  }
+  const headerBox = document.getElementById('select-all-participants');
+  if (headerBox) {
+    headerBox.checked = false;
+    headerBox.indeterminate = false;
+  }
+  updateBulkActionBar();
+}
+
+function updateBulkActionBar() {
+  const bar = document.getElementById('bulk-action-bar');
+  const badge = document.getElementById('bulk-selection-badge');
+  const numbersEl = document.getElementById('bulk-selection-numbers');
+  const count = selectedParticipantIds.size;
+  if (bar) bar.classList.toggle('is-hidden', count === 0);
+  if (badge) badge.textContent = String(count);
+  if (numbersEl) {
+    const ids = Array.from(selectedParticipantIds);
+    const idMap = new Map((participantsData || []).filter(p => p.id).map(p => [p.id, p]));
+    const numerosSorted = ids
+      .map(id => idMap.get(id)).filter(Boolean)
+      .map(p => p.numero).filter(n => n !== undefined && n !== null && n !== '')
+      .sort((a, b) => {
+        const na = parseInt(a, 10), nb = parseInt(b, 10);
+        if (!isNaN(na) && !isNaN(nb)) return na - nb;
+        return String(a).localeCompare(String(b));
+      });
+    const preview = numerosSorted.slice(0, 5).map(n => '#' + n).join(', ');
+    numbersEl.textContent = numerosSorted.length > 5
+      ? `· ${preview}, +${numerosSorted.length - 5} more`
+      : (preview ? `· ${preview}` : '');
+  }
+  const headerBox = document.getElementById('select-all-participants');
+  if (headerBox) {
+    const tbody = document.getElementById('participants-tbody');
+    const visibleSelectable = tbody
+      ? Array.from(tbody.querySelectorAll('tr')).filter(r => r.style.display !== 'none')
+        .map(r => r.querySelector('input.row-select-input-v1')).filter(cb => cb && !cb.disabled)
+      : [];
+    const visibleSelected = visibleSelectable.filter(cb =>
+      selectedParticipantIds.has(cb.getAttribute('data-participant-id'))
+    ).length;
+    headerBox.checked = visibleSelectable.length > 0 && visibleSelected === visibleSelectable.length;
+    headerBox.indeterminate = visibleSelected > 0 && visibleSelected < visibleSelectable.length;
+  }
+  if (openSidePanel && openSidePanel.kind === 'assign' && openSidePanel.scope === 'selection') {
+    openSidePanel.ids = Array.from(selectedParticipantIds);
+    renderAssignSidePanel();
+  }
+}
+
+// ---- Filter handlers --------------------------------------------
+
+function onBulkSearchChange(value) {
+  bulkSearchQuery = value || '';
+  applyVisibilityFilter();
+}
+
+function onTeamFilterToggle() {
+  const teams = Array.from(new Set((participantsData || []).map(p => p.squadra).filter(Boolean))).sort();
+  const opts = ['All', ...teams];
+  const i = opts.indexOf(bulkTeamFilter);
+  bulkTeamFilter = opts[(i + 1) % opts.length] || 'All';
+  const valueEl = document.getElementById('filter-team-value');
+  if (valueEl) valueEl.textContent = bulkTeamFilter;
+  applyVisibilityFilter();
+}
+
+function onFolderFilterToggle() {
+  const opts = ['Any', 'Without folders', 'With folders'];
+  const i = opts.indexOf(bulkFolderFilter);
+  bulkFolderFilter = opts[(i + 1) % opts.length] || 'Any';
+  const valueEl = document.getElementById('filter-folder-value');
+  if (valueEl) valueEl.textContent = bulkFolderFilter;
+  applyVisibilityFilter();
+}
+
+function applyVisibilityFilter() {
+  const tbody = document.getElementById('participants-tbody');
+  if (!tbody) return;
+  const visibleIds = new Set(getVisibleParticipants().map(p => p.id).filter(Boolean));
+  tbody.querySelectorAll('tr').forEach(row => {
+    const cb = row.querySelector('input.row-select-input-v1');
+    const id = cb ? cb.getAttribute('data-participant-id') : null;
+    row.style.display = (id && visibleIds.has(id)) ? '' : 'none';
+  });
+  updateBulkActionBar();
+}
+
+// ---- Inline chip removal ----------------------------------------
+
+async function onRemoveFolderFromRowChip(btnEl, participantId, folderName) {
+  if (!participantId || !folderName) return;
+  if (!currentPreset || !currentPreset.id) return;
+  const participant = (participantsData || []).find(p => p.id === participantId);
+  if (!participant) return;
+  const surviving = getParticipantFoldersList(participant)
+    .filter(f => f.name.toLowerCase() !== folderName.toLowerCase())
+    .map(f => f.name);
+  try {
+    btnEl.disabled = true;
+    const response = await window.api.invoke('supabase-bulk-assign-folders', {
+      presetId: currentPreset.id, participantIds: [participantId],
+      folderNames: surviving, mode: 'replace'
+    });
+    if (!response || !response.success) {
+      throw new Error(response?.error || 'Failed to remove folder');
+    }
+    if (typeof loadPresetForEditing === 'function') {
+      await loadPresetForEditing(currentPreset.id);
+    }
+  } catch (err) {
+    console.error('[PR3v2] removeFolder failed:', err);
+    showNotification('Failed to remove folder: ' + (err.message || 'Unknown error'), 'error');
+  } finally {
+    btnEl.disabled = false;
+  }
+}
+
+// ---- Side panel: open / close -----------------------------------
+
+function openAssignPanelForSelected() {
+  if (selectedParticipantIds.size === 0) {
+    showNotification('Select at least one participant first.', 'warning');
+    return;
+  }
+  closeAutoRulePanel();
+  openSidePanel = { kind: 'assign', scope: 'selection', ids: Array.from(selectedParticipantIds) };
+  renderAssignSidePanel();
+  showAssignSidePanel(true);
+}
+
+function openAssignPanelForRow(participantId) {
+  if (!participantId) return;
+  closeAutoRulePanel();
+  openSidePanel = { kind: 'assign', scope: 'single', ids: [participantId] };
+  renderAssignSidePanel();
+  showAssignSidePanel(true);
+}
+
+function closeAssignSidePanel() {
+  if (openSidePanel && openSidePanel.kind === 'assign') openSidePanel = null;
+  showAssignSidePanel(false);
+}
+
+function showAssignSidePanel(open) {
+  const panel = document.getElementById('assign-side-panel');
+  if (!panel) return;
+  panel.classList.toggle('is-open', !!open);
+  panel.setAttribute('aria-hidden', open ? 'false' : 'true');
+  document.body.classList.toggle('preset-editor-with-side-panel', !!open);
+}
+
+function openAutoRulePanel() {
+  closeAssignSidePanel();
+  openSidePanel = { kind: 'auto-rule' };
+  renderAutoRulePanel();
+  showAutoRulePanel(true);
+}
+
+function closeAutoRulePanel() {
+  if (openSidePanel && openSidePanel.kind === 'auto-rule') openSidePanel = null;
+  showAutoRulePanel(false);
+}
+
+function showAutoRulePanel(open) {
+  const panel = document.getElementById('auto-rule-side-panel');
+  if (!panel) return;
+  panel.classList.toggle('is-open', !!open);
+  panel.setAttribute('aria-hidden', open ? 'false' : 'true');
+  document.body.classList.toggle('preset-editor-with-side-panel', !!open);
+}
+
+// ---- Render: Assign side panel ----------------------------------
+
+function renderAssignSidePanel() {
+  const panel = document.getElementById('assign-side-panel');
+  if (!panel) return;
+  if (!openSidePanel || openSidePanel.kind !== 'assign') {
+    panel.innerHTML = '';
+    return;
+  }
+  const ids = openSidePanel.ids || [];
+  const rows = (participantsData || []).filter(p => p.id && ids.includes(p.id));
+  const pool = getFolderPoolSorted();
+  const visiblePool = pool.filter(f => f.name.toLowerCase().includes((assignFilter || '').toLowerCase()));
+
+  const folderCounts = new Map();
+  rows.forEach(r => {
+    getParticipantFoldersList(r).forEach(f => {
+      const key = f.name.toLowerCase();
+      folderCounts.set(key, (folderCounts.get(key) || 0) + 1);
+    });
+  });
+
+  const numerosSorted = rows.map(r => r.numero).filter(Boolean)
+    .sort((a, b) => {
+      const na = parseInt(a, 10), nb = parseInt(b, 10);
+      if (!isNaN(na) && !isNaN(nb)) return na - nb;
+      return String(a).localeCompare(String(b));
+    });
+  const previewNumeros = numerosSorted.slice(0, 6).map(n => '#' + n).join(', ');
+  const numbersHint = numerosSorted.length > 6
+    ? `${previewNumeros} +${numerosSorted.length - 6}` : previewNumeros;
+
+  panel.innerHTML = `
+    <div class="slide-panel-header">
+      <span style="width: 32px; height: 32px; border-radius: 8px; background: var(--v1-accent); color: white; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; flex-shrink: 0;">${ids.length}</span>
+      <div class="slide-panel-header-meta">
+        <div class="slide-panel-header-title">${ids.length} selected</div>
+        <div class="slide-panel-header-sub">${escapeHtml(numbersHint || '—')}</div>
+      </div>
+      <button type="button" class="slide-panel-close" onclick="closeAssignSidePanel()" aria-label="Close panel">×</button>
+    </div>
+    <div class="slide-panel-body">
+      <input type="text" placeholder="Filter folders…" value="${escapeHtml(assignFilter)}" oninput="onAssignFilterChange(this.value)" style="width: 100%; padding: 6px 10px; margin-bottom: 12px; background: var(--v1-bg-modal); border: 1px solid var(--v1-border); border-radius: var(--v1-radius-sm); color: var(--v1-text); font-size: 13px;">
+      <div class="assign-section-label">Tap a folder to assign · ${visiblePool.length} available</div>
+      <div class="assign-folder-grid">
+        ${pool.length === 0 ? `<div style="font-size: 12px; color: var(--v1-text-muted); font-style: italic;">No folders defined yet. Add one above with the <strong>+ Add Folder</strong> button.</div>` : ''}
+        ${visiblePool.map(f => {
+          const count = folderCounts.get(f.name.toLowerCase()) || 0;
+          const all = count === ids.length && ids.length > 0;
+          const some = count > 0 && count < ids.length;
+          const cls = ['assign-folder-pill'];
+          if (all) cls.push('has-all');
+          else if (some) cls.push('has-some');
+          return `<button type="button" class="${cls.join(' ')}" onclick="onAssignFolderClick('${escapeAttr(f.name)}')" title="${escapeHtml(f.path || f.name)}">${all ? '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>' : ''}${escapeHtml(f.name)}${count > 0 ? `<span class="count-fraction">${count}/${ids.length}</span>` : ''}</button>`;
+        }).join('')}
+      </div>
+      <div class="assign-section-label">Mode</div>
+      <div class="assign-mode-block">
+        <label><input type="radio" name="assign-mode" ${assignMode === 'append' ? 'checked' : ''} onchange="onAssignModeChange('append')"><span><strong>Append</strong> <span style="color: var(--v1-text-muted);">— add to existing folders</span></span></label>
+        <label><input type="radio" name="assign-mode" ${assignMode === 'replace' ? 'checked' : ''} onchange="onAssignModeChange('replace')"><span><strong>Replace</strong> <span style="color: var(--v1-text-muted);">— overwrite existing</span></span></label>
+      </div>
+    </div>
+    <div class="slide-panel-footer">
+      <button type="button" class="btn btn-sm" onclick="closeAssignSidePanel()">Done</button>
+    </div>
+  `;
+}
+
+function onAssignFilterChange(value) { assignFilter = value || ''; renderAssignSidePanel(); }
+function onAssignModeChange(mode) { if (mode === 'append' || mode === 'replace') assignMode = mode; }
+
+async function onAssignFolderClick(folderName) {
+  if (!openSidePanel || openSidePanel.kind !== 'assign') return;
+  if (!folderName) return;
+  if (!currentPreset || !currentPreset.id) {
+    showNotification('No preset to apply folders to.', 'error');
+    return;
+  }
+  const ids = openSidePanel.ids;
+  if (!ids || ids.length === 0) return;
+  try {
+    const response = await window.api.invoke('supabase-bulk-assign-folders', {
+      presetId: currentPreset.id, participantIds: ids,
+      folderNames: [folderName], mode: assignMode
+    });
+    if (!response || !response.success) throw new Error(response?.error || 'Bulk assign failed');
+    const data = response.data || { ok: 0, failed: [], unknownFolderNames: [] };
+    showNotification(
+      `${assignMode === 'replace' ? 'Replaced with' : 'Assigned'} "${folderName}" on ${data.ok} participant${data.ok === 1 ? '' : 's'}.`,
+      data.failed && data.failed.length > 0 ? 'warning' : 'success'
+    );
+    if (typeof loadPresetForEditing === 'function') {
+      await loadPresetForEditing(currentPreset.id);
+    }
+    renderAssignSidePanel();
+  } catch (err) {
+    console.error('[PR3v2] onAssignFolderClick failed:', err);
+    showNotification('Failed to assign folder: ' + (err.message || 'Unknown error'), 'error');
+  }
+}
+
+// ---- Bulk: clear folders / set active ---------------------------
+
+async function bulkClearSelectedFolders() {
+  if (selectedParticipantIds.size === 0) return;
+  if (!currentPreset || !currentPreset.id) return;
+  const ids = Array.from(selectedParticipantIds);
+  try {
+    const response = await window.api.invoke('supabase-bulk-assign-folders', {
+      presetId: currentPreset.id, participantIds: ids,
+      folderNames: [], mode: 'replace'
+    });
+    if (!response || !response.success) throw new Error(response?.error || 'Failed to clear');
+    const data = response.data || { ok: 0 };
+    showNotification(`Cleared folders on ${data.ok} participant${data.ok === 1 ? '' : 's'}.`, 'success');
+    if (typeof loadPresetForEditing === 'function') {
+      await loadPresetForEditing(currentPreset.id);
+    }
+  } catch (err) {
+    console.error('[PR3v2] bulkClearSelectedFolders failed:', err);
+    showNotification('Failed to clear folders: ' + (err.message || 'Unknown error'), 'error');
+  }
+}
+
+async function bulkSetSelectedActive(active) {
+  if (selectedParticipantIds.size === 0) return;
+  const ids = Array.from(selectedParticipantIds);
+  let okCount = 0;
+  for (const id of ids) {
+    try {
+      const response = await window.api.invoke('preset:toggleParticipantActive', { participantId: id, isActive: !!active });
+      if (response && (response.success !== false)) okCount++;
+    } catch (e) { /* per-row swallow */ }
+  }
+  showNotification(
+    `${active ? 'Activated' : 'Deactivated'} ${okCount} participant${okCount === 1 ? '' : 's'}.`,
+    okCount === ids.length ? 'success' : 'warning'
+  );
+  if (typeof loadPresetForEditing === 'function' && currentPreset?.id) {
+    await loadPresetForEditing(currentPreset.id);
+  }
+}
+
+// ---- Render: Auto-rule side panel -------------------------------
+
+function renderAutoRulePanel() {
+  const panel = document.getElementById('auto-rule-side-panel');
+  if (!panel) return;
+  if (!openSidePanel || openSidePanel.kind !== 'auto-rule') {
+    panel.innerHTML = '';
+    return;
+  }
+  const pool = getFolderPoolSorted();
+  const enabledCount = folderRules.filter(r => r.enabled).length;
+  const ruleCards = folderRules.map((r, idx) => {
+    const matchCount = (participantsData || []).filter(p => ruleMatchesParticipant(p, r)).length;
+    const cls = ['rule-card'];
+    if (!r.enabled) cls.push('is-disabled');
+    return `
+      <div class="${cls.join(' ')}" data-rule-id="${r.id}">
+        <div class="rule-card-header">
+          <button type="button" class="rule-toggle ${r.enabled ? 'on' : ''}" onclick="onRuleToggle('${r.id}')" aria-label="Toggle rule"></button>
+          <span class="rule-card-title">Rule ${idx + 1}</span>
+          <span class="rule-match-count">matches ${matchCount}</span>
+          <span style="flex: 1;"></span>
+          <button type="button" class="slide-panel-close" onclick="onRuleDelete('${r.id}')" aria-label="Delete rule" title="Delete rule">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" style="opacity:0.7"><path d="M6 19a2 2 0 002 2h8a2 2 0 002-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+          </button>
+        </div>
+        <div class="rule-card-grid-2">
+          <select class="select" onchange="onRuleFieldChange('${r.id}', this.value)">
+            <option value="team" ${r.field === 'team' ? 'selected' : ''}>Team</option>
+            <option value="category" ${r.field === 'category' ? 'selected' : ''}>Category</option>
+            <option value="car" ${r.field === 'car' ? 'selected' : ''}>Car model</option>
+          </select>
+          <select class="select" onchange="onRuleOpChange('${r.id}', this.value)">
+            <option ${r.op === 'contains' ? 'selected' : ''}>contains</option>
+            <option ${r.op === 'equals' ? 'selected' : ''}>equals</option>
+            <option ${r.op === 'starts with' ? 'selected' : ''}>starts with</option>
+          </select>
+        </div>
+        <input class="input" type="text" placeholder="value…" value="${escapeAttr(r.value || '')}" oninput="onRuleValueChange('${r.id}', this.value)" style="margin-bottom: 6px;">
+        <div class="rule-card-target">
+          <span class="rule-card-target-label">→ folder =</span>
+          <select class="select" style="flex: 1;" onchange="onRuleFolderChange('${r.id}', this.value)">
+            ${pool.length === 0 ? '<option>(no folders defined)</option>' : pool.map(f =>
+              `<option value="${escapeAttr(f.name)}" ${r.folder === f.name ? 'selected' : ''}>${escapeHtml(f.name)}</option>`
+            ).join('')}
+          </select>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  panel.innerHTML = `
+    <div class="slide-panel-header">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="#f59e0b"><path d="M12 2l2.5 6.5L21 11l-6.5 2.5L12 20l-2.5-6.5L3 11l6.5-2.5L12 2z"/></svg>
+      <div class="slide-panel-header-meta">
+        <div class="slide-panel-header-title">Auto-rules</div>
+        <div class="slide-panel-header-sub">${enabledCount} active · in-memory only</div>
+      </div>
+      <button type="button" class="btn btn-sm" onclick="onRuleAdd()">+ Add rule</button>
+      <button type="button" class="slide-panel-close" onclick="closeAutoRulePanel()" aria-label="Close panel">×</button>
+    </div>
+    <div class="slide-panel-body">
+      ${folderRules.length === 0 ? '<div style="text-align: center; padding: 24px 12px; color: var(--v1-text-muted); font-size: 13px;">No rules defined yet. Click <strong>+ Add rule</strong> to start.</div>' : ruleCards}
+      <button type="button" class="rule-add-cta" onclick="onRuleAdd()">+ Add another rule</button>
+      <p style="font-size: 11px; color: var(--v1-text-muted); margin-top: 16px; line-height: 1.5;">Rules are in-memory only — they don't yet persist on the preset. Saving the preset will not save the rules. Persistence ships in the next release.</p>
+    </div>
+    <div class="slide-panel-footer">
+      <button type="button" class="btn btn-sm" onclick="closeAutoRulePanel()">Cancel</button>
+      <button type="button" class="btn btn-primary btn-sm" onclick="applyAllRules()" ${enabledCount === 0 ? 'disabled' : ''}>
+        Apply all rules
+      </button>
+    </div>
+  `;
+}
+
+// ---- Rule editor handlers ---------------------------------------
+
+function onRuleAdd() {
+  const pool = getFolderPoolSorted();
+  const id = 'r' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+  folderRules.push({
+    id, field: 'team', op: 'contains', value: '',
+    folder: pool.length > 0 ? pool[0].name : '', enabled: true
+  });
+  renderAutoRulePanel();
+}
+function onRuleToggle(ruleId) {
+  const r = folderRules.find(x => x.id === ruleId);
+  if (r) { r.enabled = !r.enabled; renderAutoRulePanel(); }
+}
+function onRuleDelete(ruleId) {
+  const idx = folderRules.findIndex(r => r.id === ruleId);
+  if (idx >= 0) { folderRules.splice(idx, 1); renderAutoRulePanel(); }
+}
+function onRuleFieldChange(ruleId, value) {
+  const r = folderRules.find(x => x.id === ruleId);
+  if (r) { r.field = value; renderAutoRulePanel(); }
+}
+function onRuleOpChange(ruleId, value) {
+  const r = folderRules.find(x => x.id === ruleId);
+  if (r) { r.op = value; renderAutoRulePanel(); }
+}
+function onRuleValueChange(ruleId, value) {
+  const r = folderRules.find(x => x.id === ruleId);
+  if (r) { r.value = value; renderAutoRulePanel(); }
+}
+function onRuleFolderChange(ruleId, value) {
+  const r = folderRules.find(x => x.id === ruleId);
+  if (r) { r.folder = value; renderAutoRulePanel(); }
+}
+
+// ---- Apply all rules --------------------------------------------
+
+async function applyAllRules() {
+  if (!currentPreset || !currentPreset.id) {
+    showNotification('No preset open.', 'error');
+    return;
+  }
+  const enabled = folderRules.filter(r => r.enabled);
+  if (enabled.length === 0) {
+    showNotification('No active rules to apply.', 'warning');
+    return;
+  }
+  const byFolder = new Map();
+  for (const rule of enabled) {
+    if (!rule.value || !rule.folder) continue;
+    for (const p of (participantsData || [])) {
+      if (!p.id) continue;
+      if (!ruleMatchesParticipant(p, rule)) continue;
+      const arr = byFolder.get(rule.folder) || [];
+      if (!arr.includes(p.id)) arr.push(p.id);
+      byFolder.set(rule.folder, arr);
+    }
+  }
+  if (byFolder.size === 0) {
+    showNotification('No participants matched any active rule.', 'warning');
+    return;
+  }
+  let totalAffected = 0, groupsFailed = 0;
+  const unknownFolders = new Set();
+  for (const [folder, ids] of byFolder.entries()) {
+    try {
+      const response = await window.api.invoke('supabase-bulk-assign-folders', {
+        presetId: currentPreset.id, participantIds: ids,
+        folderNames: [folder], mode: 'append'
+      });
+      if (!response || !response.success) { groupsFailed++; continue; }
+      const data = response.data || { ok: 0, unknownFolderNames: [] };
+      totalAffected += data.ok || 0;
+      (data.unknownFolderNames || []).forEach(n => unknownFolders.add(n));
+    } catch (e) { groupsFailed++; }
+  }
+  const messages = [`Applied ${enabled.length} rule${enabled.length === 1 ? '' : 's'} → ${totalAffected} folder assignment${totalAffected === 1 ? '' : 's'}.`];
+  if (groupsFailed > 0) messages.push(`${groupsFailed} rule group${groupsFailed === 1 ? '' : 's'} failed.`);
+  if (unknownFolders.size > 0) messages.push(`Unknown folders skipped: ${Array.from(unknownFolders).join(', ')}.`);
+  showNotification(messages.join(' '), groupsFailed > 0 || unknownFolders.size > 0 ? 'warning' : 'success');
+  if (typeof loadPresetForEditing === 'function') {
+    await loadPresetForEditing(currentPreset.id);
+  }
+  renderAutoRulePanel();
+}
+
 // Export functions for HTML onclick handlers immediately
 window.createNewPreset = createNewPreset;
 window.editPreset = editPreset;
@@ -5785,6 +6454,33 @@ window.importPdfPreset = importPdfPreset;
 // Export utility functions for preset management
 window.getSelectedPreset = getSelectedPreset;
 window.clearSelectedPreset = clearSelectedPreset;
+
+// PR3v2 — V1 design: bulk folder UI + auto-rule editor
+window.onParticipantSelectChange = onParticipantSelectChange;
+window.onSelectAllParticipantsToggle = onSelectAllParticipantsToggle;
+window.bulkClearSelection = bulkClearSelection;
+window.bulkClearSelectedFolders = bulkClearSelectedFolders;
+window.bulkSetSelectedActive = bulkSetSelectedActive;
+window.onBulkSearchChange = onBulkSearchChange;
+window.onTeamFilterToggle = onTeamFilterToggle;
+window.onFolderFilterToggle = onFolderFilterToggle;
+window.openAssignPanelForSelected = openAssignPanelForSelected;
+window.openAssignPanelForRow = openAssignPanelForRow;
+window.closeAssignSidePanel = closeAssignSidePanel;
+window.openAutoRulePanel = openAutoRulePanel;
+window.closeAutoRulePanel = closeAutoRulePanel;
+window.onAssignFilterChange = onAssignFilterChange;
+window.onAssignModeChange = onAssignModeChange;
+window.onAssignFolderClick = onAssignFolderClick;
+window.onRemoveFolderFromRowChip = onRemoveFolderFromRowChip;
+window.onRuleAdd = onRuleAdd;
+window.onRuleToggle = onRuleToggle;
+window.onRuleDelete = onRuleDelete;
+window.onRuleFieldChange = onRuleFieldChange;
+window.onRuleOpChange = onRuleOpChange;
+window.onRuleValueChange = onRuleValueChange;
+window.onRuleFolderChange = onRuleFolderChange;
+window.applyAllRules = applyAllRules;
 
 // Initialize participants manager when DOM is ready
 document.addEventListener('DOMContentLoaded', function() {
