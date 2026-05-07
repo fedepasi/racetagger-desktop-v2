@@ -577,6 +577,13 @@
               <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" style="margin-right: 4px;"><path d="M12 2l2.5 6.5L21 11l-6.5 2.5L12 20l-2.5-6.5L3 11l6.5-2.5L12 2z"/></svg>
               Auto-assign by rule
             </button>
+            <!-- The legacy "+ Add Folder" button lived in the right-side
+                 Folder Organization panel that the polish CSS now hides.
+                 Surfacing it here keeps folder-pool creation reachable
+                 from the same row as the bulk-edit triggers. -->
+            <button type="button" class="btn btn-sm" onclick="addCustomFolder()" title="Add a folder to this preset's pool">
+              <span style="margin-right: 4px;">+</span> Add Folder
+            </button>
           </div>
 
           <!-- Bulk action bar — only visible when ≥1 row selected -->

@@ -5559,3 +5559,176 @@
 }
 
 /* end PR3v2 styles */
+
+/* ============================================================================
+ * PR3v2 polish — full-viewport modal + V1 styling on top fields
+ * ============================================================================
+ *
+ * Resolves four feedback items from Federico's first review of V1:
+ *   1. The slide-in side panel was escaping the modal because nothing in the
+ *      ancestor chain had `position: relative`. Fixed by making the modal
+ *      itself full-viewport and the modal-body the positioning context.
+ *   2. Top-section inputs (Preset Name, Description, Sport Category) were
+ *      using the legacy light-on-white styling — now overridden with V1
+ *      dark palette so the page reads as one coherent design.
+ *   3. The legacy "Personalize your Folder Organization" right panel is
+ *      hidden — its role (folder pool + creation) is now fully owned by
+ *      the new slide-in side panel and the filter row.
+ *   4. The Edit Participant Preset modal effectively becomes a full-screen
+ *      page: no backdrop blur, no centering, no scale animation. Cleaner
+ *      mental model for users + side panel has room to breathe.
+ *
+ * Scoped strictly to `#preset-editor-modal` so OTHER modals in the app
+ * (csv-import, json-import, pdf-import, participant-edit, etc.) keep their
+ * existing styling.
+ */
+
+/* Full-viewport: no centering, no padding, no backdrop blur. The modal
+ * fills the whole window. */
+#preset-editor-modal {
+  background: var(--v1-bg-deep, #0a0e1a);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  align-items: stretch;
+  justify-content: stretch;
+  padding: 0;
+}
+
+#preset-editor-modal.show .participants-modal {
+  position: relative;
+  transform: none;
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  max-height: none;
+  border-radius: 0;
+  border: none;
+  box-shadow: none;
+  display: flex;
+  flex-direction: column;
+}
+
+/* The modal body becomes the positioning context for the slide-in side
+ * panels — without this, `position: absolute; right: 0` would escape to
+ * the document body and visually float outside the app. */
+#preset-editor-modal .modal-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  padding: 24px 32px;
+  overflow-y: auto;
+}
+
+/* Pin the slide-in panels to the modal-body's right edge. The body's
+ * `position: relative` (above) makes this work. */
+#preset-editor-modal .slide-panel {
+  top: 0;        /* flush with the modal-body top — was 60px in v1.jsx */
+  bottom: 0;
+  right: 0;
+}
+
+/* Modal header — sit at the top of the full-viewport modal with V1
+ * tokens, no rounded corners, no gradient. */
+#preset-editor-modal .modal-header {
+  background: var(--v1-bg-modal);
+  border-bottom: 1px solid var(--v1-border);
+  border-radius: 0;
+  padding: 14px 32px;
+  flex-shrink: 0;
+}
+
+#preset-editor-modal .modal-header h2 {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--v1-text);
+  letter-spacing: -0.01em;
+}
+
+/* Hide the legacy folder organization right panel — its role is now
+ * fully covered by the new slide-in side panel + filter row. */
+#preset-editor-modal .folder-organization-section {
+  display: none !important;
+}
+
+/* Top section now spans full width since the right pane is gone. */
+#preset-editor-modal .preset-header-row {
+  grid-template-columns: 1fr !important;
+  display: block !important;
+}
+
+#preset-editor-modal .preset-info-section {
+  max-width: 720px;
+  margin-bottom: 0;
+}
+
+/* ---- V1 styling on top-section inputs/labels ----------------------------*/
+
+#preset-editor-modal .modal-body .form-group input[type="text"],
+#preset-editor-modal .modal-body .form-group input[type="email"],
+#preset-editor-modal .modal-body .form-group input[type="search"],
+#preset-editor-modal .modal-body .form-group select,
+#preset-editor-modal .modal-body .form-group textarea,
+#preset-editor-modal .modal-body .form-group .form-control,
+#preset-editor-modal .modal-body input#preset-name,
+#preset-editor-modal .modal-body input#preset-description,
+#preset-editor-modal .modal-body select#preset-sport-category {
+  background: var(--v1-bg-modal) !important;
+  border: 1px solid var(--v1-border) !important;
+  color: var(--v1-text) !important;
+  border-radius: var(--v1-radius-sm) !important;
+  font-size: 13px !important;
+  padding: 8px 10px !important;
+  font-family: inherit !important;
+}
+
+#preset-editor-modal .modal-body .form-group input[type="text"]:focus,
+#preset-editor-modal .modal-body .form-group select:focus,
+#preset-editor-modal .modal-body .form-group textarea:focus,
+#preset-editor-modal .modal-body .form-group .form-control:focus,
+#preset-editor-modal .modal-body input#preset-name:focus,
+#preset-editor-modal .modal-body input#preset-description:focus,
+#preset-editor-modal .modal-body select#preset-sport-category:focus {
+  border-color: var(--v1-accent) !important;
+  box-shadow: 0 0 0 3px var(--v1-accent-soft) !important;
+  outline: none !important;
+}
+
+/* Form labels — uppercase compact V1 style */
+#preset-editor-modal .modal-body .form-group label {
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  color: var(--v1-text-muted) !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.04em !important;
+  margin-bottom: 4px !important;
+  display: block !important;
+}
+
+/* Form hints (small italic helper text below inputs) */
+#preset-editor-modal .modal-body .form-hint {
+  color: var(--v1-text-faint) !important;
+  font-size: 11px !important;
+  margin-top: 4px !important;
+}
+
+/* Modal footer — V1 dark border, no gradient */
+#preset-editor-modal .modal-footer {
+  background: var(--v1-bg-modal);
+  border-top: 1px solid var(--v1-border);
+  border-radius: 0;
+  padding: 14px 32px;
+  flex-shrink: 0;
+}
+
+/* The bulk-action-bar's right padding shifts in step with the side panel
+ * just like the modal-body padding-right does, so the toolbar doesn't
+ * flow underneath the panel when one is open. */
+.preset-editor-with-side-panel #preset-editor-modal .bulk-action-bar-v1,
+.preset-editor-with-side-panel #preset-editor-modal .bulk-filter-row,
+.preset-editor-with-side-panel #preset-editor-modal .participants-table-container {
+  /* `padding-right: var(--v1-side-panel-w)` is already applied to modal-body,
+   * which provides the offset. Children inherit naturally. */
+}
+
+/* end PR3v2 polish styles */
