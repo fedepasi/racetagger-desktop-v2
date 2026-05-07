@@ -5252,10 +5252,19 @@
 
 /* ----- Slide-in side panels (assign + auto-rule, share base styling) -------*/
 
+/* Fixed to the viewport, NOT absolutely positioned inside the scrolling
+ * modal-body. Federico's review item: with `position: absolute` the panel
+ * was scrolling out of view when the user scrolled the participants list,
+ * because its coordinate space extended with the scrollable content.
+ * `position: fixed` keeps the panel anchored to the viewport regardless
+ * of scroll position. The top/bottom insets match the modal header /
+ * footer heights (post-polish: ~52px header padding 14×2 + ~24px h2 line,
+ * ~64px footer padding 14×2 + ~36px button) — when those change, update
+ * here too. z-index sits above the modal (z-index 2000 in base CSS). */
 .slide-panel {
-  position: absolute;
-  top: 60px;
-  bottom: 0;
+  position: fixed;
+  top: 52px;
+  bottom: 64px;
   right: 0;
   width: var(--v1-side-panel-w);
   background: var(--v1-bg-modal);
@@ -5265,7 +5274,7 @@
   display: flex;
   flex-direction: column;
   box-shadow: none;
-  z-index: 40;
+  z-index: 2050;
 }
 
 .slide-panel.is-open {
@@ -5274,7 +5283,7 @@
 }
 
 .slide-panel-auto-rule {
-  z-index: 41;   /* above the assign panel if both ever mounted */
+  z-index: 2051;   /* above the assign panel if both ever mounted */
 }
 
 .slide-panel-header {
@@ -5620,13 +5629,9 @@
   overflow-y: auto;
 }
 
-/* Pin the slide-in panels to the modal-body's right edge. The body's
- * `position: relative` (above) makes this work. */
-#preset-editor-modal .slide-panel {
-  top: 0;        /* flush with the modal-body top — was 60px in v1.jsx */
-  bottom: 0;
-  right: 0;
-}
+/* (Slide-panel positioning lives in the base `.slide-panel` rule above —
+ * `position: fixed` with explicit top/bottom insets to clear the modal
+ * header and footer. No #preset-editor-modal-scoped override needed.) */
 
 /* Modal header — sit at the top of the full-viewport modal with V1
  * tokens, no rounded corners, no gradient. */
