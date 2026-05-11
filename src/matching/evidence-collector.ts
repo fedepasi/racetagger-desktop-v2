@@ -23,7 +23,11 @@ export enum EvidenceType {
   // Visual DNA evidence (V6 Vehicle DNA / Gemini visual analysis)
   VEHICLE_MAKE = 'vehicle_make',     // Manufacturer: Ferrari, Honda, Pinarello, etc.
   VEHICLE_MODEL = 'vehicle_model',   // Model: 296 GT3, CBR1000RR, Dogma F, etc.
-  LIVERY_COLOR = 'livery_color'      // Primary livery/jersey/gear color
+  LIVERY_COLOR = 'livery_color',     // Primary livery/jersey/gear color
+  // Face recognition: a detected face in the photo was matched against a
+  // driver's reference face photos in the preset. Treated as one of the
+  // strongest signals available — identity-level confidence.
+  FACE_MATCH = 'face_match'
 }
 
 export interface Evidence {

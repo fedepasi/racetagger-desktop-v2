@@ -11,6 +11,7 @@ import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs/promises';
 import os from 'os';
+import { extractAfPoint, AfPointData } from './af-point-extractor';
 
 const execAsync = promisify(exec);
 
@@ -73,6 +74,19 @@ export interface ImageTimestamp {
     lensModel: string | null;  // e.g. "EF 70-200mm f/2.8L IS III USM"
     focalLength: number | null; // mm
   };
+  // Additional EXIF exposure/shooting metadata for analytics and editorial workflow.
+  // Persisted to analysis_results columns; not used in matcher scoring.
+  exposureData?: {
+    exposureTime: number | null;    // seconds (e.g. 0.004 = 1/250s)
+    fNumber: number | null;         // aperture (e.g. 2.8)
+    iso: number | null;             // ISO sensitivity
+    orientation: number | null;     // EXIF Orientation 1-8 (1=normal, 6=90°CW, 8=90°CCW)
+    subjectDistance: number | null; // meters (NULL when not reported)
+    driveMode: string | null;       // raw drive-mode string ("Single", "Continuous High", ...)
+  };
+  // Normalized EXIF autofocus point (0-1 image coordinates) when available.
+  // Already rotated per Orientation to match the displayed image.
+  afData?: AfPointData | null;
 }
 
 export interface TemporalCluster {
@@ -323,7 +337,9 @@ export class TemporalClusterManager {
               timestampSource: 'exif',
               exifData: exifResult.exifData,
               geoData: exifResult.geoData,
-              cameraData: exifResult.cameraData
+              cameraData: exifResult.cameraData,
+              exposureData: exifResult.exposureData,
+              afData: exifResult.afData ?? null
             });
           } else {
             // No valid DateTimeOriginal found - exclude from temporal clustering
@@ -416,8 +432,10 @@ export class TemporalClusterManager {
     exifData: any;
     geoData?: { latitude: number | null; longitude: number | null; altitude: number | null; direction: number | null };
     cameraData?: { make: string | null; model: string | null; lensModel: string | null; focalLength: number | null };
+    exposureData?: { exposureTime: number | null; fNumber: number | null; iso: number | null; orientation: number | null; subjectDistance: number | null; driveMode: string | null };
+    afData?: AfPointData | null;
   } | null>> {
-    const results = new Map<string, { timestamp: Date; exifData: any; geoData?: any; cameraData?: any } | null>();
+    const results = new Map<string, { timestamp: Date; exifData: any; geoData?: any; cameraData?: any; exposureData?: any; afData?: AfPointData | null } | null>();
 
     // Acquisisci il semaforo per limitare processi concorrenti
     await this.exiftoolSemaphore.acquire();
@@ -432,7 +450,18 @@ export class TemporalClusterManager {
       // Usa il flag -@ di ExifTool per leggere i percorsi dal file
       // Non quotare exiftoolPath perché potrebbe già contenere spazi gestiti internamente
       // Extract timestamps + GPS coordinates + camera info in a single batch call
-      const command = `${this.exiftoolPath} -DateTimeOriginal -CreateDate -ModifyDate -SubSecTimeOriginal -GPSLatitude -GPSLongitude -GPSAltitude -GPSImgDirection -Make -Model -LensModel -FocalLength -n -json -@ "${tmpFile}"`;
+      // Note: AF/Focus fields are camera-brand specific and are parsed by
+      // af-point-extractor.ts. We pass `-G1` to keep grouped tags (some bodies
+      // expose AF fields under MakerNotes:Canon/Nikon/etc. — `-G1` is omitted
+      // here intentionally so ExifTool flattens names; the parser handles all
+      // common keys regardless of group).
+      // Extended ExifTool command:
+      //   - timestamps + GPS + camera/lens (existing)
+      //   - exposure trio (shutter/aperture/ISO) for analytics & sharpness filters
+      //   - Orientation (for correct AF point rotation to displayed coords)
+      //   - SubjectDistance + DriveMode/ContinuousDrive/ShootingMode (drive mode is brand-specific)
+      //   - AF-related fields (existing)
+      const command = `${this.exiftoolPath} -DateTimeOriginal -CreateDate -ModifyDate -SubSecTimeOriginal -GPSLatitude -GPSLongitude -GPSAltitude -GPSImgDirection -Make -Model -LensModel -FocalLength -ExposureTime -FNumber -ISO -Orientation -SubjectDistance -DriveMode -ContinuousDrive -ShootingMode -ImageWidth -ImageHeight -ExifImageWidth -ExifImageHeight -RawImageFullWidth -RawImageFullHeight -AFAreaXPositions -AFAreaYPositions -AFAreaWidths -AFAreaHeights -AFImageWidth -AFImageHeight -AFAreaXPosition -AFAreaYPosition -AFAreaWidth -AFAreaHeight -PrimaryAFPoint -AFPointSelected -AFPointsInFocus -AFPointsUsed -FocalPlaneAFPointsUsed -FocusPixel -FocusLocation -FocusPosition2 -AFMode -AFAreaMode -AFAreaSelectMethod -FocusMode -n -json -@ "${tmpFile}"`;
 
       const { stdout, stderr } = await execAsync(command, {
         maxBuffer: 50 * 1024 * 1024, // 50MB buffer per batch grandi
@@ -503,6 +532,36 @@ export class TemporalClusterManager {
                 focalLength: typeof exifData.FocalLength === 'number' ? exifData.FocalLength : null,
               };
 
+              // Extract exposure / shooting metadata. DriveMode is brand-specific —
+              // we prefer ExifTool's normalized DriveMode, fall back to Canon's
+              // ContinuousDrive and Nikon's ShootingMode in that order.
+              const driveModeRaw =
+                (typeof exifData.DriveMode === 'string' && exifData.DriveMode) ||
+                (typeof exifData.ContinuousDrive === 'string' && exifData.ContinuousDrive) ||
+                (typeof exifData.ShootingMode === 'string' && exifData.ShootingMode) ||
+                null;
+              // SubjectDistance: some bodies use 0 or 65535 to mean "infinity" or "unknown".
+              // Treat those sentinel values as null so analytics don't see fake distances.
+              let subjectDistance: number | null = null;
+              if (typeof exifData.SubjectDistance === 'number') {
+                const d = exifData.SubjectDistance;
+                if (d > 0 && d < 10000) subjectDistance = d;
+              }
+              const exposureData = {
+                exposureTime: typeof exifData.ExposureTime === 'number' ? exifData.ExposureTime : null,
+                fNumber: typeof exifData.FNumber === 'number' ? exifData.FNumber : null,
+                iso: typeof exifData.ISO === 'number' ? exifData.ISO : null,
+                orientation: typeof exifData.Orientation === 'number' ? exifData.Orientation : null,
+                subjectDistance,
+                driveMode: driveModeRaw,
+              };
+
+              // Extract autofocus point (normalized 0-1) via multi-brand parser.
+              // The parser receives Orientation so it can rotate sensor-frame AF
+              // coords into displayed-image coords (correct for portrait shots).
+              // Returns null when EXIF lacks usable AF data, which is fine.
+              const afData = extractAfPoint(exifData);
+
               results.set(filePath, {
                 timestamp,
                 exifData: {
@@ -512,7 +571,9 @@ export class TemporalClusterManager {
                   subsecTimeOriginal: exifData.SubSecTimeOriginal
                 },
                 geoData,
-                cameraData
+                cameraData,
+                exposureData,
+                afData
               });
             } else {
               results.set(filePath, null);

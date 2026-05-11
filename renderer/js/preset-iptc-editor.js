@@ -18,10 +18,14 @@ function toggleIptcSection() {
   iptcSectionExpanded = !iptcSectionExpanded;
   const body = document.getElementById('iptc-section-body');
   const icon = document.getElementById('iptc-toggle-icon');
+  const section = document.getElementById('iptc-metadata-section');
   if (body && icon) {
     body.style.display = iptcSectionExpanded ? 'block' : 'none';
     icon.textContent = iptcSectionExpanded ? '▼' : '▶';
   }
+  // V1 design: rotate the chevron via CSS class on the parent so the
+  // transition stays smooth and the styling lives in one place.
+  if (section) section.classList.toggle('is-open', iptcSectionExpanded);
   // Re-render editable templates when section becomes visible
   if (iptcSectionExpanded) {
     setTimeout(() => {

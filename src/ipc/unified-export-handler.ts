@@ -35,6 +35,10 @@ interface ExportParticipant {
   // photo also goes to the modal's subfolder pattern destination
   // alongside the custom folders; false = custom folders only.
   include_default_folder?: boolean;
+  // Soft-disable flag. When false, the unified-export handler must treat
+  // the image as if it had no matched participant — no participant
+  // subfolder, no participant-aware rename, no preset folders[].
+  is_active?: boolean;
 }
 
 interface ExportImage {
@@ -127,7 +131,16 @@ export function registerUnifiedExportHandler(): void {
       const copiedPaths: Array<{ originalPath: string; exportedPath: string; image: ExportImage }> = [];
 
       for (let i = 0; i < images.length; i++) {
-        const image = images[i];
+        const rawImage = images[i];
+        // Soft-disabled participants: drop the participant payload entirely
+        // so this loop's per-participant logic (subfolder, rename, preset
+        // folders[], IPTC enrichment) treats the file as unmatched. The
+        // photo still gets exported to `destinationFolder` with its
+        // original filename — we never silently lose a file.
+        const image: ExportImage =
+          rawImage?.participant && rawImage.participant.is_active === false
+            ? { ...rawImage, participant: undefined }
+            : rawImage;
         const originalPath = image.imagePath;
         const fileName = path.basename(originalPath);
         const extension = path.extname(originalPath);

@@ -21,6 +21,7 @@ import {
   getUserParticipantPresetsSupabase,
   getParticipantPresetByIdSupabase,
   savePresetParticipantsSupabase,
+  bulkAssignFoldersSupabase,
   updatePresetLastUsedSupabase,
   updateParticipantPresetSupabase,
   deleteParticipantPresetSupabase,
@@ -115,6 +116,34 @@ export function registerSupabaseHandlers(): void {
     try {
       const savedParticipants = await savePresetParticipantsSupabase(presetId, participants);
       return { success: true, participants: savedParticipants };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  /**
+   * Bulk-assign one or more folder names to many preset participants in a
+   * single round-trip. Backbone of the split-view bulk UI (PR3) and the
+   * auto-assign rules engine (PR4). Dormant until the renderer wires it up.
+   *
+   * Folder names must already exist in the preset's custom_folders pool;
+   * names not in the pool are skipped and reported in `unknownFolderNames`
+   * so the UI can show a "create folder first" hint.
+   */
+  ipcMain.handle('supabase-bulk-assign-folders', async (_, payload: {
+    presetId: string;
+    participantIds: string[];
+    folderNames: string[];
+    mode: 'append' | 'replace';
+  }) => {
+    try {
+      const result = await bulkAssignFoldersSupabase(
+        payload.presetId,
+        payload.participantIds,
+        payload.folderNames,
+        payload.mode
+      );
+      return { success: true, data: result };
     } catch (e: any) {
       return { success: false, error: e.message };
     }

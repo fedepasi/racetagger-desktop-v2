@@ -42,6 +42,11 @@ export interface ParticipantMatch {
   car_model?: string;
   nationality?: string;
   categoria?: string;
+  // Soft-disable flag mirrored from preset_participants. When false the
+  // export processor treats the image as if no participant had matched:
+  // file goes to base_folder with no per-participant subfolder, no
+  // participant-aware rename, no participant-derived metadata.
+  is_active?: boolean;
 }
 
 /**
@@ -125,6 +130,14 @@ export class ExportDestinationProcessor {
     const startTime = Date.now();
     const results: ExportResult[] = [];
 
+    // If the matched participant has been soft-disabled, strip the
+    // participant payload entirely: no participant-named subfolder, no
+    // participant-aware rename pattern, no participant-derived metadata.
+    // The file still gets exported to base_folder so the user does not
+    // silently lose it.
+    const effectiveParticipant =
+      participant && participant.is_active === false ? undefined : participant;
+
     // Filter to active destinations only
     const activeDestinations = destinations.filter(d => d.is_active !== false);
 
@@ -146,7 +159,7 @@ export class ExportDestinationProcessor {
       const result = await this.exportToSingleDestination(
         imagePath,
         destination,
-        participant,
+        effectiveParticipant,
         event
       );
       results.push(result);

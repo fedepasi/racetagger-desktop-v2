@@ -15,6 +15,7 @@ import { SmartMatcher, MatchResult, AnalysisResult as SmartMatcherAnalysisResult
 import { CacheManager } from './matching/cache-manager';
 import { AnalysisLogger, CorrectionData } from './utils/analysis-logger';
 import { TemporalClusterManager, ImageTimestamp } from './matching/temporal-clustering';
+import { isAfPointInBbox } from './matching/af-point-extractor';
 import { FilesystemTimestampExtractor, FileTimestamp } from './utils/filesystem-timestamp';
 import { HardwareDetector } from './utils/hardware-detector';
 import { NetworkMonitor } from './utils/network-monitor';
@@ -405,6 +406,11 @@ class UnifiedImageWorker extends EventEmitter {
   private userTrainingConsent: boolean = true;
   // Visual Tagging cache (stores tags by imageId for metadata embedding)
   private visualTagsCache: Map<string, any> = new Map();
+  // Face Recognition cache per image: populated by analyzeImageLocal() right
+  // after performFaceRecognition() runs, consumed by findIntelligentMatches()
+  // when building smartMatcherAnalysis.faceMatches. Keyed by originalPath so
+  // the two scopes (worker analyze + processor batch matching) can rendezvous.
+  private faceRecognitionCache: Map<string, NonNullable<SmartMatcherAnalysisResult['faceMatches']>> = new Map();
   // Pending analysis_results insert data (for batch insert optimization with ONNX)
   // Set by analyzeImageLocal(), read by Processor via getPendingAnalysisInsert()
   private pendingAnalysisInsertData: any = null;
@@ -638,13 +644,30 @@ class UnifiedImageWorker extends EventEmitter {
   }
 
   /**
-   * PERFORMANCE: Quick check descriptor count without initializing bridge
-   * Returns -1 to proceed with full initialization (face recognition currently disabled)
+   * PERFORMANCE: Quick check of how many face descriptors are stored for the
+   * given preset. Returning 0 lets us skip the heavy face-api.js initialization
+   * (saves 200-500ms per session); returning -1 means the query failed and the
+   * caller should proceed with full initialization as a safe fallback.
+   *
+   * Counts photos in preset_participant_face_photos joined via preset_participants
+   * for the preset.
    */
   private async checkPresetDescriptorCount(presetId: string): Promise<number> {
-    // Face recognition is disabled (Coming Soon)
-    // Return -1 to proceed with full initialization if face recognition is re-enabled
-    return -1;
+    try {
+      const { count, error } = await this.supabase
+        .from('preset_participant_face_photos')
+        .select('id, preset_participants!inner(preset_id)', { count: 'exact', head: true })
+        .eq('preset_participants.preset_id', presetId);
+
+      if (error) {
+        log.warn(`[FaceRec] Pre-check descriptor count query failed: ${error.message} — proceeding with full init`);
+        return -1;
+      }
+      return count ?? 0;
+    } catch (err) {
+      log.warn(`[FaceRec] Pre-check descriptor count threw — proceeding with full init`, err);
+      return -1;
+    }
   }
 
   /**
@@ -655,7 +678,17 @@ class UnifiedImageWorker extends EventEmitter {
    * Each preset has its own face recognition database.
    */
   private async initializeFaceRecognition(): Promise<void> {
-    // Face recognition requires a preset with face descriptors
+    // Per-sport-category gate: face recognition only runs when the active
+    // sport_categories row has face_recognition_enabled = true. This is the
+    // master toggle the UI surfaces to admins; everything below assumes the
+    // category opted in.
+    if (this.currentSportCategory?.face_recognition_enabled !== true) {
+      log.info(`Face recognition: disabled for sport category "${this.category}" (face_recognition_enabled=false)`);
+      this.faceRecognitionEnabled = false;
+      return;
+    }
+
+    // Face recognition also requires a preset with face descriptors.
     if (!this.config.presetId) {
       log.info('Face recognition: No preset selected - disabled');
       this.faceRecognitionEnabled = false;
@@ -3297,6 +3330,25 @@ class UnifiedImageWorker extends EventEmitter {
           uploadReadyPath,
           recognitionStrategy.context
         );
+
+        // Persist face matches into the per-image cache so findIntelligentMatches()
+        // can feed them to SmartMatcher as FACE_MATCH evidence. Only keep matches
+        // that crossed the matcher's similarity threshold (matched === true);
+        // unmatched faces are noise for scoring.
+        if (faceRecognitionResult?.success && Array.isArray(faceRecognitionResult.matches)) {
+          const faceMatches = faceRecognitionResult.matches
+            .filter((m: any) => m && m.matched && m.driverInfo)
+            .map((m: any) => ({
+              driverName: m.driverInfo.driverName,
+              confidence: typeof m.similarity === 'number' ? m.similarity : 0,
+              raceNumber: m.driverInfo.raceNumber ?? null,
+              source: m.driverInfo.source === 'global' ? 'global' as const : 'preset' as const,
+            }))
+            .filter((m: any) => m.driverName);
+          if (faceMatches.length > 0) {
+            this.faceRecognitionCache.set(imageFile.originalPath, faceMatches);
+          }
+        }
       } else {
         workerLog.info(`Face recognition DISABLED (segmentation detected only vehicles)`);
       }
@@ -5587,6 +5639,10 @@ class UnifiedImageWorker extends EventEmitter {
 
       const participant = match.entry;
 
+      // Skip soft-disabled participants: never emit Person Shown strings
+      // for them even on a re-export of older results.
+      if (participant.is_active === false) continue;
+
       // Get all driver names from preset_participant_drivers
       const driverNames = getParticipantDriverNames(participant);
       const primaryName = driverNames[0] || '';
@@ -5784,6 +5840,37 @@ class UnifiedImageWorker extends EventEmitter {
           model: vehicle.model || null,
           livery: vehicle.livery || null
         };
+
+        // AF-point bonus: flag this analysis if the photographer's EXIF focus
+        // point falls inside the vehicle's bbox. SmartMatcher reads
+        // `containsAfPoint` and applies the multiplicative bonus from the sport
+        // category's matching_config when scoring is enabled. The vehicle bbox
+        // is in 0-100 percentage coordinates; afData uses 0-1 — we convert
+        // below and only treat reliable AF points as a signal.
+        if (vehicle.boundingBox && temporalContext?.imageTimestamp?.afData) {
+          const af = temporalContext.imageTimestamp.afData;
+          if (af.reliable) {
+            const bbox = {
+              x: vehicle.boundingBox.x / 100,
+              y: vehicle.boundingBox.y / 100,
+              width: vehicle.boundingBox.width / 100,
+              height: vehicle.boundingBox.height / 100
+            };
+            smartMatcherAnalysis.containsAfPoint = isAfPointInBbox(af, bbox);
+          }
+        }
+
+        // Face recognition: surface preset face matches for this image (if any
+        // were produced upstream) so SmartMatcher can apply the FACE_MATCH
+        // evidence type during scoring. Same matches are reused across every
+        // vehicle in the image — the matcher decides which participant the
+        // face belongs to via name/raceNumber correlation.
+        if (imageFile?.originalPath) {
+          const cachedFaceMatches = this.faceRecognitionCache.get(imageFile.originalPath);
+          if (cachedFaceMatches && cachedFaceMatches.length > 0) {
+            smartMatcherAnalysis.faceMatches = cachedFaceMatches;
+          }
+        }
 
         // Generate cache keys for caching
         const analysisHash = this.generateAnalysisHash(smartMatcherAnalysis);
@@ -6097,9 +6184,13 @@ class UnifiedImageWorker extends EventEmitter {
    * Ora supporta array di matches per gestire tutti i veicoli riconosciuti
    */
   private buildMetatag(analysis: any[], csvMatches?: any | any[]): string[] | null {
-    // Handle both single match (legacy) and array of matches (new multi-vehicle support)
+    // Handle both single match (legacy) and array of matches (new multi-vehicle support).
+    // Soft-disabled participants (is_active === false) are excluded so their data
+    // never leaks into Keywords even on re-export of older results.
     const matches = Array.isArray(csvMatches) ? csvMatches : (csvMatches ? [csvMatches] : []);
-    const validMatches = matches.filter(match => match && match.entry);
+    const validMatches = matches.filter(match =>
+      match && match.entry && match.entry.is_active !== false
+    );
 
     // Check if we're using a participant preset but found no matches
     const isUsingParticipantPreset = this.participantsData.length > 0;
@@ -6173,8 +6264,9 @@ class UnifiedImageWorker extends EventEmitter {
 
     const parts: string[] = [];
 
-    // Enhanced formatting for preset participants
-    if (csvMatch && csvMatch.entry) {
+    // Enhanced formatting for preset participants.
+    // Skip soft-disabled participants — their data must not be written to IPTC.
+    if (csvMatch && csvMatch.entry && csvMatch.entry.is_active !== false) {
       const participant = csvMatch.entry;
 
       // Add race number if available
@@ -6254,6 +6346,13 @@ class UnifiedImageWorker extends EventEmitter {
       }
 
       const participant = match.entry;
+
+      // Skip soft-disabled participants: their metatag must not leak into
+      // written metadata even if they were matched earlier (e.g. results
+      // produced before the user toggled them off, then re-export).
+      if (participant.is_active === false) {
+        continue;
+      }
 
       // Only use the metatag field from the participant preset
       if (!participant.metatag || participant.metatag.trim() === '') {
@@ -6480,9 +6579,13 @@ class UnifiedImageWorker extends EventEmitter {
         const csvDataList: any[] = [];
 
         if (processedAnalysis.csvMatch && Array.isArray(processedAnalysis.csvMatch)) {
-          // For each number to organize, find its corresponding csvData
+          // For each number to organize, find its corresponding csvData.
+          // Skip soft-disabled participants — their data must not reach
+          // the folder organizer (no per-participant folder will be created).
           numbersToOrganize.forEach(number => {
-            const match = processedAnalysis.csvMatch.find((m: any) => m.entry?.numero === number);
+            const match = processedAnalysis.csvMatch.find(
+              (m: any) => m.entry?.numero === number && m.entry?.is_active !== false
+            );
             if (match?.entry) {
               csvDataList.push(match.entry);
             }
@@ -6621,7 +6724,9 @@ class UnifiedImageWorker extends EventEmitter {
     const matches = Array.isArray(csvMatches) ? csvMatches : [csvMatches];
 
     for (const match of matches) {
-      if (match && match.entry && match.entry.numero) {
+      // Skip soft-disabled participants: their number must not drive
+      // folder organization on a re-export of older results.
+      if (match && match.entry && match.entry.numero && match.entry.is_active !== false) {
         const matchedNumber = String(match.entry.numero);
         if (!numbersWithMatches.includes(matchedNumber)) {
           numbersWithMatches.push(matchedNumber);
@@ -7632,6 +7737,24 @@ export class UnifiedImageProcessor extends EventEmitter {
       if (ts.cameraData.model) fields.camera_model = ts.cameraData.model;
       if (ts.cameraData.lensModel) fields.lens_model = ts.cameraData.lensModel;
       if (ts.cameraData.focalLength !== null) fields.focal_length = ts.cameraData.focalLength;
+    }
+
+    // Exposure + shooting metadata (display + analytics only; not used in
+    // SmartMatcher scoring at this stage).
+    if (ts.exposureData) {
+      if (ts.exposureData.exposureTime !== null) fields.exposure_time = ts.exposureData.exposureTime;
+      if (ts.exposureData.fNumber !== null) fields.f_number = ts.exposureData.fNumber;
+      if (ts.exposureData.iso !== null) fields.iso = ts.exposureData.iso;
+      if (ts.exposureData.orientation !== null) fields.orientation = ts.exposureData.orientation;
+      if (ts.exposureData.subjectDistance !== null) fields.subject_distance = ts.exposureData.subjectDistance;
+      if (ts.exposureData.driveMode) fields.drive_mode = ts.exposureData.driveMode;
+    }
+
+    // Autofocus point (normalized 0-1, rotated per EXIF Orientation) - consumed
+    // by SmartMatcher for scoring bonus and rendered as a focus-point overlay
+    // in the analysis modal.
+    if (ts.afData) {
+      fields.af_data = ts.afData;
     }
 
     return fields;
