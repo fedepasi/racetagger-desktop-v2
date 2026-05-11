@@ -99,6 +99,13 @@ export interface CsvParticipantData {
   categoria?: string;
   squadra?: string;
   metatag?: string;
+  // Soft-disable flag mirrored from preset_participants. When false, this
+  // participant must be skipped by the organizer: no per-participant folder
+  // gets created and the photo is treated as if it had no match for that
+  // number. Defence-in-depth: upstream callers should already filter, but
+  // we re-check here so a regression upstream cannot produce a folder
+  // named after a disabled participant.
+  is_active?: boolean;
   // 1.2.0 canonical folder array. Populated by normalizeParticipantPresetFolders
   // upstream, so by the time we read it here it's already reconciled with the
   // legacy slots. Read this instead of folder_1/2/3.
@@ -297,14 +304,46 @@ export class FolderOrganizer {
     const fileName = path.basename(imagePath);
 
     // Normalize csvDataList to always be an array
-    const csvDataArray: CsvParticipantData[] = csvDataList
+    const csvDataArrayRaw: CsvParticipantData[] = csvDataList
       ? (Array.isArray(csvDataList) ? csvDataList : [csvDataList])
       : [];
+
+    // Defence-in-depth: strip soft-disabled participants and remember which
+    // race numbers they covered, so we can also drop those numbers and avoid
+    // creating a bare "{number}/" folder for a participant the user disabled.
+    const disabledNumbers = new Set<string>();
+    const csvDataArray: CsvParticipantData[] = csvDataArrayRaw.filter(c => {
+      if (c && (c as any).is_active === false) {
+        if (c.numero) disabledNumbers.add(String(c.numero));
+        return false;
+      }
+      return true;
+    });
 
     try {
       // Deduplicate race numbers to avoid copying the same file multiple times
       // to the same folder (e.g., when crop+context detects 2 subjects both with number "5")
-      const originalNumbers = [...new Set(Array.isArray(raceNumbers) ? raceNumbers : [raceNumbers])];
+      const rawNumbers = [...new Set(Array.isArray(raceNumbers) ? raceNumbers : [raceNumbers])];
+      // Drop numbers that belong exclusively to soft-disabled participants.
+      const originalNumbers = disabledNumbers.size > 0
+        ? rawNumbers.filter(n => !disabledNumbers.has(String(n)))
+        : rawNumbers;
+
+      // If every detected number maps to a disabled participant, treat the
+      // photo as unmatched and route to Unknown_Numbers (mirrors the phantom
+      // branch below). Without this short-circuit the file would silently
+      // stay in the source folder.
+      if (rawNumbers.length > 0 && originalNumbers.length === 0) {
+        const unknownResult = await this.organizeToUnknownNumbers(
+          imagePath,
+          sourceDir
+        );
+        return {
+          ...unknownResult,
+          folderName: unknownResult.folderName + ' (disabled-participant)',
+          timeMs: Date.now() - startTime,
+        };
+      }
 
       // Issue #105 hardening: sanity check against preset allow-list (if configured).
       // When all numbers are phantom AND restriction is active → route to Unknown_Numbers

@@ -243,6 +243,31 @@ function installFromBuilder(harness: SupabaseHarness): void {
           error: harness.participantsError
         })
       );
+      // PR3v2 fix: bulk assign now uses per-row UPDATE chains
+      // (.update(patch).eq('id', id).eq('preset_id', presetId)) instead of
+      // upsert, because upsert validates NOT NULL on the INSERT side and
+      // would reject rows that omit `numero`. We capture each per-row update
+      // into harness.upsertedPayload so the existing assertions still work.
+      b.update.mockImplementation((patch: any) => {
+        return {
+          eq: jest.fn().mockImplementation((...args1: any[]) => {
+            const idVal = args1[1];
+            return {
+              eq: jest.fn().mockImplementation((..._args2: any[]) => {
+                if (harness.upsertError) {
+                  return Promise.resolve({ error: harness.upsertError });
+                }
+                if (harness.upsertedPayload === null) harness.upsertedPayload = [];
+                harness.upsertedPayload.push({ id: idVal, ...patch });
+                return Promise.resolve({ error: null });
+              })
+            };
+          })
+        };
+      });
+      // Legacy upsert mock kept as a tripwire — if it ever gets called the
+      // assertions on harness.upsertedPayload will see the wrong shape and
+      // fail loudly.
       b.upsert.mockImplementation((payload: any) => {
         harness.upsertedPayload = payload;
         return Promise.resolve({ data: null, error: harness.upsertError });

@@ -31,6 +31,24 @@ export interface AnalysisResult {
   // Temporal context for proximity matching
   imageTimestamp?: ImageTimestamp;
   temporalNeighbors?: ImageTimestamp[];
+  // True when the photographer's EXIF AF point falls inside this candidate's bbox.
+  // Computed upstream in unified-image-processor before calling findMatches().
+  // When set, SmartMatcher applies a multiplicative scoring bonus to all
+  // candidates of this AnalysisResult (see config.afPointBonus / enableAfPointScoring).
+  containsAfPoint?: boolean;
+  // Face matches produced by face-recognition pipeline against the preset's
+  // reference face photos. Each entry identifies a driver/person with a
+  // similarity score in 0-1. SmartMatcher emits a FACE_MATCH evidence per
+  // entry and scores the participant when its driver list contains the matched
+  // person name (case-insensitive fuzzy match).
+  faceMatches?: Array<{
+    driverName: string;
+    confidence: number;
+    /** Optional: race number from the matched preset entry (face → driver → number link). */
+    raceNumber?: string | null;
+    /** Source of the reference photos: 'preset' (per-event) or 'global' (cross-event DB). */
+    source?: 'preset' | 'global';
+  }>;
 }
 
 export interface ParticipantDriver {
@@ -196,6 +214,9 @@ export class SmartMatcher {
 
   // Current evidence context for advanced matching
   private currentAllEvidence: Evidence[] = [];
+  // Per-call face match context, set by findMatches() before iterating participants.
+  // Read in evaluateParticipant() to score the face_match evidence type.
+  private currentFaceMatches: NonNullable<AnalysisResult['faceMatches']> = [];
 
   // Temporal analysis cache - stores results for neighbor analysis
   private static temporalAnalysisCache: Map<string, {
@@ -762,6 +783,11 @@ export class SmartMatcher {
       };
     }
 
+    // Capture face match context for this call: evaluateParticipant() reads
+    // currentFaceMatches to score the FACE_MATCH evidence per participant.
+    // Empty array when face recognition wasn't run for this image.
+    this.currentFaceMatches = analysisResult.faceMatches ?? [];
+
     // Step 1: Collect all evidence from analysis result
     const evidence = this.evidenceCollector.extractEvidence(analysisResult);
 
@@ -824,6 +850,26 @@ export class SmartMatcher {
     // Step 4: Apply temporal proximity bonus if temporal context is available
     if (analysisResult.imageTimestamp && analysisResult.temporalNeighbors) {
       await this.applyTemporalBonuses(candidates, analysisResult, vehicleIndex);
+    }
+
+    // Step 4.5: Apply AF-point bonus when the EXIF focus point falls inside
+    // this crop's bbox. Bonus is multiplicative on totalScore so it scales with
+    // the quality of other evidence — see sport_categories.matching_config.
+    // Applied uniformly to all candidates of this AnalysisResult: the goal is
+    // to differentiate the principal subject *across crops*, not to change the
+    // winner *within* the crop.
+    if (
+      analysisResult.containsAfPoint === true &&
+      this.config.enableAfPointScoring === true &&
+      this.config.afPointBonus > 0 &&
+      candidates.length > 0
+    ) {
+      const factor = 1 + this.config.afPointBonus;
+      for (const c of candidates) {
+        const bonusPoints = c.score * this.config.afPointBonus;
+        c.score = c.score * factor;
+        c.reasoning.push(`AF-point bonus: ×${factor.toFixed(2)} (+${bonusPoints.toFixed(1)} pts — focus point inside bbox)`);
+      }
     }
 
     // Step 5: Sort candidates by score (highest first)
@@ -1029,6 +1075,84 @@ export class SmartMatcher {
         matchedEvidence.push({ ...tEvidence, type: EvidenceType.SPONSOR, score: boostedCrossScore });
         reasoning.push(`CROSS-MATCH: team "${tEvidence.value}" matched as sponsor → +${boostedCrossScore.toFixed(1)} pts (${sponsorMatch.reason})`);
         matchedEvidenceValues.add(tEvidence.value.toLowerCase().trim());
+      }
+    }
+
+    // FACE MATCH evidence — identity-level signal from face-api.js matching
+    // against the preset's reference face photos. Scored as `weights.faceMatch
+    // * faceMatch.confidence` when the matched person name is one of this
+    // participant's drivers. Strongly counts toward multi-evidence bonus.
+    if (this.currentFaceMatches.length > 0) {
+      const faceWeight = this.config.weights.faceMatch || 0;
+      if (faceWeight > 0) {
+        const driverNames = getParticipantDriverNames(participant).map((n) => n.toLowerCase().trim());
+        let bestFaceScore = 0;
+        let bestFaceReason = '';
+        let bestFaceValue = '';
+
+        for (const fm of this.currentFaceMatches) {
+          if (!fm || typeof fm.confidence !== 'number' || !fm.driverName) continue;
+          const fmName = fm.driverName.toLowerCase().trim();
+
+          // 1) Exact driver-name match (strongest)
+          if (driverNames.includes(fmName)) {
+            const score = faceWeight * fm.confidence;
+            if (score > bestFaceScore) {
+              bestFaceScore = score;
+              bestFaceValue = fm.driverName;
+              bestFaceReason = `Face match (exact): "${fm.driverName}" conf=${fm.confidence.toFixed(2)} → +${score.toFixed(1)}`;
+            }
+            continue;
+          }
+
+          // 2) Partial / fuzzy match against any participant driver
+          for (const driverName of driverNames) {
+            if (fmName.includes(driverName) || driverName.includes(fmName)) {
+              const score = faceWeight * fm.confidence * 0.85;
+              if (score > bestFaceScore) {
+                bestFaceScore = score;
+                bestFaceValue = fm.driverName;
+                bestFaceReason = `Face match (partial): "${fm.driverName}" ↔ "${driverName}" conf=${fm.confidence.toFixed(2)} → +${score.toFixed(1)}`;
+              }
+              continue;
+            }
+            const sim = this.calculateJaroWinklerSimilarity(fmName, driverName);
+            if (sim >= this.config.thresholds.nameSimilarity) {
+              const score = faceWeight * fm.confidence * sim;
+              if (score > bestFaceScore) {
+                bestFaceScore = score;
+                bestFaceValue = fm.driverName;
+                bestFaceReason = `Face match (fuzzy ${(sim * 100).toFixed(0)}%): "${fm.driverName}" ↔ "${driverName}" conf=${fm.confidence.toFixed(2)} → +${score.toFixed(1)}`;
+              }
+            }
+          }
+
+          // 3) Race-number cross-check: face match carries a raceNumber and
+          // it matches this participant's number. Useful when the matched
+          // name has a typo but the linked preset row's number is right.
+          if (fm.raceNumber && (String(participant.numero) === String(fm.raceNumber) || String(participant.number) === String(fm.raceNumber))) {
+            const score = faceWeight * fm.confidence * 0.9;
+            if (score > bestFaceScore) {
+              bestFaceScore = score;
+              bestFaceValue = fm.driverName;
+              bestFaceReason = `Face match (race# link): "${fm.driverName}" → #${fm.raceNumber} conf=${fm.confidence.toFixed(2)} → +${score.toFixed(1)}`;
+            }
+          }
+        }
+
+        if (bestFaceScore > 0) {
+          totalScore += bestFaceScore;
+          matchedEvidence.push({
+            type: EvidenceType.FACE_MATCH,
+            value: bestFaceValue,
+            confidence: bestFaceScore / Math.max(faceWeight, 1),
+            source: 'face_recognition',
+            score: bestFaceScore,
+          });
+          reasoning.push(bestFaceReason);
+          // A face hit is always treated as unique evidence (identity-level).
+          hasUniqueEvidence = true;
+        }
       }
     }
 

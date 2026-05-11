@@ -3517,6 +3517,13 @@ app.whenReady().then(async () => { // Added async here
                       categoria: entry.categoria,
                       squadra: entry.squadra,
                       metatag: entry.metatag,
+                      // Mirror the soft-disable flag from the cached entry.
+                      // For the live re-organize flow the authoritative guard
+                      // is the `allowedNumbers` gate above (DB-fresh, see
+                      // line ~3329) — this propagation just keeps the inner
+                      // FolderOrganizer filter consistent when the cached
+                      // entry happens to carry an explicit `is_active=false`.
+                      is_active: entry.is_active,
                       // 1.2.0 — propagate the canonical folders[] coming from
                       // the preset (normalized upstream). Legacy slots stay
                       // alongside as a defensive fallback for code paths

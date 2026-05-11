@@ -33,6 +33,7 @@ export type ErrorType =
   | 'ghost_images'
   | 'memory'
   | 'pdf_parser'
+  | 'renderer_action'
   | 'uncaught';
 
 export type ErrorSeverity = 'fatal' | 'recoverable' | 'warning';

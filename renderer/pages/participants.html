@@ -62,9 +62,38 @@
         <h2 id="preset-editor-title">New Participant Preset</h2>
         <button class="modal-close" onclick="closePresetEditor()">&times;</button>
       </div>
+      <!-- Stage = the area between modal-header and modal-footer. Contains the
+           scrollable modal-body and any slide-in side panels as siblings, so
+           the panels can be `position: absolute` cleanly bounded between
+           header and footer without magic-number `top` / `bottom` insets. -->
+      <div class="preset-editor-stage">
       <div class="modal-body">
+        <!-- V1 design: compact summary strip (Preset / Sport / Active) + Edit details toggle.
+             Clicking "Edit details" expands the legacy form below inline. -->
+        <div class="preset-summary-strip" id="preset-summary-strip">
+          <div class="preset-summary-cell">
+            <div class="preset-summary-label">Preset</div>
+            <div class="preset-summary-value" id="preset-summary-name">—</div>
+          </div>
+          <div class="preset-summary-divider"></div>
+          <div class="preset-summary-cell">
+            <div class="preset-summary-label">Sport</div>
+            <div class="preset-summary-value" id="preset-summary-sport">—</div>
+          </div>
+          <div class="preset-summary-divider"></div>
+          <div class="preset-summary-cell">
+            <div class="preset-summary-label">Active</div>
+            <div class="preset-summary-value" id="preset-summary-active">0 / 0</div>
+          </div>
+          <div class="preset-summary-spacer"></div>
+          <button type="button" id="preset-edit-details-btn" class="btn btn-sm" onclick="togglePresetDetails()" aria-expanded="false" aria-controls="preset-header-row">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="margin-right: 4px;"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 000-1.42l-2.34-2.33a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+            <span id="preset-edit-details-label">Edit details</span>
+          </button>
+        </div>
+
         <!-- Container affiancato per Preset Info + Folder Organization -->
-        <div class="preset-header-row">
+        <div class="preset-header-row" id="preset-header-row" hidden>
           <!-- Preset Info -->
           <div class="preset-info-section">
             <div class="form-group text-white">
@@ -525,9 +554,11 @@
 
         <!-- Participants Table -->
         <div class="participants-table-section">
-          <div class="table-header">
-            <h3>Participants</h3>
-            <!-- v1.1.4: Active counter (X/Y active) + Reset-all control -->
+          <!-- V1 design: section title + active pill on left, Import CSV + Add
+               Participant on right. The "Reset all" + "Clear All" controls
+               stay reachable but secondary. -->
+          <div class="table-header table-header-v1">
+            <h3 class="table-header-title-v1">Participants</h3>
             <div id="active-participants-summary" class="active-participants-summary" style="display: none;">
               <span id="active-count-pill" class="active-count-pill" title="Active participants in this preset">
                 <span class="dot active"></span>
@@ -537,14 +568,18 @@
                 Reset all
               </button>
             </div>
+            <div class="table-header-spacer"></div>
             <div class="table-actions">
-              <button class="btn btn-secondary btn-sm" onclick="openParticipantEditModal(-1)">
-                <span class="btn-icon">+</span>
+              <button class="btn btn-sm" onclick="openCsvImportModal()" title="Import participants from CSV">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="margin-right: 4px;"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"/></svg>
+                Import CSV
+              </button>
+              <button class="btn btn-primary btn-sm" onclick="openParticipantEditModal(-1)" title="Add a new participant">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="margin-right: 4px;"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5z"/></svg>
                 Add Participant
               </button>
-              <button class="btn btn-secondary btn-sm" onclick="clearAllParticipants()">
-                <span class="btn-icon">🗑️</span>
-                Clear All
+              <button class="btn btn-sm btn-clear-all-v1" onclick="clearAllParticipants()" title="Remove all participants">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 19a2 2 0 002 2h8a2 2 0 002-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
               </button>
             </div>
           </div>
@@ -577,11 +612,11 @@
               <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" style="margin-right: 4px;"><path d="M12 2l2.5 6.5L21 11l-6.5 2.5L12 20l-2.5-6.5L3 11l6.5-2.5L12 2z"/></svg>
               Auto-assign by rule
             </button>
-            <!-- The legacy "+ Add Folder" button lived in the right-side
-                 Folder Organization panel that the polish CSS now hides.
-                 Surfacing it here keeps folder-pool creation reachable
-                 from the same row as the bulk-edit triggers. -->
-            <button type="button" class="btn btn-sm" onclick="addCustomFolder()" title="Add a folder to this preset's pool">
+            <!-- V1 design: opens the same Assign side panel as the bulk
+                 actions, but with an empty selection and the inline create
+                 form expanded. Single source of truth for folder management;
+                 the legacy folder-name-modal is no longer reachable here. -->
+            <button type="button" class="btn btn-sm" onclick="openCreateFolderPanel()" title="Create a new folder for this preset">
               <span style="margin-right: 4px;">+</span> Add Folder
             </button>
           </div>
@@ -637,16 +672,6 @@
             Click "+ assign" on any row, or select multiple rows to bulk-assign · use auto-rule to map team/category patterns.
           </p>
 
-          <!-- Slide-in panel: Assign folders to selected -->
-          <aside id="assign-side-panel" class="slide-panel" aria-hidden="true" aria-label="Assign folders to selected participants">
-            <!-- header / body / footer rendered by renderAssignSidePanel() -->
-          </aside>
-
-          <!-- Slide-in panel: Auto-rule editor -->
-          <aside id="auto-rule-side-panel" class="slide-panel slide-panel-auto-rule" aria-hidden="true" aria-label="Auto-assign rules editor">
-            <!-- header / body / footer rendered by renderAutoRulePanel() -->
-          </aside>
-
           <!-- Face Recognition Interest Survey (shown when feature NOT enabled) -->
           <div id="face-rec-survey" style="display: none; margin-top: 16px;">
             <!-- Already submitted state -->
@@ -694,6 +719,16 @@
 
         </div>
       </div>
+      <!-- Slide-in side panels — siblings of .modal-body inside .preset-editor-stage,
+           so they're absolutely positioned within the stage's bounds (between
+           the modal-header and modal-footer), not against the viewport. -->
+      <aside id="assign-side-panel" class="slide-panel" aria-hidden="true" aria-label="Assign folders to selected participants">
+        <!-- header / body / footer rendered by renderAssignSidePanel() -->
+      </aside>
+      <aside id="auto-rule-side-panel" class="slide-panel slide-panel-auto-rule" aria-hidden="true" aria-label="Auto-assign rules editor">
+        <!-- header / body / footer rendered by renderAutoRulePanel() -->
+      </aside>
+      </div><!-- /.preset-editor-stage -->
       <div class="modal-footer">
         <button class="btn btn-secondary" onclick="closePresetEditor()">Cancel</button>
         <button class="btn btn-primary" onclick="savePreset()" id="save-preset-btn">

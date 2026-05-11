@@ -273,6 +273,7 @@ const validInvokeChannels: string[] = [
   'get-telemetry-status',
   'set-telemetry-enabled',
   'flush-telemetry-queue',
+  'report-renderer-error',
 
   // IPTC Metadata Operations
   'preset-iptc-get',

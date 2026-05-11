@@ -2186,39 +2186,53 @@ export async function bulkAssignFoldersSupabase(
     }
   }
 
-  // 4. Build the upsert payload. One row per resolvable participant, each
-  //    going through applyDualWriteFolders so the legacy folder_1/2/3
-  //    columns stay in sync for 1.1.4 clients.
-  const updatePayload = (currentRows || []).map((row) => {
+  // 4. Build per-row UPDATE patches. We can't use Supabase `.upsert(...)`
+  //    here: PostgreSQL's `INSERT ... ON CONFLICT DO UPDATE` validates
+  //    NOT NULL constraints on the INSERT side BEFORE the conflict resolves
+  //    to UPDATE, so omitting `numero` (NOT NULL) blows up with a constraint
+  //    violation even though every row already exists. UPDATE doesn't have
+  //    that problem — unspecified columns are simply preserved.
+  //
+  //    Each row goes through applyDualWriteFolders so the legacy
+  //    folder_1/2/3 columns stay in sync for 1.1.4 clients.
+  const patches = (currentRows || []).map((row) => {
     const newFolders = computeFolderUpdate(
       (row as any).folders,
       requestedFolders,
       mode
     );
-    const record: any = {
-      id: row.id,
-      preset_id: presetId,
-      folders: newFolders
-    };
-    applyDualWriteFolders(record);
-    return record;
+    const patch: any = { folders: newFolders };
+    applyDualWriteFolders(patch);
+    return { id: row.id, patch };
   });
 
-  if (updatePayload.length === 0) {
+  if (patches.length === 0) {
     return { ok: 0, failed, unknownFolderNames };
   }
 
-  // 5. Single round-trip UPSERT. If Supabase returns a partial error we
-  //    cannot easily attribute it per-row, so we surface the global error
-  //    via thrown exception — the renderer can fall back to per-row updates
-  //    in the unlikely case this happens.
-  const { error: upsertError } = await authenticatedClient
-    .from('preset_participants')
-    .upsert(updatePayload, { onConflict: 'id' });
+  // 5. Run the UPDATEs in parallel — one round-trip per participant, but
+  //    Supabase pools connections so the wall-clock cost is dominated by
+  //    network latency, not query count. Per-row error reporting lets the
+  //    renderer surface partial failure (RLS deny, transient network blip).
+  let okCount = 0;
+  await Promise.all(
+    patches.map(async ({ id, patch }) => {
+      const { error: updateError } = await authenticatedClient
+        .from('preset_participants')
+        .update(patch)
+        .eq('id', id)
+        .eq('preset_id', presetId); // defense-in-depth: never touch other presets
+      if (updateError) {
+        console.error(`[DB BulkAssign] update failed for participant ${id}:`, updateError);
+        failed.push({ id, error: updateError.message });
+      } else {
+        okCount += 1;
+      }
+    })
+  );
 
-  if (upsertError) {
-    console.error('[DB BulkAssign] bulk upsert failed:', upsertError);
-    throw new Error(`Bulk folder assignment failed: ${upsertError.message}`);
+  if (okCount === 0 && failed.length > 0) {
+    throw new Error(`Bulk folder assignment failed: ${failed[0].error}`);
   }
 
   // 6. Cache invalidation — without this, a subsequent read inside the 30s
@@ -2233,12 +2247,13 @@ export async function bulkAssignFoldersSupabase(
     .eq('id', presetId);
 
   console.log(
-    `[DB BulkAssign] ✅ ${updatePayload.length} participants × ${requestedFolders.length} folders (${mode})` +
+    `[DB BulkAssign] ✅ ${okCount} participants × ${requestedFolders.length} folders (${mode})` +
+    (failed.length > 0 ? ` · ${failed.length} failed` : '') +
     (unknownFolderNames.length > 0 ? ` · skipped unknown names: ${unknownFolderNames.join(', ')}` : '')
   );
 
   return {
-    ok: updatePayload.length,
+    ok: okCount,
     failed,
     unknownFolderNames
   };
