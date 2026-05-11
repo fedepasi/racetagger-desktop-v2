@@ -5086,12 +5086,27 @@
 
 .btn-auto-rule {
   border-style: dashed !important;
-  color: var(--v1-amber-text);
-  border-color: var(--v1-amber-border);
+  /* Persistent amber tint so the dashed pill reads at a glance instead of
+   * disappearing into the dark surface — the design reads sharper on a real
+   * screen than in JSX inline styles suggest. */
+  background: rgba(245, 158, 11, 0.10) !important;
+  color: #fde68a !important;
+  border-color: rgba(245, 158, 11, 0.55) !important;
+  font-weight: 600 !important;
+}
+
+.btn-auto-rule svg {
+  color: #fbbf24;
 }
 
 .btn-auto-rule:hover {
-  background: var(--v1-amber-soft);
+  background: rgba(245, 158, 11, 0.20) !important;
+  border-color: rgba(245, 158, 11, 0.75) !important;
+  color: #fef3c7 !important;
+}
+
+.btn-auto-rule:hover svg {
+  color: #fcd34d;
 }
 
 /* ----- Sticky bulk action bar ----------------------------------------------*/
@@ -5252,29 +5267,39 @@
 
 /* ----- Slide-in side panels (assign + auto-rule, share base styling) -------*/
 
-/* Fixed to the viewport, NOT absolutely positioned inside the scrolling
- * modal-body. Federico's review item: with `position: absolute` the panel
- * was scrolling out of view when the user scrolled the participants list,
- * because its coordinate space extended with the scrollable content.
- * `position: fixed` keeps the panel anchored to the viewport regardless
- * of scroll position. The top/bottom insets match the modal header /
- * footer heights (post-polish: ~52px header padding 14×2 + ~24px h2 line,
- * ~64px footer padding 14×2 + ~36px button) — when those change, update
- * here too. z-index sits above the modal (z-index 2000 in base CSS). */
+/* The panel is `position: absolute` inside `.preset-editor-stage` — a flex
+ * container that lives BETWEEN the modal-header and modal-footer. That gives
+ * the panel exact, automatic vertical bounds without magic-number top/bottom
+ * insets. Earlier iterations used `position: fixed` with hardcoded 52px/64px
+ * insets, which broke the moment the modal-header or modal-footer changed
+ * height (the panel would overlap them visibly).
+ *
+ * The previous iteration before that used `position: absolute` directly inside
+ * the scrolling `.modal-body`, which made the panel scroll up out of view as
+ * the user scrolled the participants list. Putting the panel at the SAME
+ * level as `.modal-body` (both children of `.preset-editor-stage`) is the
+ * fix: the panel doesn't scroll with the body, and it doesn't overlap the
+ * header/footer. */
 .slide-panel {
-  position: fixed;
-  top: 52px;
-  bottom: 64px;
+  position: absolute;
+  top: 0;
+  bottom: 0;
   right: 0;
   width: var(--v1-side-panel-w);
-  background: var(--v1-bg-modal);
-  border-left: 1px solid var(--v1-border);
+  /* Slightly more elevated than the modal-body so the panel reads as a
+   * separate surface rather than blending into the background. */
+  background: #131c2e;
+  border-left: 2px solid var(--v1-border-light);
   transform: translateX(100%);
   transition: transform 0.25s ease;
   display: flex;
   flex-direction: column;
   box-shadow: none;
-  z-index: 2050;
+  /* Must beat .participants-table th's z-index: 10 (sticky column headers).
+   * Without this the sticky header strip "stamps through" the panel body —
+   * very visible when scope='selection' because the row of column labels
+   * crashes into "Tap a folder to assign · N available". */
+  z-index: 20;
 }
 
 .slide-panel.is-open {
@@ -5287,8 +5312,10 @@
 }
 
 .slide-panel-header {
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--v1-border);
+  padding: 16px 18px;
+  /* Subtle elevated header so it stands out from the body. */
+  background: rgba(59, 130, 246, 0.06);
+  border-bottom: 1px solid var(--v1-border-light);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -5302,32 +5329,36 @@
 
 .slide-panel-header-title {
   font-weight: 600;
-  font-size: 14px;
-  color: var(--v1-text);
+  font-size: 15px;
+  color: #ffffff;
+  letter-spacing: -0.01em;
 }
 
 .slide-panel-header-sub {
-  color: var(--v1-text-muted);
-  font-size: 11px;
+  color: var(--v1-text-secondary);
+  font-size: 12px;
+  font-family: var(--v1-mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  margin-top: 2px;
 }
 
 .slide-panel-close {
   background: transparent;
   border: none;
-  color: var(--v1-text-muted);
+  color: var(--v1-text-secondary);
   cursor: pointer;
-  padding: 6px;
-  border-radius: 4px;
-  font-size: 16px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 20px;
   line-height: 1;
+  font-weight: 400;
 }
 
 .slide-panel-close:hover {
-  background: var(--v1-bg-surface);
-  color: var(--v1-text);
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
 }
 
 .slide-panel-body {
@@ -5336,20 +5367,57 @@
   padding: 16px;
 }
 
+/* The filter input inside the panel — increase contrast against the elevated
+ * panel bg, and give it a clear focus ring so the user always knows where
+ * keystrokes are going. */
+.slide-panel-body input[type="text"] {
+  background: #0b1220 !important;
+  border: 1px solid var(--v1-border-light) !important;
+  color: var(--v1-text) !important;
+}
+
+.slide-panel-body input[type="text"]::placeholder {
+  color: #94a3b8;
+}
+
+.slide-panel-body input[type="text"]:focus {
+  border-color: var(--v1-accent) !important;
+  box-shadow: 0 0 0 3px var(--v1-accent-soft);
+  outline: none;
+}
+
+/* Empty-state message — the "No folders defined yet" line. */
+.slide-panel-body .assign-folder-grid > div {
+  color: var(--v1-text-secondary) !important;
+  font-style: normal !important;
+  line-height: 1.55;
+}
+
 .slide-panel-footer {
   padding: 12px 16px;
-  border-top: 1px solid var(--v1-border);
+  border-top: 1px solid var(--v1-border-light);
+  background: rgba(15, 23, 42, 0.4);
   display: flex;
   justify-content: flex-end;
   gap: 8px;
 }
 
-/* ----- Modal body padding-right shifts when a side panel is open -----------*/
-
-.preset-editor-with-side-panel #preset-editor-modal .modal-body {
-  padding-right: calc(24px + var(--v1-side-panel-w)) !important;
-  transition: padding-right 0.25s ease;
+.slide-panel-footer .btn {
+  background: var(--v1-bg-elevated);
+  border: 1px solid var(--v1-border-light);
+  color: var(--v1-text);
 }
+
+.slide-panel-footer .btn:hover {
+  background: var(--v1-accent);
+  border-color: var(--v1-accent);
+  color: white;
+}
+
+/* The panel is now a pure overlay (it overlays the right portion of the
+ * modal-body). We no longer shift modal-body's padding-right when the panel
+ * opens — that was creating an empty corridor that read as a "second
+ * sidebar" because its background didn't match the panel's. */
 
 /* ----- Assign panel — folder pool list with counts -------------------------*/
 
@@ -5402,27 +5470,224 @@
 .assign-mode-block {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px;
-  background: var(--v1-bg-surface);
+  gap: 8px;
+  padding: 12px;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid var(--v1-border);
   border-radius: var(--v1-radius);
   font-size: 13px;
+  color: var(--v1-text);
 }
 
 .assign-mode-block label {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+  transition: background 0.12s;
 }
+
+.assign-mode-block label:hover {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.assign-mode-block input[type="radio"] {
+  accent-color: var(--v1-accent);
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+/* ============================================================================
+ * V1 design — Inline "+ New folder" form inside the Assign side panel
+ * ============================================================================
+ * Collapsed: a dashed primary CTA below the folder pool. Expanded: a compact
+ * card with name + optional path + Browse, and Cancel / Create buttons. When
+ * there's an active selection the trigger label hints "auto-assigns to N";
+ * the submit copy reads "Create & assign" instead of "Create folder".
+ */
+
+.assign-folder-pill.is-readonly {
+  cursor: default;
+  opacity: 0.85;
+}
+
+.assign-folder-pill.is-readonly:hover {
+  border-color: var(--v1-border-light);
+}
+
+.inline-create-folder-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  margin: 4px 0 18px;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px dashed rgba(59, 130, 246, 0.5);
+  border-radius: var(--v1-radius);
+  color: #93c5fd;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.inline-create-folder-trigger:hover {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: var(--v1-accent);
+  color: #bfdbfe;
+}
+
+.inline-create-folder-trigger svg {
+  flex-shrink: 0;
+}
+
+.inline-create-folder-hint {
+  font-weight: 500;
+  color: var(--v1-text-muted);
+}
+
+.inline-create-folder-form {
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid var(--v1-accent-border);
+  border-radius: var(--v1-radius);
+  padding: 12px;
+  margin: 4px 0 18px;
+}
+
+.inline-create-folder-form-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--v1-text);
+}
+
+.inline-create-folder-form-header svg {
+  color: #93c5fd;
+}
+
+.inline-create-folder-autobadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: var(--v1-accent-soft);
+  color: #93c5fd;
+  border: 1px solid var(--v1-accent-border);
+}
+
+.inline-create-folder-cancel {
+  background: transparent;
+  border: none;
+  color: var(--v1-text-muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 16px;
+  line-height: 1;
+  border-radius: 4px;
+}
+
+.inline-create-folder-cancel:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+}
+
+.inline-create-folder-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--v1-text-secondary);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.inline-create-folder-input {
+  width: 100%;
+  padding: 7px 10px;
+  background: #0b1220;
+  border: 1px solid var(--v1-border-light);
+  border-radius: var(--v1-radius-sm);
+  color: var(--v1-text);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+
+.inline-create-folder-input::placeholder {
+  color: var(--v1-text-faint);
+}
+
+.inline-create-folder-input:focus {
+  border-color: var(--v1-accent);
+  box-shadow: 0 0 0 3px var(--v1-accent-soft);
+}
+
+.inline-create-folder-path-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.inline-create-folder-path-row .inline-create-folder-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.inline-create-folder-browse {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: var(--v1-bg-elevated);
+  border: 1px solid var(--v1-border-light);
+  border-radius: var(--v1-radius-sm);
+  color: #93c5fd;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.inline-create-folder-browse:hover {
+  background: var(--v1-accent);
+  border-color: var(--v1-accent);
+  color: white;
+}
+
+.inline-create-folder-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.inline-create-folder-actions .btn[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 
 .assign-section-label {
   font-size: 11px;
-  color: var(--v1-text-muted);
-  margin-bottom: 8px;
+  /* Boost from muted (#94a3b8) to secondary (#cbd5e1) so the section
+   * dividers in the side panel actually read at a glance. */
+  color: var(--v1-text-secondary);
+  margin-bottom: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-weight: 600;
+  letter-spacing: 0.06em;
+  font-weight: 700;
 }
 
 /* ----- Auto-rule editor — rule cards stacked vertically --------------------*/
@@ -5562,9 +5827,6 @@
   .slide-panel {
     width: 100%;
   }
-  .preset-editor-with-side-panel #preset-editor-modal .modal-body {
-    padding-right: 24px !important;
-  }
 }
 
 /* end PR3v2 styles */
@@ -5617,21 +5879,27 @@
   flex-direction: column;
 }
 
-/* The modal body becomes the positioning context for the slide-in side
- * panels — without this, `position: absolute; right: 0` would escape to
- * the document body and visually float outside the app. */
-#preset-editor-modal .modal-body {
-  position: relative;
+/* `.preset-editor-stage` is a flex container sitting between the modal-header
+ * and modal-footer. It hosts the scrollable `.modal-body` plus the slide-in
+ * side panels as siblings, so the panels can be `position: absolute` with
+ * top:0 / bottom:0 cleanly bounded by the stage's edges. No magic-number
+ * insets, no overlap with header/footer when their heights change. */
+#preset-editor-modal .preset-editor-stage {
   flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  overflow: hidden;
+}
+
+#preset-editor-modal .modal-body {
+  flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
   max-height: none;
   padding: 24px 32px;
   overflow-y: auto;
 }
-
-/* (Slide-panel positioning lives in the base `.slide-panel` rule above —
- * `position: fixed` with explicit top/bottom insets to clear the modal
- * header and footer. No #preset-editor-modal-scoped override needed.) */
 
 /* Modal header — sit at the top of the full-viewport modal with V1
  * tokens, no rounded corners, no gradient. */
@@ -5726,14 +5994,370 @@
   flex-shrink: 0;
 }
 
-/* The bulk-action-bar's right padding shifts in step with the side panel
- * just like the modal-body padding-right does, so the toolbar doesn't
- * flow underneath the panel when one is open. */
-.preset-editor-with-side-panel #preset-editor-modal .bulk-action-bar-v1,
-.preset-editor-with-side-panel #preset-editor-modal .bulk-filter-row,
-.preset-editor-with-side-panel #preset-editor-modal .participants-table-container {
-  /* `padding-right: var(--v1-side-panel-w)` is already applied to modal-body,
-   * which provides the offset. Children inherit naturally. */
-}
+/* (No padding-right shift on the table region — the side panel is an
+ * overlay confined to `.preset-editor-stage` and doesn't push content.) */
 
 /* end PR3v2 polish styles */
+
+/* ============================================================================
+ * V1 design — Preset summary strip + collapsible details
+ * ============================================================================
+ * Compact 3-cell strip (Preset / Sport / Active) with a divider between cells
+ * and an "Edit details" toggle on the right. Clicking the toggle reveals the
+ * full editable form below (preset-header-row), which is hidden by default
+ * when reading an existing preset and shown by default when creating a new
+ * one. Matches the pattern from `Racetagger Bulk Folder.html` v1.jsx lines
+ * 90–110.
+ */
+
+#preset-editor-modal .preset-summary-strip {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  background: var(--v1-bg-surface);
+  border: 1px solid var(--v1-border);
+  border-radius: var(--v1-radius);
+  padding: 14px 18px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+#preset-editor-modal .preset-summary-cell {
+  min-width: 0;
+}
+
+#preset-editor-modal .preset-summary-label {
+  font-size: 11px;
+  color: var(--v1-text-muted);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin-bottom: 2px;
+  font-weight: 600;
+}
+
+#preset-editor-modal .preset-summary-value {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--v1-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 360px;
+}
+
+#preset-editor-modal .preset-summary-cell:nth-child(1) .preset-summary-value {
+  font-size: 14px;
+}
+
+#preset-editor-modal .preset-summary-cell:nth-child(3) .preset-summary-value,
+#preset-editor-modal .preset-summary-cell:nth-child(5) .preset-summary-value {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+#preset-editor-modal .preset-summary-divider {
+  width: 1px;
+  height: 32px;
+  background: var(--v1-border);
+  flex-shrink: 0;
+}
+
+#preset-editor-modal .preset-summary-spacer {
+  flex: 1;
+  min-width: 0;
+}
+
+#preset-editor-modal #preset-edit-details-btn {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+#preset-editor-modal #preset-edit-details-btn.is-active {
+  background: var(--v1-bg-elevated);
+  border-color: var(--v1-border-light);
+  color: var(--v1-text);
+}
+
+/* The legacy preset-header-row keeps its existing layout when expanded —
+ * we only manage its visibility via [hidden] on the wrapper. */
+#preset-editor-modal .preset-header-row[hidden] {
+  display: none !important;
+}
+
+/* ============================================================================
+ * V1 design — IPTC PRO accordion (purple-themed, compact)
+ * ============================================================================
+ * Overrides the legacy heavy gradient styling with a flat purple-tinted
+ * surface (alpha 0.04 fill, alpha 0.25 border) matching v1.jsx lines 113–131.
+ * The chevron rotates 90° on open. Scoped strictly to #preset-editor-modal
+ * so the preset list page (and any future IPTC surface) is not affected.
+ */
+
+#preset-editor-modal .iptc-metadata-section {
+  border: 1px solid rgba(168, 85, 247, 0.25);
+  border-radius: var(--v1-radius);
+  background: rgba(168, 85, 247, 0.04);
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+
+#preset-editor-modal .iptc-metadata-section:hover {
+  border-color: rgba(168, 85, 247, 0.35);
+}
+
+#preset-editor-modal .iptc-section-toggle {
+  background: transparent;
+  padding: 12px 16px;
+  border-bottom: none;
+}
+
+#preset-editor-modal .iptc-section-toggle:hover {
+  background: rgba(168, 85, 247, 0.06);
+}
+
+#preset-editor-modal .iptc-toggle-left {
+  gap: 10px;
+}
+
+#preset-editor-modal .iptc-toggle-icon {
+  color: #a855f7;
+  font-size: 11px;
+  width: auto;
+}
+
+#preset-editor-modal .iptc-toggle-badge {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: var(--v1-purple-soft);
+  color: #d8b4fe;
+  border: 1px solid var(--v1-purple-border);
+  text-transform: none;
+}
+
+#preset-editor-modal .iptc-toggle-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--v1-text);
+}
+
+#preset-editor-modal .iptc-toggle-status {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+#preset-editor-modal .iptc-status-inactive {
+  background: var(--v1-bg-surface);
+  color: var(--v1-text-muted);
+  border: 1px solid var(--v1-border);
+}
+
+#preset-editor-modal .iptc-status-active {
+  background: rgba(34, 197, 94, 0.18);
+  color: #86efac;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+/* Compact import button on the right of the IPTC header */
+#preset-editor-modal .iptc-import-btn {
+  background: var(--v1-bg-surface);
+  border: 1px solid var(--v1-border);
+  color: var(--v1-text-secondary);
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+#preset-editor-modal .iptc-import-btn:hover {
+  background: var(--v1-bg-elevated);
+  border-color: var(--v1-border-light);
+  color: var(--v1-text);
+}
+
+/* ============================================================================
+ * V1 design — Participants section header
+ * ============================================================================
+ * Title + active count pill on the left, primary actions on the right.
+ * Matches v1.jsx lines 134–144.
+ */
+
+#preset-editor-modal .table-header-v1 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+#preset-editor-modal .table-header-title-v1 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--v1-text);
+}
+
+#preset-editor-modal .table-header-v1 .active-participants-summary {
+  margin-left: 0;
+}
+
+#preset-editor-modal .table-header-spacer {
+  flex: 1;
+  min-width: 0;
+}
+
+#preset-editor-modal .table-header-v1 .table-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+#preset-editor-modal .table-header-v1 .table-actions .btn {
+  padding: 7px 13px;
+  font-size: 13px;
+  border-radius: var(--v1-radius);
+}
+
+#preset-editor-modal .table-header-v1 .table-actions .btn-sm {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+#preset-editor-modal .btn-clear-all-v1 {
+  width: 32px;
+  height: 32px;
+  padding: 0 !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--v1-text-muted);
+  background: var(--v1-bg-surface);
+  border: 1px solid var(--v1-border);
+}
+
+#preset-editor-modal .btn-clear-all-v1:hover {
+  color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+/* ============================================================================
+ * V1 design — Row action buttons (image / edit-amber / delete-red)
+ * ============================================================================
+ * 30×30 square icon buttons centered in the Actions column. Edit fills with
+ * amber, Delete fills with red. Matches v1.jsx lines 272–284.
+ */
+
+#preset-editor-modal .row-actions-td-v1 {
+  padding: 8px 12px !important;
+  text-align: center;
+}
+
+#preset-editor-modal .row-actions-v1 {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+}
+
+#preset-editor-modal .btn-icon-v1 {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--v1-bg-surface);
+  border: 1px solid var(--v1-border);
+  border-radius: var(--v1-radius);
+  color: var(--v1-text-secondary);
+  cursor: pointer;
+  transition: all 0.12s ease;
+  flex-shrink: 0;
+  font-family: inherit;
+}
+
+#preset-editor-modal .btn-icon-v1:hover {
+  background: var(--v1-bg-elevated);
+  border-color: var(--v1-border-light);
+  color: var(--v1-text);
+}
+
+#preset-editor-modal .btn-icon-v1 svg {
+  display: block;
+}
+
+#preset-editor-modal .btn-icon-v1-amber {
+  background: var(--v1-amber);
+  border-color: var(--v1-amber);
+  color: white;
+}
+
+#preset-editor-modal .btn-icon-v1-amber:hover {
+  background: #d97706;
+  border-color: #d97706;
+  color: white;
+}
+
+#preset-editor-modal .btn-icon-v1-red {
+  background: #ef4444;
+  border-color: #ef4444;
+  color: white;
+}
+
+#preset-editor-modal .btn-icon-v1-red:hover {
+  background: #dc2626;
+  border-color: #dc2626;
+  color: white;
+}
+
+/* ============================================================================
+ * V1 design — Number cell (mono bold, no plate box) + Category pill
+ * ============================================================================
+ * The design renders the participant number as plain mono bold 14px text,
+ * not as a plate. We override the legacy `.num-plate-v1` (which previously
+ * rendered a small box) when inside the preset editor modal, and recolor
+ * `.category-badge` to match the design's `.pill` blue accent-soft style.
+ */
+
+#preset-editor-modal .num-plate-v1 {
+  background: transparent;
+  border: none;
+  padding: 0;
+  min-width: 0;
+  height: auto;
+  font-weight: 700;
+  font-size: 14px;
+  font-family: var(--v1-mono);
+  color: var(--v1-text);
+}
+
+#preset-editor-modal .category-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: var(--v1-accent-soft);
+  color: #93c5fd;
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  text-transform: none;
+  white-space: nowrap;
+}
+
+/* ============================================================================
+ * V1 design — Footer padding shifts in step with the side panel
+ * ============================================================================
+ * The side panel is now an overlay confined to `.preset-editor-stage` (the
+ * area between modal-header and modal-footer), so it doesn't physically push
+ * any of the modal chrome — neither modal-body nor modal-footer needs a
+ * padding-right shift. The footer keeps its full width and Save / Cancel
+ * stay where they belong.
+ */

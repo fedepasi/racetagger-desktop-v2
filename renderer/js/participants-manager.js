@@ -1155,6 +1155,19 @@ function createNewPreset() {
     clearIptcForm();
   }
 
+  // V1: open the editable form for new presets (user has nothing to read yet),
+  // and refresh the summary strip with empty values.
+  const headerRow = document.getElementById('preset-header-row');
+  const editBtn = document.getElementById('preset-edit-details-btn');
+  const editLabel = document.getElementById('preset-edit-details-label');
+  if (headerRow) headerRow.removeAttribute('hidden');
+  if (editBtn) {
+    editBtn.setAttribute('aria-expanded', 'true');
+    editBtn.classList.add('is-active');
+  }
+  if (editLabel) editLabel.textContent = 'Hide details';
+  updatePresetSummaryStrip();
+
   // Show modal
   const modal = document.getElementById('preset-editor-modal');
   modal.classList.add('show');
@@ -3006,6 +3019,19 @@ async function editPreset(presetId) {
       loadIptcDataIntoForm(currentPreset.iptc_metadata || null);
     }
 
+    // V1: collapse the editable form by default (user reads the strip first),
+    // and populate the summary strip from the loaded preset.
+    const headerRow = document.getElementById('preset-header-row');
+    const editBtn = document.getElementById('preset-edit-details-btn');
+    const editLabel = document.getElementById('preset-edit-details-label');
+    if (headerRow) headerRow.setAttribute('hidden', '');
+    if (editBtn) {
+      editBtn.setAttribute('aria-expanded', 'false');
+      editBtn.classList.remove('is-active');
+    }
+    if (editLabel) editLabel.textContent = 'Edit details';
+    updatePresetSummaryStrip();
+
     // Show modal
     const modal = document.getElementById('preset-editor-modal');
     if (!modal) {
@@ -3077,6 +3103,19 @@ async function viewOfficialPreset(presetId) {
     const saveBtn = document.getElementById('save-preset-btn');
     saveBtn.innerHTML = '<span class="btn-icon">📋</span>Duplicate & Customize';
     saveBtn.setAttribute('onclick', `duplicateAndEditOfficialPreset('${presetId}')`);
+
+    // V1: collapse the editable form by default (read-only view) and populate
+    // the summary strip from the loaded preset.
+    const headerRowOff = document.getElementById('preset-header-row');
+    const editBtnOff = document.getElementById('preset-edit-details-btn');
+    const editLabelOff = document.getElementById('preset-edit-details-label');
+    if (headerRowOff) headerRowOff.setAttribute('hidden', '');
+    if (editBtnOff) {
+      editBtnOff.setAttribute('aria-expanded', 'false');
+      editBtnOff.classList.remove('is-active');
+    }
+    if (editLabelOff) editLabelOff.textContent = 'View details';
+    updatePresetSummaryStrip();
 
     // Show modal
     const modal = document.getElementById('preset-editor-modal');
@@ -3661,16 +3700,18 @@ function addParticipantRow(participant, rowIndex) {
     ${deliveryTd}
     ${faceTd}
     <td class="no-sort folders-td" data-sort="${escapeHtml(foldersSortKey)}">${foldersDisplay}</td>
-    <td class="no-sort">
-      <button class="btn btn-sm btn-secondary" onclick="duplicateParticipantFromRow(this)" title="Duplicate participant">
-        <span class="btn-icon">📋</span>
-      </button>
-      <button class="btn btn-sm btn-secondary" onclick="openParticipantEditModalFromRow(this)" title="Edit participant">
-        <span class="btn-icon">✏️</span>
-      </button>
-      <button class="btn btn-sm btn-danger" onclick="removeParticipantFromRow(this)" title="Delete participant">
-        <span class="btn-icon">🗑️</span>
-      </button>
+    <td class="no-sort row-actions-td-v1">
+      <div class="row-actions-v1">
+        <button type="button" class="btn-icon-v1" onclick="duplicateParticipantFromRow(this)" title="Duplicate participant" aria-label="Duplicate">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M21 19V5a2 2 0 00-2-2H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2zM8.5 13.5l2.5 3 3.5-4.5 4.5 6H5l3.5-4.5z"/></svg>
+        </button>
+        <button type="button" class="btn-icon-v1 btn-icon-v1-amber" onclick="openParticipantEditModalFromRow(this)" title="Edit participant" aria-label="Edit">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 000-1.42l-2.34-2.33a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+        </button>
+        <button type="button" class="btn-icon-v1 btn-icon-v1-red" onclick="removeParticipantFromRow(this)" title="Delete participant" aria-label="Delete">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 19a2 2 0 002 2h8a2 2 0 002-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+        </button>
+      </div>
     </td>
   `;
 
@@ -3733,11 +3774,6 @@ async function onParticipantActiveToggle(inputEl) {
     if (faceRecFeatureEnabled && currentPreset?.id) {
       loadFaceStatusIfEnabled();
     }
-
-    showNotification(
-      newState ? 'Participant re-enabled' : 'Participant disabled (excluded from AI matching)',
-      'success'
-    );
   } catch (err) {
     // Revert UI on failure
     inputEl.checked = !newState;
@@ -3751,6 +3787,17 @@ async function onParticipantActiveToggle(inputEl) {
       `Update failed: ${getErrorMessage(err)}`,
       'error'
     );
+    // Fire-and-forget telemetry: auto-create a GitHub issue for this failure.
+    try {
+      window.api.invoke('report-renderer-error', {
+        errorType: 'renderer_action',
+        severity: 'recoverable',
+        errorMessage: `participant-toggle-active failed: ${getErrorMessage(err)}`,
+        errorStack: err && err.stack ? String(err.stack) : undefined,
+        batchPhase: 'participants:toggleActive',
+        presetName: currentPreset?.name
+      }).catch(() => { /* telemetry never blocks UX */ });
+    } catch (_) { /* never throw from telemetry path */ }
   } finally {
     inputEl.disabled = false;
   }
@@ -3762,6 +3809,12 @@ async function onParticipantActiveToggle(inputEl) {
  * driver is disabled.
  */
 function updateActiveParticipantsSummary() {
+  // Keep the V1 summary strip in sync regardless of whether the legacy summary
+  // pill exists on the page.
+  if (typeof updatePresetSummaryStrip === 'function') {
+    updatePresetSummaryStrip();
+  }
+
   const summary = document.getElementById('active-participants-summary');
   if (!summary) return;
 
@@ -5805,6 +5858,11 @@ let bulkFolderFilter = 'Any';
 let openSidePanel = null;       // null | { kind, scope, ids? }
 let assignMode = 'append';
 let assignFilter = '';
+// V1 design: inline "+ New folder" form embedded in the Assign side panel.
+// When `open`, the form is expanded with two inputs (name + optional path).
+// On submit we add to customFolders, persist via supabase-update-participant-preset,
+// and — if there's a selection — auto-assign the new folder via bulk-assign.
+let inlineCreateFolder = { open: false, name: '', path: '' };
 let folderRules = [];           // in-memory; persistence in PR4
 
 // ---- Helpers ----------------------------------------------------
@@ -6030,9 +6088,7 @@ async function onRemoveFolderFromRowChip(btnEl, participantId, folderName) {
     if (!response || !response.success) {
       throw new Error(response?.error || 'Failed to remove folder');
     }
-    if (typeof loadPresetForEditing === 'function') {
-      await loadPresetForEditing(currentPreset.id);
-    }
+    await refreshCurrentPresetData();
   } catch (err) {
     console.error('[PR3v2] removeFolder failed:', err);
     showNotification('Failed to remove folder: ' + (err.message || 'Unknown error'), 'error');
@@ -6042,57 +6098,80 @@ async function onRemoveFolderFromRowChip(btnEl, participantId, folderName) {
 }
 
 // ---- Side panel: open / close -----------------------------------
+//
+// Invariant: at most ONE `.slide-panel` carries `.is-open` at any moment.
+// All open/close transitions go through `setOpenSidePanel(next)` — the
+// single point that mutates both `openSidePanel` state AND the DOM of
+// both asides atomically. Earlier iterations used per-panel show/hide
+// helpers plus ad-hoc cross-close calls inside each opener; a missed
+// cross-close left both `<aside>` elements with `.is-open` and both
+// panels visible simultaneously (Folder pool + Auto-rules side by
+// side). Centralising the mutation removes that failure mode.
+function setOpenSidePanel(next) {
+  openSidePanel = next;
+  const assignAside   = document.getElementById('assign-side-panel');
+  const autoRuleAside = document.getElementById('auto-rule-side-panel');
+  const wantAssign    = next && next.kind === 'assign';
+  const wantAutoRule  = next && next.kind === 'auto-rule';
+
+  if (wantAssign)   renderAssignSidePanel(); else if (assignAside)   assignAside.innerHTML = '';
+  if (wantAutoRule) renderAutoRulePanel();   else if (autoRuleAside) autoRuleAside.innerHTML = '';
+
+  if (assignAside) {
+    assignAside.classList.toggle('is-open', !!wantAssign);
+    assignAside.setAttribute('aria-hidden', wantAssign ? 'false' : 'true');
+  }
+  if (autoRuleAside) {
+    autoRuleAside.classList.toggle('is-open', !!wantAutoRule);
+    autoRuleAside.setAttribute('aria-hidden', wantAutoRule ? 'false' : 'true');
+  }
+
+  document.body.classList.toggle('preset-editor-with-side-panel', !!next);
+}
 
 function openAssignPanelForSelected() {
   if (selectedParticipantIds.size === 0) {
     showNotification('Select at least one participant first.', 'warning');
     return;
   }
-  closeAutoRulePanel();
-  openSidePanel = { kind: 'assign', scope: 'selection', ids: Array.from(selectedParticipantIds) };
-  renderAssignSidePanel();
-  showAssignSidePanel(true);
+  setOpenSidePanel({ kind: 'assign', scope: 'selection', ids: Array.from(selectedParticipantIds) });
 }
 
 function openAssignPanelForRow(participantId) {
   if (!participantId) return;
-  closeAutoRulePanel();
-  openSidePanel = { kind: 'assign', scope: 'single', ids: [participantId] };
-  renderAssignSidePanel();
-  showAssignSidePanel(true);
+  setOpenSidePanel({ kind: 'assign', scope: 'single', ids: [participantId] });
+}
+
+// V1 design: filter-row "+ Add Folder" opens the same side panel with the
+// inline create form expanded. If a selection is active in the table, we
+// honor it — the new folder will be created AND auto-assigned to the
+// selected participants (with the panel header reading "N selected" instead
+// of "Folder pool"). Otherwise we open in pool-only mode.
+function openCreateFolderPanel() {
+  const selectedIds = Array.from(selectedParticipantIds || []);
+  inlineCreateFolder = { open: true, name: '', path: '' };
+  setOpenSidePanel(
+    selectedIds.length > 0
+      ? { kind: 'assign', scope: 'selection', ids: selectedIds }
+      : { kind: 'assign', scope: 'pool', ids: [] }
+  );
+  setTimeout(() => {
+    const el = document.getElementById('inline-create-folder-name');
+    if (el) el.focus();
+  }, 50);
 }
 
 function closeAssignSidePanel() {
-  if (openSidePanel && openSidePanel.kind === 'assign') openSidePanel = null;
-  showAssignSidePanel(false);
-}
-
-function showAssignSidePanel(open) {
-  const panel = document.getElementById('assign-side-panel');
-  if (!panel) return;
-  panel.classList.toggle('is-open', !!open);
-  panel.setAttribute('aria-hidden', open ? 'false' : 'true');
-  document.body.classList.toggle('preset-editor-with-side-panel', !!open);
+  inlineCreateFolder = { open: false, name: '', path: '' };
+  if (openSidePanel?.kind === 'assign') setOpenSidePanel(null);
 }
 
 function openAutoRulePanel() {
-  closeAssignSidePanel();
-  openSidePanel = { kind: 'auto-rule' };
-  renderAutoRulePanel();
-  showAutoRulePanel(true);
+  setOpenSidePanel({ kind: 'auto-rule' });
 }
 
 function closeAutoRulePanel() {
-  if (openSidePanel && openSidePanel.kind === 'auto-rule') openSidePanel = null;
-  showAutoRulePanel(false);
-}
-
-function showAutoRulePanel(open) {
-  const panel = document.getElementById('auto-rule-side-panel');
-  if (!panel) return;
-  panel.classList.toggle('is-open', !!open);
-  panel.setAttribute('aria-hidden', open ? 'false' : 'true');
-  document.body.classList.toggle('preset-editor-with-side-panel', !!open);
+  if (openSidePanel?.kind === 'auto-rule') setOpenSidePanel(null);
 }
 
 // ---- Render: Assign side panel ----------------------------------
@@ -6127,40 +6206,347 @@ function renderAssignSidePanel() {
   const numbersHint = numerosSorted.length > 6
     ? `${previewNumeros} +${numerosSorted.length - 6}` : previewNumeros;
 
+  // V1: when invoked with an empty selection (e.g. from the filter row "+ Add
+  // Folder" button), we collapse the assign-specific affordances and show a
+  // pure folder-management view: just the pool + the inline create form.
+  const hasSelection = ids.length > 0;
+  const headerBadge = hasSelection
+    ? `<span style="width: 32px; height: 32px; border-radius: 8px; background: var(--v1-accent); color: white; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; flex-shrink: 0;">${ids.length}</span>`
+    : `<span style="width: 32px; height: 32px; border-radius: 8px; background: var(--v1-bg-elevated); color: #93c5fd; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; flex-shrink: 0;"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-8l-2-2z"/></svg></span>`;
+  const headerTitle = hasSelection
+    ? `${ids.length} selected`
+    : 'Folder pool';
+  const headerSub = hasSelection
+    ? escapeHtml(numbersHint || '—')
+    : `${pool.length} folder${pool.length === 1 ? '' : 's'} defined`;
+
   panel.innerHTML = `
     <div class="slide-panel-header">
-      <span style="width: 32px; height: 32px; border-radius: 8px; background: var(--v1-accent); color: white; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; flex-shrink: 0;">${ids.length}</span>
+      ${headerBadge}
       <div class="slide-panel-header-meta">
-        <div class="slide-panel-header-title">${ids.length} selected</div>
-        <div class="slide-panel-header-sub">${escapeHtml(numbersHint || '—')}</div>
+        <div class="slide-panel-header-title">${headerTitle}</div>
+        <div class="slide-panel-header-sub">${headerSub}</div>
       </div>
       <button type="button" class="slide-panel-close" onclick="closeAssignSidePanel()" aria-label="Close panel">×</button>
     </div>
     <div class="slide-panel-body">
-      <input type="text" placeholder="Filter folders…" value="${escapeHtml(assignFilter)}" oninput="onAssignFilterChange(this.value)" style="width: 100%; padding: 6px 10px; margin-bottom: 12px; background: var(--v1-bg-modal); border: 1px solid var(--v1-border); border-radius: var(--v1-radius-sm); color: var(--v1-text); font-size: 13px;">
-      <div class="assign-section-label">Tap a folder to assign · ${visiblePool.length} available</div>
+      ${pool.length > 5 ? `<input type="text" placeholder="Filter folders…" value="${escapeHtml(assignFilter)}" oninput="onAssignFilterChange(this.value)" style="width: 100%; padding: 6px 10px; margin-bottom: 12px; border-radius: var(--v1-radius-sm); font-size: 13px;">` : ''}
+      <div class="assign-section-label">${hasSelection ? `Tap a folder to assign · ${visiblePool.length} available` : `Existing folders · ${visiblePool.length}`}</div>
       <div class="assign-folder-grid">
-        ${pool.length === 0 ? `<div style="font-size: 12px; color: var(--v1-text-muted); font-style: italic;">No folders defined yet. Add one above with the <strong>+ Add Folder</strong> button.</div>` : ''}
+        ${pool.length === 0 ? `<div style="font-size: 12px; line-height: 1.55;">No folders defined yet. Use <strong>+ New folder</strong> below to create one${hasSelection ? ' — it will be auto-assigned to the selected participants' : ''}.</div>` : ''}
         ${visiblePool.map(f => {
           const count = folderCounts.get(f.name.toLowerCase()) || 0;
-          const all = count === ids.length && ids.length > 0;
-          const some = count > 0 && count < ids.length;
+          const all = hasSelection && count === ids.length && ids.length > 0;
+          const some = hasSelection && count > 0 && count < ids.length;
           const cls = ['assign-folder-pill'];
           if (all) cls.push('has-all');
           else if (some) cls.push('has-some');
-          return `<button type="button" class="${cls.join(' ')}" onclick="onAssignFolderClick('${escapeAttr(f.name)}')" title="${escapeHtml(f.path || f.name)}">${all ? '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>' : ''}${escapeHtml(f.name)}${count > 0 ? `<span class="count-fraction">${count}/${ids.length}</span>` : ''}</button>`;
+          if (!hasSelection) cls.push('is-readonly');
+          const onClick = hasSelection ? `onclick="onAssignFolderClick('${escapeAttr(f.name)}')"` : '';
+          const countLabel = hasSelection && count > 0 ? `<span class="count-fraction">${count}/${ids.length}</span>` : '';
+          const checkIcon = all ? '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>' : '';
+          return `<button type="button" class="${cls.join(' ')}" ${onClick} title="${escapeHtml(f.path || f.name)}">${checkIcon}${escapeHtml(f.name)}${countLabel}</button>`;
         }).join('')}
       </div>
-      <div class="assign-section-label">Mode</div>
-      <div class="assign-mode-block">
-        <label><input type="radio" name="assign-mode" ${assignMode === 'append' ? 'checked' : ''} onchange="onAssignModeChange('append')"><span><strong>Append</strong> <span style="color: var(--v1-text-muted);">— add to existing folders</span></span></label>
-        <label><input type="radio" name="assign-mode" ${assignMode === 'replace' ? 'checked' : ''} onchange="onAssignModeChange('replace')"><span><strong>Replace</strong> <span style="color: var(--v1-text-muted);">— overwrite existing</span></span></label>
-      </div>
+
+      ${renderInlineCreateFolderBlock(hasSelection, ids.length)}
+
+      ${hasSelection ? `
+        <div class="assign-section-label">Mode</div>
+        <div class="assign-mode-block">
+          <label><input type="radio" name="assign-mode" ${assignMode === 'append' ? 'checked' : ''} onchange="onAssignModeChange('append')"><span><strong>Append</strong> <span style="color: var(--v1-text-muted);">— add to existing folders</span></span></label>
+          <label><input type="radio" name="assign-mode" ${assignMode === 'replace' ? 'checked' : ''} onchange="onAssignModeChange('replace')"><span><strong>Replace</strong> <span style="color: var(--v1-text-muted);">— overwrite existing</span></span></label>
+        </div>
+      ` : ''}
     </div>
     <div class="slide-panel-footer">
       <button type="button" class="btn btn-sm" onclick="closeAssignSidePanel()">Done</button>
     </div>
   `;
+
+  // After re-render, restore focus to the inline create name input if the
+  // form is currently open, so typing isn't interrupted on every keystroke.
+  if (inlineCreateFolder.open) {
+    const nameInput = document.getElementById('inline-create-folder-name');
+    if (nameInput && document.activeElement?.id !== 'inline-create-folder-name') {
+      // Only refocus when the active element is NOT already this input,
+      // to avoid stealing focus when the user clicks Browse or the path field.
+      const wasFocused = document.activeElement?.tagName === 'BODY';
+      if (wasFocused) nameInput.focus();
+    }
+  }
+}
+
+// ─── V1 design: inline "+ New folder" form inside the Assign side panel ─────
+
+function renderInlineCreateFolderBlock(hasSelection, selectionCount) {
+  if (!inlineCreateFolder.open) {
+    return `
+      <button type="button" class="inline-create-folder-trigger" onclick="openInlineCreateFolder()">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5z"/></svg>
+        New folder${hasSelection ? ` <span class="inline-create-folder-hint">— auto-assigns to ${selectionCount}</span>` : ''}
+      </button>
+    `;
+  }
+  const safeName = escapeHtml(inlineCreateFolder.name || '');
+  const safePath = escapeHtml(inlineCreateFolder.path || '');
+  const submitDisabled = !inlineCreateFolder.name?.trim();
+  return `
+    <div class="inline-create-folder-form">
+      <div class="inline-create-folder-form-header">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-8l-2-2z"/></svg>
+        <span>New folder</span>
+        ${hasSelection ? `<span class="inline-create-folder-autobadge">auto-assign · ${selectionCount}</span>` : ''}
+        <div style="flex: 1;"></div>
+        <button type="button" class="inline-create-folder-cancel" onclick="closeInlineCreateFolder()" aria-label="Cancel">×</button>
+      </div>
+      <label class="inline-create-folder-label">Name</label>
+      <input type="text"
+             id="inline-create-folder-name"
+             class="inline-create-folder-input"
+             placeholder="e.g. AMG, Team Verstappen, Pro Drivers…"
+             value="${safeName}"
+             oninput="onInlineCreateFolderNameChange(this.value)"
+             onkeydown="onInlineCreateFolderKeyDown(event)"
+             autocomplete="off">
+      <label class="inline-create-folder-label" style="margin-top: 8px;">
+        Path <span style="font-weight: 500; color: var(--v1-text-faint); text-transform: none; letter-spacing: 0;">(optional)</span>
+      </label>
+      <div class="inline-create-folder-path-row">
+        <input type="text"
+               id="inline-create-folder-path"
+               class="inline-create-folder-input"
+               placeholder="Leave empty for default folder organization"
+               value="${safePath}"
+               oninput="onInlineCreateFolderPathChange(this.value)"
+               autocomplete="off">
+        <button type="button" class="inline-create-folder-browse" onclick="onInlineCreateFolderBrowse()" title="Browse for a directory">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-8l-2-2z"/></svg>
+        </button>
+      </div>
+      <div class="inline-create-folder-actions">
+        <button type="button" class="btn btn-sm" onclick="closeInlineCreateFolder()">Cancel</button>
+        <button type="button" class="btn btn-primary btn-sm" onclick="submitInlineCreateFolder()" ${submitDisabled ? 'disabled' : ''}>
+          ${hasSelection ? 'Create &amp; assign' : 'Create folder'}
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+function openInlineCreateFolder() {
+  inlineCreateFolder = { open: true, name: '', path: '' };
+  renderAssignSidePanel();
+  setTimeout(() => {
+    const el = document.getElementById('inline-create-folder-name');
+    if (el) el.focus();
+  }, 30);
+}
+
+function closeInlineCreateFolder() {
+  inlineCreateFolder = { open: false, name: '', path: '' };
+  renderAssignSidePanel();
+}
+
+function onInlineCreateFolderNameChange(value) {
+  inlineCreateFolder.name = value || '';
+  // Toggle the submit button's disabled state without a full re-render so we
+  // don't yank focus on every keystroke.
+  const btn = document.querySelector('.inline-create-folder-actions .btn-primary');
+  if (btn) btn.disabled = !inlineCreateFolder.name.trim();
+}
+
+function onInlineCreateFolderPathChange(value) {
+  inlineCreateFolder.path = value || '';
+}
+
+function onInlineCreateFolderKeyDown(e) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    submitInlineCreateFolder();
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    closeInlineCreateFolder();
+  }
+}
+
+async function onInlineCreateFolderBrowse() {
+  try {
+    const result = await window.api.invoke('dialog-show-open', {
+      properties: ['openDirectory', 'createDirectory'],
+      title: 'Select Destination Folder'
+    });
+    if (result && result.filePaths && result.filePaths.length > 0) {
+      const chosenPath = result.filePaths[0];
+      inlineCreateFolder.path = chosenPath;
+      // Auto-fill the name from the basename if the user hasn't typed one yet.
+      if (!inlineCreateFolder.name?.trim()) {
+        const segments = chosenPath.split(/[\\/]/).filter(s => s.length > 0);
+        const basename = segments.length > 0 ? segments[segments.length - 1] : '';
+        if (basename) inlineCreateFolder.name = basename;
+      }
+      renderAssignSidePanel();
+    }
+  } catch (err) {
+    console.error('[InlineCreateFolder] browse failed:', err);
+  }
+}
+
+async function submitInlineCreateFolder() {
+  const name = (inlineCreateFolder.name || '').trim();
+  const path = (inlineCreateFolder.path || '').trim();
+  if (!name) {
+    showNotification('Please enter a folder name.', 'warning');
+    return;
+  }
+  if (typeof folderNameExistsInPreset === 'function' && folderNameExistsInPreset(name)) {
+    showNotification(`A folder named "${name}" already exists in this preset.`, 'warning');
+    return;
+  }
+
+  // 1. Optimistic local update — push to BOTH `customFolders` (the pool view
+  //    used by Custom Folders + select dropdowns) AND `currentPreset.custom_folders`
+  //    (what `getFolderPoolSorted()` reads for the side panel's pill grid).
+  //    Earlier these two were out of sync: the local pool grew but the panel
+  //    kept rendering the stale list until a manual reload.
+  const folderObj = { name };
+  if (path) folderObj.path = path;
+  customFolders.push(folderObj);
+  if (currentPreset && typeof currentPreset === 'object') {
+    if (!Array.isArray(currentPreset.custom_folders)) currentPreset.custom_folders = [];
+    currentPreset.custom_folders.push({ ...folderObj });
+  }
+  if (typeof renderCustomFolders === 'function') renderCustomFolders();
+  if (typeof updateFolderSelects === 'function') updateFolderSelects();
+  // Refresh the side panel right away so the user sees the new pill before
+  // the Supabase round-trip completes.
+  renderAssignSidePanel();
+
+  // Persist localStorage path mapping (per-device) like the legacy modal does.
+  if (path && currentPreset?.id && typeof updateLocalFolderPath === 'function') {
+    updateLocalFolderPath(currentPreset.id, name, path);
+  }
+
+  const ids = openSidePanel?.kind === 'assign' && Array.isArray(openSidePanel.ids)
+    ? openSidePanel.ids
+    : [];
+
+  try {
+    // 2. Persist the updated custom_folders pool to Supabase.
+    //    Only do this if we're editing an existing preset — for a brand-new
+    //    preset (no id yet) the pool is local until the user clicks Save.
+    if (currentPreset?.id) {
+      const updateResp = await window.api.invoke('supabase-update-participant-preset', {
+        presetId: currentPreset.id,
+        updateData: { custom_folders: customFolders }
+      });
+      if (!updateResp || !updateResp.success) {
+        throw new Error(updateResp?.error || 'Failed to persist folder pool');
+      }
+    }
+
+    // 3. If there's a selection, auto-assign the new folder. Always append:
+    //    creating-and-replacing-with-a-brand-new-folder is rarely the intent.
+    if (currentPreset?.id && ids.length > 0) {
+      const assignResp = await window.api.invoke('supabase-bulk-assign-folders', {
+        presetId: currentPreset.id,
+        participantIds: ids,
+        folderNames: [name],
+        mode: 'append'
+      });
+      if (!assignResp || !assignResp.success) {
+        throw new Error(assignResp?.error || 'Folder created but assign failed');
+      }
+      const okCount = assignResp.data?.ok ?? ids.length;
+      showNotification(`Created "${name}" and assigned to ${okCount} participant${okCount === 1 ? '' : 's'}.`, 'success');
+    } else {
+      showNotification(`Created folder "${name}"${currentPreset?.id ? '' : ' (will be saved with the preset)'}.`, 'success');
+    }
+
+    // 4. Reload preset state so the table chips reflect the new assignments.
+    if (currentPreset?.id) {
+      await refreshCurrentPresetData();
+    }
+  } catch (err) {
+    console.error('[InlineCreateFolder] failed:', err);
+    showNotification('Folder creation failed: ' + (err.message || 'Unknown error'), 'error');
+  } finally {
+    // Reset the inline form regardless of outcome — the user can reopen it
+    // to retry, and the local customFolders push above is idempotent for a
+    // duplicate retry (folderNameExistsInPreset would block it).
+    inlineCreateFolder = { open: false, name: '', path: '' };
+    renderAssignSidePanel();
+  }
+}
+
+// V1 design: lightweight in-place refresh after a bulk mutation. Pulls the
+// freshest preset state from Supabase and re-renders the table + side panel
+// WITHOUT closing the modal, resetting scroll, or dropping selection state.
+//
+// Cowork's PR sprinkled `if (typeof loadPresetForEditing === 'function')`
+// guards across half a dozen call sites, but `loadPresetForEditing` was
+// never actually defined — so none of those calls did anything and the UI
+// silently went stale after every bulk operation. This is the missing
+// function those guards were waiting for.
+async function refreshCurrentPresetData() {
+  if (!currentPreset?.id) return;
+  try {
+    const response = await window.api.invoke('supabase-get-participant-preset-by-id', currentPreset.id);
+    if (!response?.success || !response.data) return;
+
+    currentPreset = response.data;
+    participantsData = currentPreset.participants || [];
+
+    // Re-sync the local custom_folders pool view (used by the Custom Folders
+    // section + getFolderPoolSorted reads currentPreset.custom_folders).
+    const localPaths = (typeof getLocalFolderPaths === 'function')
+      ? getLocalFolderPaths(currentPreset.id) : {};
+    customFolders = (currentPreset.custom_folders || []).map(f => {
+      const name = (typeof getFolderDisplayName === 'function')
+        ? getFolderDisplayName(f) : (f && f.name) || String(f || '');
+      const dbPath = (typeof f === 'object' && f !== null) ? (f.path || '') : '';
+      const resolvedPath = localPaths[name] || dbPath;
+      const obj = { name };
+      if (resolvedPath) obj.path = resolvedPath;
+      return obj;
+    });
+
+    if (typeof renderCustomFolders === 'function') renderCustomFolders();
+    if (typeof updateFolderSelects === 'function') updateFolderSelects();
+
+    // Snapshot the sort state BEFORE re-rendering — `loadParticipantsIntoTable`
+    // wipes the tbody and re-appends rows in source order, which loses the
+    // sortable.js shuffle. We restore the column + direction afterwards so
+    // the visible order doesn't jump after a folder assignment.
+    const sortState = (typeof getCurrentSortState === 'function')
+      ? getCurrentSortState()
+      : null;
+
+    // Re-render rows. addParticipantRow inside loadParticipantsIntoTable
+    // already prunes stale selectedParticipantIds and re-applies the
+    // visibility filter, so search/team/folder filters survive.
+    if (typeof loadParticipantsIntoTable === 'function') {
+      loadParticipantsIntoTable(participantsData);
+    }
+
+    // Re-apply the sort. Default fallback is the saved preference for this
+    // preset (or column 0 ascending if none) — same as editPreset's path.
+    if (typeof applySortState === 'function') {
+      const stateToApply = sortState
+        || (typeof loadSortPreference === 'function' ? loadSortPreference(currentPreset.id) : null)
+        || { columnIndex: 0, direction: 'asc' };
+      applySortState(stateToApply);
+    }
+
+    // Refresh the side panel — folder pill counts depend on the updated
+    // participant.folders[] arrays we just received.
+    renderAssignSidePanel();
+
+    // Keep the V1 summary strip in sync (active count may have changed).
+    if (typeof updatePresetSummaryStrip === 'function') updatePresetSummaryStrip();
+  } catch (err) {
+    console.error('[refreshCurrentPresetData] failed:', err);
+  }
 }
 
 function onAssignFilterChange(value) { assignFilter = value || ''; renderAssignSidePanel(); }
@@ -6186,9 +6572,7 @@ async function onAssignFolderClick(folderName) {
       `${assignMode === 'replace' ? 'Replaced with' : 'Assigned'} "${folderName}" on ${data.ok} participant${data.ok === 1 ? '' : 's'}.`,
       data.failed && data.failed.length > 0 ? 'warning' : 'success'
     );
-    if (typeof loadPresetForEditing === 'function') {
-      await loadPresetForEditing(currentPreset.id);
-    }
+    await refreshCurrentPresetData();
     renderAssignSidePanel();
   } catch (err) {
     console.error('[PR3v2] onAssignFolderClick failed:', err);
@@ -6210,9 +6594,7 @@ async function bulkClearSelectedFolders() {
     if (!response || !response.success) throw new Error(response?.error || 'Failed to clear');
     const data = response.data || { ok: 0 };
     showNotification(`Cleared folders on ${data.ok} participant${data.ok === 1 ? '' : 's'}.`, 'success');
-    if (typeof loadPresetForEditing === 'function') {
-      await loadPresetForEditing(currentPreset.id);
-    }
+    await refreshCurrentPresetData();
   } catch (err) {
     console.error('[PR3v2] bulkClearSelectedFolders failed:', err);
     showNotification('Failed to clear folders: ' + (err.message || 'Unknown error'), 'error');
@@ -6233,8 +6615,8 @@ async function bulkSetSelectedActive(active) {
     `${active ? 'Activated' : 'Deactivated'} ${okCount} participant${okCount === 1 ? '' : 's'}.`,
     okCount === ids.length ? 'success' : 'warning'
   );
-  if (typeof loadPresetForEditing === 'function' && currentPreset?.id) {
-    await loadPresetForEditing(currentPreset.id);
+  if (currentPreset?.id) {
+    await refreshCurrentPresetData();
   }
 }
 
@@ -6394,13 +6776,77 @@ async function applyAllRules() {
   if (groupsFailed > 0) messages.push(`${groupsFailed} rule group${groupsFailed === 1 ? '' : 's'} failed.`);
   if (unknownFolders.size > 0) messages.push(`Unknown folders skipped: ${Array.from(unknownFolders).join(', ')}.`);
   showNotification(messages.join(' '), groupsFailed > 0 || unknownFolders.size > 0 ? 'warning' : 'success');
-  if (typeof loadPresetForEditing === 'function') {
-    await loadPresetForEditing(currentPreset.id);
-  }
+  await refreshCurrentPresetData();
   renderAutoRulePanel();
 }
 
+// ─── V1 design: preset summary strip helpers ────────────────────────────────
+// The strip shows compact Preset / Sport / Active stats; the full editable
+// form is hidden under "Edit details". Both surfaces stay live — editing the
+// fields updates the strip, and reopening the editor on a different preset
+// resets both.
+
+function togglePresetDetails() {
+  const row = document.getElementById('preset-header-row');
+  const btn = document.getElementById('preset-edit-details-btn');
+  const label = document.getElementById('preset-edit-details-label');
+  if (!row || !btn) return;
+  const willOpen = row.hasAttribute('hidden');
+  if (willOpen) {
+    row.removeAttribute('hidden');
+    btn.setAttribute('aria-expanded', 'true');
+    btn.classList.add('is-active');
+    if (label) label.textContent = 'Hide details';
+  } else {
+    row.setAttribute('hidden', '');
+    btn.setAttribute('aria-expanded', 'false');
+    btn.classList.remove('is-active');
+    if (label) label.textContent = 'Edit details';
+  }
+}
+
+function updatePresetSummaryStrip() {
+  const nameEl = document.getElementById('preset-summary-name');
+  const sportEl = document.getElementById('preset-summary-sport');
+  const activeEl = document.getElementById('preset-summary-active');
+
+  if (nameEl) {
+    const nameInput = document.getElementById('preset-name');
+    const liveName = nameInput?.value?.trim();
+    const fallbackName = currentPreset?.name || '';
+    nameEl.textContent = liveName || fallbackName || '— New preset —';
+  }
+
+  if (sportEl) {
+    const sel = document.getElementById('preset-sport-category');
+    const opt = sel?.options?.[sel.selectedIndex];
+    const sportText = opt && opt.value ? (opt.textContent || '').trim() : '';
+    sportEl.textContent = sportText || '—';
+  }
+
+  if (activeEl) {
+    const total = Array.isArray(participantsData) ? participantsData.length : 0;
+    const active = Array.isArray(participantsData)
+      ? participantsData.filter(p => p?.is_active !== false).length
+      : 0;
+    activeEl.textContent = total === 0 ? '0 / 0' : `${active} / ${total}`;
+  }
+}
+
+// Wire up live updates: when the user types in the form, reflect into strip
+document.addEventListener('DOMContentLoaded', () => {
+  const wire = (id) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', updatePresetSummaryStrip);
+  };
+  wire('preset-name');
+  const sel = document.getElementById('preset-sport-category');
+  if (sel) sel.addEventListener('change', updatePresetSummaryStrip);
+});
+
 // Export functions for HTML onclick handlers immediately
+window.togglePresetDetails = togglePresetDetails;
+window.updatePresetSummaryStrip = updatePresetSummaryStrip;
 window.createNewPreset = createNewPreset;
 window.editPreset = editPreset;
 window.deletePreset = deletePreset;
@@ -6466,7 +6912,15 @@ window.onTeamFilterToggle = onTeamFilterToggle;
 window.onFolderFilterToggle = onFolderFilterToggle;
 window.openAssignPanelForSelected = openAssignPanelForSelected;
 window.openAssignPanelForRow = openAssignPanelForRow;
+window.openCreateFolderPanel = openCreateFolderPanel;
 window.closeAssignSidePanel = closeAssignSidePanel;
+window.openInlineCreateFolder = openInlineCreateFolder;
+window.closeInlineCreateFolder = closeInlineCreateFolder;
+window.onInlineCreateFolderNameChange = onInlineCreateFolderNameChange;
+window.onInlineCreateFolderPathChange = onInlineCreateFolderPathChange;
+window.onInlineCreateFolderKeyDown = onInlineCreateFolderKeyDown;
+window.onInlineCreateFolderBrowse = onInlineCreateFolderBrowse;
+window.submitInlineCreateFolder = submitInlineCreateFolder;
 window.openAutoRulePanel = openAutoRulePanel;
 window.closeAutoRulePanel = closeAutoRulePanel;
 window.onAssignFilterChange = onAssignFilterChange;
