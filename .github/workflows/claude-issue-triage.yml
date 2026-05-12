@@ -1,0 +1,108 @@
+name: Claude Issue Triage
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  triage:
+    # Trigger only on issues created by our Edge Functions
+    # (submitFeedback → user-feedback, report-automatic-error → auto-report).
+    # Skip if Claude already triaged this issue (idempotency on re-open).
+    # Manual issues created without these labels are NOT triaged.
+    if: |
+      !contains(github.event.issue.labels.*.name, 'claude-triaged') &&
+      (contains(github.event.issue.labels.*.name, 'auto-report') ||
+       contains(github.event.issue.labels.*.name, 'user-feedback'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write          # create branch + commit for draft PR
+      pull-requests: write     # open draft PR with fix attempt
+      issues: write            # post comment + add label
+      id-token: write          # required by claude-code-action
+      actions: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude triage
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          additional_permissions: |
+            actions: read
+          prompt: |
+            You are auto-triaging a newly opened GitHub issue on the RaceTagger Electron desktop app (this repository).
+
+            ## Context
+            - Repo: ${{ github.repository }}
+            - Issue: #${{ github.event.issue.number }} — ${{ github.event.issue.title }}
+            - URL: ${{ github.event.issue.html_url }}
+            - Labels: ${{ join(github.event.issue.labels.*.name, ', ') }}
+
+            Labels tell you the origin:
+            - `auto-report` → created by Supabase Edge Function `report-automatic-error` from desktop telemetry. Body contains: error type, severity, pipeline phase, system info, error message, stack trace, log snapshot.
+            - `user-feedback` → created by Edge Function `submitFeedback` from the in-app support modal. Body contains: user-written description, system diagnostics, dependencies, recent errors.
+
+            Both bodies usually include a "View Full Diagnostic Report" signed Supabase Storage URL pointing to a .txt file with ~10k lines of main process logs (sanitized: paths/emails/names redacted by `src/utils/error-telemetry-service.ts`). The URL is valid for 7 days.
+
+            ## Your tasks (in order)
+
+            1. **Read the issue body** with `gh issue view ${{ github.event.issue.number }} --json title,body,labels`. Extract error type, stack trace, file paths, function names, app version, OS, GPU.
+
+            2. **Fetch the diagnostic report if present.** Look for a markdown link labeled "View Full Diagnostic Report". Download it with `curl -sSL "<URL>" -o /tmp/diagnostic.txt` and read it. It will help disambiguate root cause vs. symptom.
+
+            3. **Search the codebase** for files/functions implicated in the stack trace. Known hot spots (from CLAUDE.md):
+               - `src/utils/raw-preview-native.ts` — RAW preview extraction
+               - `src/unified-image-processor.ts` — pipeline, edge function calls, zero-results
+               - `src/model-manager.ts` — ONNX model download/checksum
+               - `src/auth-service.ts` — token pre-authorization
+               - `src/generic-segmenter.ts` — segmentation model load
+               - `src/matching/smart-matcher.ts` — participant matching
+               - `src/utils/error-telemetry-service.ts` — telemetry itself
+               - `supabase/functions/analyzeImageDesktopV6/index.ts` — current edge function (symlinked)
+
+            4. **Check for similar past issues** via `gh issue list --state all --search "<key error phrase> in:title,body" --limit 5 --json number,title,state,url`. Cite the most relevant ones in your comment.
+
+            5. **Post an analysis comment** with `gh issue comment ${{ github.event.issue.number }} --body-file <path>`. Use exactly this structure:
+
+               ```markdown
+               ## Claude triage
+
+               **Causa probabile** (confidence: high|medium|low): <1–3 frasi>
+
+               **File coinvolti:**
+               - `path/to/file.ts:line` — perché
+               - ...
+
+               **Stack trace decifrato:** *(only if the trace is offuscated or non-ovvio)*
+               <spiegazione in linguaggio naturale>
+
+               **Prossimi passi di debug:**
+               1. <step concreto>
+               2. ...
+
+               **Issue simili:** *(only if found)*
+               - #N — title (state)
+               ```
+
+            6. **If confidence is HIGH and the fix is clearly local** (all of: ≤30 LOC changed, ≤2 files touched, NO DB migration, NO Edge Function changes, NO native module changes, NO build config changes), open a **draft PR**:
+               - Create branch `claude-triage/issue-${{ github.event.issue.number }}`
+               - Make the fix and commit
+               - Open with `gh pr create --draft --base main --title "[Claude triage] Fix tentativo per #${{ github.event.issue.number }}: <short>" --body "Closes #${{ github.event.issue.number }}\n\n## Cosa cambia\n<diff overview>\n\n## Perché\n<reasoning>\n\n⚠️ Draft PR generata automaticamente da Claude triage. Verificare manualmente prima di mergiare."`
+               - Mantieni in **draft** (NON ready-for-review, NON merge). Il workflow `claude-code-review.yml` esistente farà la review.
+
+               If confidence is medium/low, OR the fix is non-local, OR touches database/edge functions/native code/build config: do **NOT** open a PR. Comment only.
+
+            7. **Always add the `claude-triaged` label** at the end: `gh issue edit ${{ github.event.issue.number }} --add-label claude-triaged`. This prevents re-runs on close+reopen.
+
+            ## Style guidelines
+            - Comment in Italian if the issue body is mostly Italian, English otherwise. Auto-reports are English; user-feedback may be either.
+            - Be concrete: cite `path/to/file.ts:line`, exact function names, exact error strings. Avoid filler.
+            - If you cannot identify a likely cause, say so explicitly and list what additional diagnostic info would help.
+            - Never speculate beyond what code + logs actually show.
+            - Never close the issue. Never modify other issues/PRs.
