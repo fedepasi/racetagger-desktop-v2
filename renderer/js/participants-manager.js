@@ -1752,6 +1752,13 @@ async function openParticipantEditModal(rowIndex = -1) {
   const title = rowIndex === -1 ? 'Add Participant' : 'Edit Participant';
   document.getElementById('participant-edit-title').textContent = title;
 
+  // "Save & Next" is only meaningful when editing an existing row.
+  const saveNextBtn = document.getElementById('save-and-next-btn');
+  if (saveNextBtn) {
+    saveNextBtn.style.display = rowIndex >= 0 ? '' : 'none';
+  }
+  updateSaveAndNextAvailability(rowIndex);
+
   // Get current user ID for face photos
   let currentUserId = null;
   try {
@@ -1957,6 +1964,7 @@ function populateFolderSelects() {
 /**
  * Save participant edit
  * @param {boolean} closeAfterSave - Whether to close modal after save (default: true)
+ * @returns {Promise<boolean>} true on success, false if validation aborted the save
  */
 async function saveParticipantEdit(closeAfterSave = true) {
   const numero = document.getElementById('edit-numero').value.trim();
@@ -1969,7 +1977,7 @@ async function saveParticipantEdit(closeAfterSave = true) {
   if (!numero && driversArray.length === 0) {
     alert('Please enter a race number or at least one person name.\n\nTeam Principal, VIP and mechanics can be added without a number if a name is provided.');
     document.getElementById('edit-numero').focus();
-    return;
+    return false;
   }
 
   // Comma-separated for nome field (legacy compatibility)
@@ -2054,7 +2062,7 @@ async function saveParticipantEdit(closeAfterSave = true) {
     closeParticipantEditModal();
   } else {
     // Update save button to show saved state
-    const saveBtn = document.querySelector('#participant-edit-modal .btn-primary');
+    const saveBtn = document.getElementById('save-changes-btn');
     if (saveBtn) {
       const originalText = saveBtn.innerHTML;
       saveBtn.innerHTML = '✓ Saved';
@@ -2065,6 +2073,8 @@ async function saveParticipantEdit(closeAfterSave = true) {
       }, 1500);
     }
   }
+
+  return true;
 }
 
 /**
@@ -2167,6 +2177,56 @@ async function saveParticipantAndStay() {
     console.error('[Participants] Error saving participant for face photos:', error);
     showPresetSaveError(getErrorMessage(error));
   }
+}
+
+/**
+ * Save participant and open the next one in the table's current visible order.
+ * Uses DOM nextElementSibling so sort/filter state is respected.
+ * Closes the modal with a notification when the saved row is the last one.
+ */
+async function saveParticipantEditAndNext() {
+  const saved = await saveParticipantEdit(false);
+  if (!saved) return;
+
+  const currentRow = document.querySelector(
+    `#participants-tbody tr[data-original-index="${editingRowIndex}"]`
+  );
+  const nextRow = currentRow?.nextElementSibling;
+  const nextIndexAttr = nextRow?.getAttribute('data-original-index');
+  const nextIndex = nextIndexAttr !== null && nextIndexAttr !== undefined
+    ? parseInt(nextIndexAttr, 10)
+    : NaN;
+
+  if (Number.isFinite(nextIndex) && participantsData[nextIndex]) {
+    await openParticipantEditModal(nextIndex);
+  } else {
+    closeParticipantEditModal();
+    if (typeof showNotification === 'function') {
+      showNotification('Reached the last participant', 'info');
+    }
+  }
+}
+
+window.saveParticipantEditAndNext = saveParticipantEditAndNext;
+
+/**
+ * Toggle the "Save & Next" button's enabled state based on whether
+ * the given row has a visible successor in the table.
+ */
+function updateSaveAndNextAvailability(rowIndex) {
+  const btn = document.getElementById('save-and-next-btn');
+  if (!btn) return;
+  if (rowIndex < 0) {
+    btn.disabled = false;
+    btn.title = '';
+    return;
+  }
+  const currentRow = document.querySelector(
+    `#participants-tbody tr[data-original-index="${rowIndex}"]`
+  );
+  const hasNext = !!currentRow?.nextElementSibling;
+  btn.disabled = !hasNext;
+  btn.title = hasNext ? '' : 'No more participants below';
 }
 
 /**
@@ -2391,6 +2451,7 @@ function removeCustomFolder(folderName) {
   renderCustomFolders();
   updateFolderSelects();
   loadParticipantsIntoTable(participantsData);
+  if (openSidePanel?.kind === 'assign') renderAssignSidePanel();
 }
 
 /**
@@ -2605,14 +2666,21 @@ async function validatePresetFolderPaths(presets) {
     const folders = preset.custom_folders || [];
     if (folders.length === 0) continue;
 
-    // Collect all folder paths (localStorage priority, then DB)
+    // Collect all folder paths (localStorage priority, then DB) while keeping
+    // a reverse map so we can show the folder NAME (not just the path) in the
+    // warning banner — users want to know "which folders" are broken, not have
+    // to read through full paths.
     const localPaths = getLocalFolderPaths(preset.id);
+    const pathToName = new Map();
     const pathsToCheck = [];
     for (const f of folders) {
       const name = (typeof f === 'object' && f !== null) ? (f.name || f) : f;
       const dbPath = (typeof f === 'object' && f !== null) ? (f.path || '') : '';
       const resolvedPath = localPaths[name] || dbPath;
-      if (resolvedPath) pathsToCheck.push(resolvedPath);
+      if (resolvedPath) {
+        pathsToCheck.push(resolvedPath);
+        if (!pathToName.has(resolvedPath)) pathToName.set(resolvedPath, name);
+      }
     }
 
     if (pathsToCheck.length === 0) continue;
@@ -2620,7 +2688,11 @@ async function validatePresetFolderPaths(presets) {
     try {
       const result = await window.api.invoke('validate-preset-folder-paths', { paths: pathsToCheck });
       if (result.success && result.data && !result.data.valid) {
-        markPresetCardInvalid(preset.id, result.data.invalidPaths);
+        const invalidFolders = (result.data.invalidPaths || []).map(p => ({
+          name: pathToName.get(p) || '',
+          path: p
+        }));
+        markPresetCardInvalid(preset.id, invalidFolders);
       }
     } catch (e) {
       console.warn('[Participants] Error validating folder paths for preset', preset.id, e);
@@ -2629,11 +2701,33 @@ async function validatePresetFolderPaths(presets) {
 }
 
 /**
- * Add a warning badge to a preset card with invalid folder paths.
+ * HTML-escape a string for safe injection into innerHTML. Folder names and
+ * filesystem paths can in principle contain `<`, `&`, quotes, etc.
  */
-function markPresetCardInvalid(presetId, invalidPaths) {
+function escapePresetWarningText(value) {
+  if (value == null) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Add a warning badge to a preset card with invalid folder paths.
+ * @param {string} presetId
+ * @param {Array<{name: string, path: string}>} invalidFolders
+ */
+function markPresetCardInvalid(presetId, invalidFolders) {
   const card = document.querySelector(`.preset-card[data-preset-id="${presetId}"]`);
   if (!card) return;
+
+  // Backwards-compat: accept the legacy `string[]` shape too.
+  const folders = Array.isArray(invalidFolders)
+    ? invalidFolders.map(item => typeof item === 'string' ? { name: '', path: item } : item)
+    : [];
+  if (folders.length === 0) return;
 
   card.classList.add('preset-paths-warning');
 
@@ -2641,11 +2735,119 @@ function markPresetCardInvalid(presetId, invalidPaths) {
   const existing = card.querySelector('.preset-path-warning');
   if (existing) existing.remove();
 
+  const count = folders.length;
+  // Inline summary: show folder names so the user can spot the broken ones
+  // at a glance. Cap at 3 to keep the card compact; the rest live in the
+  // expandable details panel.
+  const INLINE_LIMIT = 3;
+  const named = folders.map(f => (f.name || f.path || '').trim()).filter(Boolean);
+  const namedHead = named.slice(0, INLINE_LIMIT);
+  const namedRest = named.length - namedHead.length;
+  const inlineNames = namedHead.length > 0
+    ? namedHead.map(n => `<span class="preset-path-warning__chip">${escapePresetWarningText(n)}</span>`).join(' ')
+      + (namedRest > 0 ? ` <span class="preset-path-warning__chip preset-path-warning__chip--more">+${namedRest} more</span>` : '')
+    : '';
+
+  const detailsItems = folders.map(f => {
+    const safeName = escapePresetWarningText(f.name || '');
+    return `
+    <li class="preset-path-warning__item">
+      <div class="preset-path-warning__item-info">
+        <span class="preset-path-warning__name">${escapePresetWarningText(f.name || '(unnamed folder)')}</span>
+        <code class="preset-path-warning__path">${escapePresetWarningText(f.path || '')}</code>
+      </div>
+      ${f.name ? `<button type="button" class="preset-path-warning__locate" data-folder-name="${safeName}" title="Pick the folder's current location on this device">
+        <span aria-hidden="true">&#128194;</span> Locate&hellip;
+      </button>` : ''}
+    </li>
+  `;
+  }).join('');
+
   const warning = document.createElement('div');
   warning.className = 'preset-path-warning';
-  const count = invalidPaths.length;
-  warning.innerHTML = `<span class="warning-icon">&#9888;</span> ${count} folder path${count > 1 ? 's' : ''} not found on this device`;
-  warning.title = invalidPaths.join('\n');
+  warning.innerHTML = `
+    <div class="preset-path-warning__head">
+      <span class="warning-icon" aria-hidden="true">&#9888;</span>
+      <span class="preset-path-warning__summary">
+        <strong>${count} folder path${count > 1 ? 's' : ''} not found on this device${inlineNames ? ':' : ''}</strong>
+        ${inlineNames}
+      </span>
+      <button type="button" class="preset-path-warning__toggle" aria-expanded="false" title="Show full paths">
+        <span class="preset-path-warning__toggle-icon" aria-hidden="true">&#9662;</span>
+        <span class="preset-path-warning__toggle-text">Details</span>
+      </button>
+    </div>
+    <ul class="preset-path-warning__details" hidden>${detailsItems}</ul>
+  `;
+
+  // Toggle the details panel. Stop propagation so clicks here don't trigger
+  // any "open preset" handler attached higher up on the card.
+  const toggleBtn = warning.querySelector('.preset-path-warning__toggle');
+  const detailsPanel = warning.querySelector('.preset-path-warning__details');
+  if (toggleBtn && detailsPanel) {
+    toggleBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const expanded = toggleBtn.getAttribute('aria-expanded') === 'true';
+      toggleBtn.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+      detailsPanel.hidden = expanded;
+      const icon = toggleBtn.querySelector('.preset-path-warning__toggle-icon');
+      if (icon) icon.innerHTML = expanded ? '&#9662;' : '&#9652;';
+    });
+  }
+
+  // Inline "Locate…" action: opens the OS folder picker and stores the
+  // chosen path as a device-specific override (via updateLocalFolderPath,
+  // same mechanism the Edit Folder modal uses). After a successful pick we
+  // re-render the warning with the remaining unresolved folders so the user
+  // gets immediate visual confirmation. The DB-stored path is left untouched
+  // — that one might still be correct on another machine.
+  warning.querySelectorAll('.preset-path-warning__locate').forEach((btn) => {
+    btn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      const folderName = btn.dataset.folderName || '';
+      if (!folderName) return;
+      btn.disabled = true;
+      try {
+        const result = await window.api.invoke('dialog-show-open', {
+          properties: ['openDirectory'],
+          title: `Locate folder "${folderName}"`
+        });
+        const newPath = result && result.filePaths && result.filePaths[0];
+        if (!newPath) return; // user cancelled
+        updateLocalFolderPath(presetId, folderName, newPath);
+        // If we're currently editing this very preset, refresh the chips so
+        // the path badge updates without a full reload.
+        if (typeof currentPreset === 'object' && currentPreset && currentPreset.id === presetId
+          && typeof renderCustomFolders === 'function') {
+          try { renderCustomFolders(); } catch (_) { /* non-fatal */ }
+        }
+        // Re-render warning with remaining unresolved folders. Toggle keeps
+        // its open/closed state on every re-render? — no, we always start
+        // collapsed; that's fine, the resolved one is gone.
+        const remaining = folders.filter(f => (f.name || '') !== folderName);
+        if (remaining.length === 0) {
+          card.classList.remove('preset-paths-warning');
+          warning.remove();
+        } else {
+          markPresetCardInvalid(presetId, remaining);
+        }
+      } catch (e) {
+        console.warn('[Participants] Locate folder failed:', e);
+        if (typeof showNotification === 'function') {
+          showNotification(`Could not relocate "${folderName}": ${e && e.message ? e.message : e}`, 'error');
+        }
+      } finally {
+        // Button may already be detached (re-render); guard the access.
+        try { btn.disabled = false; } catch (_) { /* element detached */ }
+      }
+    });
+  });
+
+  // Tooltip fallback: native `title` keeps working for keyboard users and
+  // copy-paste from screen readers when the panel is collapsed.
+  warning.title = folders
+    .map(f => f.name ? `${f.name} — ${f.path}` : f.path)
+    .join('\n');
 
   // Insert after preset-info section
   const presetInfo = card.querySelector('.preset-info') || card.querySelector('.preset-actions');
@@ -2779,6 +2981,7 @@ function saveEditedFolderName() {
   if (sortState) {
     applySortState(sortState);
   }
+  if (openSidePanel?.kind === 'assign') renderAssignSidePanel();
 
   // Close modal
   closeEditFolderModal();
@@ -6147,8 +6350,6 @@ function setOpenSidePanel(next) {
     autoRuleAside.classList.toggle('is-open', !!wantAutoRule);
     autoRuleAside.setAttribute('aria-hidden', wantAutoRule ? 'false' : 'true');
   }
-
-  document.body.classList.toggle('preset-editor-with-side-panel', !!next);
 }
 
 function openAssignPanelForSelected() {
@@ -6179,7 +6380,12 @@ function openCreateFolderPanel() {
   );
   setTimeout(() => {
     const el = document.getElementById('inline-create-folder-name');
-    if (el) el.focus();
+    // preventScroll: avoid the browser auto-scrolling an ancestor container
+    // (modal-body, .modal.show) to bring the input into view. That implicit
+    // scroll was a likely cause of the apparent layout shift unique to the
+    // "+ Add Folder" path — the "+ Auto-assign by rule" panel doesn't focus
+    // any input on open, which is why it didn't exhibit the same behavior.
+    if (el) el.focus({ preventScroll: true });
   }, 50);
 }
 
@@ -6253,21 +6459,42 @@ function renderAssignSidePanel() {
     </div>
     <div class="slide-panel-body">
       ${pool.length > 5 ? `<input type="text" placeholder="Filter folders…" value="${escapeHtml(assignFilter)}" oninput="onAssignFilterChange(this.value)" style="width: 100%; padding: 6px 10px; margin-bottom: 12px; border-radius: var(--v1-radius-sm); font-size: 13px;">` : ''}
-      <div class="assign-section-label">${hasSelection ? `Tap a folder to assign · ${visiblePool.length} available` : `Existing folders · ${visiblePool.length}`}</div>
-      <div class="assign-folder-grid">
+      <div class="assign-section-label">${hasSelection ? `Tap a folder to assign · ${visiblePool.length} available` : `Existing folders · ${visiblePool.length}${visiblePool.length > 0 ? ' — click ✏️ to rename or change path' : ''}`}</div>
+      <div class="assign-folder-grid${hasSelection ? '' : ' assign-folder-grid-pool'}">
         ${pool.length === 0 ? `<div style="font-size: 12px; line-height: 1.55;">No folders defined yet. Use <strong>+ New folder</strong> below to create one${hasSelection ? ' — it will be auto-assigned to the selected participants' : ''}.</div>` : ''}
         ${visiblePool.map(f => {
           const count = folderCounts.get(f.name.toLowerCase()) || 0;
-          const all = hasSelection && count === ids.length && ids.length > 0;
-          const some = hasSelection && count > 0 && count < ids.length;
+          if (!hasSelection) {
+            // Pool mode (no participants selected): manageable pill with name,
+            // path, and edit/remove actions. Reuses editCustomFolder() and
+            // removeCustomFolder() which already propagate changes across
+            // every participant that references the folder.
+            const safeName = escapeAttr(f.name);
+            const pathDisplay = f.path
+              ? `<span class="pill-path" title="${escapeHtml(f.path)}">${escapeHtml(shortenPath(f.path))}</span>`
+              : `<span class="pill-path is-empty">no path</span>`;
+            const usageBadge = count > 0
+              ? `<span class="pill-usage" title="Used by ${count} participant${count === 1 ? '' : 's'}">${count} 🏎️</span>`
+              : '';
+            return `
+              <div class="assign-folder-pill is-manageable" data-folder-name="${escapeHtml(f.name)}">
+                <span class="pill-icon" aria-hidden="true">📁</span>
+                <span class="pill-name">${escapeHtml(f.name)}</span>
+                ${pathDisplay}
+                ${usageBadge}
+                <button type="button" class="pill-action" onclick="editCustomFolder('${safeName}')" aria-label="Edit folder ${escapeAttr(f.name)}" title="Edit folder name and path">✏️</button>
+                <button type="button" class="pill-action is-danger" onclick="removeCustomFolder('${safeName}')" aria-label="Remove folder ${escapeAttr(f.name)}" title="Remove folder from preset and every participant">×</button>
+              </div>
+            `;
+          }
+          const all = count === ids.length && ids.length > 0;
+          const some = count > 0 && count < ids.length;
           const cls = ['assign-folder-pill'];
           if (all) cls.push('has-all');
           else if (some) cls.push('has-some');
-          if (!hasSelection) cls.push('is-readonly');
-          const onClick = hasSelection ? `onclick="onAssignFolderClick('${escapeAttr(f.name)}')"` : '';
-          const countLabel = hasSelection && count > 0 ? `<span class="count-fraction">${count}/${ids.length}</span>` : '';
+          const countLabel = count > 0 ? `<span class="count-fraction">${count}/${ids.length}</span>` : '';
           const checkIcon = all ? '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>' : '';
-          return `<button type="button" class="${cls.join(' ')}" ${onClick} title="${escapeHtml(f.path || f.name)}">${checkIcon}${escapeHtml(f.name)}${countLabel}</button>`;
+          return `<button type="button" class="${cls.join(' ')}" onclick="onAssignFolderClick('${escapeAttr(f.name)}')" title="${escapeHtml(f.path || f.name)}">${checkIcon}${escapeHtml(f.name)}${countLabel}</button>`;
         }).join('')}
       </div>
 

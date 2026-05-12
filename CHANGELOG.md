@@ -1,5 +1,20 @@
 # Changelog - RaceTagger Desktop
 
+## [1.1.8] - 2026-05-12
+
+### ✨ Participant editor — Save & Next
+
+- New **"Save & Next"** button in the Participant Edit modal (visible only
+  when editing an existing row, not when adding a new one). Saves the
+  current participant and immediately opens the next row in the table's
+  current visible order — sort / filter state is respected via DOM
+  `nextElementSibling`, so you walk participants in the order you're
+  actually looking at, not the underlying array order.
+- When the saved row is the last visible one, the modal closes with a
+  notification confirming the save.
+
+---
+
 ## [1.1.7] - 2026-05-12
 
 ### 🎯 Major Features

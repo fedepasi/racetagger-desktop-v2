@@ -1068,7 +1068,11 @@
         </div>
         <div class="footer-actions">
           <button class="btn btn-secondary" onclick="closeParticipantEditModal()">Cancel</button>
-          <button class="btn btn-primary" onclick="saveParticipantEdit()">
+          <button id="save-and-next-btn" class="btn btn-primary" onclick="saveParticipantEditAndNext()" style="display:none;">
+            Save &amp; Next
+            <span class="btn-icon">→</span>
+          </button>
+          <button id="save-changes-btn" class="btn btn-primary" onclick="saveParticipantEdit()">
             <span class="btn-icon">💾</span>
             Save Changes
           </button>

@@ -1244,6 +1244,60 @@
   box-shadow: 0 0 0 3px var(--accent-color-20, rgba(59, 130, 246, 0.2));
 }
 
+/* Edit Folder Name modal — opened from the Folder pool side-panel via the
+ * ✏️ action on each pill. Without these overrides, inherited rules collapse
+ * the two .form-group blocks into side-by-side columns (same issue solved
+ * for #folder-name-modal and #participant-folder-modal). Reusing their
+ * pattern keeps the three folder modals visually consistent. */
+#edit-folder-modal .modal-body {
+  display: block;
+}
+#edit-folder-modal .modal-body > .form-group {
+  display: block;
+  width: 100%;
+  margin-bottom: 1rem;
+}
+#edit-folder-modal .form-group label {
+  color: #fff;
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+}
+#edit-folder-modal .folder-path-picker {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+#edit-folder-modal .folder-path-picker .form-input {
+  flex: 1;
+  min-width: 0;
+}
+#edit-folder-modal .folder-path-picker .btn {
+  flex-shrink: 0;
+}
+#edit-folder-modal .form-input {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border: 2px solid var(--border-color, #334155);
+  border-radius: 6px;
+  font-size: 1rem;
+  background: var(--input-bg, #fff);
+  color: var(--text-primary, #000);
+  box-sizing: border-box;
+}
+#edit-folder-modal .form-input:focus {
+  outline: none;
+  border-color: var(--accent-color, #3b82f6);
+  box-shadow: 0 0 0 3px var(--accent-color-20, rgba(59, 130, 246, 0.2));
+}
+#edit-folder-modal .form-hint {
+  display: block;
+  margin-top: 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--text-secondary, #cbd5e1);
+  line-height: 1.5;
+}
+
 /* Live filter input above the list. Always visible — even short lists
    are easier to scan with a filter than without one once you've used
    it twice. The input mirrors the styling of other form-inputs but
@@ -4644,9 +4698,7 @@
 /* ===== PRESET FOLDER PATH WARNING BADGE ===== */
 
 .preset-path-warning {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
+  display: block;
   padding: 0.5rem 0.75rem;
   margin-top: 0.5rem;
   background: rgba(234, 179, 8, 0.12);
@@ -4657,9 +4709,150 @@
   cursor: default;
 }
 
+.preset-path-warning__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
 .preset-path-warning .warning-icon {
   font-size: 1rem;
   flex-shrink: 0;
+  line-height: 1.2;
+}
+
+.preset-path-warning__summary {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  line-height: 1.35;
+}
+
+.preset-path-warning__summary strong {
+  font-weight: 600;
+}
+
+.preset-path-warning__chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(234, 179, 8, 0.22);
+  border: 1px solid rgba(234, 179, 8, 0.35);
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: #92400e;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preset-path-warning__chip--more {
+  background: rgba(234, 179, 8, 0.08);
+  color: #ca8a04;
+  font-style: italic;
+}
+
+.preset-path-warning__toggle {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.5rem;
+  background: transparent;
+  border: 1px solid rgba(234, 179, 8, 0.35);
+  border-radius: 4px;
+  color: #ca8a04;
+  font-size: 0.72rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+
+.preset-path-warning__toggle:hover {
+  background: rgba(234, 179, 8, 0.18);
+}
+
+.preset-path-warning__toggle-icon {
+  font-size: 0.65rem;
+  line-height: 1;
+}
+
+.preset-path-warning__details {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.preset-path-warning__details[hidden] {
+  display: none;
+}
+
+.preset-path-warning__item {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  background: rgba(234, 179, 8, 0.08);
+  border-left: 2px solid rgba(234, 179, 8, 0.45);
+  border-radius: 3px;
+}
+
+.preset-path-warning__item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.preset-path-warning__locate {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.55rem;
+  background: rgba(234, 179, 8, 0.22);
+  border: 1px solid rgba(234, 179, 8, 0.45);
+  border-radius: 4px;
+  color: #92400e;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.12s ease;
+}
+
+.preset-path-warning__locate:hover {
+  background: rgba(234, 179, 8, 0.35);
+}
+
+.preset-path-warning__locate:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+.preset-path-warning__name {
+  font-weight: 600;
+  color: #92400e;
+  font-size: 0.78rem;
+}
+
+.preset-path-warning__path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  color: #78350f;
+  word-break: break-all;
+  background: transparent;
+  padding: 0;
 }
 
 .preset-card.preset-paths-warning {
@@ -5399,6 +5592,9 @@
 .slide-panel {
   position: absolute;
   top: 0;
+  /* Full-height panel: spans the entire stage vertically (header to footer).
+   * `.slide-panel-body { flex: 1; overflow-y: auto }` fills the available
+   * space and keeps `.slide-panel-footer` (Done) pinned at the bottom. */
   bottom: 0;
   right: 0;
   width: var(--v1-side-panel-w);
@@ -5406,6 +5602,12 @@
    * separate surface rather than blending into the background. */
   background: #131c2e;
   border-left: 2px solid var(--v1-border-light);
+  /* Bottom edge finisher: now that the panel is content-driven height it can
+   * end mid-modal, so the bottom is a visible edge — give it the same border
+   * weight as the left side so the panel reads as a finished card and not
+   * a clipped strip. */
+  border-bottom: 2px solid var(--v1-border-light);
+  border-bottom-left-radius: var(--v1-radius);
   transform: translateX(100%);
   transition: transform 0.25s ease;
   display: flex;
@@ -5421,6 +5623,16 @@
 .slide-panel.is-open {
   transform: translateX(0);
   box-shadow: var(--v1-shadow-panel);
+}
+
+/* Defensive: keep the panel locked to the right edge of the stage. Some
+ * specific selectors (e.g. responsive @media rules or future overrides)
+ * could otherwise reposition it accidentally. */
+#preset-editor-modal .slide-panel {
+  right: 0;
+  left: auto;
+  margin: 0;
+  box-sizing: border-box;
 }
 
 .slide-panel-auto-rule {
@@ -5480,7 +5692,12 @@
 .slide-panel-body {
   flex: 1;
   overflow-y: auto;
+  /* Prevent pill content (especially the new pool-mode "is-manageable" pill
+   * with white-space: nowrap) from overflowing the panel horizontally and
+   * pushing the panel layout off-center. */
+  overflow-x: hidden;
   padding: 16px;
+  min-width: 0;
 }
 
 /* The filter input inside the panel — increase contrast against the elevated
@@ -5632,6 +5849,119 @@
 
 .assign-folder-pill.is-readonly:hover {
   border-color: var(--v1-border-light);
+}
+
+/* Pool-mode pill: rectangular card with name, path, usage badge, and
+ * edit/remove actions. The container itself is not clickable — only the
+ * inner buttons trigger actions. Used by renderAssignSidePanel() when
+ * the panel is opened without a participant selection.
+ *
+ * IMPORTANT: pills must fit the side-panel width (380px) — if they
+ * overflow horizontally, the panel layout gets pushed off-center. The
+ * grid uses align-items: stretch to lock each pill to the panel width,
+ * and the pill flex children are configured so .pill-path shrinks first. */
+.assign-folder-grid-pool {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.assign-folder-pill.is-manageable {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 8px 12px;
+  border-radius: var(--v1-radius-sm);
+  background: var(--v1-bg-surface);
+  border: 1px solid var(--v1-border);
+  cursor: default;
+  font-size: 13px;
+  color: var(--v1-text);
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.assign-folder-pill.is-manageable:hover {
+  border-color: var(--v1-border-light);
+}
+
+.assign-folder-pill.is-manageable .pill-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.assign-folder-pill.is-manageable .pill-name {
+  font-weight: 600;
+  font-size: 13px;
+  flex-shrink: 0;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assign-folder-pill.is-manageable .pill-path {
+  font-size: 11px;
+  color: var(--v1-text-muted);
+  font-family: var(--v1-mono);
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assign-folder-pill.is-manageable .pill-path.is-empty {
+  font-style: italic;
+  opacity: 0.55;
+  font-family: inherit;
+}
+
+.assign-folder-pill.is-manageable .pill-usage {
+  font-size: 11px;
+  color: var(--v1-text-muted);
+  background: var(--v1-bg-elevated);
+  padding: 2px 6px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.assign-folder-pill.is-manageable .pill-action {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  opacity: 0.7;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--v1-text);
+  transition: background 0.12s, opacity 0.12s;
+}
+
+.assign-folder-pill.is-manageable .pill-action:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.assign-folder-pill.is-manageable .pill-action.is-danger {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.assign-folder-pill.is-manageable .pill-action.is-danger:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
 }
 
 .inline-create-folder-trigger {
@@ -6003,6 +6333,14 @@
 #preset-editor-modal .preset-editor-stage {
   flex: 1 1 auto;
   min-height: 0;
+  /* Without min-width: 0 a flex child defaults to min-width: auto, which
+   * is its content size. If the modal-body contains a wide table, the
+   * stage can grow beyond 100vw and the right-anchored .slide-panel ends
+   * up off-center (visually "shifted left" relative to the viewport).
+   * Locking min-width: 0 keeps the stage at 100vw and the panel snapped
+   * to the right edge. */
+  min-width: 0;
+  width: 100%;
   position: relative;
   display: flex;
   overflow: hidden;
