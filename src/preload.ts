@@ -242,6 +242,7 @@ const validInvokeChannels: string[] = [
   'preset:toggleParticipantActive',
   'preset:toggleDriverActive',
   'preset:bulkSetActive',
+  'preset:bulkSetIncludeDefaultFolder',
   'preset:resetActiveStates',
 
   'get-app-path',

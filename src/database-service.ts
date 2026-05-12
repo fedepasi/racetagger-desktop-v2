@@ -2497,6 +2497,52 @@ export async function bulkSetPresetParticipantsActive(
 }
 
 /**
+ * Bulk set `include_default_folder` on many participants of the same
+ * preset in one round-trip. Used by the "Also export to default folder"
+ * checkbox in the Assign Folder side panel — when the user changes the
+ * value there, the new state is applied to every selected participant
+ * as part of the same action.
+ *
+ * Same shape & semantics as bulkSetPresetParticipantsActive above:
+ *   - presetId narrows the UPDATE so cross-preset IDs are rejected.
+ *   - RLS on preset_participants still gates by preset ownership.
+ *   - Invalidates the preset cache so the next read sees the new flags.
+ *
+ * @returns the number of rows actually updated.
+ */
+export async function bulkSetPresetParticipantsIncludeDefaultFolder(
+  presetId: string,
+  participantIds: string[],
+  includeDefaultFolder: boolean
+): Promise<number> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+  if (!Array.isArray(participantIds) || participantIds.length === 0) return 0;
+
+  const authenticatedClient = authService.getSupabaseClient();
+
+  const { data, error } = await authenticatedClient
+    .from('preset_participants')
+    .update({ include_default_folder: includeDefaultFolder })
+    .eq('preset_id', presetId)
+    .in('id', participantIds)
+    .select('id');
+
+  if (error) {
+    console.error('[DB] bulkSetPresetParticipantsIncludeDefaultFolder failed:', error);
+    throw error;
+  }
+
+  invalidatePresetCacheEntry(presetId);
+  const updated = Array.isArray(data) ? data.length : 0;
+  console.log(
+    `[DB] Bulk set include_default_folder=${includeDefaultFolder} on ${updated}/${participantIds.length} ` +
+    `participants of preset ${presetId}`
+  );
+  return updated;
+}
+
+/**
  * Reset every participant and every driver of a preset back to is_active = true.
  *
  * This is the "Ripristina tutti" action in the editor header: it's one

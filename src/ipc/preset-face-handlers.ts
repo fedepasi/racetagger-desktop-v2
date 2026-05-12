@@ -27,6 +27,7 @@ import {
   togglePresetParticipantActive,
   togglePresetDriverActive,
   bulkSetPresetParticipantsActive,
+  bulkSetPresetParticipantsIncludeDefaultFolder,
   resetPresetActiveStates
 } from '../database-service';
 import * as crypto from 'crypto';
@@ -832,6 +833,37 @@ export function registerPresetFaceHandlers(): void {
       return { success: true, data: { updated } };
     } catch (error) {
       console.error('[PresetToggle IPC] bulkSetActive error:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  /**
+   * Bulk set `include_default_folder` on many participants of the same
+   * preset in one round-trip. Used by the "Also export to default folder"
+   * checkbox in the Assign Folder side panel.
+   */
+  ipcMain.handle('preset:bulkSetIncludeDefaultFolder', async (_, params: {
+    presetId: string;
+    participantIds: string[];
+    includeDefaultFolder: boolean;
+  }) => {
+    try {
+      if (!params?.presetId ||
+          !Array.isArray(params.participantIds) ||
+          typeof params.includeDefaultFolder !== 'boolean') {
+        return {
+          success: false,
+          error: 'presetId, participantIds[] and includeDefaultFolder are required'
+        };
+      }
+      const updated = await bulkSetPresetParticipantsIncludeDefaultFolder(
+        params.presetId,
+        params.participantIds,
+        params.includeDefaultFolder
+      );
+      return { success: true, data: { updated } };
+    } catch (error) {
+      console.error('[PresetToggle IPC] bulkSetIncludeDefaultFolder error:', error);
       return { success: false, error: (error as Error).message };
     }
   });

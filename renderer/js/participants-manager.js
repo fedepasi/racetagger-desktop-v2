@@ -1475,6 +1475,17 @@ function confirmAddParticipantFolder() {
   if (folderPath) folderObj.path = folderPath;
   editingParticipantFolders.push(folderObj);
   renderEditFolderChips();
+
+  // Keep the shared pool in sync. Without this, a folder created from
+  // inside the per-participant Edit modal stays attached to the single
+  // participant and is invisible to the multi-assign side panel — see
+  // `promoteFolderToPool` for the full rationale.
+  if (typeof promoteFolderToPool === 'function') {
+    promoteFolderToPool(folderObj).catch(err => {
+      console.error('[ParticipantFolder] pool promotion failed:', err);
+    });
+  }
+
   closeParticipantFolderModal();
 }
 
@@ -1584,6 +1595,16 @@ function confirmAddFolder() {
     if (folderPath) folderObj.path = folderPath;
     editingParticipantFolders.push(folderObj);
     renderEditFolderChips();
+
+    // Mirror into the shared pool so the multi-assign side panel and the
+    // Custom Folders section see this folder immediately — see
+    // `promoteFolderToPool` for the rationale.
+    if (typeof promoteFolderToPool === 'function') {
+      promoteFolderToPool(folderObj).catch(err => {
+        console.error('[ParticipantFolder] pool promotion failed:', err);
+      });
+    }
+
     closeFolderNameModal();
     // Reset context so the next direct invocation defaults to preset.
     addFolderContext = 'preset';
@@ -3191,6 +3212,19 @@ async function editPreset(presetId) {
       return obj;
     });
     renderCustomFolders();
+
+    // Heal historical drift: presets edited before pool-promotion existed
+    // may have folders sitting on individual participants but not in the
+    // shared `custom_folders` pool. Walk the participants once on open and
+    // lift any orphan folder into the pool so the multi-assign side panel,
+    // the Custom Folders section, and every other consumer see the same
+    // canonical list. Fire-and-forget — the UI stays usable while the
+    // backfill round-trips to Supabase.
+    if (typeof backfillParticipantFoldersIntoPool === 'function') {
+      backfillParticipantFoldersIntoPool().catch(err => {
+        console.error('[FolderPool] backfill on editPreset failed:', err);
+      });
+    }
 
     // Fill form with preset data
     document.getElementById('preset-name').value = currentPreset.name || '';
@@ -6061,6 +6095,15 @@ let bulkFolderFilter = 'Any';
 let openSidePanel = null;       // null | { kind, scope, ids? }
 let assignMode = 'append';
 let assignFilter = '';
+// Tri-state of the "Also export to default folder" checkbox in the Assign
+// side panel. Recomputed every time the panel is rendered from the
+// currently-selected participants:
+//   'on'    → every selected participant has include_default_folder=true
+//   'off'   → every selected participant has include_default_folder=false
+//   'mixed' → selection contains both. UI shows an indeterminate checkbox.
+// When the user clicks the checkbox we collapse 'mixed' to 'on', otherwise
+// we flip on↔off, and fire the bulk IPC. This stays in sync with the rows.
+let assignIncludeDefaultState = 'on';
 // V1 design: inline "+ New folder" form embedded in the Assign side panel.
 // When `open`, the form is expanded with two inputs (name + optional path).
 // On submit we add to customFolders, persist via supabase-update-participant-preset,
@@ -6106,6 +6149,195 @@ function getFolderPoolSorted() {
     .filter(Boolean);
   normalised.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   return normalised;
+}
+
+// ─── Shared folder pool — promote/backfill helpers ──────────────────────────
+//
+// Background: the multi-assign side panel reads its list of available folders
+// from `currentPreset.custom_folders` (via `getFolderPoolSorted`). But two
+// older code paths — `confirmAddParticipantFolder` and `confirmAddFolder` with
+// `addFolderContext === 'participant'` — used to push the new folder only into
+// `editingParticipantFolders` (the per-participant chip editor), so the folder
+// ended up attached to a single participant without ever entering the pool.
+// Result: a folder created from the per-participant Edit modal didn't show up
+// in the side panel when the user later tried to assign the same folder to
+// other participants.
+//
+// `promoteFolderToPool` keeps the pool in sync whenever a folder is created
+// from any code path. `backfillParticipantFoldersIntoPool` is the one-shot
+// migration that walks existing participants on preset load and lifts any
+// orphan folders into the pool, so historical data (e.g. "Genesis" attached
+// only to participant #17) gets fixed automatically the next time the preset
+// is opened for editing.
+
+/**
+ * Push a single folder into the shared pool. Idempotent on the name
+ * (case-insensitive). If the pool entry exists but lacks a path and the
+ * incoming folder has one, the path is backfilled on the existing entry.
+ * Persists to Supabase in the background; failures are logged but never
+ * surfaced to the user because the folder is already attached on the chip
+ * and the next preset save (or another pool-write) will re-sync.
+ */
+async function promoteFolderToPool(folder) {
+  if (!folder || typeof folder.name !== 'string') return;
+  const trimmed = folder.name.trim();
+  if (!trimmed) return;
+  const key = trimmed.toLowerCase();
+
+  let mutated = false;
+
+  // Local mirror (`customFolders`) lookup.
+  const existingLocal = customFolders.find(
+    f => (f && f.name ? f.name.trim().toLowerCase() : '') === key
+  );
+  if (existingLocal) {
+    if (!existingLocal.path && folder.path) {
+      existingLocal.path = folder.path;
+      mutated = true;
+    }
+  } else {
+    const obj = { name: trimmed };
+    if (folder.path) obj.path = folder.path;
+    customFolders.push(obj);
+    mutated = true;
+  }
+
+  // Preset-level pool (`currentPreset.custom_folders`) — same idempotent
+  // logic. Both stores must stay aligned because `getFolderPoolSorted`
+  // reads the preset object directly.
+  if (currentPreset && typeof currentPreset === 'object') {
+    if (!Array.isArray(currentPreset.custom_folders)) {
+      currentPreset.custom_folders = [];
+    }
+    const findInPreset = () => currentPreset.custom_folders.find(f => {
+      if (!f) return false;
+      const n = typeof f === 'string' ? f : (typeof f === 'object' ? f.name : '');
+      return (n || '').trim().toLowerCase() === key;
+    });
+    const existingPreset = findInPreset();
+    if (existingPreset) {
+      if (typeof existingPreset === 'object' && !existingPreset.path && folder.path) {
+        existingPreset.path = folder.path;
+        mutated = true;
+      }
+    } else {
+      const obj = { name: trimmed };
+      if (folder.path) obj.path = folder.path;
+      currentPreset.custom_folders.push(obj);
+      mutated = true;
+    }
+  }
+
+  if (!mutated) return;
+
+  // Optimistic re-render of every consumer.
+  if (typeof renderCustomFolders === 'function') renderCustomFolders();
+  if (typeof updateFolderSelects === 'function') updateFolderSelects();
+  if (typeof renderAssignSidePanel === 'function') renderAssignSidePanel();
+
+  // Per-device path persistence (matches `submitInlineCreateFolder`).
+  if (folder.path && currentPreset?.id && typeof updateLocalFolderPath === 'function') {
+    updateLocalFolderPath(currentPreset.id, trimmed, folder.path);
+  }
+
+  // Persist to Supabase. Skip if the preset hasn't been saved yet — the
+  // preset save flow will write `custom_folders` at that point.
+  if (!currentPreset?.id) return;
+  try {
+    const resp = await window.api.invoke('supabase-update-participant-preset', {
+      presetId: currentPreset.id,
+      updateData: { custom_folders: customFolders }
+    });
+    if (!resp || !resp.success) {
+      throw new Error(resp?.error || 'Failed to persist folder pool update');
+    }
+  } catch (err) {
+    console.error('[FolderPool] promoteFolderToPool persistence failed:', err);
+  }
+}
+
+/**
+ * One-shot migration that runs on preset open. Scans every participant's
+ * `folders[]` (and legacy folder_1/2/3 slots) for folder names that aren't
+ * yet in `currentPreset.custom_folders`, and lifts them into the pool. This
+ * heals presets where folders were created via the per-participant Edit
+ * modal before the pool-promotion logic existed.
+ *
+ * Returns the count of folders backfilled. No-op when the pool is already
+ * a superset of every participant folder, or when the preset has no id.
+ */
+async function backfillParticipantFoldersIntoPool() {
+  if (!currentPreset?.id) {
+    console.log('[FolderPool] backfill skipped: preset has no id');
+    return 0;
+  }
+  if (!Array.isArray(participantsData) || participantsData.length === 0) {
+    console.log('[FolderPool] backfill skipped: no participants loaded');
+    return 0;
+  }
+
+  // Snapshot of pool names (case-insensitive) we already know about.
+  const poolNames = new Set(
+    customFolders
+      .map(f => (f && f.name ? f.name.trim().toLowerCase() : ''))
+      .filter(Boolean)
+  );
+
+  // Collect orphans, first occurrence wins for the path.
+  const orphans = new Map(); // key → { name, path? }
+  for (const p of participantsData) {
+    const folders = (typeof getParticipantFoldersList === 'function')
+      ? getParticipantFoldersList(p) : [];
+    for (const f of folders) {
+      const key = (f && f.name ? f.name.trim().toLowerCase() : '');
+      if (!key || poolNames.has(key) || orphans.has(key)) continue;
+      const obj = { name: f.name.trim() };
+      if (f.path) obj.path = f.path;
+      orphans.set(key, obj);
+    }
+  }
+
+  console.log(
+    `[FolderPool] backfill scan: ${participantsData.length} participants, ` +
+    `${poolNames.size} folder(s) already in pool, ${orphans.size} orphan(s) found`
+  );
+
+  if (orphans.size === 0) {
+    console.log('[FolderPool] backfill no-op: pool is already a superset of every participant folder');
+    return 0;
+  }
+
+  // Apply mutations locally first.
+  for (const obj of orphans.values()) {
+    customFolders.push(obj);
+    if (!Array.isArray(currentPreset.custom_folders)) {
+      currentPreset.custom_folders = [];
+    }
+    currentPreset.custom_folders.push({ ...obj });
+  }
+
+  if (typeof renderCustomFolders === 'function') renderCustomFolders();
+  if (typeof updateFolderSelects === 'function') updateFolderSelects();
+
+  // Persist. We deliberately don't toast on success — this is silent data
+  // healing, not a user-initiated action.
+  try {
+    const resp = await window.api.invoke('supabase-update-participant-preset', {
+      presetId: currentPreset.id,
+      updateData: { custom_folders: customFolders }
+    });
+    if (!resp || !resp.success) {
+      throw new Error(resp?.error || 'Failed to backfill folder pool');
+    }
+    console.log(
+      `[FolderPool] Backfilled ${orphans.size} orphan folder(s) into the pool: ` +
+      Array.from(orphans.values()).map(f => f.name).join(', ')
+    );
+    return orphans.size;
+  } catch (err) {
+    console.error('[FolderPool] backfill persistence failed:', err);
+    return 0;
+  }
 }
 
 function escapeAttr(str) {
@@ -6434,6 +6666,19 @@ function renderAssignSidePanel() {
   const numbersHint = numerosSorted.length > 6
     ? `${previewNumeros} +${numerosSorted.length - 6}` : previewNumeros;
 
+  // Tri-state recomputation for the "Also export to default folder"
+  // checkbox: drive `assignIncludeDefaultState` from the actual rows the
+  // user has selected. Undefined / null on a row is treated as `true`
+  // (matches the DB default and the rest of the codebase, see
+  // unified-export-handler.ts ~line 208).
+  if (rows.length === 0) {
+    assignIncludeDefaultState = 'on';
+  } else {
+    const hasOn = rows.some(r => r.include_default_folder !== false);
+    const hasOff = rows.some(r => r.include_default_folder === false);
+    assignIncludeDefaultState = hasOn && hasOff ? 'mixed' : (hasOff ? 'off' : 'on');
+  }
+
   // V1: when invoked with an empty selection (e.g. from the filter row "+ Add
   // Folder" button), we collapse the assign-specific affordances and show a
   // pure folder-management view: just the pool + the inline create form.
@@ -6506,6 +6751,27 @@ function renderAssignSidePanel() {
           <label><input type="radio" name="assign-mode" ${assignMode === 'append' ? 'checked' : ''} onchange="onAssignModeChange('append')"><span><strong>Append</strong> <span style="color: var(--v1-text-muted);">— add to existing folders</span></span></label>
           <label><input type="radio" name="assign-mode" ${assignMode === 'replace' ? 'checked' : ''} onchange="onAssignModeChange('replace')"><span><strong>Replace</strong> <span style="color: var(--v1-text-muted);">— overwrite existing</span></span></label>
         </div>
+
+        <div class="assign-section-label" style="margin-top: 12px;">Default folder</div>
+        <div class="assign-mode-block">
+          <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
+            <input type="checkbox"
+                   id="assign-include-default-folder"
+                   ${assignIncludeDefaultState === 'on' ? 'checked' : ''}
+                   onchange="onAssignIncludeDefaultToggle(this)"
+                   style="margin-top: 3px; flex-shrink: 0;">
+            <span>
+              <strong>Also export to the default folder</strong>
+              <span style="color: var(--v1-text-muted); display: block; font-size: 11.5px; margin-top: 2px;">
+                ${assignIncludeDefaultState === 'mixed'
+                  ? 'Mixed across selection — clicking will set the same value for all.'
+                  : assignIncludeDefaultState === 'on'
+                    ? 'Each photo also lands in <code>{number}/</code> alongside the custom folders.'
+                    : 'Photos go ONLY to the custom folders configured for each participant.'}
+              </span>
+            </span>
+          </label>
+        </div>
       ` : ''}
     </div>
     <div class="slide-panel-footer">
@@ -6523,6 +6789,15 @@ function renderAssignSidePanel() {
       const wasFocused = document.activeElement?.tagName === 'BODY';
       if (wasFocused) nameInput.focus();
     }
+  }
+
+  // Apply the indeterminate visual state on the include-default checkbox
+  // ('checked' alone can't render the "mixed" tri-state — `indeterminate`
+  // is set imperatively after the DOM exists). Re-applied on every
+  // render so the visual stays in sync with `assignIncludeDefaultState`.
+  const incDefaultEl = document.getElementById('assign-include-default-folder');
+  if (incDefaultEl) {
+    incDefaultEl.indeterminate = (assignIncludeDefaultState === 'mixed');
   }
 }
 
@@ -6800,6 +7075,81 @@ async function refreshCurrentPresetData() {
 
 function onAssignFilterChange(value) { assignFilter = value || ''; renderAssignSidePanel(); }
 function onAssignModeChange(mode) { if (mode === 'append' || mode === 'replace') assignMode = mode; }
+
+/**
+ * Bulk-flip the per-participant `include_default_folder` flag on all
+ * currently-selected participants in one Supabase round-trip.
+ *
+ * Tri-state interaction:
+ *   - assignIncludeDefaultState === 'mixed' + click → set ALL to TRUE
+ *     (the user explicitly chose to unify the selection; turning ON is
+ *     the safer default because losing the per-participant `false` is
+ *     less destructive than losing custom routing).
+ *   - 'on'  + click → set ALL to FALSE
+ *   - 'off' + click → set ALL to TRUE
+ *
+ * On success we mutate `participantsData` in place so the table re-renders
+ * without a full Supabase refetch, then re-render the side panel so the
+ * checkbox state and the hint text reflect the new value.
+ */
+async function onAssignIncludeDefaultToggle(checkboxEl) {
+  if (!openSidePanel || openSidePanel.kind !== 'assign') return;
+  if (!currentPreset || !currentPreset.id) {
+    showNotification('No preset to apply default-folder flag to.', 'error');
+    if (checkboxEl) checkboxEl.checked = assignIncludeDefaultState === 'on';
+    return;
+  }
+  const ids = openSidePanel.ids || [];
+  if (ids.length === 0) return;
+
+  // Decide the new value. `checkboxEl.checked` already reflects the post-
+  // click state (because the browser flips it before firing onchange), so
+  // we trust it for plain on↔off and only override for the `mixed` → `on`
+  // collapse where checked === true is the desired outcome anyway.
+  const newValue = assignIncludeDefaultState === 'mixed' ? true : !!checkboxEl?.checked;
+
+  try {
+    const response = await window.api.invoke('preset:bulkSetIncludeDefaultFolder', {
+      presetId: currentPreset.id,
+      participantIds: ids,
+      includeDefaultFolder: newValue
+    });
+    if (!response || response.success === false) {
+      throw new Error(response?.error || 'Bulk update failed');
+    }
+    const updated = (response.data && typeof response.data.updated === 'number')
+      ? response.data.updated
+      : ids.length;
+
+    // In-place mirror: drop the round-trip refetch since we know exactly
+    // which rows changed. Also keeps any custom sort order intact.
+    const idSet = new Set(ids);
+    if (Array.isArray(participantsData)) {
+      for (const p of participantsData) {
+        if (p?.id && idSet.has(p.id)) p.include_default_folder = newValue;
+      }
+    }
+
+    showNotification(
+      newValue
+        ? `Enabled default folder on ${updated} participant${updated === 1 ? '' : 's'}.`
+        : `Disabled default folder on ${updated} participant${updated === 1 ? '' : 's'}.`,
+      'success'
+    );
+    renderAssignSidePanel();
+  } catch (err) {
+    console.error('[Assign] onAssignIncludeDefaultToggle failed:', err);
+    showNotification(
+      'Failed to update default-folder flag: ' + (err.message || 'Unknown error'),
+      'error'
+    );
+    // Roll back the visual state so the user sees the real DB value.
+    if (checkboxEl) {
+      checkboxEl.checked = assignIncludeDefaultState === 'on';
+      checkboxEl.indeterminate = assignIncludeDefaultState === 'mixed';
+    }
+  }
+}
 
 async function onAssignFolderClick(folderName) {
   if (!openSidePanel || openSidePanel.kind !== 'assign') return;
@@ -7234,6 +7584,7 @@ window.closeAutoRulePanel = closeAutoRulePanel;
 window.onAssignFilterChange = onAssignFilterChange;
 window.onAssignModeChange = onAssignModeChange;
 window.onAssignFolderClick = onAssignFolderClick;
+window.onAssignIncludeDefaultToggle = onAssignIncludeDefaultToggle;
 window.onRemoveFolderFromRowChip = onRemoveFolderFromRowChip;
 window.onRuleAdd = onRuleAdd;
 window.onRuleToggle = onRuleToggle;
