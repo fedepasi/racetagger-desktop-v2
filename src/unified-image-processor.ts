@@ -8464,7 +8464,9 @@ export class UnifiedImageProcessor extends EventEmitter {
             environment: {
               node_version: process.version,
               electron_version: process.versions.electron || 'N/A',
-              dcraw_version: undefined, // TODO: Add dcraw version detection
+              // dcraw_version: removed in v1.2.0 — RAW preview extraction
+              // goes through the native raw-preview-extractor → ExifTool
+              // cascade and no longer shells out to dcraw.
               sharp_version: 'N/A', // TODO: Get Sharp version safely
               timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
               locale: app.getLocale()

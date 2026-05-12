@@ -70,7 +70,10 @@ export interface ExecutionStartEvent extends LogEvent {
     environment?: {
       node_version: string;
       electron_version: string;
-      dcraw_version?: string;
+      // dcraw_version was here pre-1.2.0 when we shelled out to dcraw
+      // for RAW previews. Kept commented as a historical marker — any
+      // JSONL row in the wild that still carries this field is silently
+      // ignored by the consumers, which only read the keys above.
       sharp_version?: string;
       timezone?: string;
       locale?: string;
