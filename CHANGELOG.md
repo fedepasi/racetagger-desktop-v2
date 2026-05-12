@@ -1,5 +1,34 @@
 # Changelog - RaceTagger Desktop
 
+## [1.1.9] - 2026-05-12
+
+### 🐛 Manual corrections — durability and consistency
+
+- **Folder organization honors manual corrections**: when a user
+  manually fixes a recognized number / participant in the results page,
+  the new participant entry is applied to the folder-organizer pipeline
+  with a pre-flush of pending writes and a merge against Supabase, so
+  the corrected photo lands in the right folder on the next export.
+- **Durable correction outbox**: corrections are queued in a local
+  outbox (`src/utils/correction-outbox.ts`) with retry-on-failure to
+  Supabase. Survives renderer reloads and transient network issues —
+  no more silently-lost corrections.
+- **"NO METADATA" badge clears** correctly after a manual correction
+  writes new IPTC keywords (was previously stale until full reload).
+- **Delete-then-readd preview bug** in the log visualizer fixed: the
+  thumbnail now refreshes when the user removes and re-adds a match
+  on the same image; narrate-style logging added to make this path
+  easier to debug in the future.
+
+### 🛠 Internal
+
+- Remove dead **dcraw fallback** from RAW preview pipeline. The native
+  raw-preview-extractor + ExifTool fallback have been the canonical
+  path since 1.2.0; the residual dcraw code only added size to the
+  bundle.
+
+---
+
 ## [1.1.8] - 2026-05-12
 
 ### ✨ Participant editor — Save & Next
