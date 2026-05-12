@@ -4641,6 +4641,35 @@ class LogVisualizer {
         }
       }
 
+      // FIX (folder-org-correction Fix A): Force a synchronous flush of any
+      // pending manual corrections BEFORE invoking the organize IPC. The
+      // 3-second autosave debounce can race with a user who finishes a
+      // correction and immediately clicks Organize, leaving the JSONL on
+      // disk WITHOUT the MANUAL_CORRECTION event. The main process would
+      // then read a stale JSONL and route the photo using the AI's
+      // original (wrong) participant — exactly the bug pattern reported
+      // by Lisa ("metadata correct, sorted incorrect").
+      //
+      // If the flush fails we BLOCK the organize: silently routing with
+      // stale data is worse than asking the user to retry once the
+      // network recovers. We surface the underlying error so they can
+      // distinguish "network glitch, try again" from "real bug".
+      if (this.hasUnsavedChanges && this.manualCorrections && this.manualCorrections.size > 0) {
+        try {
+          console.log('[LogVisualizer] Flushing pending corrections before organize…');
+          await this.saveAllChanges({ silent: true, skipRefresh: true });
+          console.log('[LogVisualizer] Pending corrections flushed; proceeding with organize.');
+        } catch (flushErr) {
+          console.error('[LogVisualizer] Failed to flush pending corrections before organize:', flushErr);
+          this.showNotification(
+            '⛔ Cannot organize: failed to save your pending corrections. ' +
+            'Check your network and try again. (' + (flushErr?.message || 'unknown error') + ')',
+            'error'
+          );
+          return;
+        }
+      }
+
       // Show inline progress bar in the organization section
       const actionsDiv = document.querySelector('.lv-folder-org-actions');
       const startBtn = document.getElementById('lv-start-organization');

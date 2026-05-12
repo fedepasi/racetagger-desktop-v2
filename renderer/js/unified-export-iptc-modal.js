@@ -1311,6 +1311,32 @@ async function startUnifiedWriteOriginals() {
     if (!ok) return;
   }
 
+  // FIX (folder-org-correction Fix A): Force a synchronous flush of any
+  // pending manual corrections BEFORE the IPTC finalize. Without this, the
+  // user can correct a match in the log visualizer and immediately click
+  // "Write to originals" / Finalize. The IPTC bytes on disk get the
+  // corrected values (because we pass the FinalizedResult[] directly from
+  // memory), but the JSONL and `image_corrections` table stay stale. A
+  // subsequent Organize then routes the photo using the AI's wrong
+  // participant — Lisa's reported pattern of "metadata correct, sorted
+  // incorrect".
+  if (window.logVisualizer?.hasUnsavedChanges &&
+      window.logVisualizer?.manualCorrections?.size > 0) {
+    try {
+      console.log('[Unified Export] Flushing pending corrections before IPTC finalize…');
+      await window.logVisualizer.saveAllChanges({ silent: true, skipRefresh: true });
+      console.log('[Unified Export] Pending corrections flushed; proceeding with finalize.');
+    } catch (flushErr) {
+      console.error('[Unified Export] Failed to flush pending corrections before finalize:', flushErr);
+      alert(
+        '⛔ Cannot write IPTC metadata: failed to save your pending corrections.\n\n' +
+        'Check your network and try again.\n\n' +
+        '(' + (flushErr?.message || 'unknown error') + ')'
+      );
+      return;
+    }
+  }
+
   unifiedIsProcessing = true;
   showUnifiedProgress('Writing IPTC metadata...', true);
 

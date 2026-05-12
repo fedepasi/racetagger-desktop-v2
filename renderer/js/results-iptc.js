@@ -502,6 +502,28 @@ async function startIptcProWrite() {
     return;
   }
 
+  // FIX (folder-org-correction Fix A): Force a synchronous flush of any
+  // pending manual corrections BEFORE the IPTC finalize. The IPTC bytes
+  // on disk would otherwise get the corrected values (in-memory) while
+  // the JSONL/Supabase stay stale, breaking the subsequent Organize.
+  // See log-visualizer.js for the full rationale.
+  if (window.logVisualizer?.hasUnsavedChanges &&
+      window.logVisualizer?.manualCorrections?.size > 0) {
+    try {
+      console.log('[IPTC Pro] Flushing pending corrections before finalize…');
+      await window.logVisualizer.saveAllChanges({ silent: true, skipRefresh: true });
+      console.log('[IPTC Pro] Pending corrections flushed; proceeding with finalize.');
+    } catch (flushErr) {
+      console.error('[IPTC Pro] Failed to flush pending corrections before finalize:', flushErr);
+      alert(
+        '⛔ Cannot write IPTC metadata: failed to save your pending corrections.\n\n' +
+        'Check your network and try again.\n\n' +
+        '(' + (flushErr?.message || 'unknown error') + ')'
+      );
+      return;
+    }
+  }
+
   iptcProIsWriting = true;
 
   // Show progress

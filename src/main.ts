@@ -3272,6 +3272,59 @@ app.whenReady().then(async () => { // Added async here
             correctionMap.set(key, event.changes);
           });
 
+        // Defense-in-depth (Fix B for the "metadati corretti, cartella sbagliata"
+        // class of bugs): also merge USER_MANUAL rows from `image_corrections`
+        // on Supabase. Covers the race where:
+        //   - The user corrected a match in the renderer but the autosave
+        //     debounce (3s) hasn't fired yet → the JSONL on disk doesn't
+        //     have the MANUAL_CORRECTION event, but `update-analysis-log`
+        //     may already have written the row to Supabase.
+        //   - update-analysis-log succeeded for the DB write but failed
+        //     for the JSONL write (or the JSONL got reconciled by a
+        //     concurrent flow).
+        //   - A future correction flow lands rows in image_corrections
+        //     without re-writing the JSONL (e.g. the IPTC Finalizer path,
+        //     which today bypasses MANUAL_CORRECTION entirely).
+        // Rows are read in created_at ascending order so later edits
+        // overwrite earlier ones in the Map.
+        try {
+          const { getSupabaseClient } = await import('./database-service');
+          const supabase = getSupabaseClient();
+          if (supabase) {
+            const { data: corrRows, error: corrErr } = await supabase
+              .from('image_corrections')
+              .select('file_name, vehicle_index, changes, created_at')
+              .eq('execution_id', executionId)
+              .eq('correction_type', 'USER_MANUAL')
+              .order('created_at', { ascending: true });
+            if (!corrErr && Array.isArray(corrRows)) {
+              let merged = 0;
+              let overrode = 0;
+              for (const row of corrRows) {
+                const fileName = (row as any)?.file_name;
+                const vehicleIndex = (row as any)?.vehicle_index;
+                const changes = (row as any)?.changes;
+                if (!fileName || vehicleIndex == null || !changes) continue;
+                const key = `${fileName}_${vehicleIndex}`;
+                if (correctionMap.has(key)) overrode++;
+                correctionMap.set(key, changes);
+                merged++;
+              }
+              if (merged > 0) {
+                console.log(
+                  `[Main Process] Merged ${merged} USER_MANUAL rows from image_corrections into correctionMap ` +
+                  `(${overrode} overrode an existing JSONL MANUAL_CORRECTION)`
+                );
+              }
+            } else if (corrErr) {
+              console.warn(`[Main Process] image_corrections fetch failed (continuing with JSONL only): ${corrErr.message}`);
+            }
+          }
+        } catch (mergeErr) {
+          // Non-fatal — JSONL-only correctionMap is a safe degraded mode.
+          console.warn('[Main Process] Failed to merge image_corrections from Supabase (non-fatal):', mergeErr);
+        }
+
         // Import FolderOrganizer
         const { FolderOrganizer } = await import('./utils/folder-organizer');
 
@@ -3314,6 +3367,26 @@ app.whenReady().then(async () => { // Added async here
         const presetWasActive = !!presetIdFromStart;
 
         let allowedNumbersFromPreset: string[] | undefined = undefined;
+        // FIX (Issue #folder-org-correction):
+        //   When the user corrects a vehicle's raceNumber via the log
+        //   visualizer or the IPTC modal, the JSONL `MANUAL_CORRECTION`
+        //   event only carries the new number — NOT the full preset entry
+        //   for the new participant (folders, include_default_folder,
+        //   nome, squadra, …). The original `vehicle.participantMatch`
+        //   stays pointing at the AI's wrong participant, so the
+        //   csvDataList we build below ends up with the WRONG
+        //   participant's folders[] / include_default_folder / nome,
+        //   while raceNumbers carries the CORRECT number. Result: the
+        //   organizer's `csvDataArray.find(csv => csv.numero === num)`
+        //   returns undefined, custom folders never get created for the
+        //   corrected participant, and the photo lands in
+        //   `Organized_Photos/{number}/` (the default fallback) — exactly
+        //   what users in the field have been reporting.
+        //
+        //   Fix: load the FULL preset entry (folders, include_default_folder,
+        //   nome, squadra, …) keyed by numero, then use it as the override
+        //   whenever a MANUAL_CORRECTION provided a new raceNumber.
+        const presetParticipantMap = new Map<string, any>();
         if (presetWasActive) {
           const allowedSet = new Set<string>();
 
@@ -3326,9 +3399,33 @@ app.whenReady().then(async () => { // Added async here
               // should not appear in the "allowed numbers" gate used by
               // FolderOrganizer (Issue #105), so their output lands in
               // Unknown_Numbers consistently with matching behaviour.
+              //
+              // folder-org-correction fix: also pull the columns that
+              // CsvParticipantData needs at routing time (folders[],
+              // include_default_folder, nome, squadra, …) plus the
+              // associated driver list, so a user correction to a number
+              // not seen at analysis time still gets its full preset
+              // entry honoured by the organizer.
               const { data: presetRows, error: presetErr } = await supabase
                 .from('preset_participants')
-                .select('numero, is_active')
+                .select(`
+                  numero,
+                  is_active,
+                  nome,
+                  squadra,
+                  categoria,
+                  metatag,
+                  folders,
+                  include_default_folder,
+                  folder_1, folder_2, folder_3,
+                  folder_1_path, folder_2_path, folder_3_path,
+                  preset_participant_drivers (
+                    driver_name,
+                    driver_order,
+                    driver_nationality,
+                    driver_metatag
+                  )
+                `)
                 .eq('preset_id', presetIdFromStart)
                 .eq('is_active', true);
               if (!presetErr && Array.isArray(presetRows)) {
@@ -3336,7 +3433,10 @@ app.whenReady().then(async () => { // Added async here
                   const num = (row as any)?.numero;
                   if (num != null) {
                     const s = typeof num === 'string' ? num.trim() : String(num);
-                    if (s) allowedSet.add(s);
+                    if (s) {
+                      allowedSet.add(s);
+                      presetParticipantMap.set(s, row);
+                    }
                   }
                 }
                 console.log(`[Main Process] Issue #105: loaded ${allowedSet.size} preset numbers from Supabase (preset_id=${presetIdFromStart})`);
@@ -3349,7 +3449,11 @@ app.whenReady().then(async () => { // Added async here
           }
 
           // 2) Fallback / augment: scan all participantMatch.entry.numero in JSONL
-          //    (covers offline mode and any preset entry that did get matched)
+          //    (covers offline mode and any preset entry that did get matched).
+          //    We also harvest the entry payload itself as a secondary
+          //    source for presetParticipantMap, so the correction lookup
+          //    keeps working when the Supabase fetch failed but the
+          //    matched-AI participant happens to be the corrected one.
           for (const ev of imageAnalysisEvents) {
             const vehicles = ev?.aiResponse?.vehicles;
             if (!Array.isArray(vehicles)) continue;
@@ -3358,7 +3462,12 @@ app.whenReady().then(async () => { // Added async here
               const num = entry?.numero;
               if (num != null) {
                 const s = typeof num === 'string' ? num.trim() : String(num);
-                if (s) allowedSet.add(s);
+                if (s) {
+                  allowedSet.add(s);
+                  if (!presetParticipantMap.has(s)) {
+                    presetParticipantMap.set(s, entry);
+                  }
+                }
               }
             }
           }
@@ -3445,7 +3554,11 @@ app.whenReady().then(async () => { // Added async here
             let csvDataList: any[] = [];
 
             {
-              // Get final race numbers (apply corrections if any)
+              // Get final race numbers AND csvDataList in a single pass — apply
+              // user corrections to BOTH so the participant entry handed to
+              // the organizer (folders[], include_default_folder, nome,
+              // squadra, …) matches the corrected number rather than the
+              // original AI participantMatch.
               //
               // Issue #105 Point 2: when a participant preset is active we must NOT
               // fall through to the raw AI output (vehicle.raceNumber) because that
@@ -3465,14 +3578,21 @@ app.whenReady().then(async () => { // Added async here
               // with metadataWritten=false / "no_preset_match"). Those files then
               // fell through to finalResult.raceNumber (null) and ended up in
               // Unknown_Numbers. Read the correct field.
+              //
+              // FIX (folder-org-correction Fix C): when a correction supplied a
+              // raceNumber different from the AI match, the entry used to build
+              // csvDataList MUST come from the preset entry for the CORRECTED
+              // number (folders, include_default_folder, nome, squadra) — NOT
+              // from `vehicle.participantMatch.entry` which still points at the
+              // AI's wrong participant. Without this, the organizer's
+              // `csvDataArray.find(csv => csv.numero === num)` returns
+              // undefined and the file falls back to `Organized_Photos/{number}/`
+              // (default folder) ignoring the corrected participant's custom
+              // folders and `include_default_folder=false` flag.
               if (event.aiResponse?.vehicles) {
                 event.aiResponse.vehicles.forEach((vehicle: any, index: number) => {
                   const key = `${fileName}_${index}`;
                   const correction = correctionMap.get(key);
-                  // Support both the canonical field name (raceNumber) and the
-                  // legacy alias (number) so logs produced by older builds keep
-                  // working after this fix is deployed.
-                  const correctedNumber = correction?.raceNumber ?? correction?.number;
 
                   // Correction with {deleted: true} means the vehicle was removed;
                   // skip it so the image is not forced into a number folder.
@@ -3480,13 +3600,23 @@ app.whenReady().then(async () => { // Added async here
                     return;
                   }
 
+                  // Support both the canonical field name (raceNumber) and the
+                  // legacy alias (number) so logs produced by older builds keep
+                  // working after this fix is deployed.
+                  const rawCorrectedNumber = correction?.raceNumber ?? correction?.number;
+                  const correctedNumber = rawCorrectedNumber != null
+                    ? String(rawCorrectedNumber).trim() || null
+                    : null;
+
+                  // --- 1) Resolve the final number for raceNumbers[] ---
+                  let finalNumber: string | null = null;
                   if (correctedNumber) {
-                    raceNumbers.push(correctedNumber);
+                    finalNumber = correctedNumber;
                   } else if (vehicle.finalResult?.raceNumber) {
-                    raceNumbers.push(vehicle.finalResult.raceNumber);
+                    finalNumber = String(vehicle.finalResult.raceNumber);
                   } else if (vehicle.raceNumber && !presetWasActive) {
                     // Legacy fallback — only when no preset was active at analysis time
-                    raceNumbers.push(vehicle.raceNumber);
+                    finalNumber = String(vehicle.raceNumber);
                   } else if (vehicle.raceNumber && presetWasActive) {
                     // Drop raw AI output silently (defensive filter will catch it too).
                     // Log at debug level via console.warn for observability.
@@ -3495,27 +3625,71 @@ app.whenReady().then(async () => { // Added async here
                       `for ${fileName} vehicle[${index}] — preset active and no finalResult match.`
                     );
                   }
-                });
-              }
 
-              // Collect CSV data for ALL vehicles (not just the first)
-              if (event.aiResponse?.vehicles) {
-                event.aiResponse.vehicles.forEach((vehicle: any) => {
-                  if (vehicle.participantMatch) {
+                  if (finalNumber) {
+                    raceNumbers.push(finalNumber);
+                  }
+
+                  // --- 2) Resolve the preset entry that backs THIS vehicle's csvData ---
+                  let entry: any = null;
+                  if (correctedNumber) {
+                    // User-driven correction: look up the CORRECTED participant
+                    // in the preset map so folders[] / include_default_folder /
+                    // nome / squadra reflect the new number, not the AI's
+                    // original (wrong) match.
+                    entry = presetParticipantMap.get(correctedNumber);
+                    if (!entry) {
+                      // Corrected number isn't in the preset (e.g. user typed
+                      // a number that doesn't belong to any active
+                      // participant). Synthesize a minimal entry so the
+                      // organizer's `csvData.find(c => c.numero === num)`
+                      // still resolves — without it the file would silently
+                      // fall back to the default `Organized_Photos/{number}/`
+                      // folder even though we have a csvDataList row.
+                      entry = { numero: correctedNumber };
+                      if (DEBUG_MODE) {
+                        console.log(
+                          `[Main Process] Corrected number "${correctedNumber}" for ${fileName}[${index}] ` +
+                          `not found in preset participant map — synthesizing minimal entry (no custom folders).`
+                        );
+                      }
+                    }
+                  } else if (vehicle.participantMatch) {
                     const match = vehicle.participantMatch;
-                    const entry = match.entry || match;
+                    entry = match.entry || match;
+                  }
+
+                  // --- 3) Push the csvData row (skip when we have no entry) ---
+                  if (entry) {
                     let driverName = '';
                     if (entry.preset_participant_drivers?.length > 0) {
-                      const sorted = [...entry.preset_participant_drivers].sort((a: any, b: any) => a.driver_order - b.driver_order);
-                      driverName = sorted[0]?.driver_name || '';
+                      const sorted = [...entry.preset_participant_drivers].sort((a: any, b: any) => (a.driver_order || 0) - (b.driver_order || 0));
+                      const names = sorted.map((d: any) => d.driver_name).filter(Boolean);
+                      driverName = names.join(', ');
                     } else if (entry.nome) {
                       driverName = entry.nome;
                     }
+
+                    // Per-field overrides from the correction payload. When the
+                    // user explicitly typed a new team/drivers, prefer those
+                    // over the preset entry so the {team}/{name} placeholder
+                    // substitution in custom folder names reflects the user's
+                    // intent (e.g. they re-assigned car #69 to a different
+                    // team than what the preset says).
+                    const teamOverride =
+                      typeof correction?.team === 'string' && correction.team.trim()
+                        ? correction.team
+                        : entry.squadra;
+                    const driversOverride =
+                      Array.isArray(correction?.drivers) && correction.drivers.length > 0
+                        ? correction.drivers.join(', ')
+                        : driverName;
+
                     csvDataList.push({
                       numero: entry.numero,
-                      nome: driverName,
+                      nome: driversOverride,
                       categoria: entry.categoria,
-                      squadra: entry.squadra,
+                      squadra: teamOverride,
                       metatag: entry.metatag,
                       // Mirror the soft-disable flag from the cached entry.
                       // For the live re-organize flow the authoritative guard
