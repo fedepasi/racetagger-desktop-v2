@@ -3817,6 +3817,40 @@ app.whenReady().then(async () => { // Added async here
               raceNumbers = ['unknown'];
             }
 
+            // [Narrate] per-file routing decision — surfaces the
+            // AI-detected number vs. the final number actually used
+            // for routing, the source (correction vs. AI), the custom
+            // folders that will be created and the include_default
+            // flag. Truncated to one line per file so a 1k-image
+            // organize doesn't make the log unreadable.
+            try {
+              const aiNumbers: string[] = [];
+              if (Array.isArray(event.aiResponse?.vehicles)) {
+                for (const v of event.aiResponse.vehicles) {
+                  const n = v?.raceNumber ?? v?.finalResult?.raceNumber;
+                  if (n != null) aiNumbers.push(String(n));
+                }
+              }
+              const hadCorrection = Array.from({ length: event.aiResponse?.vehicles?.length || 1 })
+                .some((_, idx) => correctionMap.has(`${fileName}_${idx}`));
+              const customFolderNames = csvDataList.flatMap((c: any) =>
+                Array.isArray(c?.folders) ? c.folders.map((f: any) => (typeof f === 'string' ? f : f?.name)) : []
+              ).filter(Boolean);
+              const includeDefault = csvDataList.length === 0
+                ? true
+                : csvDataList.some((c: any) => c?.include_default_folder !== false);
+              console.log(
+                `[Narrate] Routing ${fileName}: ` +
+                `AI=[${aiNumbers.join(', ') || 'none'}] → final=[${raceNumbers.join(', ')}]` +
+                (hadCorrection ? ' (USER_MANUAL correction applied)' : '') +
+                `. csvDataList rows: ${csvDataList.length}` +
+                (customFolderNames.length > 0
+                  ? `, custom folders: [${customFolderNames.slice(0, 3).join(', ')}${customFolderNames.length > 3 ? ', …' : ''}]`
+                  : ', no custom folders') +
+                `, include_default_folder=${includeDefault}.`
+              );
+            } catch { /* narration must never throw */ }
+
             // Organize the image
             const result = await organizer.organizeImage(
               originalPath,
@@ -4022,6 +4056,26 @@ app.whenReady().then(async () => { // Added async here
   }) => {
     try {
       const { executionId, corrections, timestamp } = data;
+
+      // [Narrate] entry log — gives the support log a clear "story
+      // pin" for the start of a correction batch. Includes the
+      // execution_id, batch size, and a compact summary of which files
+      // and fields are affected (truncated to keep one line readable).
+      try {
+        const filesAffected = Array.from(new Set(corrections.map(c => c.fileName)));
+        const fieldsTouched = Array.from(new Set(
+          corrections.flatMap(c => Object.keys(c.changes || {}))
+        ));
+        const deletions = corrections.filter(c => c.changes?.deleted === true).length;
+        console.log(
+          `[Narrate] update-analysis-log received batch of ${corrections.length} correction(s) ` +
+          `for execution ${executionId} ` +
+          `(${filesAffected.length} file(s), fields=${fieldsTouched.join('+') || 'none'}` +
+          (deletions > 0 ? `, ${deletions} deletion(s)` : '') +
+          `). About to persist to JSONL + image_corrections + analysis_results.`
+        );
+      } catch { /* narration must never throw */ }
+
       const logsDir = path.join(app.getPath('userData'), '.analysis-logs');
       const logFilePath = path.join(logsDir, `exec_${executionId}.jsonl`);
 

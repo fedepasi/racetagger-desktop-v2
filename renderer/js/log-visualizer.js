@@ -263,9 +263,57 @@ class LogVisualizer {
 
     // Apply MANUAL_CORRECTION events to enriched results
     if (manualCorrectionEvents.length > 0) {
-      console.log(`[LogVisualizer] Applying ${manualCorrectionEvents.length} manual corrections during enrichment`);
+      // BUGFIX (delete-then-readd): the JSONL can contain multiple
+      // MANUAL_CORRECTION events for the same (fileName, vehicleIndex)
+      // when the user deletes a vehicle and then immediately re-adds a
+      // corrected one (or vice-versa). Before this fix we applied them
+      // in stream order, and a leading `{deleted: true}` would
+      // splice() the vehicle out of `result.analysis` so the later
+      // `{raceNumber: …}` update found nothing to apply — the user
+      // saw the photo come back empty after a reload, even though
+      // image_corrections + analysis_results on Supabase had the
+      // corrected number (which is why the folder organizer still
+      // routed correctly).
+      //
+      // Fix: compact correction events to one-per-key by sorting on
+      // `timestamp` ASC and keeping the LAST event for each
+      // `${fileName}_${vehicleIndex}` pair. Net effect — the last
+      // edit the user made wins, which matches the in-memory state
+      // they saw while editing.
+      const sorted = [...manualCorrectionEvents].sort((a, b) => {
+        const ta = a?.timestamp ? Date.parse(a.timestamp) : 0;
+        const tb = b?.timestamp ? Date.parse(b.timestamp) : 0;
+        return ta - tb;
+      });
+      // Track which keys had >1 raw event so we can narrate which
+      // sequences got collapsed (helpful when investigating "preview
+      // shows empty but folder was right" reports — see the
+      // delete-then-readd bug for context).
+      const rawCountPerKey = new Map();
+      const compacted = new Map();
+      for (const evt of sorted) {
+        if (!evt || !evt.fileName || evt.vehicleIndex == null) continue;
+        const key = `${evt.fileName}_${evt.vehicleIndex}`;
+        rawCountPerKey.set(key, (rawCountPerKey.get(key) || 0) + 1);
+        compacted.set(key, evt);
+      }
+      const collapsedKeys = Array.from(rawCountPerKey.entries())
+        .filter(([, n]) => n > 1)
+        .map(([k, n]) => `${k} (${n}→1)`);
 
-      manualCorrectionEvents.forEach(correction => {
+      console.log(
+        `[LogVisualizer] Applying ${compacted.size} manual corrections during enrichment ` +
+        `(compacted from ${manualCorrectionEvents.length} raw events — last-write-wins per fileName_vehicleIndex)`
+      );
+      console.log(
+        `[Narrate] Enrichment compaction: ${manualCorrectionEvents.length} raw MANUAL_CORRECTION events ` +
+        `→ ${compacted.size} net (${collapsedKeys.length} key(s) collapsed by last-write-wins)` +
+        (collapsedKeys.length > 0
+          ? `. Collapsed: ${collapsedKeys.slice(0, 5).join(', ')}${collapsedKeys.length > 5 ? ', …' : ''}`
+          : '.')
+      );
+
+      compacted.forEach(correction => {
         const { fileName, vehicleIndex, changes } = correction;
 
         // Find the result for this correction
@@ -283,26 +331,46 @@ class LogVisualizer {
             result.analysis.splice(vehicleIndex, 1);
           }
         } else if (changes) {
-          // Handle update: modify vehicle properties
-          if (result.analysis && result.analysis[vehicleIndex]) {
-            console.log(`[LogVisualizer] Applying enrichment update: ${fileName} vehicle ${vehicleIndex}`, changes);
-
-            // Apply each field change
-            Object.entries(changes).forEach(([field, value]) => {
-              if (field !== 'deleted' && field !== 'deletedAt' && field !== 'originalData' &&
-                  field !== 'resolvedFromReview' && field !== 'chosenCandidate') {
-                result.analysis[vehicleIndex][field] = value;
-              }
-            });
-
-            // If this correction was a review resolution, mark the result accordingly
-            if (changes.resolvedFromReview) {
-              result._reviewResolved = true;
+          // Handle update: modify vehicle properties.
+          //
+          // Defensive: when a previous "delete" event for this same key
+          // has spliced the vehicle out (or it never existed because
+          // the user added a new one mid-session and the JSONL hasn't
+          // caught up), the compaction above keeps THIS update — but
+          // result.analysis[vehicleIndex] may still be missing. Create
+          // a stub so the field assignments below land somewhere
+          // sensible; without it the update was silently lost.
+          if (!result.analysis) result.analysis = [];
+          if (!result.analysis[vehicleIndex]) {
+            // Pad with empty placeholders up to and including
+            // vehicleIndex so the later writes don't create sparse
+            // holes in the array (downstream filters iterate by index).
+            while (result.analysis.length <= vehicleIndex) {
+              result.analysis.push({ raceNumber: '', team: '', drivers: [], confidence: 1.0 });
             }
-
-            // Set confidence to 100% for manually corrected vehicles
-            result.analysis[vehicleIndex].confidence = 1.0;
+            console.log(
+              `[LogVisualizer] Recreated vehicle slot ${vehicleIndex} for ${fileName} ` +
+              `before applying enrichment update (covers delete-then-readd sequence).`
+            );
           }
+
+          console.log(`[LogVisualizer] Applying enrichment update: ${fileName} vehicle ${vehicleIndex}`, changes);
+
+          // Apply each field change
+          Object.entries(changes).forEach(([field, value]) => {
+            if (field !== 'deleted' && field !== 'deletedAt' && field !== 'originalData' &&
+                field !== 'resolvedFromReview' && field !== 'chosenCandidate') {
+              result.analysis[vehicleIndex][field] = value;
+            }
+          });
+
+          // If this correction was a review resolution, mark the result accordingly
+          if (changes.resolvedFromReview) {
+            result._reviewResolved = true;
+          }
+
+          // Set confidence to 100% for manually corrected vehicles
+          result.analysis[vehicleIndex].confidence = 1.0;
         }
       });
     }
@@ -1506,9 +1574,16 @@ class LogVisualizer {
     this.updateStatistics();
     this.renderResults();
 
-    // If gallery is open, refresh the current image in case the filtered results changed
+    // If gallery is open, refresh the current image in case the filtered results changed.
+    // `refreshGalleryAfterFilter` is now async (it awaits performAutoSave first to flush
+    // any pending corrections on the outgoing image — see bugfix note in that function).
+    // We deliberately don't await here because filterResults itself is sync and the
+    // gallery refresh is fire-and-forget UI work; the .catch keeps the promise from
+    // surfacing as an unhandled rejection if performAutoSave or updateGalleryContent throw.
     if (this.isGalleryOpen) {
-      this.refreshGalleryAfterFilter();
+      this.refreshGalleryAfterFilter().catch(err => {
+        console.error('[LogVisualizer] refreshGalleryAfterFilter failed:', err);
+      });
     }
 
     console.log(`[LogVisualizer] Filtered to ${this.filteredResults.length} results`);
@@ -1538,9 +1613,31 @@ class LogVisualizer {
 
   /**
    * Refresh gallery after filtering to handle cases where current image is no longer in filtered results
+   *
+   * Bugfix (Save+FilterChange): when the user changes the filter while the
+   * gallery is open, this function may either reset `currentImageIndex` to
+   * 0 (if the currently-displayed image fell out of the new filter) or
+   * close the gallery entirely. Both paths previously discarded pending
+   * manual corrections on the outgoing image. We now flush via
+   * `performAutoSave()` BEFORE any index/close mutation so the user's
+   * in-flight edits are persisted regardless of which branch runs.
+   *
+   * `performAutoSave()` is idempotent / no-op when nothing is pending, so
+   * the cost on the happy path is just the `hasUnsavedChanges` check.
    */
-  refreshGalleryAfterFilter() {
+  async refreshGalleryAfterFilter() {
     if (!this.isGalleryOpen) return;
+
+    if (this.hasUnsavedChanges) {
+      try {
+        await this.performAutoSave();
+      } catch (error) {
+        console.error('[LogVisualizer] Auto-save before filter refresh failed:', error);
+        // Continue anyway — index reset must still happen so the gallery
+        // doesn't keep pointing at an image that's no longer in
+        // filteredResults. The Save All button remains available for retry.
+      }
+    }
 
     // Get current result being displayed in gallery
     const currentResult = this.filteredResults[this.currentImageIndex];
@@ -1550,10 +1647,10 @@ class LogVisualizer {
       if (this.filteredResults.length > 0) {
         // Show first available result
         this.currentImageIndex = 0;
-        this.updateGalleryContent();
+        await this.updateGalleryContent();
       } else {
         // No results available, close gallery
-        this.closeGallery();
+        await this.closeGallery();
       }
     } else {
       // Current image is still available, just refresh the vehicle editor
@@ -2407,6 +2504,23 @@ class LogVisualizer {
       document.body.style.overflow = 'hidden'; // Prevent background scrolling
     }
 
+    // [Narrate] log — high-level "story" of what the user is doing,
+    // grep-friendly with prefix [Narrate] for easy post-hoc review of
+    // a correction session. Kept always-on (NOT gated by DEBUG_MODE)
+    // so users on production builds can capture them in support logs.
+    try {
+      const opened = this.filteredResults[index] || this.imageResults[index];
+      const vehiclesCount = opened?.analysis?.length || 0;
+      const pendingForThis = (this.manualCorrections?.size || 0) > 0 &&
+        (this.manualCorrections.has(`${opened?.fileName}_0`) ||
+         this.manualCorrections.has(opened?.fileName));
+      console.log(
+        `[Narrate] Opened vehicle editor for ${opened?.fileName || '?'} ` +
+        `(index ${index} of ${this.filteredResults?.length ?? '?'}) — vehicles: ${vehiclesCount}, ` +
+        `pending unsaved correction: ${pendingForThis ? 'yes' : 'no'}`
+      );
+    } catch { /* narration must never throw */ }
+
     // Telemetry: GALLERY_OPENED + start an aggregate that the close
     // handler flushes. Per the explicit anti-pattern note in the design:
     // we DO NOT log per-navigation events here. Instead, navigation is
@@ -2540,9 +2654,36 @@ class LogVisualizer {
 
   /**
    * Navigate gallery by offset
+   *
+   * Bugfix (Save+Arrow): arrow-key navigation previously swapped the
+   * displayed image without persisting any pending manual corrections on
+   * the outgoing image, so edits made via the in-modal Save button (or
+   * any other UI that only sets `hasUnsavedChanges`) were silently lost
+   * outside the "needs-review" tab. The Enter handler and candidate
+   * picker route through `navigateToNextReview` which is already preceded
+   * by an explicit save, so they're unaffected — this guard only fires
+   * for paths (like the keyboard arrows and the Prev/Next buttons) that
+   * previously skipped the flush.
+   *
+   * `performAutoSave()` is a no-op when `hasUnsavedChanges` is false /
+   * `manualCorrections` is empty, so this is safe to call unconditionally.
+   * We still gate on `hasUnsavedChanges` to avoid the extra await on the
+   * happy path where the user is just browsing.
    */
   async navigateGallery(offset) {
     if (this.zoomController) this.zoomController.reset(false);
+
+    if (this.hasUnsavedChanges) {
+      try {
+        await this.performAutoSave();
+      } catch (error) {
+        console.error('[LogVisualizer] Auto-save before arrow navigation failed:', error);
+        // Don't block navigation on a save failure — the Save All button
+        // remains visible so the user can retry. Losing the click would
+        // be worse than persisting on a later attempt.
+      }
+    }
+
     const newIndex = this.currentImageIndex + offset;
 
     if (newIndex >= 0 && newIndex < this.filteredResults.length) {
@@ -2892,7 +3033,49 @@ class LogVisualizer {
 
       switch (action) {
         case 'save':
-          this.saveVehicleChangesByFileName(fileName, vehicleIndex);
+          // Uniformity with the Enter / candidate-picker flows: clicking Save
+          // now also auto-advances to the next actionable image, matching the
+          // behaviour users already rely on in the needs-review tab. Without
+          // this, the manual Save button is the only confirmation path that
+          // leaves the user parked on the just-saved image, which was the
+          // original bug report ("would be best if the software automatically
+          // moved on to the next image after clicking Save").
+          //
+          // Implementation mirrors `_handleRaceNumberEnter`:
+          //   1) fire-and-forget save (don't block UI on IPC)
+          //   2) navigateToNextReview — respects the active filter
+          //      (skips already-resolved photos in needs-review, walks forward
+          //      otherwise, closes the modal when the list is exhausted)
+          //
+          // The save-button guard prevents a double-click from firing two
+          // save+advance cycles against the rebuilt editor of the next image.
+          {
+            // Per-editor guard, mirrors `_handleRaceNumberEnter` (riga ~2971):
+            // blocks only re-clicks on the SAME editor while the save IPC is
+            // in flight. After the auto-advance the next editor has a
+            // different key, so the user can keep clicking Save on each
+            // subsequent image without being throttled. The guard is cleared
+            // in `.finally()` only if it still points to the same key —
+            // important when several saves are in flight concurrently.
+            const guardKey = `${fileName}_${vehicleIndex}`;
+            if (this._saveBtnInFlight === guardKey) {
+              break;
+            }
+            this._saveBtnInFlight = guardKey;
+
+            const advanceFromIndex = this.currentImageIndex;
+            Promise.resolve(this.saveVehicleChangesByFileName(fileName, vehicleIndex))
+              .catch(err => console.error('[LogVisualizer] Save button: save failed:', err))
+              .finally(() => {
+                if (this._saveBtnInFlight === guardKey) {
+                  this._saveBtnInFlight = null;
+                }
+              });
+            // Advance immediately — same pattern as the Enter handler. The
+            // save runs in parallel; navigateToNextReview only updates the
+            // displayed image and doesn't depend on save completion.
+            this.navigateToNextReview(advanceFromIndex);
+          }
           break;
         case 'reset':
           this.resetVehicleByFileName(fileName, vehicleIndex);
@@ -3348,12 +3531,24 @@ class LogVisualizer {
 
       // Store manual correction
       const correctionKey = `${fileName}_${vehicleIndex}`;
+      const wasOverwritingPriorDelete = this.manualCorrections.has(correctionKey) &&
+        this.manualCorrections.get(correctionKey)?.changes?.deleted === true;
       this.manualCorrections.set(correctionKey, {
         fileName,
         vehicleIndex,
         changes,
         timestamp: new Date().toISOString()
       });
+
+      console.log(
+        `[Narrate] User SAVED vehicle ${vehicleIndex} of ${fileName} with changes: ` +
+        Object.entries(changes)
+          .map(([k, v]) => `${k}=${Array.isArray(v) ? `[${v.join(', ')}]` : JSON.stringify(v)}`)
+          .join(', ') +
+        (wasOverwritingPriorDelete
+          ? '. (In-memory: this overwrites a prior {deleted: true} for the same key — JSONL still has both events for now; enrichment will compact them on reload via last-write-wins.)'
+          : '. Triggering immediate persistence to JSONL + Supabase…')
+      );
 
       // Update the result data directly
       Object.assign(result.analysis[vehicleIndex], changes);
@@ -3399,6 +3594,21 @@ class LogVisualizer {
       // If immediate persistence failed, schedule auto-save as fallback
       if (!persistSuccess) {
         this.scheduleAutoSave();
+      }
+
+      // BUGFIX (preview not refreshed after save): update the result
+      // card on the grid right away so the user sees the corrected
+      // number as soon as they close the gallery. deleteVehicleByFileName
+      // already does the equivalent via this.renderResults(); for
+      // single-vehicle edits the cheaper updateResultCard suffices.
+      // Without this, the user had to re-open and re-close the modal
+      // to "kick" a render before the preview reflected the save.
+      try {
+        this.updateResultCard(fileName);
+      } catch (renderErr) {
+        // Defensive — the underlying renderer should never throw, but
+        // a corrupt result shape shouldn't break the save flow.
+        console.warn('[LogVisualizer] updateResultCard after save failed (non-critical):', renderErr);
       }
 
       // Show feedback
@@ -3488,6 +3698,11 @@ class LogVisualizer {
     this.autoSaveTimer = setTimeout(async () => {
       if (this.hasUnsavedChanges && this.manualCorrections.size > 0) {
         console.log('[LogVisualizer] Auto-saving changes...');
+        console.log(
+          `[Narrate] Autosave (3s debounce) firing: ${this.manualCorrections.size} pending correction(s) to flush. ` +
+          `Files: ${[...new Set(Array.from(this.manualCorrections.values()).map(c => c.fileName))].slice(0, 5).join(', ')}` +
+          (this.manualCorrections.size > 5 ? ', …' : '')
+        );
 
         try {
           // Get only corrections that haven't been saved since last auto-save
@@ -3753,6 +3968,12 @@ class LogVisualizer {
       // Save original data for the correction log
       const originalVehicle = { ...result.analysis[vehicleIndex] };
       console.log(`[LogVisualizer] Deleting vehicle:`, originalVehicle);
+      console.log(
+        `[Narrate] User DELETED vehicle ${vehicleIndex} of ${fileName} ` +
+        `(was #${originalVehicle?.raceNumber ?? '?'}` +
+        (originalVehicle?.team ? `, team "${originalVehicle.team}"` : '') +
+        `). Will autosave to JSONL + Supabase within 3s.`
+      );
 
       // Remove the vehicle from the analysis array
       result.analysis.splice(vehicleIndex, 1);
@@ -3842,6 +4063,13 @@ class LogVisualizer {
         drivers: [],
         confidence: 1.0 // Manual additions are 100% confidence
       });
+
+      const newIdx = result.analysis.length - 1;
+      console.log(
+        `[Narrate] User ADDED a new empty vehicle slot at index ${newIdx} of ${fileName}. ` +
+        `Total vehicles now: ${result.analysis.length}. No correction recorded yet — ` +
+        `will be tracked when the user clicks Save with the new fields filled in.`
+      );
 
       // Update UI if in gallery
       if (this.isGalleryOpen) {

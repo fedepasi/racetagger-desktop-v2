@@ -252,6 +252,15 @@ export async function flushPending(): Promise<{ flushed: number; failed: number;
     const pending = all.filter(op => !op.completed);
     if (pending.length === 0) return { flushed, failed, dropped };
 
+    // [Narrate] entry log when there's actual work to do — silent on
+    // the happy path (no pending ops) so the periodic 30s flush
+    // doesn't spam the log.
+    const opTypes = Array.from(new Set(pending.map(o => o.type))).join(', ');
+    console.log(
+      `[Narrate] Correction outbox flush starting: ${pending.length} pending op(s) ` +
+      `(types: ${opTypes}). Retrying each up to ${MAX_ATTEMPTS} attempts before dropping.`
+    );
+
     for (const op of pending) {
       // Honour backoff: skip ops whose last attempt is more recent than
       // BACKOFF_MS[attempts - 1] ago. We approximate "last attempt time"
@@ -287,6 +296,10 @@ export async function flushPending(): Promise<{ flushed: number; failed: number;
 
   if (flushed > 0 || dropped > 0) {
     console.log(`[CorrectionOutbox] Flush summary — flushed=${flushed} failed=${failed} dropped=${dropped}`);
+    console.log(
+      `[Narrate] Correction outbox flush complete: ${flushed} succeeded, ${failed} failed (will retry), ` +
+      `${dropped} permanently dropped after max attempts.`
+    );
   }
   return { flushed, failed, dropped };
 }
