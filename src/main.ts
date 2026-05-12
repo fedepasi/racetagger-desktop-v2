@@ -3169,6 +3169,53 @@ app.whenReady().then(async () => { // Added async here
     }
   }, 5_000);
 
+  // Initialise the correction outbox — a durable, retry-with-backoff queue
+  // for Supabase writes that MUST eventually succeed even if the network
+  // flaps during a correction session. We saw `TypeError: fetch failed`
+  // errors drop at least one image_corrections row in the field (Michele
+  // 13:58:30, support_1778335167281). The outbox persists the write to
+  // userData/.outbox/corrections.jsonl BEFORE the network attempt so the
+  // op survives process death, then retries with exponential backoff in
+  // the background.
+  try {
+    const { init: initCorrectionOutbox } = require('./utils/correction-outbox');
+    initCorrectionOutbox(async (op: any) => {
+      // Executor: knows how to run each queued op against Supabase.
+      const { getSupabaseClient } = require('./database-service');
+      const supabase = getSupabaseClient();
+      if (!supabase) {
+        throw new Error('Supabase client not available');
+      }
+      switch (op.type) {
+        case 'image_corrections_insert': {
+          const { error } = await supabase
+            .from('image_corrections')
+            .insert(op.payload);
+          if (error) throw new Error(error.message || 'image_corrections insert failed');
+          return;
+        }
+        case 'analysis_results_update': {
+          const { image_id, update } = op.payload || {};
+          if (!image_id || !update) {
+            throw new Error('analysis_results_update payload missing image_id or update');
+          }
+          const { error } = await supabase
+            .from('analysis_results')
+            .update(update)
+            .eq('image_id', image_id);
+          if (error) throw new Error(error.message || 'analysis_results update failed');
+          return;
+        }
+        default:
+          throw new Error(`Unknown outbox op type: ${op.type}`);
+      }
+    }).catch((err: any) => {
+      console.warn('[Main] Correction outbox init failed (non-critical):', err?.message ?? err);
+    });
+  } catch (err: any) {
+    console.warn('[Main] Failed to load correction outbox module (non-critical):', err?.message ?? err);
+  }
+
   ipcMain.on('select-folder', handleFolderSelection);
 
   // Handle folder selection by path (drag & drop) — uses handle/invoke pattern for reliability
@@ -3272,6 +3319,21 @@ app.whenReady().then(async () => { // Added async here
             correctionMap.set(key, event.changes);
           });
 
+        // Best-effort flush of the correction outbox BEFORE we read
+        // image_corrections from Supabase. Any pending USER_MANUAL row
+        // that failed to land at correction time (network glitch) will
+        // be retried now so the defense-in-depth merge sees the most
+        // current state of the DB.
+        try {
+          const outbox = require('./utils/correction-outbox');
+          if (typeof outbox.flushPending === 'function') {
+            await outbox.flushPending();
+          }
+        } catch (flushErr) {
+          // Non-critical — the merge query below is itself a safety net.
+          console.warn('[Main Process] Pre-merge outbox flush failed (non-critical):', flushErr);
+        }
+
         // Defense-in-depth (Fix B for the "metadati corretti, cartella sbagliata"
         // class of bugs): also merge USER_MANUAL rows from `image_corrections`
         // on Supabase. Covers the race where:
@@ -3293,27 +3355,58 @@ app.whenReady().then(async () => { // Added async here
           if (supabase) {
             const { data: corrRows, error: corrErr } = await supabase
               .from('image_corrections')
-              .select('file_name, vehicle_index, changes, created_at')
+              .select('image_id, vehicle_index, corrected_value, created_at')
               .eq('execution_id', executionId)
               .eq('correction_type', 'USER_MANUAL')
               .order('created_at', { ascending: true });
             if (!corrErr && Array.isArray(corrRows)) {
+              // Build an in-memory index from imageId/dbImageId → fileName so
+              // we can translate the DB's image_id back to the
+              // `${fileName}_${vehicleIndex}` key the correctionMap uses.
+              // We index by BOTH `imageId` and `dbImageId` because the
+              // insert payload at correction time picks `imageAnalysisEvent.imageId`
+              // first and only falls back to the composite key. Older rows
+              // can therefore appear under either form.
+              const imageIdToFileName = new Map<string, string>();
+              for (const ev of imageAnalysisEvents) {
+                if (ev?.imageId && ev?.fileName) imageIdToFileName.set(String(ev.imageId), ev.fileName);
+                if (ev?.dbImageId && ev?.fileName) imageIdToFileName.set(String(ev.dbImageId), ev.fileName);
+              }
               let merged = 0;
               let overrode = 0;
+              let unmatched = 0;
               for (const row of corrRows) {
-                const fileName = (row as any)?.file_name;
+                const imageId = (row as any)?.image_id;
                 const vehicleIndex = (row as any)?.vehicle_index;
-                const changes = (row as any)?.changes;
-                if (!fileName || vehicleIndex == null || !changes) continue;
+                const correctedValue = (row as any)?.corrected_value;
+                if (!imageId || vehicleIndex == null || !correctedValue) continue;
+
+                // Resolve the fileName for this row. Strategy:
+                //   1. Look up imageAnalysisEvents by imageId (UUID dbImageId
+                //      or legacy client-side id).
+                //   2. Fall back: if image_id matches the composite form
+                //      `${fileName}_${vehicleIndex}` we wrote when no
+                //      dbImageId was available, parse the fileName out.
+                let fileName = imageIdToFileName.get(String(imageId));
+                if (!fileName) {
+                  const trailingIdx = `_${vehicleIndex}`;
+                  if (String(imageId).endsWith(trailingIdx)) {
+                    fileName = String(imageId).slice(0, -trailingIdx.length);
+                  }
+                }
+                if (!fileName) {
+                  unmatched++;
+                  continue;
+                }
                 const key = `${fileName}_${vehicleIndex}`;
                 if (correctionMap.has(key)) overrode++;
-                correctionMap.set(key, changes);
+                correctionMap.set(key, correctedValue);
                 merged++;
               }
-              if (merged > 0) {
+              if (merged > 0 || unmatched > 0) {
                 console.log(
                   `[Main Process] Merged ${merged} USER_MANUAL rows from image_corrections into correctionMap ` +
-                  `(${overrode} overrode an existing JSONL MANUAL_CORRECTION)`
+                  `(${overrode} overrode an existing JSONL MANUAL_CORRECTION, ${unmatched} could not be mapped to a fileName)`
                 );
               }
             } else if (corrErr) {
@@ -4202,15 +4295,35 @@ app.whenReady().then(async () => { // Added async here
               dbUpdate.training_flags = trainingFlags;
             }
 
-            const { error: dbError } = await supabase
-              .from('analysis_results')
-              .update(dbUpdate)
-              .eq('image_id', dbImageIdForUpdate);
-
-            if (dbError) {
-              console.warn(`[Main Process] Failed to update analysis_results for ${correction.fileName}: ${dbError.message}`);
-            } else {
-              console.log(`[Main Process] ✅ Updated analysis_results for ${correction.fileName} (image_id: ${dbImageIdForUpdate}, #${correction.changes.raceNumber})`);
+            // Route the analysis_results UPDATE through the correction
+            // outbox too (see the image_corrections insert below for
+            // motivation). The update is idempotent: re-running it with
+            // the same payload yields the same end state, and the
+            // `recognized_number` + manual-correction training_flags
+            // accumulate to the user's last-corrected value either way.
+            try {
+              const outbox = require('./utils/correction-outbox');
+              const res = await outbox.enqueueAndTry('analysis_results_update', {
+                image_id: dbImageIdForUpdate,
+                update: dbUpdate,
+              });
+              if (res.ok) {
+                console.log(`[Main Process] ✅ Updated analysis_results for ${correction.fileName} (image_id: ${dbImageIdForUpdate}, #${correction.changes.raceNumber})`);
+              } else if (res.queued) {
+                console.warn(`[Main Process] analysis_results update queued for retry (network issue) — correction safe in outbox: ${correction.fileName} (image_id: ${dbImageIdForUpdate})`);
+              }
+            } catch (outboxErr) {
+              // Outbox itself failed — fall back to a direct attempt.
+              console.warn('[Main Process] Outbox unavailable for analysis_results, falling back to direct update:', outboxErr);
+              const { error: dbError } = await supabase
+                .from('analysis_results')
+                .update(dbUpdate)
+                .eq('image_id', dbImageIdForUpdate);
+              if (dbError) {
+                console.warn(`[Main Process] Failed to update analysis_results for ${correction.fileName}: ${dbError.message}`);
+              } else {
+                console.log(`[Main Process] ✅ Updated analysis_results for ${correction.fileName} (image_id: ${dbImageIdForUpdate}, #${correction.changes.raceNumber})`);
+              }
             }
           } catch (dbUpdateError) {
             console.warn('[Main Process] Failed to update analysis_results in DB:', dbUpdateError);
@@ -4285,7 +4398,29 @@ app.whenReady().then(async () => { // Added async here
               originalValue.confidence = imageAnalysisEvent.aiResponse.vehicles[correction.vehicleIndex].confidence ?? null;
             }
 
-            const { error: corrError } = await supabase.from('image_corrections').insert({
+            // Build the image_corrections insert payload. Routed through the
+            // correction outbox so a transient `TypeError: fetch failed`
+            // (seen in the field — Michele 13:58:30 dropped one such row)
+            // doesn't cause us to lose the correction: the outbox persists
+            // it to disk first, tries once synchronously, and retries with
+            // exponential backoff for up to ~30s if needed. Plus side: the
+            // organize defense-in-depth merge from image_corrections (see
+            // ~line 3290) now has a real safety net upstream of it.
+            //
+            // Also: this insert payload is uniquely determined by
+            // (execution_id, image_id, vehicle_index, correction_type),
+            // so a duplicate retry inserts a second equivalent row at
+            // worst — the management portal already dedups by these
+            // fields when aggregating.
+            // Note on schema: image_corrections does NOT have a `file_name`
+            // column today (see migrations 20251216000000 and
+            // 20260320100000). The fileName lives implicitly inside
+            // image_id when we fall back to the composite
+            // `${fileName}_${vehicleIndex}` form, and inside `message`.
+            // The downstream "defense-in-depth" merge in organize reads
+            // image_id + vehicle_index + corrected_value and joins back
+            // to fileName via the in-memory imageAnalysisEvents list.
+            const corrPayload = {
               execution_id: executionId,
               user_id: userId,
               image_id: imageAnalysisEvent?.imageId || `${correction.fileName}_${correction.vehicleIndex}`,
@@ -4299,12 +4434,26 @@ app.whenReady().then(async () => { // Added async here
               vehicle_index: correction.vehicleIndex,
               details: Object.keys(vehicleDna).length > 0 ? vehicleDna : null,
               preset_id: executionStartEvent?.participantPresetId || null,
-            });
-
-            if (corrError) {
-              console.warn(`[Main Process] Failed to write USER_MANUAL correction to image_corrections: ${corrError.message} [code: ${corrError.code}]`);
-            } else {
-              console.log(`[Main Process] ✅ Wrote USER_MANUAL correction to image_corrections for ${correction.fileName} vehicle ${correction.vehicleIndex}`);
+            };
+            try {
+              const outbox = require('./utils/correction-outbox');
+              const res = await outbox.enqueueAndTry('image_corrections_insert', corrPayload);
+              if (res.ok) {
+                console.log(`[Main Process] ✅ Wrote USER_MANUAL correction to image_corrections for ${correction.fileName} vehicle ${correction.vehicleIndex}`);
+              } else if (res.queued) {
+                console.warn(`[Main Process] image_corrections write queued for retry (network issue) — correction safe in outbox: ${correction.fileName} vehicle ${correction.vehicleIndex}`);
+              }
+            } catch (outboxErr) {
+              // Outbox itself failed (very rare — disk full etc.). Fall back
+              // to the legacy in-line insert so we at least try once and log
+              // the failure visibly.
+              console.warn('[Main Process] Outbox unavailable, falling back to direct insert:', outboxErr);
+              const { error: corrError } = await supabase.from('image_corrections').insert(corrPayload);
+              if (corrError) {
+                console.warn(`[Main Process] Failed to write USER_MANUAL correction to image_corrections: ${corrError.message} [code: ${corrError.code}]`);
+              } else {
+                console.log(`[Main Process] ✅ Wrote USER_MANUAL correction to image_corrections for ${correction.fileName} vehicle ${correction.vehicleIndex}`);
+              }
             }
           }
         } catch (corrInsertError) {
