@@ -27,6 +27,23 @@
   path since 1.2.0; the residual dcraw code only added size to the
   bundle.
 
+### 📁 Folder pool & default-folder toggle
+
+- **Shared folder pool across modals**: folders created from inside the
+  per-participant Edit modal are now promoted to the preset-level
+  `custom_folders` pool, so they show up immediately in the multi-assign
+  side panel (no more "Genesis" attached to one participant but invisible
+  when assigning others). A one-shot `backfillParticipantFoldersIntoPool`
+  runs on preset open to heal legacy presets created before this fix.
+- **Bulk "include default folder" toggle** in the bulk-action bar:
+  tri-state checkbox (on / off / mixed) lets you flip the
+  `include_default_folder` flag on N selected participants in a single
+  IPC trip (`preset:bulkSetIncludeDefaultFolder`).
+- **`include_default_folder=false` honoured consistently** in both the
+  analysis-time FolderOrganizer (Flusso A) and the Export & IPTC modal
+  (Flusso B) — fixes the case where unchecking the toggle still produced
+  a `{number}` default folder in one of the two flows.
+
 ---
 
 ## [1.1.8] - 2026-05-12
