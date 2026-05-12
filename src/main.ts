@@ -4275,13 +4275,30 @@ app.whenReady().then(async () => { // Added async here
           }
         }
 
-        // Update image metadata using exiftool
+        // Update image metadata using exiftool. If the IPTC keyword write
+        // succeeds, flip the IMAGE_ANALYSIS event's `metadataWritten` flag
+        // to true so the renderer drops the "NO METADATA" badge on the
+        // preview card. The flag is initially set at analysis time based
+        // on whether keywords were emitted (see unified-image-processor
+        // around lines 4122/4163); when the AI couldn't match a preset
+        // participant it stays false even after the user manually
+        // corrects the photo — the user then sees a card with all the
+        // right fields PLUS a stale "NO METADATA" badge.
         try {
-          await updateImageMetadataWithCorrection(
+          const metaResult = await updateImageMetadataWithCorrection(
             correction,
             imageAnalysisEvent?.originalPath,
             imageAnalysisEvent?.organizedPath
           );
+          if (metaResult?.success && imageAnalysisEvent) {
+            imageAnalysisEvent.metadataWritten = true;
+            if (DEBUG_MODE) {
+              console.log(
+                `[Main Process] Flipped metadataWritten=true for ${correction.fileName} ` +
+                `after USER_MANUAL keyword write (was: ${imageAnalysisEvent.metadataWritten === false ? 'false' : 'undefined'}).`
+              );
+            }
+          }
         } catch (metadataError) {
           if (DEBUG_MODE) console.warn('[Main Process] Failed to update image metadata:', metadataError);
           // Continue with log update even if metadata update fails
