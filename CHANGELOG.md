@@ -1,6 +1,6 @@
 # Changelog - RaceTagger Desktop
 
-## [1.2.0] - 2026-04-29
+## [1.1.7] - 2026-05-12
 
 ### 🎯 Major Features
 
@@ -123,6 +123,20 @@ included here for the broader 1.2.0 rollout:
   list of individual extended names per pilot:
   `(90) Feller (SUI) - Manthey - Porsche, (7) Thiim (DEN) - Comtoyou
   - Aston Martin`. Single-match behavior is unchanged.
+
+### ✨ Preset editor — bulk folder assignment UX
+
+- New V1 design for managing folder assignments in the preset editor:
+  slide-in side panel with a folder pool, inline `+ New folder` form,
+  per-row `+ assign` pill, multi-select bulk-action bar, and an
+  Auto-assign by rule editor (Team / Category / Car contains / equals /
+  starts with → target folder).
+- Mutually-exclusive side panels: opening "+ Add Folder" while
+  "Auto-assign by rule" is open now correctly hides the latter
+  (single-setter invariant ensures at most one panel `.is-open` at any
+  time).
+- Fixed a z-index regression where the sticky participants-table
+  column header stamped through the side panel body.
 
 ---
 

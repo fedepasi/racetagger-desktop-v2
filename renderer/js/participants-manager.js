@@ -6025,6 +6025,28 @@ function updateBulkActionBar() {
     headerBox.checked = visibleSelectable.length > 0 && visibleSelected === visibleSelectable.length;
     headerBox.indeterminate = visibleSelected > 0 && visibleSelected < visibleSelectable.length;
   }
+
+  // v1.1.5 — context-aware Activate / Deactivate buttons.
+  // `is_active === false` means inactive; undefined/true means active.
+  // Show "Activate" only when there's at least one inactive row in the
+  // selection, and "Deactivate" only when there's at least one active row.
+  // Mixed selection → both buttons visible.
+  const activateBtn = document.getElementById('bulk-activate-btn');
+  const deactivateBtn = document.getElementById('bulk-deactivate-btn');
+  if (activateBtn || deactivateBtn) {
+    const idMapForActive = new Map((participantsData || []).filter(p => p.id).map(p => [p.id, p]));
+    let hasActive = false;
+    let hasInactive = false;
+    for (const id of selectedParticipantIds) {
+      const p = idMapForActive.get(id);
+      if (!p) continue;
+      if (p.is_active === false) hasInactive = true;
+      else hasActive = true;
+      if (hasActive && hasInactive) break;
+    }
+    if (activateBtn) activateBtn.classList.toggle('is-hidden', !hasInactive);
+    if (deactivateBtn) deactivateBtn.classList.toggle('is-hidden', !hasActive);
+  }
   if (openSidePanel && openSidePanel.kind === 'assign' && openSidePanel.scope === 'selection') {
     openSidePanel.ids = Array.from(selectedParticipantIds);
     renderAssignSidePanel();
@@ -6603,21 +6625,80 @@ async function bulkClearSelectedFolders() {
 
 async function bulkSetSelectedActive(active) {
   if (selectedParticipantIds.size === 0) return;
+  if (!currentPreset || !currentPreset.id) return;
   const ids = Array.from(selectedParticipantIds);
+
+  // v1.1.5 — single bulk RPC instead of N sequential per-row calls.
+  // Old loop did 35 IPC trips × 1 Supabase HTTP each (~5–10s on 35 rows);
+  // `preset:bulkSetActive` does one UPDATE … WHERE id IN (…) (<500ms).
   let okCount = 0;
-  for (const id of ids) {
-    try {
-      const response = await window.api.invoke('preset:toggleParticipantActive', { participantId: id, isActive: !!active });
-      if (response && (response.success !== false)) okCount++;
-    } catch (e) { /* per-row swallow */ }
+  try {
+    const response = await window.api.invoke('preset:bulkSetActive', {
+      presetId: currentPreset.id,
+      participantIds: ids,
+      isActive: !!active
+    });
+    if (!response || response.success === false) {
+      throw new Error(response?.error || 'Bulk update failed');
+    }
+    okCount = (response.data && typeof response.data.updated === 'number')
+      ? response.data.updated
+      : ids.length;
+  } catch (err) {
+    console.error('[PR3v2] bulkSetSelectedActive failed:', err);
+    showNotification(
+      `Failed to ${active ? 'activate' : 'deactivate'} participants: ${err.message || 'Unknown error'}`,
+      'error'
+    );
+    return;
   }
+
+  // v1.1.5 — in-place DOM/model update instead of a full preset reload.
+  // The bulk RPC already invalidated the desktop cache (so the next genuine
+  // refresh hits Supabase), but for THIS interaction we know exactly which
+  // rows changed and can mirror the change locally — eliminating the
+  // CACHE MISS round-trip and keeping the table sort order intact.
+  const tbody = document.getElementById('participants-tbody');
+  const idSet = new Set(ids);
+  if (Array.isArray(participantsData)) {
+    for (const p of participantsData) {
+      if (p?.id && idSet.has(p.id)) p.is_active = !!active;
+    }
+  }
+  if (tbody) {
+    for (const id of ids) {
+      const cb = tbody.querySelector(
+        `input.active-toggle-input[data-participant-id="${CSS.escape(id)}"]`
+      );
+      if (!cb) continue;
+      cb.checked = !!active;
+      const row = cb.closest('tr');
+      if (row) row.classList.toggle('participant-row-inactive', !active);
+      // Keep the toggle cell's data-sort in sync so a click on the "Active"
+      // header after this still sorts correctly.
+      const cell = cb.closest('td');
+      if (cell) cell.setAttribute('data-sort', active ? '1' : '0');
+    }
+  }
+
+  // Refresh the visible counters (Active 28/29 strip + pill) and the
+  // bulk-action bar's Activate/Deactivate visibility now that is_active
+  // values changed.
+  if (typeof updateActiveParticipantsSummary === 'function') {
+    updateActiveParticipantsSummary();
+  }
+  updateBulkActionBar();
+
+  // Face-status dots depend on is_active (disabled faces don't count).
+  if (typeof faceRecFeatureEnabled !== 'undefined' && faceRecFeatureEnabled
+      && currentPreset?.id && typeof loadFaceStatusIfEnabled === 'function') {
+    loadFaceStatusIfEnabled();
+  }
+
   showNotification(
     `${active ? 'Activated' : 'Deactivated'} ${okCount} participant${okCount === 1 ? '' : 's'}.`,
     okCount === ids.length ? 'success' : 'warning'
   );
-  if (currentPreset?.id) {
-    await refreshCurrentPresetData();
-  }
 }
 
 // ---- Render: Auto-rule side panel -------------------------------
