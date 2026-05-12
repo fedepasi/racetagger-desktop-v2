@@ -448,13 +448,50 @@ export class FolderOrganizer {
         ? true
         : csvDataArray.some(c => c?.include_default_folder !== false);
 
-      // 1.2.0 DECISION TREE:
-      //   - no custom folders                    → default targets only (legacy)
+      // 1.2.1 DECISION TREE — honour `include_default_folder` even when
+      // there are no custom folders. Previously the
+      // `uniqueFolderTargets.length === 0` branch always fell back to
+      // `defaultTargets`, which silently ignored a user who had
+      // explicitly disabled "Also export to the default folder" on the
+      // participant. Now: if they want no default AND there's no
+      // custom, route to Unknown_Numbers (matches the phantom-number
+      // fallback semantics — clearly visible and recoverable) instead
+      // of forcing the file into a `{number}/` folder the user didn't
+      // want.
+      //
       //   - custom folders + wantsDefault=true   → custom + default (additive)
       //   - custom folders + wantsDefault=false  → custom only (legacy behavior)
+      //   - no custom folders + wantsDefault=true → default only (legacy)
+      //   - no custom folders + wantsDefault=false → ROUTE TO Unknown_Numbers
+      //                                              (so the photo is not
+      //                                              silently parked in a
+      //                                              folder the user opted out
+      //                                              of, but stays clearly
+      //                                              visible for review)
       let foldersToCreate: FolderTarget[];
       if (uniqueFolderTargets.length === 0) {
-        foldersToCreate = defaultTargets;
+        if (wantsDefault) {
+          foldersToCreate = defaultTargets;
+        } else {
+          // User explicitly opted out of the default folder AND has no
+          // custom folders to fall back to — route to Unknown_Numbers
+          // so the photo isn't lost but also isn't dropped in the
+          // disallowed default folder.
+          console.log(
+            `[Narrate] No-custom-no-default for ${fileName}: ` +
+            `wantsDefault=false and uniqueFolderTargets=[] → routing to Unknown_Numbers ` +
+            `(honouring participant's "no default folder" opt-out).`
+          );
+          const unknownResult = await this.organizeToUnknownNumbers(
+            imagePath,
+            sourceDir
+          );
+          return {
+            ...unknownResult,
+            folderName: unknownResult.folderName + ' (no-default-opt-out)',
+            timeMs: Date.now() - startTime,
+          };
+        }
       } else if (wantsDefault) {
         // Union: custom folders first (so the user-configured destinations
         // are processed before the auto-generated default), default

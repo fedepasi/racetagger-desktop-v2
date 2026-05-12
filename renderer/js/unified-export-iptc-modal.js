@@ -332,11 +332,42 @@ function createUnifiedModal() {
             </div>
           </div>
 
-          <!-- Subfolder Organization -->
+          <!--
+            FOLDER ORGANIZATION — two MUTUALLY EXCLUSIVE modes.
+            "Follow preset folder assignments" comes first because it's
+            the more powerful option (uses the per-participant custom
+            folders + the per-participant "Also export to default
+            folder" toggle). "Organize in Subfolders" is the simpler
+            pattern-based mode for presets without custom folders. The
+            two checkboxes are wired in JS to toggle each other off so
+            the user can only pick one at a time.
+          -->
+
+          <!-- Preset folder assignments (PRIMARY) -->
+          <div class="export-section" id="unified-preset-folders-section">
+            <div class="export-section-head">
+              <label>
+                <input type="checkbox" id="unified-chk-preset-folders" checked data-folder-mode="preset">
+                📁 Follow preset folder assignments
+              </label>
+              <span class="export-section-hint" id="unified-preset-folders-hint">
+                Photos go to each participant's custom folders. The per-participant
+                "Also export to the default folder" toggle decides whether each photo
+                ALSO lands in a <code>{number}/</code> subfolder.
+              </span>
+            </div>
+          </div>
+
+          <!-- Subfolder Organization (SECONDARY — pattern-only) -->
           <div class="export-section">
             <div class="export-section-head">
-              <label><input type="checkbox" id="unified-chk-subfolder"> 📂 Organize in Subfolders</label>
-              <span class="export-section-hint">Group files by number, name, or team</span>
+              <label><input type="checkbox" id="unified-chk-subfolder" data-folder-mode="pattern"> 📂 Organize in Subfolders</label>
+              <span class="export-section-hint">
+                Group ALL exported files into one subfolder pattern (e.g.
+                <code>{number}_{surname}</code>). Use this when your preset has no
+                per-participant custom folders. Disables "Follow preset folder
+                assignments" while active.
+              </span>
             </div>
             <div class="export-section-body" id="unified-subfolder-body" style="display:none;">
               <div class="ipf">
@@ -349,29 +380,6 @@ function createUnifiedModal() {
                 <span class="export-preview-label">Preview:</span>
                 <span class="export-preview-value" id="unified-preview-subfolder"></span>
               </div>
-            </div>
-          </div>
-
-          <!--
-            Preset folder assignments — when ON, the export honours the
-            per-participant custom folders configured in the preset
-            (participants.html → "📁 Personalize your Folder Organization").
-            Whether each photo ALSO ends up in the default subfolder
-            pattern destination is decided per-participant by the
-            "Also export to the default folder" toggle on each
-            participant — no global override needed here.
-            Default ON when the preset has folders; disabled otherwise.
-          -->
-          <div class="export-section" id="unified-preset-folders-section">
-            <div class="export-section-head">
-              <label>
-                <input type="checkbox" id="unified-chk-preset-folders" checked>
-                📁 Follow preset folder assignments
-              </label>
-              <span class="export-section-hint" id="unified-preset-folders-hint">
-                Photos go to each participant's custom folders. Whether they ALSO go to the
-                default <code>{number}</code> subfolder is decided per-participant in the preset.
-              </span>
             </div>
           </div>
         </div>
@@ -700,13 +708,49 @@ function wireUnifiedEvents(matchedCount, totalCount) {
     });
   }
 
-  // Subfolder checkbox toggle
+  // Subfolder checkbox toggle. Mutually exclusive with
+  // "Follow preset folder assignments" — when this one is turned ON,
+  // we turn the other OFF (and vice-versa) so the user picks exactly
+  // one folder organization mode. The two modes don't compose
+  // meaningfully (preset folders are per-participant; the pattern is
+  // global) so layering them produced duplicate copies on
+  // accident — see the user report dated 2026-05-12.
   const subfolderChk = document.getElementById('unified-chk-subfolder');
   if (subfolderChk) {
     subfolderChk.addEventListener('change', () => {
       const body = document.getElementById('unified-subfolder-body');
       if (body) body.style.display = subfolderChk.checked ? '' : 'none';
+      if (subfolderChk.checked) {
+        const presetChk = document.getElementById('unified-chk-preset-folders');
+        if (presetChk && presetChk.checked) {
+          presetChk.checked = false;
+          // Visual hint so the user notices the auto-uncheck. Skipped
+          // when the preset checkbox was already off.
+          console.log('[Unified Export] Folder mode switched to "subfolder pattern"; preset folder assignments disabled.');
+        }
+      }
       updateUnifiedPreview();
+    });
+  }
+
+  // Mirror handler on the preset-folders checkbox so picking "preset"
+  // turns OFF "subfolder pattern". Together with the handler above the
+  // two checkboxes behave as a soft radio group (but stay checkboxes
+  // so the user can also have NEITHER selected, meaning "no folder
+  // organization — drop everything in the destination root").
+  const presetChkForExclusion = document.getElementById('unified-chk-preset-folders');
+  if (presetChkForExclusion) {
+    presetChkForExclusion.addEventListener('change', () => {
+      if (presetChkForExclusion.checked) {
+        const subChk = document.getElementById('unified-chk-subfolder');
+        if (subChk && subChk.checked) {
+          subChk.checked = false;
+          const body = document.getElementById('unified-subfolder-body');
+          if (body) body.style.display = 'none';
+          console.log('[Unified Export] Folder mode switched to "preset folder assignments"; subfolder pattern disabled.');
+          updateUnifiedPreview();
+        }
+      }
     });
   }
 
@@ -1147,6 +1191,32 @@ async function startUnifiedExport() {
       `written. EXIF camera data is not affected. Continue?`
     );
     if (!ok) return;
+  }
+
+  // FIX (folder-org-correction Fix A — coverage gap): same pre-flush
+  // guard that already covers Organize (log-visualizer.js) and the
+  // "Write to Originals" IPTC button (the other branch in this file
+  // around line 1313). Without this, a user who corrects a match in
+  // the log visualizer and immediately clicks "Export to Folder"
+  // would get an export with the right in-memory state, but JSONL +
+  // image_corrections + analysis_results stay stale — and any later
+  // Organize on the same execution would route using the AI's
+  // (wrong) original participant.
+  if (window.logVisualizer?.hasUnsavedChanges &&
+      window.logVisualizer?.manualCorrections?.size > 0) {
+    try {
+      console.log('[Unified Export] Flushing pending corrections before export-to-folder…');
+      await window.logVisualizer.saveAllChanges({ silent: true, skipRefresh: true });
+      console.log('[Unified Export] Pending corrections flushed; proceeding with export.');
+    } catch (flushErr) {
+      console.error('[Unified Export] Failed to flush pending corrections before export:', flushErr);
+      alert(
+        '⛔ Cannot export: failed to save your pending corrections.\n\n' +
+        'Check your network and try again.\n\n' +
+        '(' + (flushErr?.message || 'unknown error') + ')'
+      );
+      return;
+    }
   }
 
   unifiedIsProcessing = true;

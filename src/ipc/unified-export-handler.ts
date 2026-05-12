@@ -149,38 +149,37 @@ export function registerUnifiedExportHandler(): void {
         try {
           // ---- Compute the list of target FOLDERS for this image ----
           //
-          // Two sources of destinations:
-          //   (1) Default subfolder — derived from `subfolderPattern` under
-          //       `destinationFolder`. Used when no preset folders apply,
-          //       OR when followPresetFolders is true AND the participant's
-          //       `include_default_folder` flag is true (additive mode).
-          //   (2) Preset folders — each entry on participant.folders[]:
-          //       absolute `path` if present (full override), otherwise
-          //       a subfolder of `destinationFolder` whose name comes
-          //       from the entry. Active only when followPresetFolders.
+          // The modal exposes two MUTUALLY EXCLUSIVE folder
+          // organization modes (see unified-export-iptc-modal.js):
           //
-          // Deduplicated by absolute resolved path so a custom folder
-          // that happens to match the default subfolder pattern doesn't
-          // produce two copies of the same file.
-          const defaultSubfolderPath = (() => {
-            if (!subfolderPattern || !image.participant) return destinationFolder;
-            const subfolderContext = {
-              original: originalName,
-              extension,
-              participant: {
-                name: image.participant.name,
-                surname: undefined as string | undefined,
-                number: image.participant.number,
-                team: image.participant.team,
-                car_model: image.participant.car_model,
-                nationality: image.participant.nationality
-              },
-              event: eventName,
-              date: new Date()
-            };
-            const subfolder = buildSubfolderPath(subfolderPattern, subfolderContext);
-            return subfolder ? path.join(destinationFolder, subfolder) : destinationFolder;
-          })();
+          //   A) followPresetFolders = true
+          //      → photos go to the participant's custom folders.
+          //        If the participant's `include_default_folder` flag is
+          //        true (the DB default), ALSO append `dest/{number}/`.
+          //        If the participant has NO custom folders AND the
+          //        default flag is false → SKIP this photo (the user
+          //        explicitly opted out of the default and has nothing
+          //        else to fall back to — we honour the intent rather
+          //        than silently routing to a folder they didn't want).
+          //
+          //   B) subfolderPattern present (and !followPresetFolders)
+          //      → photos go to ONE pattern-derived subfolder,
+          //        e.g. `dest/{number}_{surname}/`. The per-participant
+          //        `include_default_folder` flag is irrelevant here —
+          //        the pattern is the only routing rule.
+          //
+          //   C) neither set → photos go to the destination root.
+          //
+          // `targetFolders === null` is the skip signal; the caller
+          // below records it as skipped (separate counter from errors)
+          // and moves on without copying.
+
+          const numberStr = image.participant?.number != null
+            ? String(image.participant.number).trim()
+            : '';
+          const defaultByNumberPath = numberStr
+            ? path.join(destinationFolder, numberStr)
+            : null;
 
           const presetFolderPaths: string[] = [];
           if (followPresetFolders && Array.isArray(image.participant?.folders)) {
@@ -197,22 +196,58 @@ export function registerUnifiedExportHandler(): void {
             }
           }
 
-          // Decide which folders this image actually goes to.
-          // 1.2.0 — the additive-default decision is now per-participant:
-          // each participant's `include_default_folder` flag (true by
-          // default) controls whether the modal's subfolder pattern
-          // destination is added alongside their custom folders.
-          //   - no preset folders OR followPresetFolders=false → default only
-          //   - preset folders + participant.include_default_folder=true → default + preset
-          //   - preset folders + participant.include_default_folder=false → preset only
+          const patternSubfolderPath = (() => {
+            if (followPresetFolders) return null; // pattern mode is disabled when in preset mode
+            if (!subfolderPattern || !image.participant) return null;
+            const subfolderContext = {
+              original: originalName,
+              extension,
+              participant: {
+                name: image.participant.name,
+                surname: undefined as string | undefined,
+                number: image.participant.number,
+                team: image.participant.team,
+                car_model: image.participant.car_model,
+                nationality: image.participant.nationality
+              },
+              event: eventName,
+              date: new Date()
+            };
+            const sub = buildSubfolderPath(subfolderPattern, subfolderContext);
+            return sub ? path.join(destinationFolder, sub) : null;
+          })();
+
           const wantsDefault = image.participant?.include_default_folder !== false; // default true
-          let targetFolders: string[];
-          if (presetFolderPaths.length === 0) {
-            targetFolders = [defaultSubfolderPath];
-          } else if (wantsDefault) {
-            targetFolders = [defaultSubfolderPath, ...presetFolderPaths];
+          let targetFolders: string[] | null = [];
+
+          if (followPresetFolders) {
+            // Mode A — preset folder assignments
+            if (wantsDefault && defaultByNumberPath) {
+              targetFolders.push(defaultByNumberPath);
+            }
+            targetFolders.push(...presetFolderPaths);
+            if (targetFolders.length === 0) {
+              // No custom folders AND user disabled the default flag →
+              // honour the intent and skip.
+              targetFolders = null;
+              console.log(
+                `[Narrate] Skipping ${fileName}: followPresetFolders=true but participant ` +
+                `#${numberStr || '?'} has no custom folders AND include_default_folder=false. ` +
+                `Honouring the user's "no default" intent.`
+              );
+            }
+          } else if (patternSubfolderPath) {
+            // Mode B — pattern subfolder. include_default_folder is N/A.
+            targetFolders.push(patternSubfolderPath);
           } else {
-            targetFolders = presetFolderPaths;
+            // Mode C — neither selected: destination root.
+            targetFolders.push(destinationFolder);
+          }
+
+          if (targetFolders === null) {
+            // Skip this image — count it separately and continue.
+            skippedFiles++;
+            continue;
           }
           // Dedup
           targetFolders = Array.from(new Set(targetFolders.map(p => path.resolve(p))));
