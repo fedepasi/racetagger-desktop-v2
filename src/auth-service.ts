@@ -1550,14 +1550,27 @@ export class AuthService {
   /**
    * Calcola il numero di token necessari per un batch.
    *
+   * Il calcolo restituisce il valore ESATTO (potenzialmente frazionario, es. 1.5
+   * per 1 immagine con visual tagging). Dal 2026-05-13 il backend supporta
+   * NUMERIC su tokens_reserved/consumed/refunded e su token_transactions.amount,
+   * quindi non serve piu' arrotondare per eccesso (vecchio Math.ceil rimosso).
+   *
+   * Nota di compatibilita': il valore restituito viene passato come
+   * `p_tokens_needed` alla RPC `pre_authorize_tokens`, il cui parametro e' INTEGER.
+   * La RPC ignora quel valore per la prenotazione effettiva (ricalcola server-side
+   * con math NUMERIC esatta da p_image_count + p_visual_tagging) e lo usa solo
+   * per il check di disponibilita'. Quindi anche un Math.ceil residuo qui non
+   * cambia il consumo reale; lo rimuoviamo solo per allineare la UI ("questo
+   * batch consumera' X token") al valore effettivo.
+   *
    * @param imageCount - Numero di immagini
    * @param visualTaggingEnabled - Se true, applica moltiplicatore 1.5x
-   * @returns Numero totale di token necessari
+   * @returns Numero totale di token necessari (puo' essere frazionario)
    */
   calculateTokensNeeded(imageCount: number, visualTaggingEnabled: boolean): number {
     const baseTokens = imageCount;
     const visualTaggingTokens = visualTaggingEnabled ? imageCount * 0.5 : 0;
-    return Math.ceil(baseTokens + visualTaggingTokens);
+    return baseTokens + visualTaggingTokens;
   }
 }
 
