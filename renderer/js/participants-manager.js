@@ -1773,12 +1773,20 @@ async function openParticipantEditModal(rowIndex = -1) {
   const title = rowIndex === -1 ? 'Add Participant' : 'Edit Participant';
   document.getElementById('participant-edit-title').textContent = title;
 
-  // "Save & Next" is only meaningful when editing an existing row.
+  // "Save & Next" / "Save & Previous" are only meaningful when editing
+  // an existing row — they walk the participant list one step at a
+  // time after persisting the current row. In "Add Participant" mode
+  // (rowIndex === -1) both stay hidden.
   const saveNextBtn = document.getElementById('save-and-next-btn');
   if (saveNextBtn) {
     saveNextBtn.style.display = rowIndex >= 0 ? '' : 'none';
   }
+  const savePrevBtn = document.getElementById('save-and-prev-btn');
+  if (savePrevBtn) {
+    savePrevBtn.style.display = rowIndex >= 0 ? '' : 'none';
+  }
   updateSaveAndNextAvailability(rowIndex);
+  updateSaveAndPreviousAvailability(rowIndex);
 
   // Get current user ID for face photos
   let currentUserId = null;
@@ -2231,6 +2239,39 @@ async function saveParticipantEditAndNext() {
 window.saveParticipantEditAndNext = saveParticipantEditAndNext;
 
 /**
+ * Mirror of saveParticipantEditAndNext that walks BACKWARDS through the
+ * table's currently visible order. Uses DOM previousElementSibling so
+ * sort/filter state is respected — never relies on participantsData
+ * indexing because that's the import order, not what the user sees.
+ * Closes the modal with an informational toast when the saved row is
+ * the first one.
+ */
+async function saveParticipantEditAndPrevious() {
+  const saved = await saveParticipantEdit(false);
+  if (!saved) return;
+
+  const currentRow = document.querySelector(
+    `#participants-tbody tr[data-original-index="${editingRowIndex}"]`
+  );
+  const prevRow = currentRow?.previousElementSibling;
+  const prevIndexAttr = prevRow?.getAttribute('data-original-index');
+  const prevIndex = prevIndexAttr !== null && prevIndexAttr !== undefined
+    ? parseInt(prevIndexAttr, 10)
+    : NaN;
+
+  if (Number.isFinite(prevIndex) && participantsData[prevIndex]) {
+    await openParticipantEditModal(prevIndex);
+  } else {
+    closeParticipantEditModal();
+    if (typeof showNotification === 'function') {
+      showNotification('Reached the first participant', 'info');
+    }
+  }
+}
+
+window.saveParticipantEditAndPrevious = saveParticipantEditAndPrevious;
+
+/**
  * Toggle the "Save & Next" button's enabled state based on whether
  * the given row has a visible successor in the table.
  */
@@ -2248,6 +2289,30 @@ function updateSaveAndNextAvailability(rowIndex) {
   const hasNext = !!currentRow?.nextElementSibling;
   btn.disabled = !hasNext;
   btn.title = hasNext ? '' : 'No more participants below';
+}
+
+/**
+ * Toggle the "Save & Previous" button's enabled state based on whether
+ * the given row has a visible predecessor in the table. Mirror of
+ * updateSaveAndNextAvailability above — kept as a separate function so
+ * each button has a single source of truth for its disabled/title
+ * state (no accidental coupling if one of the two flows is changed
+ * later).
+ */
+function updateSaveAndPreviousAvailability(rowIndex) {
+  const btn = document.getElementById('save-and-prev-btn');
+  if (!btn) return;
+  if (rowIndex < 0) {
+    btn.disabled = false;
+    btn.title = '';
+    return;
+  }
+  const currentRow = document.querySelector(
+    `#participants-tbody tr[data-original-index="${rowIndex}"]`
+  );
+  const hasPrev = !!currentRow?.previousElementSibling;
+  btn.disabled = !hasPrev;
+  btn.title = hasPrev ? '' : 'No participants above';
 }
 
 /**
