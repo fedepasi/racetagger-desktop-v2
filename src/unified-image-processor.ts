@@ -284,6 +284,11 @@ export interface UnifiedProcessingResult {
   };
   // Pending JSONL log entry (worker builds it, main process logs it via analysisLogger)
   pendingLogEntry?: any;
+  // Supabase image row UUID — surfaced separately so the temporal second-pass
+  // can correlate `pendingUpdates` / `pendingAnalysisInserts` (keyed by DB id)
+  // back to the local file path after the heavy pendingLogEntry has been cleared
+  // by the memory-optimization pass in processWithWorker.
+  dbImageId?: string;
 }
 
 /**
@@ -4033,6 +4038,14 @@ class UnifiedImageWorker extends EventEmitter {
           filteredAnalysis.length
         );
 
+        // Photo / camera / exposure / AF metadata extracted upfront from EXIF.
+        // The Gemini Edge Function inserts the row before we update it and has no
+        // access to the local file, so we enrich the row here. Without this, the
+        // photo_taken_at column stays NULL for every Gemini analysis, which in
+        // turn blinds the temporal-clustering second pass and downstream
+        // analytics that join on photo time.
+        const photoMetadata = processor?.getPhotoMetadataForDB(imageFile.originalPath) || {};
+
         pendingUpdateData = {
           imageId: dbImageId,
           updateData: {
@@ -4049,7 +4062,9 @@ class UnifiedImageWorker extends EventEmitter {
               enrichedAt: new Date().toISOString()
             },
             // Training flags for YOLO-seg retraining (null if no flags)
-            ...(trainingFlags ? { training_flags: trainingFlags } : {})
+            ...(trainingFlags ? { training_flags: trainingFlags } : {}),
+            // EXIF-derived photo metadata (photo_taken_at, camera_*, exposure_*, af_data, geo)
+            ...photoMetadata
           },
           timestamp: Date.now()
         };
@@ -4173,7 +4188,10 @@ class UnifiedImageWorker extends EventEmitter {
         } : undefined,
         // Pending JSONL log entry (worker builds it, main process logs via its analysisLogger)
         // Workers from pool don't have analysisLogger, so the main process handles JSONL writing
-        pendingLogEntry: imageAnalysisEvent
+        pendingLogEntry: imageAnalysisEvent,
+        // Surface the Supabase image UUID for the temporal second-pass; survives
+        // the post-accumulation cleanup that wipes pendingLogEntry / pendingUpdate.
+        dbImageId: analysisResult.imageId || undefined,
       };
 
       // Clear the pending insert data after returning it
@@ -9076,6 +9094,165 @@ export class UnifiedImageProcessor extends EventEmitter {
             durationMs: secondPassMs
           });
         }
+      }
+    }
+
+    // ==================== TEMPORAL MULTI-CONFIRM RESCORE SECOND PASS ====================
+    // After the worker pool finishes, SmartMatcher.temporalAnalysisCache is fully
+    // populated. The first-pass bonus runs while workers race in parallel, so it
+    // sees only a fraction of each image's neighbors (offline sim on Gruppe C:
+    // ~50% visibility). This second pass re-evaluates uncertain matches with the
+    // full cache, applying the bonus only when ≥2 neighbors agree (MULTI_CONFIRM)
+    // and capped at +60 points. Offline simulation showed 10× lower flip-rate
+    // on HIGH-confidence records vs the naive single-neighbor variant.
+    //
+    // We iterate directly on pendingUpdates / pendingAnalysisInserts because
+    // results[].pendingUpdate has already been cleared post-accumulation (see
+    // memory-optimization cleanup in processWithWorker). Each pending write
+    // already holds the imageId, originalPath via raw_response, and the
+    // vehicles array we need to re-score.
+    if (participantsPresetData.length > 0) {
+      const rescoreStart = Date.now();
+      const sport = this.config.category || 'motorsport';
+      const proximityBonus = this.temporalManager.getProximityBonus(sport);
+      const clusterWindowMs = this.temporalManager.getClusterWindow(sport);
+      const burstThresholdMs = this.temporalManager.getBurstThreshold(sport);
+
+      // Build originalPath lookup from results (needed because pendingUpdates
+      // only carries the DB UUID, but rescoreVehiclesWithTemporalMultiConfirm
+      // keys the cache by the local file path).
+      const pathByDbId = new Map<string, string>();
+      for (const r of results) {
+        const dbId = (r as any).dbImageId
+          ?? (r as any).pendingUpdate?.imageId
+          ?? (r as any).pendingAnalysisInsert?.data?.image_id;
+        if (dbId && r.originalPath) pathByDbId.set(String(dbId), r.originalPath);
+      }
+
+      type PendingUpd = { imageId: string; updateData: any; timestamp: number };
+      type PendingIns = { data: any; timestamp: number };
+      type PendingWrite =
+        | { kind: 'update'; ref: PendingUpd }
+        | { kind: 'insert'; ref: PendingIns };
+      const allWrites: PendingWrite[] = [];
+      for (const u of this.pendingUpdates) allWrites.push({ kind: 'update', ref: u });
+      for (const i of this.pendingAnalysisInserts) allWrites.push({ kind: 'insert', ref: i });
+
+      let rescoreCandidates = 0;
+      let rescoreFlipped = 0;
+      let rescoreReinforced = 0;
+      const rescoreFlipsLog: Array<{ imageId: string; vehicleIndex: number; from: string; to: string }> = [];
+
+      for (const w of allWrites) {
+        // For updates the payload lives under .updateData, for inserts under .data
+        const data: any = w.kind === 'update' ? w.ref.updateData : w.ref.data;
+        const dbId: string | undefined = w.kind === 'update' ? w.ref.imageId : data?.image_id;
+        const vehicles: any[] | undefined = data?.raw_response?.vehicles;
+        if (!dbId || !Array.isArray(vehicles) || vehicles.length === 0) continue;
+        const originalPath = pathByDbId.get(String(dbId));
+        if (!originalPath) continue;
+
+        const hasUncertain = vehicles.some((v) => {
+          const status = v?.participantMatch?.smartMatch?.matchStatus;
+          return !status || status !== 'matched';
+        });
+        if (!hasUncertain) continue;
+        rescoreCandidates++;
+
+        const rescore = SmartMatcher.rescoreVehiclesWithTemporalMultiConfirm(
+          originalPath,
+          vehicles,
+          {
+            clusterWindowMs,
+            proximityBonus,
+            burstThresholdMs,
+            minConfirmations: 2,
+            maxBonus: 60,
+            neighborConfidenceFloor: 0.8,
+          },
+        );
+        if (rescore.bonusesApplied.length > 0) rescoreReinforced++;
+        if (!rescore.changed) continue;
+
+        for (const flip of rescore.flips) {
+          const v = vehicles[flip.vehicleIndex];
+          if (!v) continue;
+          const newParticipant = participantsPresetData.find(
+            (p: any) => String(p.numero) === flip.to,
+          );
+          if (!newParticipant) {
+            console.warn(`[TemporalRescore] image ${dbId}: new winner #${flip.to} not in preset; skipping flip`);
+            continue;
+          }
+          const altsList = v?.participantMatch?.smartMatch?.alternativeCandidates ?? [];
+          const newAlt = altsList.find((a: any) => String(a.participantNumber) === flip.to);
+          const newConfidence = typeof newAlt?.confidence === 'number' ? newAlt.confidence : 0.85;
+
+          console.log(`[TemporalRescore] image ${dbId}: vehicle ${flip.vehicleIndex} flipped #${flip.from} → #${flip.to} (score ${flip.oldScore.toFixed(1)} → ${flip.newScore.toFixed(1)})`);
+          rescoreFlipsLog.push({ imageId: dbId, vehicleIndex: flip.vehicleIndex, from: flip.from, to: flip.to });
+
+          v.raceNumber = flip.to;
+          v.confidence = newConfidence;
+          v.teamName = newParticipant.squadra || null;
+          v.team = newParticipant.squadra || null;
+          v.drivers = newParticipant.nome
+            ? String(newParticipant.nome).split(/[,&]/).map((d: string) => d.trim()).filter(Boolean)
+            : [];
+          if (v.participantMatch) {
+            v.participantMatch.matchedValue = flip.to;
+            v.participantMatch.entry = newParticipant;
+            if (v.participantMatch.smartMatch) {
+              v.participantMatch.smartMatch.score = flip.newScore;
+              v.participantMatch.smartMatch.confidence = newConfidence;
+              if (!Array.isArray(v.participantMatch.smartMatch.reasoning))
+                v.participantMatch.smartMatch.reasoning = [];
+              v.participantMatch.smartMatch.reasoning.push(
+                `Temporal second-pass flip (MULTI_CONFIRM ≥2 within ${clusterWindowMs}ms): #${flip.from} → #${flip.to} (+${(flip.newScore - flip.oldScore).toFixed(1)} pts)`,
+              );
+            }
+          }
+          if (v.finalResult) {
+            v.finalResult.raceNumber = flip.to;
+            v.finalResult.team = newParticipant.squadra || null;
+            v.finalResult.drivers = newParticipant.nome ? [newParticipant.nome] : [];
+            v.finalResult.matchedBy = 'temporal_rescore';
+          }
+        }
+        rescoreFlipped++;
+
+        // Reflect new winner on the top-level columns (recognized_number /
+        // confidence_score / confidence_level) so DB queries that don't dive
+        // into raw_response see the corrected number too.
+        const primary = vehicles[0];
+        const c = primary?.confidence || 0;
+        const lvl = c >= 0.97 ? 'HIGH' : c >= 0.92 ? 'MEDIUM' : 'LOW';
+        data.raw_response = {
+          ...data.raw_response,
+          vehicles,
+          temporalRescored: true,
+          temporalRescoredAt: new Date().toISOString(),
+        };
+        if (primary) {
+          data.recognized_number = primary.raceNumber || null;
+          data.confidence_score = c;
+          data.confidence_level = lvl;
+        }
+      }
+
+      const rescoreMs = Date.now() - rescoreStart;
+      if (rescoreCandidates > 0) {
+        console.log(
+          `[TemporalRescore] Pass complete in ${rescoreMs}ms: ` +
+            `${rescoreFlipped} winner flips, ${rescoreReinforced} reinforced, ` +
+            `${rescoreCandidates} candidates evaluated`,
+        );
+        this.emit('temporalRescoreComplete', {
+          candidates: rescoreCandidates,
+          flipped: rescoreFlipped,
+          reinforced: rescoreReinforced,
+          durationMs: rescoreMs,
+          flips: rescoreFlipsLog,
+        });
       }
     }
 

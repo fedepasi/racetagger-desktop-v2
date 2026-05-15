@@ -429,6 +429,145 @@ export class SmartMatcher {
   }
 
   /**
+   * Second-pass temporal re-scoring with MULTI_CONFIRM policy.
+   *
+   * Runs AFTER the parallel worker pool has finished processing every image, so
+   * the static temporalAnalysisCache is fully populated. Re-evaluates a single
+   * image's `vehicles[]` (raw_response.vehicles format) using its temporal
+   * neighbors from the cache and applies the bonus ONLY when at least
+   * `minConfirmations` neighbors carry the candidate's participantNumber.
+   *
+   * This avoids the race-condition lossage of the first pass, where the cache
+   * is half-populated when bonus is applied. Offline simulation on Gruppe C
+   * showed MULTI_CONFIRM has 10x lower flip-rate on HIGH records vs the naive
+   * single-confirmation variant.
+   *
+   * Returns:
+   *   - changed: true when the winner of at least one vehicle was flipped.
+   *     Caller is expected to update vehicle.raceNumber / participantMatch.entry
+   *     using the matching participant from the preset.
+   *   - bonusesApplied: per-vehicle/per-candidate list for logging/telemetry.
+   *
+   * This method does NOT mutate participants or call findMatches — it only
+   * adjusts scores within the candidate list of each vehicle.
+   */
+  static rescoreVehiclesWithTemporalMultiConfirm(
+    imagePath: string,
+    vehicles: any[],
+    options: {
+      clusterWindowMs: number;
+      proximityBonus: number;
+      burstThresholdMs: number;
+      minConfirmations?: number;
+      maxBonus?: number;
+      neighborConfidenceFloor?: number;
+    }
+  ): {
+    changed: boolean;
+    bonusesApplied: Array<{ vehicleIndex: number; candidateNumber: string; bonus: number; confirmations: number; isBurst: boolean }>;
+    flips: Array<{ vehicleIndex: number; from: string; to: string; oldScore: number; newScore: number }>;
+  } {
+    const minConfirmations = options.minConfirmations ?? 2;
+    const maxBonus = options.maxBonus ?? 60;
+    const confFloor = options.neighborConfidenceFloor ?? 0.8;
+
+    const ownKey = imagePath.toLowerCase();
+    const ownEntry = SmartMatcher.temporalAnalysisCache.get(ownKey);
+    const result = {
+      changed: false,
+      bonusesApplied: [] as Array<{ vehicleIndex: number; candidateNumber: string; bonus: number; confirmations: number; isBurst: boolean }>,
+      flips: [] as Array<{ vehicleIndex: number; from: string; to: string; oldScore: number; newScore: number }>,
+    };
+    if (!ownEntry || !ownEntry.timestamp) return result;
+
+    // Collect neighbors within window, excluding self.
+    // Cache size is bounded (FIFO 1000), so O(n) scan is fine.
+    const ownTs = ownEntry.timestamp.getTime();
+    const neighbors: Array<{ number: string; confidence: number; ts: Date }> = [];
+    for (const [key, entry] of SmartMatcher.temporalAnalysisCache.entries()) {
+      if (key === ownKey) continue;
+      if (!entry.timestamp) continue;
+      if (entry.confidence < confFloor) continue;
+      const diff = Math.abs(entry.timestamp.getTime() - ownTs);
+      if (diff <= options.clusterWindowMs) {
+        neighbors.push({ number: entry.participantNumber, confidence: entry.confidence, ts: entry.timestamp });
+      }
+    }
+    if (neighbors.length < minConfirmations) return result;
+
+    for (let vIdx = 0; vIdx < vehicles.length; vIdx++) {
+      const v = vehicles[vIdx];
+      const sm = v?.participantMatch?.smartMatch;
+      if (!sm || typeof sm.score !== 'number') continue;
+      const alts = Array.isArray(sm.alternativeCandidates) ? sm.alternativeCandidates : [];
+      const currentWinnerNumber = String(v?.participantMatch?.entry?.numero ?? v.raceNumber ?? '');
+      if (!currentWinnerNumber) continue;
+
+      // Build candidate map: number → score (winner included)
+      const scoreByCandidate = new Map<string, number>();
+      scoreByCandidate.set(currentWinnerNumber, sm.score);
+      for (const a of alts) {
+        if (!a?.participantNumber || typeof a.score !== 'number') continue;
+        const k = String(a.participantNumber);
+        const prev = scoreByCandidate.get(k);
+        scoreByCandidate.set(k, prev === undefined ? a.score : Math.max(prev, a.score));
+      }
+
+      // Apply MULTI_CONFIRM bonus per candidate
+      const adjustedScores = new Map<string, number>(scoreByCandidate);
+      for (const [candNum, candScore] of scoreByCandidate.entries()) {
+        const confirming = neighbors.filter((n) => n.number === candNum);
+        if (confirming.length < minConfirmations) continue;
+        const avgConf = confirming.reduce((s, n) => s + n.confidence, 0) / confirming.length;
+        const isBurst = confirming.some((n) => Math.abs(n.ts.getTime() - ownTs) <= options.burstThresholdMs);
+        const burstMul = isBurst ? 1.5 : 1.0;
+        const rawBonus = options.proximityBonus * confirming.length * avgConf * burstMul;
+        const bonus = Math.floor(Math.min(rawBonus, maxBonus));
+        if (bonus <= 0) continue;
+        adjustedScores.set(candNum, candScore + bonus);
+        result.bonusesApplied.push({
+          vehicleIndex: vIdx,
+          candidateNumber: candNum,
+          bonus,
+          confirmations: confirming.length,
+          isBurst,
+        });
+      }
+
+      // Find new winner
+      let newWinnerNumber = currentWinnerNumber;
+      let newWinnerScore = adjustedScores.get(currentWinnerNumber) ?? sm.score;
+      for (const [n, s] of adjustedScores.entries()) {
+        if (s > newWinnerScore) {
+          newWinnerNumber = n;
+          newWinnerScore = s;
+        }
+      }
+      if (newWinnerNumber !== currentWinnerNumber) {
+        result.changed = true;
+        result.flips.push({
+          vehicleIndex: vIdx,
+          from: currentWinnerNumber,
+          to: newWinnerNumber,
+          oldScore: sm.score,
+          newScore: newWinnerScore,
+        });
+      } else {
+        // Persist the updated score even when winner stays (useful for analytics
+        // and to expose temporal-reinforced confidence to downstream consumers).
+        const newSelfScore = adjustedScores.get(currentWinnerNumber);
+        if (newSelfScore !== undefined && newSelfScore > sm.score) {
+          const delta = newSelfScore - sm.score;
+          sm.score = newSelfScore;
+          if (!Array.isArray(sm.reasoning)) sm.reasoning = [];
+          sm.reasoning.push(`Temporal second-pass bonus (MULTI_CONFIRM): +${delta} pts confirmed winner`);
+        }
+      }
+    }
+    return result;
+  }
+
+  /**
    * Analyze participant preset for uniqueness of values
    * This is cached and computed only once per preset for performance
    *
