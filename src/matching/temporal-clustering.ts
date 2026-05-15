@@ -884,6 +884,24 @@ export class TemporalClusterManager {
   }
 
   /**
+   * Get the cluster window (milliseconds) for the given sport, with fallback
+   * to the 'generic' default when the sport is unknown.
+   */
+  getClusterWindow(sport: string = 'generic'): number {
+    const config = this.config[sport as keyof TemporalConfig] || this.config.generic;
+    return config.clusterWindow;
+  }
+
+  /**
+   * Get the burst threshold (milliseconds) for the given sport, with fallback
+   * to the 'generic' default when the sport is unknown.
+   */
+  getBurstThreshold(sport: string = 'generic'): number {
+    const config = this.config[sport as keyof TemporalConfig] || this.config.generic;
+    return config.burstThreshold;
+  }
+
+  /**
    * Update sport-specific configuration
    */
   updateConfig(sport: string, updates: Partial<TemporalConfig[keyof TemporalConfig]>): void {
