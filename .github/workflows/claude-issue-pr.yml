@@ -1,0 +1,137 @@
+name: Claude Issue → Draft PR (approved pipeline)
+
+# Triggered by the Supabase Edge Function `support-action-approve` when Fede
+# approves a `ready_to_implement` triage run in /management-portal/support-queue.
+# Receives the ticket / triage_run identifiers and lets Claude open a draft PR
+# scoped to the approved implementation plan.
+#
+# This workflow coexists with `claude-issue-triage.yml` (auto-comment + naive
+# draft PR on every user-feedback issue). The new pipeline is strictly opt-in:
+# it only fires after human review.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ticket_id:
+        description: 'support_tickets.id (UUID)'
+        required: true
+      github_issue_number:
+        description: 'GitHub issue number on this repo'
+        required: true
+      triage_run_id:
+        description: 'support_triage_runs.id (UUID) — the approved run'
+        required: true
+
+# Opt into Node 24 for JS actions (Node 20 deprecated, removed Sept 2026)
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  open-draft-pr:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write           # branch + commit
+      pull-requests: write      # open draft PR
+      issues: write             # comment on issue
+      id-token: write           # claude-code-action
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Fetch approved triage plan from Supabase
+        id: plan
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TRIAGE_RUN_ID: ${{ inputs.triage_run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SUPABASE_URL:-}" ] || [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
+            echo "::error::SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY secret missing"
+            exit 1
+          fi
+          curl -sS \
+            "${SUPABASE_URL}/rest/v1/support_triage_runs?id=eq.${TRIAGE_RUN_ID}&select=claude_output,claude_decision,ticket_id" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Accept: application/json" \
+            > /tmp/triage_runs.json
+          jq '.[0]' /tmp/triage_runs.json > /tmp/triage_run.json
+          if [ "$(jq -r '.claude_decision' /tmp/triage_run.json)" != "ready_to_implement" ]; then
+            echo "::error::triage_run is not ready_to_implement"
+            exit 1
+          fi
+          jq -r '.claude_output.implementation_plan' /tmp/triage_run.json > /tmp/plan.json
+          echo "plan_path=/tmp/plan.json" >> "$GITHUB_OUTPUT"
+
+      - name: Build Claude prompt
+        id: prompt
+        env:
+          ISSUE_NUMBER: ${{ inputs.github_issue_number }}
+          TICKET_ID: ${{ inputs.ticket_id }}
+        run: |
+          set -euo pipefail
+          PLAN_JSON=$(cat /tmp/plan.json)
+          cat > /tmp/prompt.md <<EOF
+          You are implementing an approved fix for a triaged user support ticket on the RaceTagger Electron desktop app.
+
+          ## Context
+          - Repo: ${{ github.repository }}
+          - GitHub issue: #${ISSUE_NUMBER}
+          - Support ticket ID: ${TICKET_ID}
+          - The implementation plan below was reviewed and approved by Fede in /management-portal/support-queue.
+
+          ## Approved implementation plan (JSON)
+          \`\`\`json
+          ${PLAN_JSON}
+          \`\`\`
+
+          ## Hard constraints (NEVER violate)
+          1. **Open ONLY a draft PR.** Never mark ready-for-review. Never merge.
+          2. **Never** modify files matching:
+             - \`src/auth-service.ts\` (token pre-authorization)
+             - \`src/services/token-*\`, \`src/ipc/token-*\`, \`src/utils/token-*\`
+             - any file referencing user_tokens, token_transactions, batch_token_reservations
+          3. **Never** modify existing Supabase migrations under \`supabase/migrations/\`. If a DB change is required, create a NEW migration file (timestamped today, with GRANT template).
+          4. **Never** modify existing Edge Function versions under \`supabase/functions/analyzeImageDesktopV*/\`. If a change is needed, add a new version + bump MAX_SUPPORTED_EDGE_FUNCTION_VERSION in config.ts.
+          5. **Never** touch code signing / notarization config in package.json or electron-builder config.
+          6. If the approved plan implies touching any of the above, STOP, do NOT open a PR, and post a comment on issue #${ISSUE_NUMBER} explaining the constraint violation. Tag with label \`needs-human-implementation\`.
+
+          ## Workflow
+          1. Create branch \`claude/issue-${ISSUE_NUMBER}\` (don't reuse existing).
+          2. Apply changes per the plan. Stay scoped — do not refactor surrounding code.
+          3. Run \`npm install\` if needed, then \`npm run type-check\`, \`npm run lint\`, \`npm test\`. Fix any breakages caused by your changes (not pre-existing ones).
+          4. Commit with message: \`fix(#${ISSUE_NUMBER}): <short>\` referencing the approved plan summary.
+          5. Open draft PR: \`gh pr create --draft --base main --title "[Claude] Fix #${ISSUE_NUMBER}: <short>" --body-file <body file>\`.
+             Body MUST include:
+             - \`Closes #${ISSUE_NUMBER}\` line
+             - Section "What changed" with bullet list
+             - Section "Test plan" with checklist
+             - Section "Approved plan" referencing support_triage_runs.id = ${{ inputs.triage_run_id }}
+             - Label \`claude-generated\`
+          6. Comment on issue #${ISSUE_NUMBER} with the PR link.
+
+          Style: terse, English, no emojis. If you cannot implement the plan (unclear, contradictory, hits a constraint), comment on the issue explaining why and exit without opening a PR.
+          EOF
+          echo "prompt_path=/tmp/prompt.md" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund --prefer-offline
+
+      - name: Run Claude Code (implement approved plan)
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          additional_permissions: |
+            actions: read
+          prompt_file: /tmp/prompt.md
+          claude_args: '--allowed-tools Read,Edit,Write,Bash(npm:*),Bash(git:*),Bash(gh issue:*),Bash(gh pr:*)'

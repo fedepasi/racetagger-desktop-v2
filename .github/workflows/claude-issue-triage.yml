@@ -1,108 +1,242 @@
-name: Claude Issue Triage
+name: Claude Issue Triage (support pipeline)
+
+# REPLACED 2026-05-17.
+#
+# Previous behaviour (auto-comment on every user-feedback issue + sometimes open
+# a naive draft PR) has been superseded by the new support pipeline. This
+# workflow is now invoked ONLY via workflow_dispatch from the Supabase Edge
+# Functions `support-triage` (initial) and `support-followup-submit` (after a
+# user fills the follow-up form). The pipeline architecture is described in
+# `.claude/plans/stavo-pensando-di-mettere-concurrent-marshmallow.md`.
+#
+# The job's job:
+#  1. fetch the support_tickets row + latest follow-up answers from Supabase,
+#  2. fetch the issue body via gh CLI,
+#  3. let Claude decide (ask_user / ready_to_implement / reject / duplicate)
+#     and POST the result into support_triage_runs,
+#  4. flip support_tickets.status to 'pending_review'.
+#
+# Nothing user-visible (no comment, no PR). Fede approves in the management
+# portal `/management-portal/support-queue` — `support-action-approve` then
+# decides whether to email the user (ask_user) or dispatch `claude-issue-pr.yml`
+# (ready_to_implement).
 
 on:
-  issues:
-    types: [opened]
+  workflow_dispatch:
+    inputs:
+      ticket_id:
+        description: 'support_tickets.id (UUID)'
+        required: true
+      github_issue_number:
+        description: 'GitHub issue number on this repo'
+        required: true
+
+# Opt into Node 24 for JS actions (Node 20 deprecated, removed Sept 2026)
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   triage:
-    # Trigger only on issues created by our Edge Functions
-    # (submitFeedback → user-feedback, report-automatic-error → auto-report).
-    # Skip if Claude already triaged this issue (idempotency on re-open).
-    # Manual issues created without these labels are NOT triaged.
-    if: |
-      !contains(github.event.issue.labels.*.name, 'claude-triaged') &&
-      (contains(github.event.issue.labels.*.name, 'auto-report') ||
-       contains(github.event.issue.labels.*.name, 'user-feedback'))
     runs-on: ubuntu-latest
     permissions:
-      contents: write          # create branch + commit for draft PR
-      pull-requests: write     # open draft PR with fix attempt
-      issues: write            # post comment + add label
-      id-token: write          # required by claude-code-action
+      contents: read           # checkout for code search
+      issues: read             # gh issue view
+      id-token: write          # claude-code-action
       actions: read
 
+    env:
+      SUPABASE_URL: https://taompbzifylmdzgbbrpv.supabase.co
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      TICKET_ID: ${{ inputs.ticket_id }}
+      ISSUE_NUMBER: ${{ inputs.github_issue_number }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
     steps:
-      - name: Checkout repository
+      - name: Checkout repository (read-only, for code grep)
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Run Claude triage
-        id: claude
+      - name: Build Claude prompt
+        run: |
+          set -euo pipefail
+          cat > /tmp/prompt.md <<'PROMPT'
+          You are RaceTagger's L1 support triager. RaceTagger is a desktop app
+          (Electron) that does AI-powered race-number recognition for sports
+          photographers. This workflow is invoked after a user opened a
+          user-feedback issue, or after they answered a follow-up form. Your
+          job is to decide what comes next and persist a structured decision
+          to Supabase. NEVER comment on the GitHub issue and NEVER open a PR
+          from this workflow — both happen later, after a human approves your
+          decision in /management-portal/support-queue.
+
+          ## Inputs available in env
+
+          - $TICKET_ID            — support_tickets.id (UUID)
+          - $ISSUE_NUMBER         — GitHub issue number on this repo
+          - $SUPABASE_URL         — https://taompbzifylmdzgbbrpv.supabase.co
+          - $SUPABASE_SERVICE_ROLE_KEY — service role bearer (DO NOT echo / log)
+
+          ## Step 1 — fetch ticket + history from Supabase
+
+          Use curl to fetch the ticket and its last submitted follow-up
+          (if any). The `support_tickets` row has fields: user_id,
+          github_repo, github_issue_number, category, language, status,
+          current_round, created_at. The latest `support_followup_forms` row
+          with status='submitted' (if any) contains the schema we previously
+          asked + the answers the user provided.
+
+          ```bash
+          curl -sS "$SUPABASE_URL/rest/v1/support_tickets?id=eq.$TICKET_ID&select=*" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY"
+
+          curl -sS "$SUPABASE_URL/rest/v1/support_followup_forms?ticket_id=eq.$TICKET_ID&status=eq.submitted&select=round,schema,answers&order=round.desc&limit=1" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY"
+
+          curl -sS "$SUPABASE_URL/rest/v1/support_triage_runs?ticket_id=eq.$TICKET_ID&select=round,claude_decision,claude_output,created_at&order=round.asc" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY"
+          ```
+
+          ## Step 2 — fetch issue body
+
+          `gh issue view $ISSUE_NUMBER --json title,body,labels`
+
+          ## Step 3 — fetch a tiny slice of user context (optional, only if user_id is present)
+
+          ```bash
+          USER_ID=<from ticket>
+          curl -sS "$SUPABASE_URL/rest/v1/executions?user_id=eq.$USER_ID&select=id,status,sport_category,edge_function_version,total_images,created_at&order=created_at.desc&limit=5" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY"
+          ```
+
+          ## Step 4 — search the codebase for relevant files
+
+          Use Grep/Glob to find the implicated files in the issue body
+          (filenames, function names, error strings). Known hot spots:
+          - src/utils/raw-preview-native.ts (RAW preview)
+          - src/unified-image-processor.ts (main pipeline)
+          - src/model-manager.ts (ONNX models)
+          - src/auth-service.ts (tokens — READ ONLY, NEVER plan to modify)
+          - src/matching/smart-matcher.ts (participant matching)
+          - supabase/functions/analyzeImageDesktopV6/ (current EF)
+
+          ## Step 5 — decide
+
+          One of:
+          - **ask_user**: information is missing. Produce a SHORT (1–4
+            fields max) follow-up form IN THE USER'S LANGUAGE. Do not ask
+            things you already asked in a previous round (check the triage
+            history). If you've already asked twice and still need more,
+            switch to "reject" with note "needs human triage".
+          - **ready_to_implement**: the bug is well-scoped, a Claude Code
+            coding agent can realistically fix it. Provide an implementation
+            plan.
+          - **reject**: not actionable.
+          - **duplicate**: matches an existing issue. List the issue number.
+
+          ### Hard constraints on the implementation plan (NEVER violate)
+
+          If implementing would require modifying ANY of the following, set
+          decision="ask_user" with a question to Fede instead, or "reject":
+          - `src/auth-service.ts` or any file matching `*token*` (token logic)
+          - any reference to user_tokens / token_transactions / batch_token_reservations
+          - existing files under `supabase/migrations/`
+          - existing files under `supabase/functions/analyzeImageDesktopV*/` (must add a NEW version)
+          - code signing / notarization config
+
+          ## Step 6 — POST the result to Supabase
+
+          Build a JSON file at /tmp/decision.json matching this shape, and
+          POST it to the `support_triage_runs` table. Compute `round` =
+          (max existing round for this ticket) + 1, starting at 1 for the
+          first run.
+
+          ```json
+          {
+            "ticket_id": "<uuid>",
+            "round": <int>,
+            "claude_decision": "ask_user" | "ready_to_implement" | "reject" | "duplicate",
+            "confidence": <0-100>,
+            "claude_output": {
+              "decision": "<same as above>",
+              "language": "<ISO 639-1>",
+              "confidence": <0-100>,
+              "reasoning": "<short English rationale>",
+              "email_subject": "<localized, only for ask_user>",
+              "email_body": "<localized, only for ask_user, 3-5 sentences, no link placeholder>",
+              "form_schema": {
+                "title": "<localized>",
+                "intro": "<optional localized>",
+                "fields": [
+                  {"name": "...", "type": "text|textarea|select|radio|checkbox|file_upload", "label": "<localized>", "required": true|false, "options": ["..."]}
+                ]
+              },
+              "implementation_plan": {
+                "summary": "...",
+                "files_to_modify": ["..."],
+                "risks": ["..."],
+                "test_strategy": "..."
+              },
+              "related_issues": [{"number": <n>, "reason": "..."}]
+            },
+            "model_used": "claude-code-action"
+          }
+          ```
+
+          Only include `email_subject`/`email_body`/`form_schema` when
+          decision = ask_user. Only include `implementation_plan` when
+          decision = ready_to_implement. `related_issues` is optional.
+
+          POST it with:
+
+          ```bash
+          curl -sS -X POST "$SUPABASE_URL/rest/v1/support_triage_runs" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            --data-binary @/tmp/decision.json
+          ```
+
+          ## Step 7 — update ticket status + language
+
+          ```bash
+          curl -sS -X PATCH "$SUPABASE_URL/rest/v1/support_tickets?id=eq.$TICKET_ID" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Content-Type: application/json" \
+            --data '{"status":"pending_review","language":"<detected>","current_round":<round used>}'
+          ```
+
+          ## Style / privacy
+
+          - Be terse and concrete (file paths, exact error strings, function
+            names). No filler.
+          - Do NOT include user-identifying data (email, full path with
+            username) in the GitHub-visible parts. The reasoning text lives
+            in Supabase and is visible only to Fede.
+          - The `racetagger-desktop-v2` repo is PUBLIC. NEVER post comments
+            to it from this workflow.
+          - NEVER open a PR. NEVER push a branch. NEVER use `gh pr create`.
+            The follow-up workflow `claude-issue-pr.yml` is responsible for
+            that, and only runs after a human approves your decision.
+
+          ## What success looks like
+
+          A new row in `support_triage_runs` for this ticket, with a sensible
+          decision, the ticket flipped to status=pending_review. Fede then
+          reviews in the management portal.
+          PROMPT
+
+      - name: Run Claude Code (triage only)
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           additional_permissions: |
             actions: read
-          prompt: |
-            You are auto-triaging a newly opened GitHub issue on the RaceTagger Electron desktop app (this repository).
-
-            ## Context
-            - Repo: ${{ github.repository }}
-            - Issue: #${{ github.event.issue.number }} — ${{ github.event.issue.title }}
-            - URL: ${{ github.event.issue.html_url }}
-            - Labels: ${{ join(github.event.issue.labels.*.name, ', ') }}
-
-            Labels tell you the origin:
-            - `auto-report` → created by Supabase Edge Function `report-automatic-error` from desktop telemetry. Body contains: error type, severity, pipeline phase, system info, error message, stack trace, log snapshot.
-            - `user-feedback` → created by Edge Function `submitFeedback` from the in-app support modal. Body contains: user-written description, system diagnostics, dependencies, recent errors.
-
-            Both bodies usually include a "View Full Diagnostic Report" signed Supabase Storage URL pointing to a .txt file with ~10k lines of main process logs (sanitized: paths/emails/names redacted by `src/utils/error-telemetry-service.ts`). The URL is valid for 7 days.
-
-            ## Your tasks (in order)
-
-            1. **Read the issue body** with `gh issue view ${{ github.event.issue.number }} --json title,body,labels`. Extract error type, stack trace, file paths, function names, app version, OS, GPU.
-
-            2. **Fetch the diagnostic report if present.** Look for a markdown link labeled "View Full Diagnostic Report". Download it with `curl -sSL "<URL>" -o /tmp/diagnostic.txt` and read it. It will help disambiguate root cause vs. symptom.
-
-            3. **Search the codebase** for files/functions implicated in the stack trace. Known hot spots (from CLAUDE.md):
-               - `src/utils/raw-preview-native.ts` — RAW preview extraction
-               - `src/unified-image-processor.ts` — pipeline, edge function calls, zero-results
-               - `src/model-manager.ts` — ONNX model download/checksum
-               - `src/auth-service.ts` — token pre-authorization
-               - `src/generic-segmenter.ts` — segmentation model load
-               - `src/matching/smart-matcher.ts` — participant matching
-               - `src/utils/error-telemetry-service.ts` — telemetry itself
-               - `supabase/functions/analyzeImageDesktopV6/index.ts` — current edge function (symlinked)
-
-            4. **Check for similar past issues** via `gh issue list --state all --search "<key error phrase> in:title,body" --limit 5 --json number,title,state,url`. Cite the most relevant ones in your comment.
-
-            5. **Post an analysis comment** with `gh issue comment ${{ github.event.issue.number }} --body-file <path>`. Use exactly this structure:
-
-               ```markdown
-               ## Claude triage
-
-               **Causa probabile** (confidence: high|medium|low): <1–3 frasi>
-
-               **File coinvolti:**
-               - `path/to/file.ts:line` — perché
-               - ...
-
-               **Stack trace decifrato:** *(only if the trace is offuscated or non-ovvio)*
-               <spiegazione in linguaggio naturale>
-
-               **Prossimi passi di debug:**
-               1. <step concreto>
-               2. ...
-
-               **Issue simili:** *(only if found)*
-               - #N — title (state)
-               ```
-
-            6. **If confidence is HIGH and the fix is clearly local** (all of: ≤30 LOC changed, ≤2 files touched, NO DB migration, NO Edge Function changes, NO native module changes, NO build config changes), open a **draft PR**:
-               - Create branch `claude-triage/issue-${{ github.event.issue.number }}`
-               - Make the fix and commit
-               - Open with `gh pr create --draft --base main --title "[Claude triage] Fix tentativo per #${{ github.event.issue.number }}: <short>" --body "Closes #${{ github.event.issue.number }}\n\n## Cosa cambia\n<diff overview>\n\n## Perché\n<reasoning>\n\n⚠️ Draft PR generata automaticamente da Claude triage. Verificare manualmente prima di mergiare."`
-               - Mantieni in **draft** (NON ready-for-review, NON merge). Il workflow `claude-code-review.yml` esistente farà la review.
-
-               If confidence is medium/low, OR the fix is non-local, OR touches database/edge functions/native code/build config: do **NOT** open a PR. Comment only.
-
-            7. **Always add the `claude-triaged` label** at the end: `gh issue edit ${{ github.event.issue.number }} --add-label claude-triaged`. This prevents re-runs on close+reopen.
-
-            ## Style guidelines
-            - Comment in Italian if the issue body is mostly Italian, English otherwise. Auto-reports are English; user-feedback may be either.
-            - Be concrete: cite `path/to/file.ts:line`, exact function names, exact error strings. Avoid filler.
-            - If you cannot identify a likely cause, say so explicitly and list what additional diagnostic info would help.
-            - Never speculate beyond what code + logs actually show.
-            - Never close the issue. Never modify other issues/PRs.
+          prompt_file: /tmp/prompt.md
+          claude_args: '--allowed-tools Read,Grep,Glob,Write,Edit,Bash(gh issue:*),Bash(curl:*),Bash(jq:*),Bash(cat:*),Bash(echo:*),Bash(mkdir:*),Bash(test:*),Bash(ls:*)'
