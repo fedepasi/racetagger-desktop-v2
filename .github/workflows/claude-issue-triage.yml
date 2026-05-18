@@ -240,3 +240,32 @@ jobs:
             actions: read
           prompt_file: /tmp/prompt.md
           claude_args: '--allowed-tools Read,Grep,Glob,Write,Edit,Bash(gh issue:*),Bash(curl:*),Bash(jq:*),Bash(cat:*),Bash(echo:*),Bash(mkdir:*),Bash(test:*),Bash(ls:*)'
+
+      - name: Notify support reviewer (Fede)
+        if: success()
+        env:
+          SUPABASE_URL: ${{ env.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ env.SUPABASE_SERVICE_ROLE_KEY }}
+          TICKET_ID: ${{ env.TICKET_ID }}
+        run: |
+          set -euo pipefail
+          # Pull the most recent triage run for this ticket (the one Claude
+          # just wrote) and POST to notify-support-review which sends a
+          # Brevo email to info@racetagger.cloud with a link to the queue.
+          LATEST_RUN_ID=$(curl -sS \
+            "${SUPABASE_URL}/rest/v1/support_triage_runs?ticket_id=eq.${TICKET_ID}&select=id&order=round.desc,created_at.desc&limit=1" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            | jq -r '.[0].id // empty')
+
+          if [ -z "${LATEST_RUN_ID}" ]; then
+            echo "::warning::No triage_run row found for ticket ${TICKET_ID} — notification skipped (Claude may have failed to POST)"
+            exit 0
+          fi
+
+          # Non-blocking: if notify fails, don't fail the whole workflow.
+          curl -sS -X POST "${SUPABASE_URL}/functions/v1/notify-support-review" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Content-Type: application/json" \
+            --data "{\"ticket_id\":\"${TICKET_ID}\",\"triage_run_id\":\"${LATEST_RUN_ID}\"}" \
+            || echo "::warning::notify-support-review call failed (non-fatal)"
