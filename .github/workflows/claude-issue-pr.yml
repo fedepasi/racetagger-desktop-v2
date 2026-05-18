@@ -67,57 +67,6 @@ jobs:
           jq -r '.claude_output.implementation_plan' /tmp/triage_run.json > /tmp/plan.json
           echo "plan_path=/tmp/plan.json" >> "$GITHUB_OUTPUT"
 
-      - name: Build Claude prompt
-        id: prompt
-        env:
-          ISSUE_NUMBER: ${{ inputs.github_issue_number }}
-          TICKET_ID: ${{ inputs.ticket_id }}
-        run: |
-          set -euo pipefail
-          PLAN_JSON=$(cat /tmp/plan.json)
-          cat > /tmp/prompt.md <<EOF
-          You are implementing an approved fix for a triaged user support ticket on the RaceTagger Electron desktop app.
-
-          ## Context
-          - Repo: ${{ github.repository }}
-          - GitHub issue: #${ISSUE_NUMBER}
-          - Support ticket ID: ${TICKET_ID}
-          - The implementation plan below was reviewed and approved by Fede in /management-portal/support-queue.
-
-          ## Approved implementation plan (JSON)
-          \`\`\`json
-          ${PLAN_JSON}
-          \`\`\`
-
-          ## Hard constraints (NEVER violate)
-          1. **Open ONLY a draft PR.** Never mark ready-for-review. Never merge.
-          2. **Never** modify files matching:
-             - \`src/auth-service.ts\` (token pre-authorization)
-             - \`src/services/token-*\`, \`src/ipc/token-*\`, \`src/utils/token-*\`
-             - any file referencing user_tokens, token_transactions, batch_token_reservations
-          3. **Never** modify existing Supabase migrations under \`supabase/migrations/\`. If a DB change is required, create a NEW migration file (timestamped today, with GRANT template).
-          4. **Never** modify existing Edge Function versions under \`supabase/functions/analyzeImageDesktopV*/\`. If a change is needed, add a new version + bump MAX_SUPPORTED_EDGE_FUNCTION_VERSION in config.ts.
-          5. **Never** touch code signing / notarization config in package.json or electron-builder config.
-          6. If the approved plan implies touching any of the above, STOP, do NOT open a PR, and post a comment on issue #${ISSUE_NUMBER} explaining the constraint violation. Tag with label \`needs-human-implementation\`.
-
-          ## Workflow
-          1. Create branch \`claude/issue-${ISSUE_NUMBER}\` (don't reuse existing).
-          2. Apply changes per the plan. Stay scoped — do not refactor surrounding code.
-          3. Run \`npm install\` if needed, then \`npm run type-check\`, \`npm run lint\`, \`npm test\`. Fix any breakages caused by your changes (not pre-existing ones).
-          4. Commit with message: \`fix(#${ISSUE_NUMBER}): <short>\` referencing the approved plan summary.
-          5. Open draft PR: \`gh pr create --draft --base main --title "[Claude] Fix #${ISSUE_NUMBER}: <short>" --body-file <body file>\`.
-             Body MUST include:
-             - \`Closes #${ISSUE_NUMBER}\` line
-             - Section "What changed" with bullet list
-             - Section "Test plan" with checklist
-             - Section "Approved plan" referencing support_triage_runs.id = ${{ inputs.triage_run_id }}
-             - Label \`claude-generated\`
-          6. Comment on issue #${ISSUE_NUMBER} with the PR link.
-
-          Style: terse, English, no emojis. If you cannot implement the plan (unclear, contradictory, hits a constraint), comment on the issue explaining why and exit without opening a PR.
-          EOF
-          echo "prompt_path=/tmp/prompt.md" >> "$GITHUB_OUTPUT"
-
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -127,11 +76,66 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund --prefer-offline
 
+      - name: Read approved plan into env (for Claude prompt expansion)
+        id: plan_text
+        run: |
+          set -euo pipefail
+          {
+            echo 'PLAN_JSON<<__PLAN_EOF__'
+            cat /tmp/plan.json
+            echo
+            echo '__PLAN_EOF__'
+          } >> "$GITHUB_ENV"
+
       - name: Run Claude Code (implement approved plan)
         uses: anthropics/claude-code-action@v1
+        env:
+          ISSUE_NUMBER: ${{ inputs.github_issue_number }}
+          TICKET_ID: ${{ inputs.ticket_id }}
+          TRIAGE_RUN_ID: ${{ inputs.triage_run_id }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           additional_permissions: |
             actions: read
-          prompt_file: /tmp/prompt.md
           claude_args: '--allowed-tools Read,Edit,Write,Bash(npm:*),Bash(git:*),Bash(gh issue:*),Bash(gh pr:*)'
+          prompt: |
+            You are implementing an approved fix for a triaged user support ticket on the RaceTagger Electron desktop app.
+
+            ## Context
+            - Repo: ${{ github.repository }}
+            - GitHub issue: #${{ inputs.github_issue_number }}
+            - Support ticket ID: ${{ inputs.ticket_id }}
+            - Triage run ID (approved): ${{ inputs.triage_run_id }}
+            - The implementation plan below was reviewed and approved by Fede in /management-portal/support-queue.
+
+            ## Approved implementation plan (JSON)
+            ```json
+            ${{ env.PLAN_JSON }}
+            ```
+
+            ## Hard constraints (NEVER violate)
+            1. **Open ONLY a draft PR.** Never mark ready-for-review. Never merge.
+            2. **Never** modify files matching:
+               - `src/auth-service.ts` (token pre-authorization)
+               - `src/services/token-*`, `src/ipc/token-*`, `src/utils/token-*`
+               - any file referencing user_tokens, token_transactions, batch_token_reservations
+            3. **Never** modify existing Supabase migrations under `supabase/migrations/`. If a DB change is required, create a NEW migration file (timestamped today, with GRANT template).
+            4. **Never** modify existing Edge Function versions under `supabase/functions/analyzeImageDesktopV*/`. If a change is needed, add a new version + bump MAX_SUPPORTED_EDGE_FUNCTION_VERSION in config.ts.
+            5. **Never** touch code signing / notarization config in package.json or electron-builder config.
+            6. If the approved plan implies touching any of the above, STOP, do NOT open a PR, and post a comment on issue #${{ inputs.github_issue_number }} explaining the constraint violation. Tag with label `needs-human-implementation`.
+
+            ## Workflow
+            1. Create branch `claude/issue-${{ inputs.github_issue_number }}` (don't reuse existing).
+            2. Apply changes per the plan. Stay scoped — do not refactor surrounding code.
+            3. Run `npm install` if needed, then `npm run type-check`, `npm run lint`, `npm test`. Fix any breakages caused by your changes (not pre-existing ones).
+            4. Commit with message: `fix(#${{ inputs.github_issue_number }}): <short>` referencing the approved plan summary.
+            5. Open draft PR: `gh pr create --draft --base main --title "[Claude] Fix #${{ inputs.github_issue_number }}: <short>" --body-file <body file>`.
+               Body MUST include:
+               - `Closes #${{ inputs.github_issue_number }}` line
+               - Section "What changed" with bullet list
+               - Section "Test plan" with checklist
+               - Section "Approved plan" referencing support_triage_runs.id = ${{ inputs.triage_run_id }}
+               - Label `claude-generated`
+            6. Comment on issue #${{ inputs.github_issue_number }} with the PR link.
+
+            Style: terse, English, no emojis. If you cannot implement the plan (unclear, contradictory, hits a constraint), comment on the issue explaining why and exit without opening a PR.
