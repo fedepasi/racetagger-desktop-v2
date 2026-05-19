@@ -8,9 +8,8 @@ name: Backlog Autopilot · Sweep
 # Design: .studio/state/2026-05-19-backlog-autopilot-build-kickoff.md
 
 on:
-  # CRON DISABLED until manual trial is green. Uncomment to enable daily run.
-  # schedule:
-  #   - cron: '0 6 * * *'  # daily 06:00 UTC (aligned with studio-autotune)
+  schedule:
+    - cron: '0 6 * * *'  # daily 06:00 UTC (08:00 IT in estate) — aligned with studio-autotune
   workflow_dispatch:
     inputs:
       max_issues:
