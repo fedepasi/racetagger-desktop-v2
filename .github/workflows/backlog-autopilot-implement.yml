@@ -349,14 +349,42 @@ jobs:
 
             All paths must emit the structured `$GITHUB_OUTPUT` keys so the reviewer + audit log work.
 
+      - name: Parse implementer result (JSON → GitHub Action outputs)
+        id: parse
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ ! -f /tmp/autopilot_result.json ]; then
+            echo "::warning::/tmp/autopilot_result.json missing — implementer did not write result file"
+            echo "pr_opened=false" >> "$GITHUB_OUTPUT"
+            echo "decision_type=attempt_failed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! jq -e . /tmp/autopilot_result.json >/dev/null 2>&1; then
+            echo "::warning::/tmp/autopilot_result.json is not valid JSON"
+            echo "pr_opened=false" >> "$GITHUB_OUTPUT"
+            echo "decision_type=attempt_failed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          R=$(cat /tmp/autopilot_result.json)
+          {
+            echo "pr_opened=$(echo "$R" | jq -r '.pr_opened // false')"
+            echo "pr_number=$(echo "$R" | jq -r '.pr_number // empty')"
+            echo "pr_url=$(echo "$R" | jq -r '.pr_url // ""')"
+            echo "branch=$(echo "$R" | jq -r '.branch // ""')"
+            echo "decision_type=$(echo "$R" | jq -r '.decision_type // "attempt_failed"')"
+          } >> "$GITHUB_OUTPUT"
+          echo "Parsed implementer result:"
+          echo "$R" | jq -c .
+
       - name: Step 2 — Reviewer (Sonnet 4.6, devil-advocate pattern)
         id: reviewer
-        if: steps.implementer.outputs.pr_opened == 'true'
+        if: steps.parse.outputs.pr_opened == 'true'
         uses: anthropics/claude-code-action@v1
         env:
-          PR_NUMBER: ${{ steps.implementer.outputs.pr_number }}
-          PR_URL: ${{ steps.implementer.outputs.pr_url }}
-          BRANCH: ${{ steps.implementer.outputs.branch }}
+          PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
+          PR_URL: ${{ steps.parse.outputs.pr_url }}
+          BRANCH: ${{ steps.parse.outputs.branch }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           additional_permissions: |
