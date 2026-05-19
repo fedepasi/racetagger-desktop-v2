@@ -1,0 +1,494 @@
+name: Backlog Autopilot · Implement
+
+# Implements a fix for one GitHub issue (typically [AUTO] crash or [BUG] user-feedback).
+# Pattern: 2-agent — Implementer (Opus 4.7) opens a draft PR, Reviewer (Sonnet 4.6)
+# applies devil-advocate critique as a PR comment. Never auto-merges. All decisions
+# are logged to Supabase `agent_decisions` for audit.
+#
+# Triggered manually via workflow_dispatch (single issue) or dispatched by the
+# `backlog-autopilot-sweep.yml` workflow which selects up to N candidates.
+#
+# Design: .studio/state/2026-05-19-backlog-autopilot-build-kickoff.md
+# Office hours: .studio/office-hours/2026-05-19-backlog-autopilot.md
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'GitHub issue number to process'
+        required: true
+      dry_run:
+        description: 'If true, post proposal as issue comment instead of opening PR'
+        required: false
+        default: 'false'
+
+# Sequential execution: only one autopilot run at a time (sweep + implement share group).
+concurrency:
+  group: backlog-autopilot
+  cancel-in-progress: false
+
+# Opt into Node 24 for JS actions (Node 20 deprecated, removed Sept 2026)
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write       # branch + commit
+      pull-requests: write  # open draft PR
+      issues: write         # comment on issue
+      id-token: write       # claude-code-action
+      actions: read
+
+    env:
+      SUPABASE_URL: https://taompbzifylmdzgbbrpv.supabase.co
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      ISSUE_NUMBER: ${{ inputs.issue_number }}
+      DRY_RUN: ${{ inputs.dry_run }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      AUTOPILOT_RUN_ID: ${{ github.run_id }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history so the implementer can `git log` to check recent fixes
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund --prefer-offline
+
+      - name: Configure git author
+        run: |
+          git config user.name "racetagger-autopilot[bot]"
+          git config user.email "noreply@racetagger.cloud"
+
+      - name: Step 1 — Implementer (Opus 4.7)
+        id: implementer
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          additional_permissions: |
+            actions: read
+          claude_args: '--model claude-opus-4-7 --allowed-tools Read,Edit,Write,Glob,Grep,Bash(npm:*),Bash(git:*),Bash(gh issue:*),Bash(gh pr:*),Bash(gh search:*),Bash(curl:*),Bash(jq:*),Bash(cat:*),Bash(test:*),Bash(echo:*),Bash(ls:*),Bash(mkdir:*),Bash(date:*),Bash(grep:*),Bash(wc:*),Bash(head:*),Bash(tail:*)'
+          prompt: |
+            You are the **Backlog Autopilot Implementer** for the RaceTagger Electron desktop app
+            (repo: ${{ github.repository }}). Your job: take one open GitHub issue, decide if it's
+            still relevant, and either close it as resolved or open a SMALL draft PR with a fix.
+
+            ## Inputs (env)
+
+            - $ISSUE_NUMBER         — GitHub issue number to process
+            - $DRY_RUN              — "true" to post proposal as issue comment, "false" to open draft PR
+            - $SUPABASE_URL         — https://taompbzifylmdzgbbrpv.supabase.co
+            - $SUPABASE_SERVICE_ROLE_KEY  — service role bearer (DO NOT echo or log; use only in curl)
+            - $AUTOPILOT_RUN_ID     — this GitHub Actions run id
+
+            ## Step 1 — fetch issue body + labels
+
+            ```bash
+            gh issue view "$ISSUE_NUMBER" --json title,body,labels,author,createdAt > /tmp/issue.json
+            ```
+
+            ## Step 2 — classify issue type
+
+            - Title starts with `[AUTO]` OR labels include `auto-report` → AUTO crash (error telemetry)
+            - Title starts with `[BUG]` OR labels include `bug`+`user-feedback` → BUG user-feedback
+            - Otherwise → set decision_type="issue_skipped_stale" and exit (not eligible for autopilot)
+
+            ## Step 3 — relevance check
+
+            ### If AUTO:
+
+            Extract the fingerprint hint from the issue body (look for `Fingerprint:`, `Error type:`,
+            `version`, the first error line). Then query Supabase `error_reports`:
+
+            ```bash
+            # Try matching by GitHub issue number first (preferred — error_issue_mappings).
+            MAPPING=$(curl -sS "$SUPABASE_URL/rest/v1/error_issue_mappings?github_issue_number=eq.$ISSUE_NUMBER&select=fingerprint,error_report_id" \
+              -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+              -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY")
+            FINGERPRINT=$(echo "$MAPPING" | jq -r '.[0].fingerprint // empty')
+
+            if [ -n "$FINGERPRINT" ]; then
+              curl -sS "$SUPABASE_URL/rest/v1/error_reports?fingerprint=eq.$FINGERPRINT&select=last_seen,occurrence_count,user_count,first_seen,error_type,first_message" \
+                -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+                -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" > /tmp/error_report.json
+            fi
+            ```
+
+            Check `package.json` "version" field — read current installer version.
+
+            **Decision rules for AUTO**:
+            - If `error_reports.last_seen` is older than 30 days AND `occurrence_count` < 3 → resolved/stale. Comment on issue: "Errore non più riportato negli ultimi 30 giorni (last_seen: <date>, occurrence_count: N). Chiudibile." → decision_type=`issue_marked_resolved`. EXIT.
+            - If error fingerprint not found in error_reports at all → comment "Nessun match in error_reports. Possibilmente già pulito." → decision_type=`issue_marked_resolved`. EXIT.
+            - If `last_seen` recent and the error is in `src/auth-service.ts`, `*token*`, `supabase/migrations/`, or signing/notarization → too risky for autopilot. Comment: "Errore attivo ma area protetta (token / migration / signing) — richiede implementazione manuale." Add label `needs-human-implementation`. EXIT (`issue_skipped_stale`).
+            - Otherwise: continue to Step 4 (attempt fix).
+
+            ### If BUG:
+
+            Read the issue body. Try to extract:
+            - error strings / function names / file names mentioned
+            - reproduction steps if any
+            - what feature is broken
+
+            Then:
+            1. `git log --oneline -50` and `git log --since="14 days ago" --oneline` — has anything touched the implicated area recently?
+            2. Grep the codebase for the relevant symbols.
+            3. If recent commits clearly target the same area: comment in user's language (detect from body — Italian/German/English) "Probabilmente già corretto in commit <SHA> (<date>). Per favore verifica con l'ultima build." → decision_type=`issue_marked_resolved`. EXIT.
+            4. If the issue is too vague (single sentence, no repro, no error string): comment requesting more info: "Per procedere serve: 1) versione esatta, 2) screenshot o log dell'errore, 3) passi per riprodurre." → decision_type=`issue_skipped_stale`. EXIT.
+            5. Otherwise: continue to Step 4.
+
+            ## Step 4 — hard constraints (NEVER violate)
+
+            If implementing requires modifying ANY of the following, STOP, do NOT open a PR, comment
+            on the issue explaining the constraint, add label `needs-human-implementation`,
+            and EXIT (`issue_skipped_stale`):
+
+            1. `src/auth-service.ts` (token pre-authorization)
+            2. Any file matching `*token*` (e.g. `src/services/token-*`, `src/ipc/token-*`)
+            3. Any reference touching `user_tokens`, `token_transactions`, `batch_token_reservations`
+            4. Existing files under `supabase/migrations/` (a NEW migration is OK, with GRANT template)
+            5. Existing files under `supabase/functions/analyzeImageDesktopV*/` (add a NEW version + bump `MAX_SUPPORTED_EDGE_FUNCTION_VERSION` in `src/config.ts` instead)
+            6. Code signing / notarization config in `package.json` or `electron-builder.yml`
+            7. `src/main.ts` EPIPE protection blocks (CLAUDE.md hard rule)
+
+            ## Step 5 — size cap
+
+            Plan your fix. If it requires **>50 added lines** OR **>3 files modified**, STOP.
+            Comment on issue: "Scope troppo grande per l'autopilot (richiederebbe N file, M righe). Richiede implementazione manuale." Add label `needs-human-implementation`. EXIT (`issue_skipped_stale`).
+
+            ## Step 6 — implement (dry_run-aware)
+
+            Read the implicated files. Apply minimal changes. Then verify:
+
+            ```bash
+            npm run type-check
+            # Only run tests if the touched area is covered (look for matching tests under tests/)
+            ```
+
+            If type-check fails or tests you ran fail:
+            - Try to fix breakages caused by your own changes (not pre-existing).
+            - If still failing after 1 retry: STOP. Comment "Autopilot tentativo fallito — type-check/test fail: <details>. Riproverò al prossimo ciclo." → decision_type=`attempt_failed`. EXIT.
+
+            ### If $DRY_RUN == "true":
+
+            Post a comment on issue #$ISSUE_NUMBER with this exact format:
+
+            ```
+            🤖 **Backlog Autopilot — DRY RUN**
+
+            **Decisione**: <decision_type>
+            **Motivazione (plain-language)**: <2-3 sentences in user's language about what would change>
+
+            **Proposta di fix**:
+            - File da modificare: <list>
+            - Righe aggiunte/rimosse: ~+N / -M
+            - Test toccati: <list or "nessuno">
+
+            **Diff proposto** (estratto):
+            \`\`\`diff
+            <abbreviated diff, max 30 lines, prefer the most representative hunk>
+            \`\`\`
+
+            **Verifiche eseguite**:
+            - type-check: <PASS|FAIL|skipped>
+            - test relativi: <PASS|FAIL|N/A>
+
+            ---
+            Modello implementer: claude-opus-4-7 · run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            Per applicare davvero: rilancia con `dry_run=false`.
+            ```
+
+            DO NOT create a branch. DO NOT commit. DO NOT open a PR. EXIT successfully.
+
+            Write to `$GITHUB_OUTPUT`:
+            - `pr_opened=false`
+            - `decision_type=pr_opened`  (yes, even on dry-run — the proposal IS the deliverable; if you chose `issue_marked_resolved` earlier you already exited)
+            - `reason=<short Italian explanation, max 200 chars>`
+            - `files_changed=<JSON array of file paths>`
+            - `lines_added=<integer>`
+            - `lines_removed=<integer>`
+
+            ### If $DRY_RUN == "false":
+
+            1. Create branch: `backlog-autopilot/issue-$ISSUE_NUMBER-<short-slug>`
+               Slug rule: lowercase, kebab-case, max 30 chars from a short summary of the fix.
+            2. Stage changes, commit with single message:
+               ```
+               [autopilot] fix #$ISSUE_NUMBER: <short summary>
+
+               <2-3 line description>
+
+               Closes #$ISSUE_NUMBER
+               ```
+            3. Push the branch: `git push -u origin <branch>`
+            4. Open DRAFT PR with `gh pr create --draft`:
+               - Base: `main`
+               - Title: `[autopilot] fix #$ISSUE_NUMBER: <short summary>`
+               - Body MUST include sections:
+                 - `## Cosa cambia` — plain-language explanation
+                 - `## Verifiche` — checklist of type-check/lint/test outcomes
+                 - `## Come è stato verificato che l'issue è ancora rilevante` — brief
+                 - `Closes #$ISSUE_NUMBER`
+               - Labels: `backlog-autopilot`, `claude-generated`
+            5. Comment on issue #$ISSUE_NUMBER in user's language: "Aperta draft PR <PR_URL> per questo problema. Sarà rivista automaticamente prima del merge."
+
+            Write to `$GITHUB_OUTPUT`:
+            - `pr_opened=true`
+            - `pr_number=<N>`
+            - `pr_url=<URL>`
+            - `branch=<branch name>`
+            - `decision_type=pr_opened`
+            - `reason=<short Italian explanation, max 200 chars>`
+            - `files_changed=<JSON array of file paths>`
+            - `lines_added=<integer>`
+            - `lines_removed=<integer>`
+
+            ## Style
+
+            - Italian for GitHub comments on issues (users write Italian/German — mirror the issue body's language if different from Italian)
+            - English for commit messages, PR title/body, branch names, code
+            - Terse. No filler. No emojis except the 🤖 prefix on the issue comment.
+            - NEVER post the SUPABASE_SERVICE_ROLE_KEY anywhere.
+            - NEVER mark PR ready-for-review. NEVER merge.
+
+            ## What success looks like
+
+            One of:
+            - Issue closed-as-resolved with a clear comment (relevance check failed) — no PR opened.
+            - Constraint violation — comment + label + no PR.
+            - Dry-run: proposal comment on issue, no branch, no PR.
+            - Real run: draft PR opened, issue commented with PR link.
+
+            All paths must emit the structured `$GITHUB_OUTPUT` keys so the reviewer + audit log work.
+
+      - name: Step 2 — Reviewer (Sonnet 4.6, devil-advocate pattern)
+        id: reviewer
+        if: steps.implementer.outputs.pr_opened == 'true'
+        uses: anthropics/claude-code-action@v1
+        env:
+          PR_NUMBER: ${{ steps.implementer.outputs.pr_number }}
+          PR_URL: ${{ steps.implementer.outputs.pr_url }}
+          BRANCH: ${{ steps.implementer.outputs.branch }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          additional_permissions: |
+            actions: read
+          claude_args: '--model claude-sonnet-4-6 --allowed-tools Read,Grep,Glob,Bash(gh pr:*),Bash(gh issue:*),Bash(gh api:*),Bash(git:*),Bash(curl:*),Bash(jq:*),Bash(cat:*),Bash(grep:*),Bash(find:*),Bash(wc:*),Bash(head:*),Bash(test:*)'
+          prompt: |
+            You are the **Backlog Autopilot Reviewer**. The Implementer just opened draft PR #$PR_NUMBER
+            for issue #$ISSUE_NUMBER. Apply a **devil-advocate** critique and post a structured comment
+            on the PR. NEVER modify code. NEVER merge. NEVER mark ready-for-review.
+
+            ## Inputs (env)
+
+            - $ISSUE_NUMBER  — original issue
+            - $PR_NUMBER     — draft PR opened by the Implementer
+            - $PR_URL        — full PR URL
+            - $BRANCH        — branch name (`backlog-autopilot/issue-<n>-<slug>`)
+
+            ## Step 1 — read the materials
+
+            ```bash
+            gh pr view $PR_NUMBER --json title,body,files,changedFiles,additions,deletions > /tmp/pr.json
+            gh pr diff $PR_NUMBER > /tmp/pr.diff
+            gh issue view $ISSUE_NUMBER --json title,body,labels > /tmp/issue.json
+            ```
+
+            ## Step 2 — devil-advocate critique (code_change mode)
+
+            For each of these dimensions, write a short finding (✅ / ⚠️ / ❌):
+
+            1. **Retrocompatibilità (blast radius)** — Use Grep to search the codebase for call-sites
+               of the modified symbols. Does the diff change a function signature, exported type, or
+               return shape that other files depend on? Specifically check `src/ipc/types.ts`,
+               `src/preload.ts`, and renderer JS files.
+            2. **Side-effects** — What else could the change affect besides the target bug? Look for
+               implicit coupling (in-memory caches, EPIPE handlers, error boundaries).
+            3. **Test coverage** — For each modified `src/*.ts` file, check if a matching test file
+               exists under `tests/` (e.g. `src/foo.ts` → `tests/foo.test.ts` or any `tests/*foo*`).
+               Does the existing test exercise the path being fixed?
+            4. **Edge cases** — Enumerate 2-3 concrete scenarios where the fix could backfire. Be
+               specific (e.g. "When the user has 0 participants in CSV, the new null check at line N
+               causes a different code path that previously worked"). Avoid generic statements.
+            5. **Regression risk vs scope** — Is the change wider than the issue requires? If the fix
+               touches 3 files but only 1 was implicated by the bug, flag as `wider_than_needed`.
+            6. **Hard constraints** — Verify the diff does NOT touch protected paths
+               (`src/auth-service.ts`, `*token*`, `supabase/migrations/`, `supabase/functions/analyzeImageDesktopV*/`,
+               code signing). If it does — set verdict=BLOCK with reason.
+
+            ## Step 3 — output verdict
+
+            - **APPROVE**: no hard issues, ≤2 minor concerns. Coverage may be missing — note it.
+            - **BLOCK**: ≥1 hard issue (constraint violation, test fails, breaking API change, no
+              tests AND high-risk area, scope materially wider than issue).
+
+            ## Step 4 — post PR comment
+
+            Use `gh pr comment $PR_NUMBER --body-file /tmp/review.md`. Body MUST follow this template
+            EXACTLY (Italian for plain-language sections, English for code refs):
+
+            ```
+            🤖 **Backlog Autopilot — Review automatica**
+
+            **Verdetto**: <APPROVE | BLOCK>
+
+            **Cosa fa il diff** (plain-language, 2-3 frasi):
+            <description>
+
+            **Controlli**:
+            - <✅|⚠️|❌> Retrocompatibilità: <finding>
+            - <✅|⚠️|❌> Side-effects: <finding>
+            - <✅|⚠️|❌> Test coverage: <finding>
+            - <✅|⚠️|❌> Edge cases analizzati:
+              1. <case 1>
+              2. <case 2>
+              3. <case 3>
+            - <✅|⚠️|❌> Scope vs issue: <finding>
+            - <✅|⚠️|❌> Hard constraints: <PASS|VIOLATED:list>
+
+            **⚠️ NO TEST COVERAGE**: [show this line ONLY if test_coverage_present=false]
+
+            **Se BLOCK, motivazione**: <reason>
+
+            **Raccomandazione umana**: <"merge sicuro dopo review tua" | "non mergiare, vedi BLOCK">
+
+            ---
+            Modello reviewer: claude-sonnet-4-6 · run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            ```
+
+            ## Step 5 — write outputs
+
+            To `$GITHUB_OUTPUT`:
+            - `reviewer_verdict=<APPROVE|BLOCK>`
+            - `test_coverage_present=<true|false>`
+            - `hard_constraints_pass=<true|false>`
+            - `reason_if_block=<text or empty>`
+
+            ## Hard rules
+
+            - NEVER push commits to the PR.
+            - NEVER merge or mark ready-for-review.
+            - NEVER comment on the issue (only on the PR).
+            - Be specific. Avoid generic critiques like "could have bugs". Reference line numbers,
+              symbols, and concrete scenarios.
+
+      - name: Log decisions to agent_decisions (always)
+        if: always()
+        env:
+          IMPLEMENTER_PR_OPENED: ${{ steps.implementer.outputs.pr_opened || 'false' }}
+          IMPLEMENTER_PR_NUMBER: ${{ steps.implementer.outputs.pr_number || '' }}
+          IMPLEMENTER_PR_URL: ${{ steps.implementer.outputs.pr_url || '' }}
+          IMPLEMENTER_BRANCH: ${{ steps.implementer.outputs.branch || '' }}
+          IMPLEMENTER_DECISION: ${{ steps.implementer.outputs.decision_type || 'attempt_failed' }}
+          IMPLEMENTER_REASON: ${{ steps.implementer.outputs.reason || 'workflow execution failed; see Actions log' }}
+          IMPLEMENTER_FILES: ${{ steps.implementer.outputs.files_changed || '[]' }}
+          IMPLEMENTER_LINES_ADDED: ${{ steps.implementer.outputs.lines_added || '0' }}
+          IMPLEMENTER_LINES_REMOVED: ${{ steps.implementer.outputs.lines_removed || '0' }}
+          REVIEWER_VERDICT: ${{ steps.reviewer.outputs.reviewer_verdict || '' }}
+          REVIEWER_TEST_COVERAGE: ${{ steps.reviewer.outputs.test_coverage_present || 'false' }}
+          REVIEWER_HARD_CONSTRAINTS: ${{ steps.reviewer.outputs.hard_constraints_pass || 'true' }}
+          REVIEWER_BLOCK_REASON: ${{ steps.reviewer.outputs.reason_if_block || '' }}
+          IMPLEMENTER_STATUS: ${{ steps.implementer.outcome }}
+          REVIEWER_STATUS: ${{ steps.reviewer.outcome }}
+          ACTIONS_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          # Derive severity
+          severity="info"
+          if [ "$IMPLEMENTER_STATUS" = "failure" ] || [ "$REVIEWER_VERDICT" = "BLOCK" ]; then
+            severity="high"
+          elif [ "$REVIEWER_TEST_COVERAGE" = "false" ] && [ "$IMPLEMENTER_PR_OPENED" = "true" ]; then
+            severity="medium"
+          fi
+
+          # Build action_taken JSON (defensive parsing — files_changed may be empty string)
+          files_json="$IMPLEMENTER_FILES"
+          if [ -z "$files_json" ]; then files_json="[]"; fi
+          lines_added_int="$IMPLEMENTER_LINES_ADDED"
+          if [ -z "$lines_added_int" ]; then lines_added_int="0"; fi
+          lines_removed_int="$IMPLEMENTER_LINES_REMOVED"
+          if [ -z "$lines_removed_int" ]; then lines_removed_int="0"; fi
+
+          action_taken=$(jq -n \
+            --arg issue "$ISSUE_NUMBER" \
+            --arg pr "$IMPLEMENTER_PR_NUMBER" \
+            --arg pr_url "$IMPLEMENTER_PR_URL" \
+            --arg branch "$IMPLEMENTER_BRANCH" \
+            --arg dry_run "$DRY_RUN" \
+            --argjson files "$files_json" \
+            --argjson lines_added "$lines_added_int" \
+            --argjson lines_removed "$lines_removed_int" \
+            --arg run_url "$ACTIONS_URL" \
+            '{
+              issue_number: ($issue | tonumber),
+              pr_number: (if $pr == "" then null else ($pr | tonumber) end),
+              pr_url: $pr_url,
+              branch: $branch,
+              dry_run: ($dry_run == "true"),
+              files_changed: $files,
+              lines_added: $lines_added,
+              lines_removed: $lines_removed,
+              run_url: $run_url
+            }')
+
+          result=$(jq -n \
+            --arg impl_status "$IMPLEMENTER_STATUS" \
+            --arg verdict "$REVIEWER_VERDICT" \
+            --arg cov "$REVIEWER_TEST_COVERAGE" \
+            --arg hc "$REVIEWER_HARD_CONSTRAINTS" \
+            --arg block_reason "$REVIEWER_BLOCK_REASON" \
+            '{
+              implementer_status: $impl_status,
+              reviewer_verdict: (if $verdict == "" then null else $verdict end),
+              test_coverage_present: ($cov == "true"),
+              hard_constraints_pass: ($hc == "true"),
+              block_reason: (if $block_reason == "" then null else $block_reason end)
+            }')
+
+          payload=$(jq -n \
+            --arg agent_name "backlog-autopilot-implementer" \
+            --arg run_id "$AUTOPILOT_RUN_ID" \
+            --arg decision_type "$IMPLEMENTER_DECISION" \
+            --arg severity "$severity" \
+            --arg reason "$IMPLEMENTER_REASON" \
+            --argjson action_taken "$action_taken" \
+            --argjson result "$result" \
+            --arg model "claude-opus-4-7" \
+            '{
+              agent_name: $agent_name,
+              agent_run_id: $run_id,
+              decision_type: $decision_type,
+              severity: $severity,
+              reason: $reason,
+              action_taken: $action_taken,
+              result: $result,
+              model_used: $model,
+              human_approval_required: false
+            }')
+
+          echo "POSTing decision payload:"
+          echo "$payload" | jq '.'
+
+          HTTP_CODE=$(curl -sS -o /tmp/insert_response.json -w "%{http_code}" \
+            -X POST "$SUPABASE_URL/rest/v1/agent_decisions" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            --data "$payload")
+
+          echo "Supabase HTTP: $HTTP_CODE"
+          cat /tmp/insert_response.json || true
+
+          if [ "$HTTP_CODE" != "201" ] && [ "$HTTP_CODE" != "204" ]; then
+            echo "::warning::Failed to insert agent_decisions row (HTTP $HTTP_CODE) — non-fatal"
+          fi

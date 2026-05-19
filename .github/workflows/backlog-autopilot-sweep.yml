@@ -1,0 +1,238 @@
+name: Backlog Autopilot · Sweep
+
+# Selects up to N candidate issues from the open backlog and dispatches the
+# `backlog-autopilot-implement.yml` workflow for each. Runs once a day after the
+# manual trial period proves stable. Cron is DISABLED by default (commented) —
+# enable only after 2-3 manual sweeps produce clean outcomes.
+#
+# Design: .studio/state/2026-05-19-backlog-autopilot-build-kickoff.md
+
+on:
+  # CRON DISABLED until manual trial is green. Uncomment to enable daily run.
+  # schedule:
+  #   - cron: '0 6 * * *'  # daily 06:00 UTC (aligned with studio-autotune)
+  workflow_dispatch:
+    inputs:
+      max_issues:
+        description: 'Max issues to dispatch (default 2)'
+        required: false
+        default: '2'
+      dry_run:
+        description: 'If true, dispatch implement workflows in dry_run mode'
+        required: false
+        default: 'true'
+
+concurrency:
+  group: backlog-autopilot
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  select-and-dispatch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      actions: write          # dispatch implement workflow
+      id-token: write         # claude-code-action
+
+    env:
+      SUPABASE_URL: https://taompbzifylmdzgbbrpv.supabase.co
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      MAX_ISSUES: ${{ inputs.max_issues || '2' }}
+      SWEEP_DRY_RUN: ${{ inputs.dry_run || 'true' }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      SWEEP_RUN_ID: ${{ github.run_id }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Select candidate issues (Sonnet 4.6)
+        id: select
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          additional_permissions: |
+            actions: read
+          claude_args: '--model claude-sonnet-4-6 --allowed-tools Read,Grep,Glob,Bash(gh issue:*),Bash(gh pr:*),Bash(gh api:*),Bash(curl:*),Bash(jq:*),Bash(cat:*),Bash(echo:*),Bash(test:*),Bash(date:*),Bash(grep:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(sort:*)'
+          prompt: |
+            You are the **Backlog Autopilot Sweep Selector**. Your job: pick up to **$MAX_ISSUES**
+            candidate issues from the open backlog that the Implementer (later step) should attempt
+            to process. NEVER comment on issues. NEVER open PRs. NEVER dispatch workflows —
+            that's done by the next step. Just pick and emit a JSON array of issue numbers.
+
+            ## Inputs (env)
+
+            - $MAX_ISSUES        — int, max issues to select (default 2)
+            - $SUPABASE_URL      — Supabase REST base
+            - $SUPABASE_SERVICE_ROLE_KEY — bearer (DO NOT log)
+            - $SWEEP_RUN_ID      — this Actions run id
+
+            ## Step 1 — list candidate issues
+
+            ```bash
+            # Open AUTO issues (auto-report label) — newest first
+            gh issue list --label "auto-report" --state open --limit 30 \
+              --json number,title,labels,createdAt,updatedAt > /tmp/auto_issues.json
+
+            # Open BUG user-feedback issues — newest first
+            gh issue list --label "bug" --state open --limit 30 \
+              --json number,title,labels,createdAt,updatedAt,author > /tmp/bug_issues.json
+            ```
+
+            Filter out issues that already have label `needs-human-implementation` or
+            `autopilot-skipped` or `backlog-autopilot` (already processed).
+
+            ## Step 2 — check if already processed in agent_decisions
+
+            For each remaining issue:
+
+            ```bash
+            ISSUE=<n>
+            curl -sS "$SUPABASE_URL/rest/v1/agent_decisions?action_taken->>issue_number=eq.$ISSUE&select=id,decision_type,created_at,action_taken&order=created_at.desc&limit=1" \
+              -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+              -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY"
+            ```
+
+            Skip the issue if:
+            - It has a `pr_opened` decision with a still-open PR (check via gh pr list for branch `backlog-autopilot/issue-$ISSUE-*`).
+            - It has a `issue_marked_resolved` or `issue_skipped_stale` decision within the last 7 days.
+            - It has 3+ `attempt_failed` decisions ever (label-skip permanently — add label `autopilot-skipped` after this sweep — actually NO, you cannot write labels here; just exclude).
+
+            For AUTO issues that survive, also pull their occurrence_count + last_seen from
+            error_reports via the error_issue_mappings table:
+
+            ```bash
+            curl -sS "$SUPABASE_URL/rest/v1/error_issue_mappings?github_issue_number=eq.$ISSUE&select=fingerprint,error_reports(last_seen,occurrence_count,user_count)" \
+              -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+              -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY"
+            ```
+
+            ## Step 3 — rank surviving candidates
+
+            Apply in order — pick the first $MAX_ISSUES that match:
+
+            1. **BUG from paying users** — author of the issue maps to a row in
+               `purchases` with status in ('completed','succeeded','paid'):
+               ```bash
+               GH_LOGIN=<from issue.author.login>
+               curl -sS "$SUPABASE_URL/rest/v1/subscribers?github_handle=eq.$GH_LOGIN&select=user_id" ...
+               # If user_id found, check purchases for that user_id.
+               ```
+               If the `subscribers.github_handle` column doesn't exist, skip this rule silently.
+            2. **AUTO with occurrence_count ≥ 5 and last_seen within 14 days** (still-firing crash).
+            3. **BUG user-feedback oldest** (createdAt ascending).
+            4. **AUTO oldest** (createdAt ascending).
+
+            Stop at $MAX_ISSUES. If 0 candidates remain, output an empty JSON array.
+
+            ## Step 4 — emit output
+
+            Write to `$GITHUB_OUTPUT`:
+            - `issue_numbers=<JSON array, e.g. [147,156]>`
+            - `reasons=<JSON object, e.g. {"147":"BUG-oldest","156":"AUTO-recurring-5occ"}>`
+            - `selected_count=<int>`
+
+            Print the result and a one-line summary per selected issue (so the Actions log is
+            human-skimmable):
+
+            ```
+            Selected 2 issues:
+              #147 — BUG user-feedback oldest (createdAt=2026-05-14)
+              #156 — AUTO recurring (occurrence_count=8, last_seen=2026-05-17)
+            ```
+
+            ## Hard rules
+
+            - Never log $SUPABASE_SERVICE_ROLE_KEY.
+            - Never trigger the implement workflow from this step — that's the next step.
+            - If you cannot decide (Supabase unreachable, gh CLI fails), output an empty array
+              and explain in the log; do not guess.
+
+      - name: Dispatch implement workflow per selected issue
+        if: steps.select.outputs.selected_count != '0'
+        env:
+          ISSUES_JSON: ${{ steps.select.outputs.issue_numbers }}
+          REASONS_JSON: ${{ steps.select.outputs.reasons }}
+        run: |
+          set -euo pipefail
+          echo "Selected: $ISSUES_JSON"
+          echo "Reasons: $REASONS_JSON"
+          echo ""
+
+          # Dispatch implement workflow for each issue with 30s spacing to respect
+          # the concurrency.group=backlog-autopilot guard.
+          first=1
+          for issue in $(echo "$ISSUES_JSON" | jq -r '.[]'); do
+            if [ "$first" = "1" ]; then first=0; else sleep 30; fi
+            reason=$(echo "$REASONS_JSON" | jq -r ".[\"$issue\"] // \"unranked\"")
+            echo "Dispatching implement workflow for issue #$issue (reason: $reason, dry_run=$SWEEP_DRY_RUN)"
+            gh workflow run backlog-autopilot-implement.yml \
+              -f issue_number="$issue" \
+              -f dry_run="$SWEEP_DRY_RUN"
+          done
+
+      - name: Log sweep summary to agent_decisions
+        if: always()
+        env:
+          ISSUES_JSON: ${{ steps.select.outputs.issue_numbers || '[]' }}
+          REASONS_JSON: ${{ steps.select.outputs.reasons || '{}' }}
+          SELECTED_COUNT: ${{ steps.select.outputs.selected_count || '0' }}
+          STEP_STATUS: ${{ steps.select.outcome }}
+          ACTIONS_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          payload=$(jq -n \
+            --arg agent_name "backlog-autopilot-sweep" \
+            --arg run_id "$SWEEP_RUN_ID" \
+            --arg decision_type "sweep_completed" \
+            --arg severity "info" \
+            --arg reason "Sweep selezionato $SELECTED_COUNT issue (status=$STEP_STATUS)" \
+            --argjson issues "$ISSUES_JSON" \
+            --argjson reasons "$REASONS_JSON" \
+            --arg dry_run "$SWEEP_DRY_RUN" \
+            --arg max "$MAX_ISSUES" \
+            --arg run_url "$ACTIONS_URL" \
+            --arg model "claude-sonnet-4-6" \
+            '{
+              agent_name: $agent_name,
+              agent_run_id: $run_id,
+              decision_type: $decision_type,
+              severity: $severity,
+              reason: $reason,
+              action_taken: {
+                issues_selected: $issues,
+                reasons: $reasons,
+                dry_run: ($dry_run == "true"),
+                max_issues: ($max | tonumber),
+                run_url: $run_url
+              },
+              result: {
+                status: $STEP_STATUS,
+                selected_count: ($SELECTED_COUNT | tonumber)
+              },
+              model_used: $model,
+              human_approval_required: false
+            }')
+
+          echo "POSTing sweep summary:"
+          echo "$payload" | jq '.'
+
+          HTTP_CODE=$(curl -sS -o /tmp/insert_response.json -w "%{http_code}" \
+            -X POST "$SUPABASE_URL/rest/v1/agent_decisions" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            --data "$payload")
+
+          echo "Supabase HTTP: $HTTP_CODE"
+          if [ "$HTTP_CODE" != "201" ] && [ "$HTTP_CODE" != "204" ]; then
+            echo "::warning::Failed to insert sweep agent_decisions row (HTTP $HTTP_CODE)"
+          fi
