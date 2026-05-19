@@ -62,7 +62,10 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci --no-audit --no-fund --prefer-offline
+        # `--ignore-scripts` skips the vendor/raw-preview-extractor `install` hook
+        # which looks for a Linux prebuild we don't ship. The autopilot only needs
+        # `tsc --noEmit` for verification, not the native module.
+        run: npm ci --no-audit --no-fund --prefer-offline --ignore-scripts
 
       - name: Configure git author
         run: |
@@ -169,11 +172,16 @@ jobs:
             Read the implicated files. Apply minimal changes. Then verify:
 
             ```bash
-            npm run type-check
-            # Only run tests if the touched area is covered (look for matching tests under tests/)
+            npx tsc --noEmit         # there is no `npm run type-check` script — use tsc directly
+            # Tests: `npm test` may FAIL on the runner if any test loads native modules
+            # (raw-preview-extractor / sharp) — they were skipped by `--ignore-scripts`.
+            # Only attempt tests if you can run a narrow file directly, e.g.:
+            #   npx jest tests/smart-matcher.test.ts --no-coverage
+            # If a test fails because the native module is missing, do NOT treat it
+            # as a real failure — note it as "test skipped (CI lacks native module)".
             ```
 
-            If type-check fails or tests you ran fail:
+            If `tsc --noEmit` fails or a runnable test you targeted fails:
             - Try to fix breakages caused by your own changes (not pre-existing).
             - If still failing after 1 retry: STOP. Comment "Autopilot tentativo fallito — type-check/test fail: <details>. Riproverò al prossimo ciclo." → decision_type=`attempt_failed`. EXIT.
 
