@@ -216,13 +216,33 @@ jobs:
 
             DO NOT create a branch. DO NOT commit. DO NOT open a PR. EXIT successfully.
 
-            Write to `$GITHUB_OUTPUT`:
-            - `pr_opened=false`
-            - `decision_type=pr_opened`  (yes, even on dry-run — the proposal IS the deliverable; if you chose `issue_marked_resolved` earlier you already exited)
-            - `reason=<short Italian explanation, max 200 chars>`
-            - `files_changed=<JSON array of file paths>`
-            - `lines_added=<integer>`
-            - `lines_removed=<integer>`
+            **REQUIRED — write a JSON result file at `/tmp/autopilot_result.json` AND emit GitHub Action outputs.** Do this with a single bash call:
+
+            ```bash
+            cat > /tmp/autopilot_result.json <<'JSON'
+            {
+              "pr_opened": false,
+              "pr_number": null,
+              "pr_url": "",
+              "branch": "",
+              "decision_type": "pr_opened",
+              "reason": "<short Italian explanation, max 200 chars>",
+              "files_changed": ["<file1>"],
+              "lines_added": <int>,
+              "lines_removed": <int>
+            }
+            JSON
+            {
+              echo "pr_opened=false"
+              echo "decision_type=pr_opened"
+              echo "reason=<short Italian explanation>"
+              echo "files_changed=[\"<file1>\"]"
+              echo "lines_added=<int>"
+              echo "lines_removed=<int>"
+            } >> "$GITHUB_OUTPUT"
+            ```
+
+            The agent_decisions log step prefers the JSON file. Both are required so a partial failure still records something.
 
             ### If $DRY_RUN == "false":
 
@@ -248,16 +268,68 @@ jobs:
                - Labels: `backlog-autopilot`, `claude-generated`
             5. Comment on issue #$ISSUE_NUMBER in user's language: "Aperta draft PR <PR_URL> per questo problema. Sarà rivista automaticamente prima del merge."
 
-            Write to `$GITHUB_OUTPUT`:
-            - `pr_opened=true`
-            - `pr_number=<N>`
-            - `pr_url=<URL>`
-            - `branch=<branch name>`
-            - `decision_type=pr_opened`
-            - `reason=<short Italian explanation, max 200 chars>`
-            - `files_changed=<JSON array of file paths>`
-            - `lines_added=<integer>`
-            - `lines_removed=<integer>`
+            **REQUIRED — write a JSON result file at `/tmp/autopilot_result.json` AND emit GitHub Action outputs**:
+
+            ```bash
+            cat > /tmp/autopilot_result.json <<JSON
+            {
+              "pr_opened": true,
+              "pr_number": <N>,
+              "pr_url": "<URL>",
+              "branch": "<branch name>",
+              "decision_type": "pr_opened",
+              "reason": "<short Italian explanation>",
+              "files_changed": ["<f1>","<f2>"],
+              "lines_added": <int>,
+              "lines_removed": <int>
+            }
+            JSON
+            {
+              echo "pr_opened=true"
+              echo "pr_number=<N>"
+              echo "pr_url=<URL>"
+              echo "branch=<branch name>"
+              echo "decision_type=pr_opened"
+              echo "reason=<short Italian explanation>"
+              echo "files_changed=[\"<f1>\",\"<f2>\"]"
+              echo "lines_added=<int>"
+              echo "lines_removed=<int>"
+            } >> "$GITHUB_OUTPUT"
+            ```
+
+            ## Universal exit contract (ALL paths)
+
+            EVERY exit path — `issue_marked_resolved`, `issue_skipped_stale`, `attempt_failed`,
+            `pr_opened` (dry-run or real) — MUST write the result file AND emit `$GITHUB_OUTPUT`
+            keys. Pattern:
+
+            ```bash
+            cat > /tmp/autopilot_result.json <<JSON
+            {
+              "pr_opened": <true|false>,
+              "pr_number": <N or null>,
+              "pr_url": "<URL or empty>",
+              "branch": "<name or empty>",
+              "decision_type": "<one of: pr_opened, issue_marked_resolved, issue_skipped_stale, attempt_failed>",
+              "reason": "<short Italian explanation>",
+              "files_changed": [<paths>],
+              "lines_added": <int>,
+              "lines_removed": <int>
+            }
+            JSON
+            {
+              echo "pr_opened=<true|false>"
+              echo "decision_type=<...>"
+              echo "reason=<...>"
+              echo "files_changed=<JSON-string>"
+              echo "lines_added=<int>"
+              echo "lines_removed=<int>"
+              # pr_number / pr_url / branch only when pr_opened=true
+            } >> "$GITHUB_OUTPUT"
+            ```
+
+            If you exit without writing these, the log step will record a generic `attempt_failed`
+            and lose your context — never desirable.
 
             ## Style
 
@@ -395,11 +467,11 @@ jobs:
           IMPLEMENTER_PR_NUMBER: ${{ steps.implementer.outputs.pr_number || '' }}
           IMPLEMENTER_PR_URL: ${{ steps.implementer.outputs.pr_url || '' }}
           IMPLEMENTER_BRANCH: ${{ steps.implementer.outputs.branch || '' }}
-          IMPLEMENTER_DECISION: ${{ steps.implementer.outputs.decision_type || 'attempt_failed' }}
-          IMPLEMENTER_REASON: ${{ steps.implementer.outputs.reason || 'workflow execution failed; see Actions log' }}
-          IMPLEMENTER_FILES: ${{ steps.implementer.outputs.files_changed || '[]' }}
-          IMPLEMENTER_LINES_ADDED: ${{ steps.implementer.outputs.lines_added || '0' }}
-          IMPLEMENTER_LINES_REMOVED: ${{ steps.implementer.outputs.lines_removed || '0' }}
+          IMPLEMENTER_DECISION: ${{ steps.implementer.outputs.decision_type || '' }}
+          IMPLEMENTER_REASON: ${{ steps.implementer.outputs.reason || '' }}
+          IMPLEMENTER_FILES: ${{ steps.implementer.outputs.files_changed || '' }}
+          IMPLEMENTER_LINES_ADDED: ${{ steps.implementer.outputs.lines_added || '' }}
+          IMPLEMENTER_LINES_REMOVED: ${{ steps.implementer.outputs.lines_removed || '' }}
           REVIEWER_VERDICT: ${{ steps.reviewer.outputs.reviewer_verdict || '' }}
           REVIEWER_TEST_COVERAGE: ${{ steps.reviewer.outputs.test_coverage_present || 'false' }}
           REVIEWER_HARD_CONSTRAINTS: ${{ steps.reviewer.outputs.hard_constraints_pass || 'true' }}
@@ -410,41 +482,60 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Derive severity
+          # Prefer the JSON result file written by the implementer agent. If absent,
+          # fall back to the step outputs (which Claude may not have written).
+          if [ -f /tmp/autopilot_result.json ] && jq -e . /tmp/autopilot_result.json >/dev/null 2>&1; then
+            echo "Reading canonical result from /tmp/autopilot_result.json"
+            R="$(cat /tmp/autopilot_result.json)"
+            pr_opened=$(echo "$R" | jq -r '.pr_opened // false')
+            pr_number=$(echo "$R" | jq -r '.pr_number // empty')
+            pr_url=$(echo "$R"   | jq -r '.pr_url // ""')
+            branch=$(echo "$R"   | jq -r '.branch // ""')
+            decision=$(echo "$R" | jq -r '.decision_type // "attempt_failed"')
+            reason=$(echo "$R"   | jq -r '.reason // "no reason recorded"')
+            files_json=$(echo "$R" | jq -c '.files_changed // []')
+            lines_added=$(echo "$R" | jq -r '.lines_added // 0')
+            lines_removed=$(echo "$R" | jq -r '.lines_removed // 0')
+          else
+            echo "No /tmp/autopilot_result.json — falling back to step outputs"
+            pr_opened="$IMPLEMENTER_PR_OPENED"
+            pr_number="$IMPLEMENTER_PR_NUMBER"
+            pr_url="$IMPLEMENTER_PR_URL"
+            branch="$IMPLEMENTER_BRANCH"
+            decision="${IMPLEMENTER_DECISION:-attempt_failed}"
+            reason="${IMPLEMENTER_REASON:-workflow execution failed or implementer did not emit outputs; see Actions log}"
+            files_json="${IMPLEMENTER_FILES:-[]}"
+            lines_added="${IMPLEMENTER_LINES_ADDED:-0}"
+            lines_removed="${IMPLEMENTER_LINES_REMOVED:-0}"
+          fi
+
+          # Severity: high on implementer failure / reviewer BLOCK / decision=attempt_failed
           severity="info"
-          if [ "$IMPLEMENTER_STATUS" = "failure" ] || [ "$REVIEWER_VERDICT" = "BLOCK" ]; then
+          if [ "$IMPLEMENTER_STATUS" = "failure" ] || [ "$REVIEWER_VERDICT" = "BLOCK" ] || [ "$decision" = "attempt_failed" ]; then
             severity="high"
-          elif [ "$REVIEWER_TEST_COVERAGE" = "false" ] && [ "$IMPLEMENTER_PR_OPENED" = "true" ]; then
+          elif [ "$REVIEWER_TEST_COVERAGE" = "false" ] && [ "$pr_opened" = "true" ]; then
             severity="medium"
           fi
 
-          # Build action_taken JSON (defensive parsing — files_changed may be empty string)
-          files_json="$IMPLEMENTER_FILES"
-          if [ -z "$files_json" ]; then files_json="[]"; fi
-          lines_added_int="$IMPLEMENTER_LINES_ADDED"
-          if [ -z "$lines_added_int" ]; then lines_added_int="0"; fi
-          lines_removed_int="$IMPLEMENTER_LINES_REMOVED"
-          if [ -z "$lines_removed_int" ]; then lines_removed_int="0"; fi
-
           action_taken=$(jq -n \
             --arg issue "$ISSUE_NUMBER" \
-            --arg pr "$IMPLEMENTER_PR_NUMBER" \
-            --arg pr_url "$IMPLEMENTER_PR_URL" \
-            --arg branch "$IMPLEMENTER_BRANCH" \
+            --arg pr "$pr_number" \
+            --arg pr_url "$pr_url" \
+            --arg branch "$branch" \
             --arg dry_run "$DRY_RUN" \
             --argjson files "$files_json" \
-            --argjson lines_added "$lines_added_int" \
-            --argjson lines_removed "$lines_removed_int" \
+            --arg lines_added "$lines_added" \
+            --arg lines_removed "$lines_removed" \
             --arg run_url "$ACTIONS_URL" \
             '{
               issue_number: ($issue | tonumber),
-              pr_number: (if $pr == "" then null else ($pr | tonumber) end),
+              pr_number: (if ($pr | tostring) == "" then null else ($pr | tonumber) end),
               pr_url: $pr_url,
               branch: $branch,
               dry_run: ($dry_run == "true"),
               files_changed: $files,
-              lines_added: $lines_added,
-              lines_removed: $lines_removed,
+              lines_added: ($lines_added | tonumber),
+              lines_removed: ($lines_removed | tonumber),
               run_url: $run_url
             }')
 
@@ -461,6 +552,10 @@ jobs:
               hard_constraints_pass: ($hc == "true"),
               block_reason: (if $block_reason == "" then null else $block_reason end)
             }')
+
+          # Re-bind for downstream payload jq
+          IMPLEMENTER_DECISION="$decision"
+          IMPLEMENTER_REASON="$reason"
 
           payload=$(jq -n \
             --arg agent_name "backlog-autopilot-implementer" \
