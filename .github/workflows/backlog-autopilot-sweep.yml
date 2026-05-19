@@ -200,6 +200,8 @@ jobs:
             --arg max "$MAX_ISSUES" \
             --arg run_url "$ACTIONS_URL" \
             --arg model "claude-sonnet-4-6" \
+            --arg step_status "$STEP_STATUS" \
+            --arg selected_count "$SELECTED_COUNT" \
             '{
               agent_name: $agent_name,
               agent_run_id: $run_id,
@@ -214,8 +216,8 @@ jobs:
                 run_url: $run_url
               },
               result: {
-                status: $STEP_STATUS,
-                selected_count: ($SELECTED_COUNT | tonumber)
+                status: $step_status,
+                selected_count: ($selected_count | tonumber)
               },
               model_used: $model,
               human_approval_required: false
