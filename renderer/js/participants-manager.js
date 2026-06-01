@@ -5185,36 +5185,68 @@ function parseCSV(csvText) {
   const lines = csvText.split('\n').map(line => line.trim()).filter(line => line.length > 0);
   if (lines.length === 0) return [];
 
-  // Parse headers
   const headers = parseCSVLine(lines[0]);
   const data = [];
 
-  // Field mapping from English to database field names
+  // Canonical lowercase -> db field. Case/whitespace insensitive on lookup.
+  // Synonyms cover common CSV exports from other tools and event timing systems.
   const fieldMapping = {
-    'Number': 'numero',
-    'Person': 'nome',
-    'Team': 'squadra',
-    'Category': 'categoria',
-    'Plate_Number': 'plate_number',
-    'Sponsors': 'sponsor',
-    'Metatag': 'metatag',
-    'Folder_1': 'folder_1',
-    'Folder_2': 'folder_2',
-    'Folder_3': 'folder_3',
-    'Folder_1_Path': 'folder_1_path',
-    'Folder_2_Path': 'folder_2_path',
-    'Folder_3_Path': 'folder_3_path'
+    'number': 'numero',
+    'numero': 'numero',
+    'race_number': 'numero',
+    'bib': 'numero',
+    'bib_number': 'numero',
+    'person': 'nome',
+    'driver': 'nome',
+    'name': 'nome',
+    'nome': 'nome',
+    'team': 'squadra',
+    'squadra': 'squadra',
+    'category': 'categoria',
+    'categoria': 'categoria',
+    'class': 'categoria',
+    'plate_number': 'plate_number',
+    'plate': 'plate_number',
+    'car_model': 'car_model',
+    'nationality': 'nationality',
+    'sponsors': 'sponsor',
+    'sponsor': 'sponsor',
+    'metatag': 'metatag',
+    'folder_1': 'folder_1',
+    'folder_2': 'folder_2',
+    'folder_3': 'folder_3',
+    'folder_1_path': 'folder_1_path',
+    'folder_2_path': 'folder_2_path',
+    'folder_3_path': 'folder_3_path'
   };
+
+  const normalizeHeader = (h) => h.toLowerCase().trim().replace(/\s+/g, '_');
 
   for (let i = 1; i < lines.length; i++) {
     const values = parseCSVLine(lines[i]);
     if (values.length === headers.length) {
       const row = {};
       headers.forEach((header, index) => {
-        const dbField = fieldMapping[header] || header.toLowerCase();
+        const normalized = normalizeHeader(header);
+        const dbField = fieldMapping[normalized] || normalized;
         row[dbField] = values[index] || '';
       });
       data.push(row);
+    }
+  }
+
+  // Fail-fast guard: if no row got a race number, the CSV headers didn't map
+  // to anything the matcher recognizes. Surface the failure here instead of
+  // silently producing a preset where SmartMatcher can never find a match.
+  if (data.length > 0) {
+    const rowsWithNumero = data.filter(r => r.numero && String(r.numero).trim() !== '').length;
+    if (rowsWithNumero === 0) {
+      const headerList = headers.join(', ');
+      throw new Error(
+        `CSV import failed: 0 of ${data.length} rows have a race number after parsing. ` +
+        `Found headers: [${headerList}]. ` +
+        `Expected at least one of: "Number", "number", "race_number", "Bib", or "numero".`
+      );
     }
   }
 

@@ -2765,6 +2765,24 @@ export async function duplicateOfficialPresetSupabase(sourcePresetId: string): P
 export async function importParticipantsFromCSVSupabase(csvData: any[], presetName: string, categoryId?: string): Promise<ParticipantPresetSupabase> {
   const supabase = authService.getSupabaseClient();
 
+  // Defensive guard: refuse to create a preset where no row has a race
+  // number. Surfaces the failure before SmartMatcher silently misses every
+  // photo. Mirrors the frontend parseCSV guard so this function is safe to
+  // call from any importer path.
+  if (csvData.length > 0) {
+    const rowsWithNumero = csvData.filter(r =>
+      (r.numero || r.Number || r.number || r.race_number || r.bib || '').toString().trim() !== ''
+    ).length;
+    if (rowsWithNumero === 0) {
+      const sampleKeys = Object.keys(csvData[0] || {}).slice(0, 12).join(', ');
+      throw new Error(
+        `CSV import failed: 0 of ${csvData.length} rows have a race number. ` +
+        `Detected columns: [${sampleKeys}]. ` +
+        `Expected one of: numero, Number, number, race_number, or Bib.`
+      );
+    }
+  }
+
   const preset = await createParticipantPresetSupabase({
     user_id: getCurrentUserId() || '',
     name: presetName,
@@ -2775,13 +2793,13 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
   const participants: Omit<PresetParticipantSupabase, 'id' | 'created_at'>[] = csvData.map((row, index) => {
     const participant = {
       preset_id: preset.id!,
-      numero: row.numero || row.Number || '',
-      nome: row.nome || row.Driver || '',
-      categoria: row.categoria || row.Category || '',
+      numero: row.numero || row.Number || row.number || row.race_number || row.bib || '',
+      nome: row.nome || row.Driver || row.driver || row.Person || row.person || row.Name || row.name || '',
+      categoria: row.categoria || row.Category || row.category || row.class || row.Class || '',
       squadra: row.squadra || row.team || row.Team || '',
-      sponsor: row.sponsor || row.Sponsors || '',
+      sponsor: row.sponsor || row.Sponsors || row.sponsors || '',
       metatag: row.metatag || row.Metatag || '',
-      plate_number: row.plate_number || row.Plate_Number || '',
+      plate_number: row.plate_number || row.Plate_Number || row.plate || row.Plate || '',
       car_model: row.car_model || row.Car_Model || '',
       folder_1: row.folder_1 || row.Folder_1 || '',
       folder_2: row.folder_2 || row.Folder_2 || '',
@@ -2793,7 +2811,7 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
       custom_fields: {
         // Store any additional CSV fields
         ...Object.keys(row).reduce((acc, key) => {
-          const knownFields = ['numero', 'Number', 'nome', 'Driver', 'categoria', 'Category', 'squadra', 'team', 'Team', 'sponsor', 'Sponsors', 'metatag', 'Metatag', 'plate_number', 'Plate_Number', 'folder_1', 'Folder_1', 'folder_2', 'Folder_2', 'folder_3', 'Folder_3', 'folder_1_path', 'Folder_1_Path', 'folder_2_path', 'Folder_2_Path', 'folder_3_path', 'Folder_3_Path', '_Driver_IDs', '_driver_ids', '_Driver_Metatags', '_driver_metatags', '_Driver_Nationalities', '_driver_nationalities', 'car_model', 'Car_Model', 'nationality', 'Nationality'];
+          const knownFields = ['numero', 'Number', 'number', 'race_number', 'bib', 'Bib', 'nome', 'Driver', 'driver', 'Person', 'person', 'Name', 'name', 'categoria', 'Category', 'category', 'class', 'Class', 'squadra', 'team', 'Team', 'sponsor', 'Sponsors', 'sponsors', 'metatag', 'Metatag', 'plate_number', 'Plate_Number', 'plate', 'Plate', 'folder_1', 'Folder_1', 'folder_2', 'Folder_2', 'folder_3', 'Folder_3', 'folder_1_path', 'Folder_1_Path', 'folder_2_path', 'Folder_2_Path', 'folder_3_path', 'Folder_3_Path', '_Driver_IDs', '_driver_ids', '_Driver_Metatags', '_driver_metatags', '_Driver_Nationalities', '_driver_nationalities', 'car_model', 'Car_Model', 'nationality', 'Nationality'];
           if (!knownFields.includes(key)) {
             acc[key] = row[key];
           }
