@@ -1,823 +1,312 @@
 # RaceTagger Desktop
 
-Professional Electron desktop application for AI-powered race number detection in motorsport/running/cycling photography. Built with TypeScript, Electron, and Supabase.
+Professional Electron desktop application for AI-powered race number detection in motorsport/running/cycling photography. TypeScript + Electron + Supabase.
 
-**Version:** 1.1.0 | **Status:** Beta Live Production (57+ users, 2,578+ analyses)
+**Status:** Beta Live Production.
+
+> Cross-repo orchestration, token logic, migration template, and shared conventions live in the root **[../CLAUDE.md](../CLAUDE.md)** (auto-loaded). This file covers desktop-specific architecture only — it does not repeat root content.
 
 ## Essential Context
 
-**Related Documentation:**
-- **[DATABASE.md](./DATABASE.md)** - Complete schema (85+ tables), Edge Functions, storage buckets
-- **[RACETAGGER_CONTEXT.md](../RACETAGGER_CONTEXT.md)** - Business context, pricing, market analysis
-- **[CHANGELOG.md](./CHANGELOG.md)** - Version history and release notes
-- **[../CLAUDE.md](../CLAUDE.md)** - Cross-repository orchestration guide
-- **[../racetagger-app/CLAUDE.md](../racetagger-app/CLAUDE.md)** - Web platform guide
+- **[DATABASE.md](./DATABASE.md)** — complete schema (85+ tables), Edge Functions, storage buckets
+- **[RACETAGGER_CONTEXT.md](../RACETAGGER_CONTEXT.md)** — business context, pricing, market, buyer personas
+- **[CHANGELOG.md](./CHANGELOG.md)** — version history
+- **[../racetagger-app/CLAUDE.md](../racetagger-app/CLAUDE.md)** — web platform guide
 
 ## Shared Database with Web App
 
-The Supabase PostgreSQL database (**project: `taompbzifylmdzgbbrpv`**) is shared between this desktop app and the Next.js web app at `../racetagger-app/`. Key implications:
+Supabase PostgreSQL (**project: `taompbzifylmdzgbbrpv`**) is shared with the Next.js web app at `../racetagger-app/`. Implications:
 
 - **Schema changes** require migration files in `../racetagger-app/supabase/migrations/`
-- **Edge Functions** in `supabase/functions/` serve both platforms (desktop uses `analyzeImageDesktopV2-V6`, web uses `analyzeImageWeb`)
-- **Token system** (`user_tokens`, `token_transactions`, `batch_token_reservations`) is consumed by both apps - logic must stay in sync
+- **Edge Functions** in `supabase/functions/` (symlink → `../racetagger-app/supabase/functions/`) serve both platforms — desktop uses `analyzeImageDesktopV2`–`V6`, web uses `analyzeImageWeb`
+- **Token system** (`user_tokens`, `token_transactions`, `batch_token_reservations`) is consumed by both apps — logic must stay in sync (see root CLAUDE.md "Token logic is sacred")
 - **RLS policies** must account for both web auth (cookies) and desktop auth (JWT bearer tokens)
-- The `supabase/` directory contains Edge Functions shared with the web app
 
 ## Tech Stack
 
-- **Framework:** Electron 36.9.5, TypeScript 5.9.2, Node.js 18+
-- **Image Processing:** Sharp 0.34.3, raw-preview-extractor (custom in `/vendor/`)
-- **RAW Preview:** raw-preview-extractor (native C++ N-API) + ExifTool fallback
-- **Database:** Supabase 2.30.0 (cloud, source of truth) + in-memory caches (categories, presets)
-- **AI/ML:** Google Gemini (Flash/Pro/Lite via Edge Functions), onnxruntime-node 1.23.2 (local inference)
-- **Face Recognition:** face-api.js 0.22.2, canvas 3.2.0 (DISABLED - Coming Soon)
-- **Build:** electron-builder 24.13.0, cross-platform (macOS, Windows, Linux)
-- **Testing:** Jest 29.7.0, ts-jest 29.4.1
+- **Framework:** Electron 36, TypeScript 5.9, Node.js 18+
+- **Image Processing:** Sharp 0.34, raw-preview-extractor (custom C++ N-API in `/vendor/`) + ExifTool fallback
+- **Database:** Supabase 2.30 (cloud, source of truth) + in-memory caches (categories 60s, presets 30s)
+- **AI/ML:** Google Gemini (Flash/Pro/Lite via Edge Functions), onnxruntime-node 1.23 (local inference)
+- **Face Recognition:** face-api.js + canvas (DISABLED — Coming Soon)
+- **Build:** electron-builder 24, cross-platform (macOS, Windows, Linux)
+- **Testing:** Jest 29 + ts-jest
 
-## Project Structure
+## Code Map
+
+Source is ~45k lines of TypeScript main process + ~23k lines of plain-JS renderer. The orientation map below names the files that matter; use `wc -l` / `glob` for current sizes (don't trust embedded counts — they go stale).
 
 ```
-/src/                              # TypeScript source (~44,900 lines total)
-├── main.ts                        # Electron main process (3,607 lines)
-├── preload.ts                     # Preload script, contextBridge IPC API (306 lines)
-├── config.ts                      # Multi-environment config (708 lines)
-├── config.production.ts           # Hardcoded production values
+src/
+├── main.ts                      # Electron main process ★ large — avoid direct edits; preserve EPIPE guard
+├── preload.ts                   # contextBridge IPC API (whitelisted channels)
+├── config.ts                    # Multi-env config; MAX_SUPPORTED_EDGE_FUNCTION_VERSION lives here
+├── config.production.ts         # Hardcoded production values (used when app.isPackaged)
 │
-├── unified-image-processor.ts     # Central processing pipeline (6,759 lines) ★ LARGEST
-├── smart-routing-processor.ts     # Intelligent routing based on category config (455 lines)
-├── generic-segmenter.ts           # YOLOv8-seg subject segmentation (749 lines)
-├── scene-classifier.ts            # Scene type classification (433 lines)
-├── scene-classifier-onnx.ts       # ONNX-based scene classifier
-├── onnx-detector.ts               # Local ONNX inference engine (837 lines)
-├── model-manager.ts               # ONNX model download/versioning/caching (739 lines)
-├── yolo-model-registry.ts         # YOLO model variant registry
+├── unified-image-processor.ts   # Central processing pipeline ★ LARGEST file in the repo
+├── smart-routing-processor.ts   # Routes images by sport_categories config
+├── generic-segmenter.ts         # YOLOv8-seg subject segmentation
+├── scene-classifier{,-onnx}.ts  # Scene type classification
+├── onnx-detector.ts             # Local ONNX inference engine
+├── model-manager.ts             # ONNX model download/versioning/caching (model_registry table)
 │
-├── auth-service.ts                # Supabase auth + token pre-authorization (1,266 lines)
-├── database-service.ts            # Supabase CRUD + in-memory caches (~3,000 lines)
-├── user-preferences-service.ts    # User settings persistence
-├── consent-service.ts             # Training consent management
-├── email-service.ts               # Brevo email integration
-├── folder-select-handler.ts       # Enhanced folder selection with drag & drop
+├── auth-service.ts              # Supabase auth + token pre-authorization
+├── database-service.ts          # Supabase CRUD + in-memory caches (categories, presets, CSV, export)
+├── {user-preferences,consent,email}-service.ts
 │
-├── face-recognition-processor.ts  # Face detection pipeline (440 lines) [DISABLED]
-├── face-detection-bridge.ts       # Bridge for renderer face detection [DISABLED]
+├── face-*.ts                    # Face detection pipeline [DISABLED]
 │
-├── ipc/                           # Modular IPC handlers (136 handlers across 15 files)
-│   ├── index.ts                   # Central registration + re-exports
-│   ├── context.ts                 # Shared state (mainWindow, caches, Supabase client)
-│   ├── types.ts                   # IPC TypeScript interfaces (HandlerResult, BatchProcessConfig, etc.)
-│   ├── handler-factory.ts         # Handler creation utilities
-│   ├── window-handlers.ts         # Window control (3 handlers)
-│   ├── auth-handlers.ts           # Auth, tokens, admin, subscriptions (18 handlers)
-│   ├── database-handlers.ts       # Projects, executions, presets (22 handlers)
-│   ├── supabase-handlers.ts       # Sport categories, caching, feature flags (19 handlers)
-│   ├── export-handlers.ts         # Export destinations & processing (13 handlers)
-│   ├── app-handlers.ts            # App info, consent, settings (11 handlers)
-│   ├── file-handlers.ts           # File dialogs, folder operations (8 handlers)
-│   ├── image-handlers.ts          # Thumbnail generation, image loading (5 handlers)
-│   ├── csv-handlers.ts            # CSV loading and parsing (4 handlers)
-│   ├── analysis-handlers.ts       # Analysis logs, pipeline, log viewer (4 handlers)
-│   ├── face-recognition-handlers.ts  # Face detection and matching (6 handlers)
-│   ├── preset-face-handlers.ts    # Preset participant face photos (6 handlers)
-│   ├── version-handlers.ts        # App version checking, force update (4 handlers)
-│   ├── feedback-handlers.ts       # Support feedback & diagnostics (5 handlers)
-│   └── error-telemetry-handlers.ts # Automatic error reporting (3 handlers)
+├── ipc/                         # Modular IPC handlers, one domain per file, registered in index.ts
+│   ├── context.ts               # Shared state (mainWindow, caches, supabase singleton)
+│   ├── types.ts                 # IPC interfaces (HandlerResult<T>, BatchProcessConfig, …)
+│   ├── handler-factory.ts
+│   └── {auth,database,supabase,export,app,file,image,csv,analysis,window,
+│        version,feedback,error-telemetry,face-recognition,preset-face}-handlers.ts
 │
-├── matching/                      # Participant matching algorithms
-│   ├── smart-matcher.ts           # Multi-evidence correlation (2,253 lines) ★
-│   ├── temporal-clustering.ts     # Burst mode detection (811 lines)
-│   ├── evidence-collector.ts      # Evidence aggregation
-│   ├── cache-manager.ts           # Match result caching (595 lines)
-│   ├── sport-config.ts            # Sport-specific matching rules (617 lines)
-│   ├── ocr-corrector.ts           # OCR error correction
-│   └── ml-interfaces.ts           # ML pipeline interfaces (549 lines)
+├── matching/                    # Participant matching
+│   ├── smart-matcher.ts         # Multi-evidence correlation ★ + driver-name helpers
+│   ├── temporal-clustering.ts   # Burst mode detection
+│   ├── evidence-collector.ts · cache-manager.ts · sport-config.ts · ocr-corrector.ts · ml-interfaces.ts
 │
-├── utils/                         # Utilities
-│   ├── raw-converter.ts           # Temp file management (~94 lines)
-│   ├── raw-preview-native.ts      # Native RAW preview extraction + ExifTool fallback (~542 lines)
-│   ├── crop-context-extractor.ts  # Crop + context multi-image extraction (940 lines)
-│   ├── analysis-logger.ts         # JSONL logging system (1,024 lines)
-│   ├── metadata-writer.ts         # EXIF/XMP/sidecar writing (828 lines)
-│   ├── folder-organizer.ts        # File organization by number/team (727 lines)
-│   ├── session-manager.ts         # Session state persistence (622 lines)
-│   ├── memory-pool.ts             # Buffer pooling for performance (586 lines)
-│   ├── export-destination-processor.ts # Export to configured destinations (516 lines)
-│   ├── native-modules.ts          # Native module management (512 lines)
-│   ├── cleanup-manager.ts         # Temp file lifecycle (471 lines)
-│   ├── filename-renamer.ts        # File renaming strategies (446 lines)
-│   ├── xmp-manager.ts             # XMP sidecar creation
-│   ├── disk-monitor.ts            # Disk space management
-│   ├── performance-monitor.ts     # Real-time metrics
-│   ├── performance-timer.ts       # High-res timing
-│   ├── native-tool-manager.ts     # ExifTool management (~312 lines)
-│   ├── logger.ts                  # Structured logging
-│   ├── system-info.ts             # System diagnostics
-│   ├── hardware-detector.ts       # Hardware capability detection
-│   ├── network-monitor.ts         # Network status monitoring
-│   ├── error-tracker.ts           # Error aggregation
-│   ├── error-telemetry-service.ts # Automatic error reporting to Supabase + GitHub (~350 lines)
-│   ├── filesystem-timestamp.ts    # File timestamp utilities
-│   └── mask-rle.ts                # Run-length encoding for masks
+├── utils/                       # crop-context-extractor, analysis-logger (JSONL), metadata-writer
+│   │                            # (EXIF/XMP/sidecar), folder-organizer, filename-renamer,
+│   │                            # session-manager, memory-pool, raw-preview-native, native-tool-manager,
+│   │                            # error-telemetry-service, performance-monitor, … (feature-per-file)
 │
-├── types/                         # Type definitions
-│   ├── piexifjs.d.ts              # EXIF library types
-│   └── execution-settings.ts      # Execution telemetry types
-│
-└── assets/                        # App icons, resources
+└── types/                       # piexifjs.d.ts, execution-settings.ts
 
-/renderer/                         # Frontend (HTML/CSS/JS, ~23,400 lines JS)
-├── index.html                     # Main layout shell (sidebar + content area)
-├── pages/                         # Page content (dynamically loaded by router)
-│   ├── home.html                  # Dashboard (stats, recent executions, announcements)
-│   ├── analysis.html              # Image analysis (folder/CSV select, processing)
-│   ├── participants.html          # Participant presets management
-│   ├── settings.html              # User settings
-│   ├── projects.html              # Project management
-│   └── destinations.html          # Export destinations
-├── js/                            # JavaScript modules (28 files)
-│   ├── router.js                  # Navigo.js hash router (434 lines)
-│   ├── renderer.js                # Core renderer logic (2,333 lines)
-│   ├── participants-manager.js    # Preset management (3,734 lines) ★ LARGEST
-│   ├── log-visualizer.js          # Execution log viewer (3,129 lines)
-│   ├── enhanced-file-browser.js   # Folder selection with drag & drop (1,365 lines)
-│   ├── delight-integration.js     # UI delight system (1,120 lines)
-│   ├── auth.js                    # Authentication UI (1,039 lines)
-│   ├── enhanced-progress.js       # Progress tracking UI (865 lines)
-│   ├── delight-system.js          # Animation & feedback system (855 lines)
-│   ├── export-destinations.js     # Export config UI (822 lines)
-│   ├── desktop-ui.js              # Desktop-specific UI (746 lines)
-│   ├── preset-face-manager.js     # Face photo management (749 lines) [DISABLED]
-│   ├── results-page.js            # Analysis results display (668 lines)
-│   ├── home.js                    # Dashboard logic (501 lines)
-│   ├── driver-face-manager.js     # Driver face panels (488 lines) [DISABLED]
-│   ├── face-detector.js           # face-api.js wrapper (467 lines) [DISABLED]
-│   ├── enhanced-processing.js     # Processing pipeline UI (459 lines)
-│   ├── face-recognition-ui.js     # Recognition badge UI (422 lines) [DISABLED]
-│   ├── feedback-modal.js          # Support feedback (402 lines)
-│   ├── settings.js                # Settings page logic
-│   ├── smart-presets.js           # Smart preset features
-│   ├── streaming-view.js          # Streaming pipeline progress
-│   ├── visual-tagging-manager.js  # Visual tag display
-│   ├── gallery-zoom.js            # Image gallery zoom
-│   ├── enhanced-ui-coordinator.js # UI state coordination
-│   ├── admin-features.js          # Admin-only features
-│   ├── force-update.js            # Force update modal
-│   ├── last-analysis-settings.js  # Persist last used settings
-│   └── vendor/navigo.min.js       # Navigo 8.11.1
-└── css/                           # Stylesheets (15 files)
-    ├── styles.css                 # Base styles
-    ├── desktop-theme.css          # Desktop app theme
-    ├── sidebar.css                # Navigation sidebar
-    ├── auth.css                   # Login/register
-    ├── participants.css           # Participants page (inc. Coming Soon)
-    ├── settings.css               # Settings page
-    ├── results-integrated.css     # Results display
-    ├── enhanced-progress.css      # Progress indicators
-    ├── enhanced-file-browser.css  # File browser
-    ├── processing-status.css      # Processing states
-    ├── smart-presets.css          # Smart presets
-    ├── delight-system.css         # Animations & delight
-    ├── home-user.css              # Home page
-    ├── admin-features.css         # Admin UI
-    └── feedback-modal.css         # Feedback dialog
+renderer/                        # Plain HTML/CSS/JS, no framework, no build step
+├── index.html                   # Layout shell (sidebar + content)
+├── pages/                       # home · analysis · participants · settings · projects · destinations
+├── js/                          # Navigo router + per-page modules. Biggest: participants-manager.js,
+│   │                            # log-visualizer.js, renderer.js. Several face-*.js are [DISABLED].
+│   └── vendor/navigo.min.js
+└── css/                         # One stylesheet per page/feature
 
-/tests/                            # Jest tests + performance benchmarks
-├── setup.ts                       # Test environment setup
-├── __mocks__/                     # Electron & fs mocks
-│   ├── electron.ts
-│   └── fs.ts
-├── ipc-handlers.test.ts           # IPC handler tests
-├── smart-matcher.test.ts          # SmartMatcher algorithm tests
-├── driver-preservation.test.ts    # Driver data preservation tests
-├── upsert-logic.test.ts           # Database upsert tests
-├── metadata-writer-raw-guard.test.ts  # RAW file protection tests
-├── fallback-mechanisms.test.ts    # Fallback behavior tests
-├── file-selection.test.ts         # File selection tests
-├── folder-selection.test.ts       # Folder selection tests
-├── initialization-coordination.test.ts  # Init sequence tests
-└── performance/                   # Performance benchmarks
-    ├── benchmark-suite.ts         # Full benchmark suite
-    └── test-runner.ts             # Benchmark runner
-
-/supabase/functions/               # Edge Functions (42 functions, Deno runtime)
-├── analyzeImageDesktop/           # V1 - Basic Gemini analysis
-├── analyzeImageDesktopV2/         # V2 - SmartMatcher integration
-├── analyzeImageDesktopV3/         # V3 - Temporal clustering
-├── analyzeImageDesktopV4/         # V4 - RF-DETR + Gemini dual recognition
-├── analyzeImageDesktopV5/         # V5 - Local ONNX + face recognition
-├── analyzeImageDesktopV6/         # V6 - Crop+Context multi-image ★ CURRENT
-├── analyzeImageWeb/               # Web demo (rate limited, 3 free)
-├── analyzeImage/                  # Legacy V1
-├── analyzeImageAdmin/             # Admin analysis
-├── identifyPersonWithGrounding/   # Person identification with grounding
-├── visualTagging/                 # Visual feature extraction
-├── parsePdfEntryList/             # PDF entry list parsing
-├── track-execution-settings/      # Telemetry tracking
-├── export-training-labels/        # Training data export
-├── uploadImage/                   # Image storage
-├── submitFeedback/                # User feedback
-├── handle-token-request/          # Token request workflow
-├── get-registrants/               # Pending registrants
-├── grant-bonus-tokens/            # Admin token grants
-├── register-user-unified/         # User registration
-├── register-subscriber/           # Legacy registration
-├── verify-and-activate-code/      # Access code verification
-├── check-user-registration-status/ # Registration state check
-├── create-auth-user/              # Auth user creation
-├── delete-user-accounts/          # User data deletion
-├── generate-access-codes/         # Access code generation
-├── process-access-grants/         # Access grant processing
-├── process-referral-signup/       # Referral processing
-├── send-confirmation-email/       # Confirmation emails (Brevo)
-├── send-token-request-email/      # Token request notification
-├── send-token-balance-email/      # Balance notification
-├── send-contact-email/            # Contact form
-├── verify-recaptcha/              # reCAPTCHA validation
-├── sync-to-brevo/                 # Brevo/Sendinblue sync
-├── admin-approve-feedback/        # Admin feedback approval
-├── submit-feedback-with-rewards/  # Feedback with token rewards
-├── submit-social-share/           # Social share tracking
-├── update-feedback-tokens/        # Feedback token grants
-├── quick-register-from-feedback/  # Quick registration
-├── report-automatic-error/        # Automatic error telemetry → GitHub issues
-├── test-auth-user-check/          # Auth testing
-└── shared/                        # Shared utilities
-
-/scripts/                          # Build scripts, utilities
-/vendor/                           # Native dependencies (ExifTool, raw-preview-extractor)
-/ml-training/                      # ML model training pipeline (Python, ONNX conversion)
-/dist/                             # Compiled TypeScript output (generated)
-/release/                          # Built installers (generated)
+tests/                           # Jest + performance/ benchmarks
+supabase/                        # SYMLINK → ../racetagger-app/supabase (canonical)
+vendor/                          # ExifTool binaries, raw-preview-extractor native addon
+ml-training/                     # Python ONNX training pipeline
 ```
+
+**Edge Functions** (`supabase/functions/`, Deno runtime): the desktop analysis path is `analyzeImageDesktopV2`–`V6` (V6 current). Everything else (registration, tokens, email, feedback, telemetry, training export, …) follows the verb-noun naming convention — `ls supabase/functions/` for the live list rather than maintaining one here.
 
 ## Key Commands
 
-**Development:**
-```bash
-npm run dev              # TypeScript watch + Electron dev mode (concurrently)
-npm run dev:debug        # Development with DEBUG_MODE=true
-npm run compile          # Compile TypeScript to /dist
-npm start                # Start compiled app
-```
+Full command list is in the root CLAUDE.md. Desktop-specific essentials:
 
-**Testing:**
 ```bash
-npm test                 # Jest test suite (10 test files)
-npm run test:watch       # Jest watch mode
-npm run test:coverage    # Coverage report
-npm run test:performance # Standard performance tests
-npm run test:performance:quick   # Quick regression tests
-npm run test:performance:full    # Comprehensive benchmark
-npm run benchmark        # Alias for test:performance:full
-npm run regression-test  # Alias for test:performance:quick
-```
-
-**Build:**
-```bash
-npm run build            # tsc + electron-builder (current platform)
-npm run build:mac:arm64  # macOS Apple Silicon DMG+ZIP
-npm run build:mac:x64    # macOS Intel DMG+ZIP
-npm run build:mac:universal  # macOS Universal Binary
-npm run build:mac:all    # All macOS architectures
-npm run build:win:x64    # Windows 64-bit (NSIS + portable + ZIP)
-npm run build:win:arm64  # Windows ARM64
-npm run build:win:all    # All Windows architectures
-```
-
-**Native Modules:**
-```bash
-npm run rebuild          # electron-rebuild (all native modules)
-npm run rebuild:sharp    # Rebuild Sharp.js for Electron specifically
-npm run postinstall      # Auto-runs electron-builder install-app-deps
+npm run dev              # TypeScript watch + Electron (concurrently)
+npm run dev:debug        # DEBUG_MODE=true
+npm run compile          # tsc → /dist  (run this to verify TS after changes)
+npm test                 # Jest
+npm run test:performance:quick   # Quick regression after changes
+npm run rebuild          # electron-rebuild (after npm install — native modules)
+npm run rebuild:sharp    # Rebuild Sharp for Electron specifically
+npm run build:mac:arm64 / build:win:x64 / …   # platform builds
 ```
 
 ## Architecture Deep Dive
 
 ### Core Processing Pipeline
 
-The image processing flows through a multi-stage pipeline orchestrated by `unified-image-processor.ts` (6,759 lines):
+Orchestrated by `unified-image-processor.ts`:
 
 ```
-1. Image Discovery    → Scan folder, detect formats (RAW vs standard)
-2. RAW Preview        → raw-preview-extractor (native) or ExifTool fallback
-3. Scene Classif.     → Local ONNX model classifies scene type (track/paddock/podium/portrait)
-4. Segmentation       → YOLOv8-seg isolates subjects (generic-segmenter.ts)
-5. Crop Extraction    → Extract crops per subject + negative/context image
-6. AI Analysis        → Edge Function V6 (Gemini Vision) or local-onnx
-7. Smart Matching     → Match numbers to CSV participants (smart-matcher.ts)
-8. Face Recognition   → [DISABLED] face-api.js matching
-9. Metadata Writing   → EXIF/XMP/sidecar with matched data
-10. Folder Org.       → Organize files by number/team/category
-11. Export            → Copy to configured export destinations
+1. Image Discovery  → scan folder, detect RAW vs standard
+2. RAW Preview      → raw-preview-extractor (native) or ExifTool fallback
+3. Scene Classif.   → local ONNX classifies scene (track/paddock/podium/portrait)
+4. Segmentation     → YOLOv8-seg isolates subjects (generic-segmenter.ts)
+5. Crop Extraction  → crops per subject + "negative"/context image
+6. AI Analysis      → Edge Function V6 (Gemini Vision) or local-onnx
+7. Smart Matching   → match numbers to CSV participants (smart-matcher.ts)
+8. Face Recognition → [DISABLED]
+9. Metadata Writing → EXIF/XMP/sidecar with matched data
+10. Folder Org.     → organize by number/team/category
+11. Export          → copy to configured export destinations
 ```
 
 ### Smart Routing (`smart-routing-processor.ts`)
 
-Routes images through different pipelines based on `sport_categories` database config:
-- **recognition_method**: `gemini` | `local-onnx` (rf-detr deprecated and removed 2026-04-22)
-- **edge_function_version**: 2-6 (determines which Edge Function to call)
-- **scene_classifier_enabled**: Skip non-relevant scenes
-- **crop_config**: Enable crop+context multi-image analysis (V6)
+Routes images through different pipelines based on `sport_categories` DB config:
+- **recognition_method**: `gemini` | `local-onnx` (rf-detr cloud path removed 2026-04-22)
+- **edge_function_version**: 2–6 (which Edge Function to call)
+- **scene_classifier_enabled**: skip non-relevant scenes
+- **crop_config**: enable crop+context multi-image analysis (V6)
 
 ### Edge Function Version History
 
 ```
-V2: Basic analysis (app 1.0.0 - 1.0.7)
-V3: Advanced annotations + temporal clustering (app 1.0.8+)
-V4: RF-DETR + Gemini dual recognition (app 1.0.9+)
-V5: Vehicle recognition + face recognition (app 1.0.11+)
-V6: Crop + Context multi-image analysis (app 1.0.12+) ★ CURRENT
+V2: Basic analysis            V5: Vehicle + face recognition
+V3: Temporal clustering       V6: Crop + Context multi-image ★ CURRENT
+V4: RF-DETR + Gemini dual
 ```
 
-**`MAX_SUPPORTED_EDGE_FUNCTION_VERSION = 6`** in `config.ts`. Categories with higher versions are hidden.
+`MAX_SUPPORTED_EDGE_FUNCTION_VERSION = 6` in `config.ts`. Categories with higher versions are hidden. Breaking changes require a new version — never edit a deployed one in place.
 
 ### IPC Architecture
 
-128 handlers across 14 modular files, registered centrally in `ipc/index.ts`.
+Modular handlers in `src/ipc/`, one domain per file, registered centrally in `ipc/index.ts`.
 
-**Context (`ipc/context.ts`):** Shared state module providing:
-- `mainWindow` reference (safe send with destroyed-check)
-- `globalCsvData` - Loaded CSV participant data
-- `batchConfig` - Current batch processing configuration
-- `versionCheckResult` - Force update state
-- `supabase` - Singleton Supabase client
-- `supabaseImageUrlCache` - URL caching for signed URLs
+- **`ipc/context.ts`** — shared state: `mainWindow` (safe send with destroyed-check), `globalCsvData`, `batchConfig`, `versionCheckResult`, `supabase` singleton, signed-URL cache
+- **`preload.ts`** — exposes 3 methods via `contextBridge`: `window.api.send` (fire-and-forget), `.receive` (event listener, returns cleanup fn), `.invoke` (request/response). **All channels whitelisted** — adding a channel means editing the preload whitelist.
+- Every handler returns `HandlerResult<T>`: `{ success: true, data: T } | { success: false, error: string }`
 
-**Preload API (`preload.ts`):** Exposes 3 methods to renderer via `contextBridge`:
-- `window.api.send(channel, data)` - Fire-and-forget
-- `window.api.receive(channel, callback)` - Event listener (returns cleanup fn)
-- `window.api.invoke(channel, ...args)` - Promise-based request/response
+### Frontend
 
-All channels are whitelisted (57 send/receive + 171 invoke channels).
+Navigo.js hash router (`renderer/js/router.js`). Routes: `#/home`, `#/analysis`, `#/participants`, `#/settings`, `#/projects`, `#/destinations`. Each page has a JS module that initializes on the `page-loaded` event. Pages cached after first fetch. Renderer talks to main **only** via `window.api`.
 
-### Frontend Architecture
+### Database
 
-**Router:** Navigo.js 8.11.1 hash-based routing (`renderer/js/router.js`)
-- Routes: `#/home`, `#/analysis`, `#/participants`, `#/settings`, `#/projects`, `#/destinations`
-- Dynamic page loading from `/renderer/pages/`
-- Page caching to avoid re-fetching HTML
-- Events: `page-loaded`, `section-changed`
-
-**Page initialization:** Each page has a corresponding JS module that initializes on `page-loaded`.
-
-### Database Architecture
-
-**Supabase-Only (v1.2.0+):**
-```
-Desktop App
-└── Supabase PostgreSQL ← Source of truth (cloud)
-    ├── 85+ tables with RLS policies
-    ├── 41+ Edge Functions (Deno runtime)
-    └── 7 storage buckets
-
-In-Memory Caches (module-level variables with TTL):
-├── categoriesCache (60s TTL) — sport categories
-└── presetsCache (30s TTL) — participant presets
-```
-
-NOTE: SQLite (better-sqlite3) was removed in v1.2.0. All data is fetched from Supabase with in-memory caching for frequently accessed data (categories, presets).
-
-**Key Database Operations:**
-- `database-service.ts` (~3,000 lines): Supabase CRUD, in-memory caches, CSV storage, export destinations
-- `auth-service.ts` (1,266 lines): Session persistence, token balance, pre-authorization
+Supabase-only since v1.2.0 (SQLite/better-sqlite3 removed). Source of truth is cloud PostgreSQL; module-level in-memory caches with TTL (`categoriesCache` 60s, `presetsCache` 30s). Key files: `database-service.ts` (CRUD, caches, CSV, export destinations), `auth-service.ts` (session persistence, token balance, pre-authorization).
 
 ## Token System
 
-### Architecture
+Token tables, pre-authorization flow, and the "logic is sacred" rule are documented in the root CLAUDE.md. Desktop specifics:
 
-```
-1 token = 1 image analysis (consumed by Edge Function)
-Source of truth: user_tokens table in Supabase PostgreSQL
-```
+- `pre_authorize_tokens()` RPC reserves with dynamic TTL (30min–12h by batch size) → returns `reservationId`
+- Edge Function V6 tracks actual images analyzed
+- `finalize_token_reservation()` RPC consumes actual, refunds unused, logs the transaction
+- Timeout → `cleanup_expired_reservations()` auto-finalizes
 
-**Key Tables:**
-- `user_tokens` - Current balance (`tokens_purchased` - `tokens_used` = remaining)
-- `token_transactions` - Complete audit log (purchase/usage/bonus/refund)
-- `batch_token_reservations` - Pre-authorization for batch processing
+Pre-auth lives in `auth-service.ts`. **Never change token logic without updating the web app too.**
 
-### Pre-Authorization Flow (v1.1.0+)
+## Performance Optimization
 
-```
-1. Desktop calls pre_authorize_tokens() RPC
-   → Reserves tokens with dynamic TTL (30min-12h based on batch size)
-   → Returns reservationId
+### Optimization Levels (`config.ts`, env `RACETAGGER_OPTIMIZATION_LEVEL`)
 
-2. Edge Function V6 processes images
-   → Tracks actual images analyzed
-
-3. Desktop calls finalize_token_reservation() RPC
-   → Consumes actual tokens used
-   → Refunds reserved-but-unused tokens
-   → Generates transaction log entry
-
-4. Timeout: cleanup_expired_reservations() auto-finalizes
-```
-
-### Current Pricing (Beta)
-
-| Tier | Tokens | Price |
-|------|--------|-------|
-| STARTER | 3,000 | 29 |
-| PROFESSIONAL | 10,000 | 49 |
-| STUDIO | 25,000 | 99 |
-
-## Performance Optimization System
-
-### Optimization Levels (`config.ts`)
-
-| Level | Uploads | Analysis | Rate Limit | Memory | Streaming |
-|-------|---------|----------|------------|--------|-----------|
+| Level | Uploads | Analysis | Rate | Memory | Streaming |
+|-------|---------|----------|------|--------|-----------|
 | DISABLED | 4 | 100 | 100/s | 512MB | No |
 | CONSERVATIVE | 8 | 110 | 110/s | 1GB | No |
-| **BALANCED** | 12 | 120 | 120/s | 1.5GB | Yes |
+| **BALANCED** (default) | 12 | 120 | 120/s | 1.5GB | Yes |
 | AGGRESSIVE | 20 | 125 | 125/s | 2GB | Yes |
 
-Default: **BALANCED**. Configurable via `RACETAGGER_OPTIMIZATION_LEVEL` env var.
+### Streaming Pipeline (`PIPELINE_CONFIG`)
 
-### Streaming Pipeline (`config.ts` → `PIPELINE_CONFIG`)
-
-Activates for batches >50 images:
-- RAW converter workers: 3
-- DNG-to-JPEG workers: 2
-- Upload workers: 4
-- Recognition workers: 2
-- Min free disk space: 5GB
-- Operation timeout: 30s
-- Auto-retry: 3 attempts with backoff
+Activates for batches >50 images: RAW-converter workers 3, DNG→JPEG 2, upload 4, recognition 2; min free disk 5GB; 30s op timeout; 3-attempt backoff retry.
 
 ### Resize Presets
 
-| Preset | Max Dim | JPEG Quality |
-|--------|---------|--------------|
-| VELOCE | 1080px | 75% |
-| BILANCIATO | 1440px | 85% |
-| **QUALITA** | 1920px | 90% |
-
-Default: **QUALITA**
+VELOCE (1080px/75%) · BILANCIATO (1440px/85%) · **QUALITA (1920px/90%, default)**
 
 ## AI/ML Systems
 
-### Gemini Vision (Primary)
-
-- Default model: `gemini-2.5-flash-lite`
-- Called via Edge Functions (V2-V6)
-- Configurable per sport category via `ai_prompt` field
-- 30s timeout per request
-
-### RF-DETR Object Detection (DEPRECATED, removed 2026-04-22)
-
-- The cloud Roboflow serverless workflow path has been removed from the code.
-- Historical context only: the recognition pipeline previously supported `sport_categories.recognition_method = 'rf-detr'` (Label format `"MODEL_NUMBER"`, e.g. `"SF-25_16"`, ~$0.0045/image).
-- NOTE: `onnx-detector.ts` and `model-manager.ts` still accept `output_format: 'rf-detr'` as an ONNX parsing hint for RT-DETR-style models (`boxes` + `scores` output tensors). This is a local-onnx feature, independent of the removed cloud path.
-
-### Local ONNX Inference
-
-- Scene classification: `scene-classifier-onnx.ts`
-- Object detection: `onnx-detector.ts` (837 lines)
-- Generic segmentation: `generic-segmenter.ts` (YOLOv8-seg, 749 lines)
-- Model management: `model-manager.ts` (download, version, cache from `model_registry` table)
-
-### Crop + Context System (V6)
-
-When `sport_categories.crop_config.enabled = true`:
-1. YOLOv8-seg segments subjects in image
-2. Extracts individual crops per subject (with padding)
-3. Generates "negative" image (subject masked out) for context
-4. Sends crops + negative to Edge Function V6 for analysis
-5. Configured in `config.ts` → `CropContextConfig`
+- **Gemini Vision (primary):** default `gemini-3.1-flash-lite`, called via Edge Functions V2–V6, configurable per sport category via `ai_prompt`, 30s timeout.
+- **Local ONNX:** scene classification (`scene-classifier-onnx.ts`), object detection (`onnx-detector.ts`), YOLOv8-seg segmentation (`generic-segmenter.ts`), model lifecycle via `model-manager.ts` against the `model_registry` table.
+- **Crop + Context (V6):** when `sport_categories.crop_config.enabled`, YOLOv8-seg segments subjects → extracts padded crops + a "negative" (subject-masked) context image → sends both to V6. Config in `config.ts` → `CropContextConfig`.
+- **RF-DETR (removed 2026-04-22):** cloud Roboflow path deleted. `onnx-detector.ts`/`model-manager.ts` still accept `output_format: 'rf-detr'` as a *local* ONNX parsing hint for RT-DETR-style models — independent of the removed cloud path.
 
 ## RAW Processing
 
-**Primary: raw-preview-extractor** (`vendor/raw-preview-extractor/`)
-- Custom C++ N-API addon extracting embedded JPEG previews from RAW files
-- Formats: NEF, ARW, CR2, CR3, ORF, RAW, RW2, DNG
-- Fast extraction (200KB-2MB previews)
+- **Primary:** `raw-preview-extractor` (`vendor/`) — custom C++ N-API addon extracting embedded JPEG previews. Formats: NEF, ARW, CR2, CR3, ORF, RAW, RW2, DNG.
+- **Fallback:** ExifTool (`vendor/{darwin,win32}/`), managed by `native-tool-manager.ts`.
+- dcraw and ImageMagick were removed in v1.2.0.
 
-**Fallback: ExifTool** (`vendor/darwin/exiftool`, `vendor/win32/exiftool.exe`)
-- Perl-based metadata tool used as fallback for preview extraction
-- Managed by `native-tool-manager.ts` (ExifTool only since v1.2.0)
+## Participant Driver Data
 
-NOTE: dcraw and ImageMagick were removed in v1.2.0. All RAW processing uses native raw-preview-extractor + ExifTool fallback.
+**Canonical source:** `preset_participant_drivers` table (rows, not columns), separate from `preset_participants`. Columns: `driver_name`, `driver_metatag` (nullable), `driver_order` (0 = primary, 1 = co-driver, …).
 
-## Participant Driver Data Structure
+In code, `Participant` (`smart-matcher.ts`) and `PresetParticipant` (`database-service.ts`) carry:
+- `preset_participant_drivers?: ParticipantDriver[]` — loaded via Supabase nested select
+- `nome?: string` — legacy CSV fallback (comma-separated names)
 
-**Canonical source:** `preset_participant_drivers` table (separate from `preset_participants`).
+Helpers exported from `smart-matcher.ts`: `getParticipantDriverNames()` (sorted by `driver_order`, falls back to `nome`), `getPrimaryDriverName()`.
 
-Each participant's drivers are stored as rows in `preset_participant_drivers`:
-- `driver_name` (text): Full driver name
-- `driver_metatag` (text, nullable): Metadata tag for the driver
-- `driver_order` (integer): Sort order (0 = primary driver, 1 = co-driver, etc.)
+**Deprecated:** `nome_pilota`/`nome_navigatore`/`nome_terzo`/`nome_quarto` columns still exist on `preset_participants` but are **no longer used** — all driver logic uses `preset_participant_drivers`.
 
-**In code**, the `Participant` interface (`smart-matcher.ts`) and `PresetParticipant` interface (`database-service.ts`) include:
-- `preset_participant_drivers?: ParticipantDriver[]` — array loaded via Supabase nested select
-- `nome?: string` — legacy CSV fallback (comma-separated names for simple CSV imports without driver records)
+## SmartMatcher (`matching/smart-matcher.ts`)
 
-**Helper functions** (exported from `smart-matcher.ts`):
-- `getParticipantDriverNames(participant)` — returns driver names sorted by `driver_order`, falls back to `nome`
-- `getPrimaryDriverName(participant)` — returns first driver name
-
-**IMPORTANT:** The DB columns `nome_pilota`, `nome_navigatore`, `nome_terzo`, `nome_quarto` still exist in the `preset_participants` table but are **deprecated and no longer used in code**. All driver logic uses `preset_participant_drivers` exclusively.
-
-## SmartMatcher (`matching/smart-matcher.ts`, 2,253 lines)
-
-Multi-evidence participant matching:
-- **OCR correction**: Common digit confusions (6/8, 1/7, etc.)
-- **Temporal clustering**: Same number in consecutive photos = same participant
-- **Fuzzy matching**: Partial number matches with configurable thresholds
-- **Sport-specific rules**: Configured per category via `matching_config`
-- **Cache management**: Results cached for performance (`cache-manager.ts`)
+Multi-evidence participant matching: OCR correction (6/8, 1/7 confusions), temporal clustering (same number in consecutive photos = same participant), fuzzy matching (configurable thresholds), sport-specific rules via `matching_config`, result caching (`cache-manager.ts`).
 
 ## Face Recognition (DISABLED)
 
-**Status:** UI shows "Coming Soon" with blurred preview. Feature disabled at 3 layers.
-
-**To re-enable:**
-1. `renderer/js/face-detector.js` - Set `FACE_RECOGNITION_ENABLED = true`
-2. `renderer/js/driver-face-manager.js` - Set `FACE_RECOGNITION_ENABLED = true`
-3. `renderer/pages/participants.html` - Remove disabled class, restore original UI
-
-**Related files (code intact, just disabled):**
-- `renderer/js/face-recognition-ui.js`, `preset-face-manager.js`
-- `src/ipc/face-recognition-handlers.ts` (6 handlers)
-- `src/ipc/preset-face-handlers.ts` (6 handlers)
-- `src/face-recognition-processor.ts`, `face-detection-bridge.ts`
+UI shows "Coming Soon" with blurred preview; disabled at 3 layers. To re-enable, set `FACE_RECOGNITION_ENABLED = true` in `renderer/js/face-detector.js` and `driver-face-manager.js`, and restore the UI in `renderer/pages/participants.html`. Code is intact (handlers, processor, bridge) — just gated.
 
 ## Analysis Logging
 
-**Format:** JSONL files per execution (`exec_{execution_id}.jsonl`)
-
-**Entry types:**
-- `EXECUTION_START` - Config, image count, category, preset
-- `IMAGE_ANALYSIS` - AI response, corrections, final results
-- `CORRECTION` - Individual correction with reasoning
-- `TEMPORAL_CLUSTER` - Burst mode grouping decisions
-- `PARTICIPANT_MATCH` - Fuzzy matching results with scores
-- `EXECUTION_COMPLETE` - Final statistics
-
-**Storage:**
-- Local: `.analysis-logs/` in user data folder
-- Remote: Supabase Storage bucket `analysis-logs` (auto-upload every 30s in dev)
+JSONL per execution (`exec_{execution_id}.jsonl`). Entry types: `EXECUTION_START`, `IMAGE_ANALYSIS`, `CORRECTION`, `TEMPORAL_CLUSTER`, `PARTICIPANT_MATCH`, `EXECUTION_COMPLETE`. Stored local (`.analysis-logs/` in user data) + Supabase Storage bucket `analysis-logs`.
 
 ## Automatic Error Telemetry
 
-**Purpose:** Proactive error detection — automatically reports critical failures to Supabase and creates GitHub issues before users report them.
+Proactive: desktop (fire-and-forget) → Edge Function `report-automatic-error` → Supabase + GitHub Issues.
 
-**Architecture:** Desktop (fire-and-forget) → Edge Function `report-automatic-error` → Supabase DB + GitHub Issues API
-
-**Key Files:**
-- `src/utils/error-telemetry-service.ts` — Singleton service, fingerprinting, rate limiting, privacy sanitization
-- `supabase/functions/report-automatic-error/index.ts` — Edge Function: upsert report, create/comment GitHub issue
-- `src/ipc/error-telemetry-handlers.ts` — 3 IPC handlers (status, enable/disable, flush)
-
-**Database Tables:**
-- `error_reports` — Deduplicated by SHA-256 fingerprint (one row per unique error globally)
-- `error_occurrences` — Individual occurrence per user per event (with system info, log snapshot)
-- `error_issue_mappings` — Fingerprint → GitHub issue number mapping
-
-**Monitored Failure Points:**
-- RAW preview extraction failure (`raw-preview-native.ts`)
-- Edge Function errors during AI analysis (`unified-image-processor.ts`)
-- Zero recognized numbers on batch >20 images (`unified-image-processor.ts`)
-- ONNX model download/checksum failures (`model-manager.ts`)
-- Token reservation failures (`auth-service.ts`)
-- Segmentation model load failure (`generic-segmenter.ts`)
-- Uncaught exceptions (`main.ts`)
-
-**Deduplication:** Global cross-user. One GitHub issue per unique error fingerprint. New users hitting the same error add a comment with updated count. Label `widespread` added when ≥5 users affected.
-
-**Rate Limits:** 5 reports per execution, 20 per day per user. 100% non-blocking (fire-and-forget).
-
-**Privacy:** All logs sanitized (paths, emails, names removed via regex). User opt-out toggle in Settings → Privacy.
-
-**GitHub Integration:** Uses `GITHUB_PAT` secret (same as `submitFeedback`). Creates issues with labels `[auto-report, {error_type}]`.
+- **Files:** `src/utils/error-telemetry-service.ts` (fingerprinting, rate limiting, sanitization), `src/ipc/error-telemetry-handlers.ts` (3 handlers), `supabase/functions/report-automatic-error/`.
+- **Tables:** `error_reports` (deduped by SHA-256 fingerprint, one row per unique error globally), `error_occurrences` (per user per event), `error_issue_mappings` (fingerprint → GitHub issue #).
+- **Monitored:** RAW preview failure, Edge Function errors, zero recognitions on batch >20, ONNX download/checksum failure, token reservation failure, segmentation load failure, uncaught exceptions.
+- **Dedup:** global cross-user. One GitHub issue per fingerprint; repeat users add a comment + count. `widespread` label when ≥5 users.
+- **Limits:** 5/execution, 20/day/user. 100% non-blocking. All logs sanitized (paths/emails/names via regex); opt-out in Settings → Privacy. Uses `GITHUB_PAT`.
 
 ## Environment Variables
 
-**Required in `.env`:**
 ```bash
+# Required (.env)
 SUPABASE_URL=https://taompbzifylmdzgbbrpv.supabase.co
-SUPABASE_KEY=your-anon-key
+SUPABASE_KEY=your-anon-key            # anon key ONLY — never service role in client
+
+# Optional
+DEBUG_MODE=true
+RACETAGGER_OPTIMIZATION_LEVEL=balanced   # disabled|conservative|balanced|aggressive
+ENABLE_STREAMING_PIPELINE=true
 ```
 
-**Optional:**
-```bash
-DEBUG_MODE=true                               # Verbose logging
-RACETAGGER_OPTIMIZATION_LEVEL=balanced        # disabled|conservative|balanced|aggressive
-ENABLE_STREAMING_PIPELINE=true                # Force streaming mode
-```
+Production values are hardcoded in `config.production.ts` (used when `app.isPackaged`).
 
-**Production:** Values hardcoded in `config.production.ts` (used when `app.isPackaged`).
+## Build & Signing
 
-## Build Configuration
+Targets: macOS (DMG/ZIP — arm64, x64, universal), Windows (NSIS/portable/ZIP — x64), Linux (AppImage/deb).
 
-**Cross-Platform Targets:**
-
-| Platform | Formats | Architectures |
-|----------|---------|---------------|
-| macOS | DMG, ZIP | arm64, x64, universal |
-| Windows | NSIS, portable, ZIP | x64 |
-| Linux | AppImage, deb | - |
-
-**Code Signing (macOS):**
-- Identity: `FEDERICO PASINETTI (MNP388VJLQ)`
-- Hardened runtime + notarization enabled
-- Sign ignore: vendor data files, Windows vendor
-
-**ASAR Unpack:** Native modules that need filesystem access:
-- `sharp`, `@img/*`, `raw-preview-extractor`
-- `vendor/**/*` (ExifTool)
-
-**TypeScript Config:**
-- Target: ES2020, Module: CommonJS
-- Strict mode enabled
-- Output: `/dist/`
-- Includes: `src/**/*`, `tests/performance/**/*`
-
-## Code Conventions
-
-**TypeScript:**
-- Strict mode, no `any` without justification
-- Interfaces in `/src/ipc/types.ts` for IPC contracts
-- `interface` for object shapes, `type` for unions/intersections
-- Explicit return types on public functions
-- `HandlerResult<T>` pattern for IPC responses: `{ success: true, data: T } | { success: false, error: string }`
-
-**File Organization:**
-- IPC handlers: One domain per file in `/src/ipc/`
-- Utilities: Feature-specific files in `/src/utils/`
-- Matching: Algorithm files in `/src/matching/`
-- Target: files under 500 lines (split if larger)
-
-**Electron Patterns:**
-- Main process: `src/main.ts` - avoid direct modifications when possible
-- IPC: Use modular handlers in `/src/ipc/`, register via `registerAllHandlers()`
-- Preload: Whitelist channels explicitly in `preload.ts`
-- Renderer: Plain JS (no framework), communicate only via `window.api`
-
-**Error Handling:**
-- EPIPE protection in `main.ts` (prevent crash on broken pipes)
-- Structured error return via `HandlerResult<T>`
-- Resource cleanup in catch blocks (files, buffers, DB connections)
-- Console disabled in production renderer (via preload override)
+- **Code signing (macOS):** identity `FEDERICO PASINETTI (MNP388VJLQ)`, hardened runtime + notarization.
+- **ASAR unpack** (need filesystem access): `sharp`, `@img/*`, `raw-preview-extractor`, `vendor/**`.
+- **TS:** ES2020, CommonJS, strict, output `/dist/`.
 
 ## Critical DO NOTs
 
-**Security:**
-- NEVER expose service role key in client code (desktop uses anon key only)
-- NEVER commit `.env` files or `config.production.ts` secrets
-- NEVER bypass RLS policies
-- NEVER hardcode API keys (use env vars or config.production.ts)
-
-**Database:**
-- NEVER modify production Supabase schema without migration file
-- NEVER modify existing migration files (create new ones)
-- NEVER use `SELECT *` (specify columns for performance)
-- NEVER disable RLS in production
-
-**File Operations:**
-- NEVER modify files in `/vendor/` directory
-- NEVER modify compiled files in `/dist/` (edit source in `/src/`)
-- NEVER commit build artifacts (`/release/`, DMG, EXE files)
-- NEVER delete `/dist/` manually (use `npm run compile`)
-
-**Performance:**
-- NEVER load all images into memory at once (use streaming pipeline)
-- NEVER skip cleanup of temporary files
-- NEVER exceed 2GB memory usage per worker
-- NEVER process >100 images without streaming pipeline
-
-**Code Quality:**
-- NEVER use `any` type without justification comment
-- NEVER create monolithic files >1000 lines (split into modules)
-- NEVER add npm dependencies without checking native module compatibility with Electron
-- NEVER remove EPIPE protection or error handling from main.ts
-
-**Build:**
-- NEVER skip native module rebuild after `npm install`
-- NEVER modify `package.json` build config without cross-platform testing
-- NEVER modify electron-builder config without testing on target platform
-
-**Cross-Platform Sync:**
-- NEVER change token logic without updating both desktop + web
-- NEVER change Edge Function signatures without versioning
-- NEVER deploy schema changes without updating types in both apps
+- **Security:** never expose service role key in client (anon only); never commit `.env` / `config.production.ts` secrets; never bypass RLS.
+- **Database:** never modify production schema without a migration; never edit an existing migration (create a new one); never `SELECT *`.
+- **Files:** never modify `/vendor/` or `/dist/` (edit `/src/`); never commit build artifacts (`/release/`, DMG, EXE).
+- **Performance:** never load all images into memory (use streaming); never skip temp-file cleanup; never process >100 images without the streaming pipeline.
+- **Code:** never `any` without a justification comment; never remove EPIPE protection / error handling from `main.ts`; never add an npm dependency without checking Electron native-module compatibility.
+- **Build:** never skip native rebuild after `npm install`; never change `package.json` build config without cross-platform testing.
+- **Cross-platform sync:** never change token logic, Edge Function signatures, or schema-driven types without updating the web app too.
 
 ## Common Tasks
 
-**Adding a new IPC handler:**
-1. Add handler function in appropriate file in `/src/ipc/`
-2. Export from that file
-3. Add channel to whitelist in `/src/preload.ts` (`validInvokeChannels` or `validSendReceiveChannels`)
-4. Add TypeScript interface in `/src/ipc/types.ts` if new types needed
-5. Call from renderer via `window.api.invoke('channel-name', ...args)`
+**New IPC handler:** add fn in the right `src/ipc/*-handlers.ts` → export it → add channel to the `preload.ts` whitelist → add types in `ipc/types.ts` → call via `window.api.invoke('channel', …)`.
 
-**Adding a new page:**
-1. Create HTML in `/renderer/pages/pagename.html`
-2. Add route in `/renderer/js/router.js`
-3. Add sidebar navigation link in `/renderer/index.html`
-4. Create JS module in `/renderer/js/pagename.js` with initialization logic
-5. Load JS in `/renderer/index.html` via `<script>` tag
-6. Add CSS in `/renderer/css/pagename.css` if needed
+**New page:** HTML in `renderer/pages/` → route in `router.js` → sidebar link + `<script>` in `index.html` → JS module `renderer/js/<page>.js` → CSS if needed.
 
-**Adding a new Edge Function version:**
-1. Create `/supabase/functions/analyzeImageDesktopVN/index.ts`
-2. Update `MAX_SUPPORTED_EDGE_FUNCTION_VERSION` in `config.ts`
-3. Update `sport_categories.edge_function_version` in database
-4. Update `unified-image-processor.ts` to handle new response format
-5. Deploy: `npx supabase functions deploy analyzeImageDesktopVN`
+**New Edge Function version:** create `supabase/functions/analyzeImageDesktopVN/` → bump `MAX_SUPPORTED_EDGE_FUNCTION_VERSION` in `config.ts` → set `sport_categories.edge_function_version` → handle new response shape in `unified-image-processor.ts` → `npx supabase functions deploy analyzeImageDesktopVN`.
 
-**Database schema change:**
-1. Create migration in `../racetagger-app/supabase/migrations/YYYYMMDDHHMMSS_description.sql`
-2. Update types in `src/ipc/types.ts` or `src/types/`
-3. Update relevant functions in `src/database-service.ts`
-4. Deploy migration to Supabase, test both apps
+**Schema change:** migration in `../racetagger-app/supabase/migrations/` (with the GRANT template — see root CLAUDE.md) → update types → update `database-service.ts` → deploy, test both apps.
 
-**Debugging:**
-```bash
-# Debug mode with verbose logging
-DEBUG_MODE=true npm run dev:debug
+## Buyer Personas
 
-# Performance profiling
-npm run benchmark
+Development decisions are guided by three target profiles (full market context in `RACETAGGER_CONTEXT.md`):
 
-# Quick regression check after changes
-npm run regression-test
-```
+1. **Multi-Client Photographer** — covers races for many clients. Core need: **delivery speed**. Wants fast folder org by number/team, file renaming (`{number}_{name}_{team}-{seq:02}`), multi-client subfolders, batch export per client. IPTC: low priority.
+2. **Editorial Photographer** — works with agencies (Getty, DPPI, Motorsport Images). Core need: **Getty-ready IPTC** on every image. Wants full metadata (caption with `{name}`, Person Shown, copyright, credit, keywords), per-agency IPTC profiles, XMP sidecars for RAW, caption templates, multi-match. IPTC: **mission-critical**.
+3. **Event Organizer** — marketing team of circuits/organizers (not photographers). Core need: **searchable tags** for a downstream DAM. Wants AI tagging (numbers, scene, keywords into IPTC), visual tagging (logos, livery), bulk keywords, renaming. IPTC: medium (keywords matter, full editorial chain doesn't).
 
-## Buyer Personas & Feature Priorities
+### Priority & Status
 
-Development decisions should always be guided by these three target user profiles:
-
-### Persona 1: Multi-Client Photographer
-**Who:** Event/sports photographer covering races for multiple clients, teams, or sponsors.
-**Core Need:** Speed of photo delivery. Needs to quickly sort and distribute photos to the right recipients.
-**Key Workflow:** Process event → divide photos by number/team/pilot → deliver to each client.
-**Critical Features:**
-- Fast folder organization by race number, team, or category
-- File renaming with participant data (`{number}_{name}_{team}-{seq:02}`)
-- Subfolder patterns for multi-client delivery (`{team}/{number}/`)
-- Batch export to multiple destinations (one per client)
-**IPTC Importance:** Low — clients care about getting the right photos fast, not metadata standards.
-
-### Persona 2: Editorial Photographer
-**Who:** Professional photographer working with news agencies (Getty, DPPI, Motorsport Images, Shutterstock Editorial, etc.).
-**Core Need:** Getty-ready IPTC metadata on every image. Without correct metadata, agencies reject or delay publication.
-**Key Workflow:** Process event → review matches → write professional IPTC (credit, copyright, caption with names, Person Shown, keywords) → export to agency with specific metadata requirements.
-**Critical Features:**
-- IPTC Pro: full metadata writing (caption with {name}, Person Shown, copyright, credit, keywords)
-- Multi-agency export with different IPTC profiles per agency (different credit line, different copyright holder)
-- XMP sidecar for RAW files
-- Template system for captions and headlines
-- Multi-match support (photos with multiple participants)
-**IPTC Importance:** Mission-critical — this is the primary value proposition.
-
-### Persona 3: Event Organizer
-**Who:** Marketing/communications team of race organizers, circuits, or event companies. Not photographers themselves.
-**Core Need:** Tag photos for easy searchability by the media team. "Find all photos of pilot X" or "all podium shots." The search/browsing happens on external systems (logo/DAM platforms) — RaceTagger's job is to write the right tags into the images so those systems can index them.
-**Key Workflow:** Receive event photos → process for tagging (numbers, visual tagging, keywords) → export tagged images → upload to logo/DAM system where the marketing team searches and selects.
-**Critical Features:**
-- AI tagging (race numbers, scene type, keywords written into IPTC)
-- Visual tagging (sponsor logos, helmet designs, livery details → keywords)
-- Bulk keyword assignment
-- File renaming for organized upload
-**IPTC Importance:** Medium — keywords, tags, and basic captions matter for searchability in downstream systems. Full editorial IPTC compliance (Person Shown, copyright chain) does not.
-
-### Feature Priority Matrix
-
-| Feature | Multi-Client | Editorial | Organizer | Priority |
-|---------|:---:|:---:|:---:|:---:|
-| AI number recognition | ★★★ | ★★★ | ★★★ | P0 — Core |
-| Participant matching (CSV) | ★★★ | ★★★ | ★★ | P0 — Core |
-| Folder organization | ★★★ | ★ | ★ | P1 |
-| File renaming on export | ★★★ | ★★ | ☆ | P1 |
-| IPTC Pro metadata writing | ★ | ★★★ | ★ | P1 |
-| Multi-destination export | ★★★ | ★★★ | ☆ | P2 |
-| XMP sidecar for RAW | ★ | ★★★ | ☆ | P1 |
-| AI keywords | ★ | ★★ | ★★★ | P1 |
-| Web gallery/sharing | ☆ | ☆ | ★★★ | P3 — Future |
-
-### Current Implementation Status
-
-| Feature | Status | Notes |
-|---------|--------|-------|
-| AI number recognition | ✅ Live | Edge Function V6 (Gemini) + local-onnx (triple-zone cascade) |
-| Participant matching | ✅ Live | SmartMatcher with fuzzy matching |
-| IPTC Pro metadata | ✅ Built | Preset IPTC profile → batch write (JPEG + RAW sidecar) |
-| Folder organization | ✅ Live | Admin-only, by number/team |
-| File renaming engine | ✅ Built | `filename-renamer.ts` ready, not wired to results UI |
-| Export Destinations | ⚠️ Partial | Backend + config UI exist, no trigger from results page |
-| Multi-destination export | ⚠️ Partial | Processor ready, needs results page integration |
-| AI keywords | ✅ Live | Via Edge Function analysis |
-| Web gallery | ❌ Not started | Future feature |
+| Feature | Multi-Client | Editorial | Organizer | Priority | Status |
+|---|:--:|:--:|:--:|:--:|---|
+| AI number recognition | ★★★ | ★★★ | ★★★ | P0 | ✅ Live (V6 + local-onnx) |
+| Participant matching (CSV) | ★★★ | ★★★ | ★★ | P0 | ✅ Live (SmartMatcher) |
+| Folder organization | ★★★ | ★ | ★ | P1 | ✅ Live (admin) |
+| File renaming on export | ★★★ | ★★ | ☆ | P1 | ✅ Built (not wired to results UI) |
+| IPTC Pro metadata | ★ | ★★★ | ★ | P1 | ✅ Built |
+| XMP sidecar for RAW | ★ | ★★★ | ☆ | P1 | ✅ Built |
+| AI keywords | ★ | ★★ | ★★★ | P1 | ✅ Live |
+| Multi-destination export | ★★★ | ★★★ | ☆ | P2 | ⚠️ Partial (no results-page trigger) |
+| Web gallery/sharing | ☆ | ☆ | ★★★ | P3 | ❌ Future |
 
 ## General Instructions
 
-- **Do what has been asked; nothing more, nothing less**
-- **ALWAYS prefer editing existing files to creating new ones**
-- **NEVER proactively create documentation files (*.md) unless explicitly requested**
-- **When modifying core systems (main.ts, unified-image-processor.ts), run performance tests**
-- **Check DATABASE.md before modifying database-related code**
-- **Test builds on target platform before suggesting deployment**
-- **Preserve EPIPE protection and error handling in main.ts**
-- **When modifying shared resources (DB, Edge Functions, types), consider impact on web app**
-- **Run `npm run compile` to verify TypeScript after changes**
+The four Karpathy guidelines (Think Before Coding, Simplicity First, Surgical Changes, Goal-Driven Execution) and the repo verification rails are in the root CLAUDE.md. Desktop reminders:
+
+- Check **DATABASE.md** before touching DB code.
+- Run `npm run compile` to verify TypeScript after changes; run performance tests when touching `main.ts` or `unified-image-processor.ts`.
+- Preserve EPIPE protection and error handling in `main.ts`.
+- When touching shared resources (DB, Edge Functions, types, token logic), consider the web-app impact.

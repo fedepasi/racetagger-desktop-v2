@@ -1,0 +1,6 @@
+[
+  { "slug": "analysis",     "kind": "hash", "route": "#/analysis",     "selector": "#section-analysis",     "docs_page": "getting-started" },
+  { "slug": "participants", "kind": "hash", "route": "#/participants", "selector": "#section-participants", "docs_page": "participant-presets" },
+  { "slug": "settings",     "kind": "hash", "route": "#/settings",     "selector": "#section-settings",     "docs_page": "metadata" },
+  { "slug": "results",      "kind": "href", "href": "results.html?executionId=__DEMO_EXECUTION_ID__", "selector": ".results-header", "docs_page": "results" }
+]
