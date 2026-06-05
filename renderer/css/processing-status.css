@@ -1112,6 +1112,24 @@
   font-weight: 600;
 }
 
+.lv-scene-skip-badge {
+  position: absolute;
+  bottom: var(--spacing-xs);
+  right: var(--spacing-xs);
+  background: rgba(120, 120, 120, 0.92);
+  color: white;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-radius: var(--border-radius-sm);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: capitalize;
+  letter-spacing: 0.2px;
+  max-width: calc(100% - var(--spacing-md));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .lv-card-content {
   flex: 1;
   padding: var(--spacing-md);

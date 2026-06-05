@@ -1837,6 +1837,7 @@ class LogVisualizer {
           ${result.metadataWritten === false ? '<div class="lv-no-metadata-badge">No metadata</div>' : ''}
           ${vehicles.length > 1 ? `<div class="lv-multi-badge">${vehicles.length} detections</div>` : ''}
           ${otherPeople.length > 0 ? `<div class="lv-other-people-badge" title="${otherPeopleLabel}">★ ${otherPeople.length} VIP</div>` : ''}
+          ${result.sceneSkipped ? `<div class="lv-scene-skip-badge" title="AI skipped: scene classified as ${result.sceneCategory || 'non-relevant'}${result.sceneConfidence ? ` (${Math.round(result.sceneConfidence * 100)}%)` : ''}">🚫 ${(result.sceneCategory || 'scene skipped').replace(/_/g, ' ')}</div>` : ''}
         </div>
 
         <div class="lv-card-content">
@@ -3660,6 +3661,15 @@ class LogVisualizer {
 
       if (result.success) {
         console.log(`[LogVisualizer] Successfully persisted correction for ${correction.fileName}_${correction.vehicleIndex}`);
+        // Drop from the in-memory queue so the next saveAllChanges (gallery
+        // close, review-resolve, manual button) doesn't re-send a row we've
+        // already persisted. Without this delete the same correction lands
+        // in image_corrections 2-8x per real edit (observed: 27 rows/image
+        // on Gruppe C review-resolve flow).
+        this.manualCorrections.delete(correctionKey);
+        if (this.manualCorrections.size === 0) {
+          this._hideSaveAllButton();
+        }
         return true;
       } else {
         console.error(`[LogVisualizer] Failed to persist correction:`, result.error);
@@ -3671,6 +3681,19 @@ class LogVisualizer {
       console.error('[LogVisualizer] Error persisting single correction:', error);
       this.showNotification('⚠️ Save successful but persistence failed', 'warning');
       return false;
+    }
+  }
+
+  /**
+   * Clear the unsaved-changes flag and hide the Save All button. Called
+   * whenever the manual-corrections queue drains successfully.
+   */
+  _hideSaveAllButton() {
+    this.hasUnsavedChanges = false;
+    const saveAllBtn = document.getElementById('lv-save-all');
+    if (saveAllBtn) {
+      saveAllBtn.style.display = 'none';
+      saveAllBtn.classList.remove('btn-pulse');
     }
   }
 
@@ -3705,10 +3728,11 @@ class LogVisualizer {
         );
 
         try {
-          // Get only corrections that haven't been saved since last auto-save
-          const corrections = Array.from(this.manualCorrections.values()).filter(correction => {
-            return !this.lastSaveTimestamp || new Date(correction.timestamp) > new Date(this.lastSaveTimestamp);
-          });
+          // Snapshot current pending corrections AND their Map keys, so we
+          // can drop only what we actually persisted (anything added during
+          // the in-flight save belongs to the next tick).
+          const corrections = Array.from(this.manualCorrections.values());
+          const persistedKeys = corrections.map(c => `${c.fileName}_${c.vehicleIndex}`);
 
           if (corrections.length > 0) {
             // Create clean copies of corrections to avoid circular references
@@ -3731,7 +3755,14 @@ class LogVisualizer {
 
             if (result.success) {
               this.lastSaveTimestamp = new Date().toISOString();
-              this.hasUnsavedChanges = false;
+              // Drop just the snapshot we persisted — entries added while
+              // the save was in flight stay in the Map for the next tick.
+              for (const key of persistedKeys) {
+                this.manualCorrections.delete(key);
+              }
+              if (this.manualCorrections.size === 0) {
+                this._hideSaveAllButton();
+              }
               this.showNotification(`🔄 Auto-saved ${corrections.length} changes`, 'info');
               console.log(`[LogVisualizer] Auto-saved ${corrections.length} corrections`);
             }
@@ -3778,15 +3809,7 @@ class LogVisualizer {
 
         if (result.success) {
           this.lastSaveTimestamp = new Date().toISOString();
-          this.hasUnsavedChanges = false;
-
-          // Hide Save All button after auto-save
-          const saveAllBtn = document.getElementById('lv-save-all');
-          if (saveAllBtn) {
-            saveAllBtn.style.display = 'none';
-            saveAllBtn.classList.remove('btn-pulse');
-          }
-
+          this._hideSaveAllButton();
           console.log(`[LogVisualizer] Auto-saved ${corrections.length} corrections immediately`);
         } else {
           console.error('[LogVisualizer] Failed to auto-save:', result.error);
@@ -4332,13 +4355,8 @@ class LogVisualizer {
         }
         // Only clear the unsaved flag if no other corrections snuck in.
         if (this.manualCorrections.size === 0) {
-          this.hasUnsavedChanges = false;
-          const saveAllBtn = document.getElementById('lv-save-all');
-          if (saveAllBtn) {
-            saveAllBtn.style.display = 'none';
-            saveAllBtn.classList.remove('btn-pulse');
-            console.log('[LogVisualizer] Save All button hidden - all changes saved');
-          }
+          this._hideSaveAllButton();
+          console.log('[LogVisualizer] Save All button hidden - all changes saved');
         }
 
         this.updateStatistics();
@@ -4650,6 +4668,12 @@ class LogVisualizer {
         compressedPath: event.compressedPath,
         // Include visual tags if available
         visualTags: event.visualTags || null,
+        // Scene classifier skip — surfaced as a badge so empty `analysis`
+        // arrays on these photos read as "intentionally skipped" rather
+        // than "AI ran and found nothing".
+        sceneSkipped: event.sceneSkipped === true,
+        sceneCategory: event.sceneCategory || null,
+        sceneConfidence: event.sceneConfidence || null,
         // Store original log event for additional data access
         logEvent: event
       };

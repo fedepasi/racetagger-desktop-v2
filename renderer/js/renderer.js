@@ -52,7 +52,7 @@ let uploading = false;
 let processedImagesCount = 0;
 let totalImagesCount = 0;
 let csvLoaded = false; // Flag per tenere traccia se un CSV è stato caricato
-let selectedModel = 'gemini-2.5-flash-lite-preview-06-17'; // Modello predefinito
+let selectedModel = 'gemini-3.1-flash-lite'; // Modello predefinito
 let selectedCategory = 'motorsport'; // Categoria predefinita
 window.selectedCategory = selectedCategory; // Expose globally for other modules
 let analysisStartTime = null;
@@ -955,9 +955,9 @@ function handleModelSelection(event) {
 
   // Update the current model display
   const modelNames = {
-    'gemini-2.5-flash-lite-preview-06-17': 'FAST',
-    'gemini-2.5-flash-preview-04-17': 'BALANCED',
-    'gemini-2.5-pro-preview-05-06': 'ADVANCED'
+    'gemini-3.1-flash-lite': 'FAST',
+    'gemini-3.5-flash': 'BALANCED',
+    'gemini-3.1-pro-preview': 'ADVANCED'
   };
 
   currentModelDisplay.textContent = modelNames[selectedModel] || selectedModel;
@@ -1443,9 +1443,9 @@ async function handleUploadAndAnalyze() {
 
   // Update used model display
   const modelNames = {
-    'gemini-2.5-flash-lite-preview-06-17': 'FAST',
-    'gemini-2.5-flash-preview-04-17': 'BALANCED',
-    'gemini-2.5-pro-preview-05-06': 'ADVANCED'
+    'gemini-3.1-flash-lite': 'FAST',
+    'gemini-3.5-flash': 'BALANCED',
+    'gemini-3.1-pro-preview': 'ADVANCED'
   };
   // usedModelDisplay.textContent = modelNames[selectedModel] || selectedModel; // Removed
 

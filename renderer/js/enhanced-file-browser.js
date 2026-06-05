@@ -1077,7 +1077,7 @@ class EnhancedFileBrowser {
         folderPath: this.selectedFiles[0].path ? this.selectedFiles[0].path.split('/').slice(0, -1).join('/') : 'selected-files',
         filePaths: this.selectedFiles.map(file => file.path),
         selectedFiles: this.selectedFiles, // Include file metadata
-        selectedModel: 'gemini-2.5-flash-preview-04-17',
+        selectedModel: 'gemini-3.5-flash',
         selectedCategory: window.selectedCategory || 'motorsport',
         resize: {
           enabled: document.getElementById('resize-enabled')?.checked || false,

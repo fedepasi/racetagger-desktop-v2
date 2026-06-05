@@ -250,7 +250,7 @@ class RacetaggerDelightIntegration {
         folderPath: 'dropped-files', // Temporary identifier for dropped files
         filePaths: filePaths,
         tempFiles: tempFiles, // Include actual File objects for processing
-        selectedModel: 'gemini-2.5-flash-preview-04-17',
+        selectedModel: 'gemini-3.5-flash',
         selectedCategory: window.selectedCategory || 'motorsport',
         resize: { enabled: true, preset: 'balanced' }
       };

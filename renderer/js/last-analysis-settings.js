@@ -108,7 +108,7 @@ function clearLastAnalysisSettings() {
 
 function getSelectedModel() {
   const modelSelect = document.getElementById('model-select');
-  return modelSelect ? modelSelect.value : 'gemini-2.5-flash-lite-preview-06-17';
+  return modelSelect ? modelSelect.value : 'gemini-3.1-flash-lite';
 }
 
 function getSelectedCategory() {

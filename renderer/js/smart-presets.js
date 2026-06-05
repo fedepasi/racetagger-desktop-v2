@@ -10,7 +10,7 @@ class SmartPresets {
     
     // Hardcoded Fast settings - only Fast mode available
     this.fastSettings = {
-      model: 'gemini-2.5-flash-lite',
+      model: 'gemini-3.1-flash-lite',
       // category: removed - preserve user's category selection
       resize: { enabled: true, preset: 'fast' },
       metadata: 'default',
@@ -315,9 +315,9 @@ class SmartPresets {
 
   getModelDisplayName(modelId) {
     const modelNames = {
-      'gemini-2.5-flash-lite': 'Fast',
-      'gemini-2.5-flash-preview-04-17': 'Balanced',
-      'gemini-2.5-pro-preview-05-06': 'Pro'
+      'gemini-3.1-flash-lite': 'Fast',
+      'gemini-3.5-flash': 'Balanced',
+      'gemini-3.1-pro-preview': 'Pro'
     };
     
     return modelNames[modelId] || 'Unknown';

@@ -342,7 +342,7 @@ export const APP_CONFIG = {
   name: 'Racetagger Desktop',
   version: '1.0.0',
   // Default Gemini model to use for analysis
-  defaultModel: 'gemini-2.5-flash-lite',
+  defaultModel: 'gemini-3.1-flash-lite',
   // Default resize preset
   defaultResizePreset: ResizePreset.QUALITA,
   // Feature flags for experimental functionality

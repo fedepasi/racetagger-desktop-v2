@@ -207,7 +207,7 @@ function generateMarkdownReport(stats: Stats): string {
 |-----------|--------|
 | **Versione Desktop** | 1.0.9 |
 | **Piattaforme** | macOS (arm64/x64), Windows (x64/arm64), Linux |
-| **Modello AI** | gemini-2.5-flash-lite |
+| **Modello AI** | gemini-3.1-flash-lite |
 | **Database** | Supabase + SQLite (cache locale) |
 | **Ultimo Commit** | Release v1.0.9 with UX improvements and category fix |
 

@@ -10,7 +10,7 @@ CREATE TABLE execution_settings (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   
   -- === IMPOSTAZIONI MODELLO AI ===
-  ai_model TEXT, -- es: 'gemini-2.5-flash-lite-preview-06-17'
+  ai_model TEXT, -- es: 'gemini-3.1-flash-lite'
   sport_category TEXT, -- 'motorsport', 'running', 'altro'
   
   -- === GESTIONE METADATI ===

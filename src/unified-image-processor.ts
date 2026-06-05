@@ -3242,46 +3242,149 @@ class UnifiedImageWorker extends EventEmitter {
       }
       timing['2.7_sceneClassification'] = Date.now() - phaseStart;
 
-      // If skipping AI, return early with scene classification info
+      // If skipping AI, persist a "no-result" record (so the photo shows up in
+      // the results page with a scene badge and survives JSONL loss), run
+      // visual tagging if enabled, then return early.
       if (shouldSkipAI && sceneClassification) {
         const processingTimeMs = Date.now() - startTime;
         workerLog.info(`Completed (SKIPPED AI): ${imageFile.fileName} in ${processingTimeMs}ms`);
 
-        // Generate preview for UI even when skipping AI
         const previewDataUrl = `data:${mimeType};base64,${buffer.toString('base64')}`;
 
-        // Log the skipped scene analysis for results page
-        if (this.analysisLogger) {
-          this.analysisLogger.logImageAnalysis({
-            imageId: imageFile.id,
-            fileName: imageFile.fileName,
-            originalFileName: path.basename(imageFile.originalPath),
-            originalPath: imageFile.originalPath,
-            supabaseUrl: `local://${imageFile.originalPath}`,
-            previewDataUrl, // Include base64 preview for management portal
-            aiResponse: {
-              rawText: `SKIPPED: ${sceneClassification.category} scene (${(sceneClassification.confidence * 100).toFixed(0)}% confidence)`,
-              totalVehicles: 0,
-              vehicles: []
-            },
-            thumbnailPath,
-            microThumbPath,
-            compressedPath,
-            sceneCategory: sceneClassification.category,
-            sceneConfidence: sceneClassification.confidence,
-            sceneSkipped: true
-          });
+        // Map SceneCategory → analysis_results.skip_reason controlled vocab.
+        // Today only CROWD_SCENE reaches this branch; the mapping is here so
+        // future scene-based skips slot in cleanly.
+        const skipReason: string =
+          sceneClassification.category === SceneCategory.CROWD_SCENE
+            ? 'scene_crowd'
+            : `scene_${sceneClassification.category}`;
+
+        let skipStoragePath: string | null = null;
+        let skipImageId: string | null = null;
+        let skipVisualTagsResult: { tags: any; usage: any } | null = null;
+        let skipSupabaseUrl = `local://${imageFile.originalPath}`;
+
+        // Best-effort persistence: a network/DB failure must not block the
+        // per-image return — the user still gets the JSONL-driven UI.
+        try {
+          const authState = authService.getAuthState();
+          const skipUserId = authState.isAuthenticated ? authState.user?.id : null;
+
+          if (this.supabase && skipUserId) {
+            skipStoragePath = await this.uploadToStorage(imageFile.fileName, buffer, mimeType);
+            skipSupabaseUrl = `${SUPABASE_CONFIG.url}/storage/v1/object/public/uploaded-images/${skipStoragePath}`;
+            workerLog.info(`[SceneSkip] Uploaded to Supabase: ${skipStoragePath}`);
+
+            const { data: imageRecord, error: imageError } = await this.supabase
+              .from('images')
+              .insert({
+                user_id: skipUserId,
+                original_filename: imageFile.fileName,
+                storage_path: skipStoragePath,
+                mime_type: mimeType,
+                size_bytes: buffer.length,
+                execution_id: this.config.executionId || null,
+                status: 'analyzed'
+              })
+              .select('id')
+              .single();
+
+            if (imageError) {
+              workerLog.error(`[SceneSkip] Error saving to images: ${imageError.message}`);
+            } else if (imageRecord) {
+              skipImageId = imageRecord.id;
+
+              if (this.config.visualTagging?.enabled && skipStoragePath) {
+                try {
+                  skipVisualTagsResult = await this.invokeVisualTagging(skipStoragePath, {
+                    imageId: skipImageId,
+                    analysis: []
+                  });
+                  if (skipVisualTagsResult) {
+                    workerLog.info(`[SceneSkip] Visual tags extracted: ${Object.values(skipVisualTagsResult.tags).flat().length} tags`);
+                  }
+                } catch (err: any) {
+                  workerLog.warn(`[SceneSkip] Visual tagging failed (continuing): ${err.message}`);
+                }
+              }
+
+              // Build the analysis_results row but DON'T insert directly:
+              // N parallel direct INSERTs hit the analysis_results RLS subquery
+              // concurrently and trip statement_timeout. Hand it to the main
+              // process via `pendingAnalysisInsert`, which flushes through
+              // `persistOnnxAnalysis` (service_role, no RLS, batched).
+              const skipPhotoMeta = processor?.getPhotoMetadataForDB(imageFile.originalPath) || {};
+              this.pendingAnalysisInsertData = {
+                user_id: skipUserId,
+                image_id: skipImageId,
+                analysis_provider: 'scene_classifier',
+                recognized_number: null,
+                additional_text: [],
+                confidence_score: 0,
+                confidence_level: skipVisualTagsResult ? 'visual_only' : 'none',
+                skip_reason: skipReason,
+                raw_response: {
+                  modelSource: 'scene_classifier_onnx',
+                  sceneCategory: sceneClassification.category,
+                  sceneConfidence: sceneClassification.confidence,
+                  visualTags: skipVisualTagsResult?.tags || null,
+                  inferenceTimeMs: sceneClassification.inferenceTimeMs || 0
+                },
+                input_tokens: 0,
+                output_tokens: 0,
+                estimated_cost_usd: 0,
+                execution_time_ms: processingTimeMs,
+                training_eligible: false,
+                user_consent_at_analysis: false,
+                ...skipPhotoMeta
+              };
+            }
+          } else if (!skipUserId) {
+            workerLog.warn(`[SceneSkip] Skipping DB save: user not authenticated`);
+          }
+        } catch (skipPersistError: any) {
+          workerLog.error(`[SceneSkip] Persistence failed (continuing): ${skipPersistError.message}`);
         }
 
-        // Folder organization removed from pipeline - now a post-analysis action
-        // Scene-skipped images will be organized to "Others" folder via log-visualizer post-analysis
+        const skipPendingLogEntry: any = {
+          imageId: imageFile.id,
+          fileName: imageFile.fileName,
+          originalFileName: path.basename(imageFile.originalPath),
+          originalPath: imageFile.originalPath,
+          supabaseUrl: skipSupabaseUrl,
+          previewDataUrl,
+          aiResponse: {
+            rawText: `SKIPPED: ${sceneClassification.category} scene (${(sceneClassification.confidence * 100).toFixed(0)}% confidence)`,
+            totalVehicles: 0,
+            vehicles: []
+          },
+          thumbnailPath,
+          microThumbPath,
+          compressedPath,
+          sceneCategory: sceneClassification.category,
+          sceneConfidence: sceneClassification.confidence,
+          sceneSkipped: true,
+          visualTags: skipVisualTagsResult?.tags
+        };
+
+        // Legacy / non-pool path: this worker owns its own logger, write
+        // through it. Pool workers leave `this.analysisLogger` undefined and
+        // the main process writes via the returned `pendingLogEntry`.
+        if (this.analysisLogger) {
+          this.analysisLogger.logImageAnalysis(skipPendingLogEntry);
+        }
+
+        const skipPendingAnalysisInsert = this.pendingAnalysisInsertData
+          ? { data: this.pendingAnalysisInsertData, timestamp: Date.now() }
+          : undefined;
+        this.pendingAnalysisInsertData = null;
 
         return {
           fileId: imageFile.id,
           fileName: imageFile.fileName,
           originalPath: imageFile.originalPath,
           success: true,
-          analysis: [], // Empty analysis - no race numbers
+          analysis: [],
           processingTimeMs,
           previewDataUrl,
           compressedPath,
@@ -3289,7 +3392,9 @@ class UnifiedImageWorker extends EventEmitter {
           microThumbPath,
           sceneCategory: sceneClassification.category,
           sceneConfidence: sceneClassification.confidence,
-          sceneSkipped: true
+          sceneSkipped: true,
+          pendingLogEntry: skipPendingLogEntry,
+          pendingAnalysisInsert: skipPendingAnalysisInsert
         };
       }
 
@@ -5232,7 +5337,7 @@ class UnifiedImageWorker extends EventEmitter {
           participant_name: participantName,
           participant_team: participantTeam,
           participant_number: participantNumber,
-          model_used: 'gemini-2.5-flash-lite',
+          model_used: 'gemini-3.1-flash-lite',
           input_tokens: usage?.inputTokens || 0,
           output_tokens: usage?.outputTokens || 0,
           estimated_cost_usd: usage?.estimatedCostUSD || 0

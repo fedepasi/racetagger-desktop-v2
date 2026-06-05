@@ -75,6 +75,25 @@ async function main() {
     process.exit(3);
   }
 
+  // First-launch overlays: a fresh demo account shows the privacy/policy modal that blocks
+  // every screen. Accept it the same way clicking #privacy-consent-accept does — set the
+  // localStorage flag + hide the modal. Non-destructive; only affects this isolated profile.
+  await win
+    .evaluate(() => {
+      try {
+        localStorage.setItem('racetagger_privacy_consent_accepted', new Date().toISOString());
+      } catch (e) {}
+      // Hide known first-launch overlays that block the UI (consent modal + the ONNX
+      // model-download progress modal). Cosmetic only — the download still proceeds in the
+      // background; we just don't want the modal in docs screenshots.
+      for (const id of ['privacy-consent-modal', 'model-download-modal']) {
+        const m = document.getElementById(id);
+        if (m) m.style.display = 'none';
+      }
+    })
+    .catch(() => {});
+  await win.waitForTimeout(400);
+
   const results = [];
   for (const s of screens) {
     try {
@@ -86,6 +105,15 @@ async function main() {
       }
       await win.waitForSelector(s.selector, { state: 'visible', timeout: 15000 });
       await win.waitForTimeout(800); // settle animations / async data
+      // Re-hide first-launch overlays in case the model-download modal re-appeared.
+      await win
+        .evaluate(() => {
+          for (const id of ['privacy-consent-modal', 'model-download-modal']) {
+            const m = document.getElementById(id);
+            if (m) m.style.display = 'none';
+          }
+        })
+        .catch(() => {});
       const file = path.join(outDir, `${s.slug}.png`);
       await win.screenshot({ path: file });
       results.push({ slug: s.slug, status: 'ok', file });

@@ -306,7 +306,16 @@ class ResultsPageManager {
           // True iff at least one MANUAL_CORRECTION event exists for this
           // fileName. Filters and counters use this to route the photo to
           // the "Corrections" view and out of "No Match".
-          hasCorrection: correctedFileNames.has(entry.fileName)
+          hasCorrection: correctedFileNames.has(entry.fileName),
+          // Scene classifier skip metadata: when sceneSkipped=true the AI was
+          // bypassed and `analysis` is empty by design (not a recognition
+          // failure). The visualizer surfaces this with a badge so the user
+          // sees "this photo was filtered out as crowd" instead of an
+          // unexplained empty cell.
+          sceneSkipped: entry.sceneSkipped === true,
+          sceneCategory: entry.sceneCategory || null,
+          sceneConfidence: entry.sceneConfidence || null,
+          visualTags: entry.visualTags || null
         });
       }
     }
