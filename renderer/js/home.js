@@ -39,6 +39,23 @@ function initializeHomePage() {
 
   // Check if we need to navigate to a specific section from results page
   checkNavigationIntent();
+
+  // Surface resume/analysis abort notices (e.g. "already complete", "can't resume on this
+  // device"). The main process sends these on 'analysis-aborted'. Registered once.
+  if (window.api && window.api.receive && !window.__analysisAbortedWired) {
+    window.__analysisAbortedWired = true;
+    window.api.receive('analysis-aborted', (data) => {
+      // When a resume is showing its live view on the Analysis screen, that screen surfaces the
+      // abort itself (inline message, or redirect to results if the run was already complete) —
+      // don't also pop a Home alert() on the wrong screen.
+      if (window.__resumeViewActive) return;
+      const msg = (data && data.message) ? data.message : 'The analysis could not be started.';
+      // Refresh the list so a now-completed/failed run reflects its new state.
+      try { loadRecentExecutions(); } catch (_) {}
+      // eslint-disable-next-line no-alert
+      alert(msg);
+    });
+  }
 }
 
 /**
@@ -293,16 +310,32 @@ function renderRecentExecutions(executions) {
           : '');
 
     const statusLabel = exec.status === 'completed' ? 'Completed'
+      : exec.status === 'completed_with_errors' ? 'Completed'
       : exec.status === 'processing' ? 'Processing'
       : exec.status === 'failed' ? 'Failed'
       : 'Pending';
 
+    // Side badge precedence:
+    //  - interrupted (local OR cloud): the run stopped before finishing → amber "⚠ Interrupted"
+    //  - cloud-only but completed elsewhere (another device / reinstall) → blue "☁ Cloud"
+    //  - otherwise → the normal status pill
+    const interruptedBadge = `<span class="status-pill" style="background:rgba(245,158,11,0.15);color:#f59e0b;border:1px solid rgba(245,158,11,0.35);" title="This analysis was interrupted before it finished. Re-run it to complete.">⚠ Interrupted</span>`;
+    const cloudBadge = `<span class="status-pill" style="background:rgba(99,179,237,0.15);color:#63b3ed;border:1px solid rgba(99,179,237,0.3);" title="Local data not available. This analysis was completed on another device or local files were removed. Re-running the analysis will restore full functionality.">☁ Cloud</span>`;
+    // 'completed_with_errors' has no dedicated pill style — render it green like 'completed'
+    // (its label is already "Completed") so it isn't an uncolored pill.
+    const pillClass = exec.status === 'completed_with_errors' ? 'completed' : (exec.status || 'pending');
+    const sideBadge = exec.interrupted ? interruptedBadge
+      : exec.cloudOnly ? cloudBadge
+      : `<span class="status-pill ${escapeHtml(pillClass)}">${statusLabel}</span>`;
+    // Rows with no complete, usable local result: cloud-only OR interrupted.
+    const noLocalResult = exec.cloudOnly || exec.interrupted;
+
     return `
-      <div class="card-b" data-execution-id="${escapeHtml(exec.id)}">
+      <div class="card-b${exec.cloudOnly ? ' card-b-cloud-only' : ''}" data-execution-id="${escapeHtml(exec.id)}" ${exec.cloudOnly ? 'data-cloud-only="true"' : ''}${exec.interrupted ? ` data-interrupted="true" data-total="${Number(exec.totalImages) || 0}" data-processed="${Number(exec.processedImages) || 0}"` : ''}>
         <div class="card-b-main">
           <div class="title-row">
             <span class="${titleClass}" data-role="title">${escapeHtml(displayName)}</span>
-            <button class="rename-btn" data-role="rename" title="Rename analysis" aria-label="Rename analysis">✏️</button>
+            ${noLocalResult ? '' : `<button class="rename-btn" data-role="rename" title="Rename analysis" aria-label="Rename analysis">✏️</button>`}
           </div>
           <div class="meta-line">
             <span>${escapeHtml(formattedDate)}</span>
@@ -310,7 +343,11 @@ function renderRecentExecutions(executions) {
             <span>${sportLabel}</span>
             ${presetLabel ? `<span class="sep">·</span><span class="preset-chip">${presetLabel}</span>` : ''}
           </div>
-          ${folderLine}
+          ${exec.interrupted
+            ? `<div class="folder-line" style="font-size:11px;color:var(--text-muted,#94a3b8);">⚠️ Interrupted before finishing${(exec.processedImages && exec.totalImages) ? ` — ${exec.processedImages} of ${exec.totalImages} photos analyzed` : ''} · re-run to complete</div>`
+            : exec.cloudOnly
+                ? `<div class="folder-line" style="font-size:11px;color:var(--text-muted,#94a3b8);">📡 Local data unavailable — completed on another device or after reinstall</div>`
+                : folderLine}
         </div>
         <div class="card-b-side">
           <div class="mini-stats">
@@ -319,15 +356,15 @@ function renderRecentExecutions(executions) {
               <span class="mini-stat-label">Photos</span>
             </div>
             <div class="mini-stat">
-              <span class="mini-stat-value">${exec.imagesWithNumbers}</span>
+              <span class="mini-stat-value">${noLocalResult ? '—' : exec.imagesWithNumbers}</span>
               <span class="mini-stat-label">Detected</span>
             </div>
             <div class="mini-stat">
-              <span class="mini-stat-value success-rate">${successRate}%</span>
+              <span class="mini-stat-value success-rate">${noLocalResult ? '—' : successRate + '%'}</span>
               <span class="mini-stat-label">Success</span>
             </div>
           </div>
-          <span class="status-pill ${escapeHtml(exec.status || 'pending')}">${statusLabel}</span>
+          ${sideBadge}
           <button class="delete-execution-btn" data-role="delete" title="Remove from history" aria-label="Remove from history">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
               <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
@@ -354,6 +391,18 @@ function renderRecentExecutions(executions) {
         // Reserved: in the future, clicking a gallery badge can navigate to the gallery
         // detail page. For now we just prevent the row click from firing.
         e.stopPropagation();
+        return;
+      }
+      // LOCAL interrupted run (has the partial JSONL on this device) → offer Resume: the app
+      // can skip the already-analyzed photos and charge only the rest.
+      if (row.dataset.interrupted === 'true' && row.dataset.cloudOnly !== 'true') {
+        showInterruptedModal(executionId, Number(row.dataset.total) || 0, Number(row.dataset.processed) || 0);
+        return;
+      }
+      // Cloud-only rows (completed elsewhere, OR interrupted with no local data) have no usable
+      // local JSONL — Resume can't be done safely here, so show the informational cloud modal.
+      if (row.dataset.cloudOnly === 'true') {
+        showCloudOnlyModal(executionId);
         return;
       }
       openExecutionResults(executionId);
@@ -567,6 +616,152 @@ function enterRenameMode(row, executionId) {
 /**
  * Open execution results in the dedicated results page
  */
+/**
+ * Modal for a "☁ Cloud" run — one whose local data isn't on this device (reinstall, another
+ * device, or a deleted/corrupt local file). The results are backed up in the cloud, so we offer
+ * to RESTORE: download the original analysis log back onto this computer so the run becomes a
+ * normal local analysis again — no re-analyzing, no credits. Copy follows support-voice.md:
+ * lead with what we can do, own the limit honestly (restoring brings back results, not the
+ * original photos), no false promises, "credits" not "tokens".
+ */
+function showCloudOnlyModal(executionId) {
+  const existing = document.getElementById('cloud-only-modal');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'cloud-only-modal';
+  overlay.className = 'delete-modal-overlay';
+  overlay.innerHTML = `
+    <div class="delete-modal" role="dialog" aria-modal="true" aria-labelledby="cloud-only-title">
+      <h3 id="cloud-only-title" class="delete-modal-title">☁ Backed up in the cloud</h3>
+      <p class="delete-modal-body" data-role="body">
+        The results of this analysis are safely backed up in the cloud. We can bring them back to
+        this computer so you can view them again — no re-analyzing, and no credits.<br><br>
+        One thing to know: re-organizing into folders or exporting still needs the original photos
+        on this computer. Restoring brings back the results, not the photos themselves.
+      </p>
+      <div class="delete-modal-actions">
+        <button type="button" class="delete-modal-btn delete-modal-btn-cancel" data-role="close">Close</button>
+        <button type="button" class="delete-modal-btn delete-modal-btn-confirm" data-role="restore">Restore from cloud</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const cleanup = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+  overlay.addEventListener('click', (ev) => { if (ev.target === overlay) cleanup(); });
+  overlay.querySelector('[data-role="close"]').addEventListener('click', cleanup);
+
+  const restoreBtn = overlay.querySelector('[data-role="restore"]');
+  const body = overlay.querySelector('[data-role="body"]');
+
+  if (!executionId || !window.api || !window.api.invoke) {
+    // Can't restore without an id / IPC — degrade to an info-only modal.
+    if (restoreBtn) restoreBtn.remove();
+  } else {
+    restoreBtn.addEventListener('click', async () => {
+      restoreBtn.disabled = true;
+      restoreBtn.textContent = 'Restoring…';
+      try {
+        const res = await window.api.invoke('restore-execution-from-cloud', executionId);
+        if (res && res.success) {
+          // The log is back on disk — the row becomes a normal completed analysis on refresh.
+          cleanup();
+          if (typeof loadRecentExecutions === 'function') { try { loadRecentExecutions(); } catch (_) {} }
+          return;
+        }
+        if (res && (res.code === 'no_cloud_copy' || res.code === 'incomplete_backup')) {
+          // Be honest — there's nothing complete to restore. Don't leave a button that can't work.
+          if (body) {
+            body.textContent = res.code === 'incomplete_backup'
+              ? "The cloud copy of this analysis is from a run that didn't finish, so there's nothing complete to bring back. To get full results, re-run it on the same folder — re-running costs credits."
+              : "We couldn't find a cloud backup for this analysis — it looks like it never finished uploading, so there's nothing to bring back. To get these results you'd have to re-run it on the same folder, and re-running costs credits.";
+          }
+          restoreBtn.remove();
+          return;
+        }
+        // Something else went wrong — let the user try again.
+        if (body) body.textContent = (res && res.error) ? res.error : "Couldn't restore right now — check your connection and try again.";
+        restoreBtn.disabled = false;
+        restoreBtn.textContent = 'Restore from cloud';
+      } catch (_) {
+        if (body) body.textContent = "Couldn't restore right now — check your connection and try again.";
+        restoreBtn.disabled = false;
+        restoreBtn.textContent = 'Restore from cloud';
+      }
+    });
+  }
+
+  function onKey(ev) {
+    if (ev.key === 'Escape') { ev.preventDefault(); cleanup(); }
+  }
+  document.addEventListener('keydown', onKey);
+}
+
+/**
+ * Show a modal for an analysis that was interrupted before it finished. Offers to RESUME:
+ * the app re-analyzes only the photos that weren't done yet and charges only for those —
+ * it does NOT re-process (or re-charge) the part already completed. Copy follows
+ * support-voice.md (plain language, own the problem, "credits" not "tokens").
+ */
+function showInterruptedModal(executionId, totalImages = 0, processedImages = 0) {
+  const existing = document.getElementById('interrupted-modal');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'interrupted-modal';
+  overlay.className = 'delete-modal-overlay';
+  overlay.innerHTML = `
+    <div class="delete-modal" role="dialog" aria-modal="true" aria-labelledby="interrupted-title">
+      <h3 id="interrupted-title" class="delete-modal-title">⚠ Analysis Interrupted</h3>
+      <p class="delete-modal-body" data-role="body">
+        This analysis stopped before it finished, so the folders aren't organized yet.
+        You can pick up right where it left off — only the photos that weren't analyzed yet
+        will be processed, and you'll only be charged for those. The part already done is kept.
+      </p>
+      <div class="delete-modal-actions">
+        <button type="button" class="delete-modal-btn delete-modal-btn-cancel" data-role="close">Close</button>
+        <button type="button" class="delete-modal-btn delete-modal-btn-confirm" data-role="resume">Resume analysis</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const cleanup = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+  overlay.addEventListener('click', (ev) => { if (ev.target === overlay) cleanup(); });
+  overlay.querySelector('[data-role="close"]').addEventListener('click', cleanup);
+
+  const resumeBtn = overlay.querySelector('[data-role="resume"]');
+  resumeBtn.addEventListener('click', () => {
+    if (!executionId || !window.api || !window.api.send) { cleanup(); return; }
+    // Hand the Analysis screen the context it needs to show live progress the moment it
+    // loads (the resume's remaining count), so the user sees activity right away instead
+    // of a screen that looks like nothing happened.
+    try {
+      sessionStorage.setItem('resumeInProgress', JSON.stringify({
+        executionId,
+        total: Number(totalImages) || 0,
+        processed: Number(processedImages) || 0,
+      }));
+    } catch (_) { /* sessionStorage unavailable — the page falls back to event-driven counts */ }
+    // Start the resume in the main process…
+    window.api.send('resume-analysis', { executionId });
+    cleanup();
+    // …then open the Analysis screen so progress shows in the usual place. When the run
+    // finishes, the global batch-complete handler redirects to the results page as normal.
+    if (window.router && typeof window.router.navigate === 'function') {
+      window.router.navigate('/analysis');
+    } else {
+      window.location.hash = '#/analysis';
+    }
+  });
+
+  function onKey(ev) {
+    if (ev.key === 'Escape') { ev.preventDefault(); cleanup(); }
+  }
+  document.addEventListener('keydown', onKey);
+}
+
 window.openExecutionResults = function(executionId) {
   console.log('[Home] Opening execution results:', executionId);
   // Navigate to results page with execution ID

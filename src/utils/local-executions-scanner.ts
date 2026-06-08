@@ -49,6 +49,9 @@ export interface LocalExecutionRow {
   status: 'processing' | 'completed' | 'completed_with_errors' | 'failed' | 'cancelled';
   sportCategory: string;
   totalImages: number;
+  /** Images actually analyzed so far (from IMAGE_ANALYSIS events). For an interrupted run
+   *  this is the partial count, so the UI can show "X of Y analyzed". */
+  processedImages: number;
   imagesWithNumbers: number;
   folderPath: string;
   executionName: string | null;
@@ -256,6 +259,7 @@ function buildRow(
     status: finalStatus,
     sportCategory: startEvent?.category || summary?.sportCategory || 'motorsport',
     totalImages: Number.isFinite(finalTotal) ? finalTotal : 0,
+    processedImages: Number.isFinite(totalProcessed) ? totalProcessed : 0,
     imagesWithNumbers: Number.isFinite(finalWithNumbers) ? finalWithNumbers : 0,
     folderPath: startEvent?.folderPath || summary?.folderPath || '',
     executionName: latestExecutionName || summary?.executionName || null,

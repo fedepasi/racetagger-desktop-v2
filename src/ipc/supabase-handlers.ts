@@ -291,12 +291,14 @@ export function registerSupabaseHandlers(): void {
           console.error('[Home Stats] Query error:', error);
         } else if (data) {
           for (const exec of data) {
-            if (exec.status === 'completed') {
+            if (exec.status === 'completed' || exec.status === 'completed_with_errors') {
               completedEvents++;
             }
             const settings = exec.execution_settings as any;
-            if (settings && settings.total_images_processed) {
-              monthlyPhotos += settings.total_images_processed;
+            // execution_settings is a one-to-many embed: check for both array and object shapes.
+            const settingsObj = Array.isArray(settings) ? settings[0] : settings;
+            if (settingsObj && settingsObj.total_images_processed) {
+              monthlyPhotos += settingsObj.total_images_processed;
             }
           }
         }

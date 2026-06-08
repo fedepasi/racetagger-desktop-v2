@@ -274,6 +274,74 @@ export async function updateExecutionOnline(id: string, executionUpdateData: Par
   return data as Execution;
 }
 
+/**
+ * Recover analysis executions interrupted ON THIS DEVICE: runs left stuck as `processing`
+ * (or `running`) because the app was closed/crashed mid-batch before they could finalize.
+ * Left alone such a row is a zombie — it looks like work still in progress. We flip it to
+ * `failed` so it stops looking active and surfaces as "Interrupted".
+ *
+ * The caller passes `locallyIncompleteIds`: execution ids it has PROVEN are interrupted
+ * here, because a local `exec_<id>.jsonl` exists that started but never logged completion.
+ * That file is on THIS machine and the process has since restarted, so the run died here —
+ * it cannot still be live. (A run live in the CURRENT session is excluded by the caller's
+ * boot-time guard, and survives a laptop sleep because the same process resumes it: its id
+ * is never in this list.) `running` is included because the local JSONL is written before
+ * the processor upserts the row from `running` to `processing`, so a very-early interruption
+ * can leave it `running`.
+ *
+ * Deliberately there is NO reservation-based recovery for runs we CANNOT prove locally
+ * (other device / reinstall / deleted local log). A token reservation can be `auto_finalized`
+ * by the TTL cron while a run is still genuinely live (e.g. the laptop slept past the 30-min
+ * TTL floor, and small batches never refresh `updated_at` mid-run), so reservation status is
+ * NOT a safe liveness signal and must never drive a `failed` write. Those runs are instead
+ * surfaced as "Interrupted" by the home page's display-only staleness heuristic — no DB write,
+ * no risk of clobbering a live run.
+ *
+ * Best-effort and non-throwing; fired-and-forgotten from the home-open handler.
+ *
+ * @returns the number of executions actually marked failed (0 on any error / nothing to do).
+ */
+export async function reconcileOrphanExecutions(userId?: string, locallyIncompleteIds?: string[]): Promise<number> {
+  const uid = userId ?? getCurrentUserId();
+  if (!uid) return 0;
+
+  const ids = Array.isArray(locallyIncompleteIds)
+    ? Array.from(new Set(locallyIncompleteIds.filter((x): x is string => typeof x === 'string' && x.length > 0)))
+    : [];
+  if (ids.length === 0) return 0;
+
+  try {
+    const client = getSupabaseClient();
+    // The status + deleted_at guards keep this idempotent and ensure we only ever flip a row
+    // that is genuinely still mid-flight (never one that finalized in the meantime). .select()
+    // returns the rows actually updated, so the count reflects real writes.
+    const { data: updated, error: updErr } = await client
+      .from('executions')
+      .update({
+        status: 'failed',
+        error_summary: { reason: 'interrupted_local', recovered_at: new Date().toISOString() },
+        updated_at: new Date().toISOString(),
+      })
+      .in('id', ids)
+      .eq('user_id', uid)
+      .in('status', ['processing', 'running'])
+      .is('deleted_at', null)
+      .select('id');
+    if (updErr) {
+      console.warn('[OrphanReconcile] Failed to mark interrupted executions (non-fatal):', updErr.message);
+      return 0;
+    }
+    const marked = updated?.length ?? 0;
+    if (marked > 0) {
+      console.log(`[OrphanReconcile] Marked ${marked} interrupted execution(s) as failed for user ${uid}`);
+    }
+    return marked;
+  } catch (err) {
+    console.warn('[OrphanReconcile] Reconcile error (non-fatal):', err instanceof Error ? err.message : err);
+    return 0;
+  }
+}
+
 export async function deleteExecutionOnline(id: string): Promise<void> {
   const userId = getCurrentUserId();
   if (!userId) throw new Error('User not authenticated.');

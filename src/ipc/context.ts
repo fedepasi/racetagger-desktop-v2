@@ -73,6 +73,21 @@ export function setBatchProcessingCancelled(cancelled: boolean): void {
   _batchProcessingCancelled = cancelled;
 }
 
+// Execution id of the analysis currently being processed in THIS app session (null when
+// idle). Set when a run/resume starts, cleared when it ends. The interrupted-run recovery
+// (get-local-executions) uses it to NEVER flag/reconcile a run that is genuinely live right
+// now — critical for a resumed run, which reuses an OLD execution id (and old createdAt) and
+// would otherwise be mistaken for an interrupted prior-session run while it is mid-flight.
+let _activeProcessingExecutionId: string | null = null;
+
+export function getActiveProcessingExecutionId(): string | null {
+  return _activeProcessingExecutionId;
+}
+
+export function setActiveProcessingExecutionId(id: string | null): void {
+  _activeProcessingExecutionId = id;
+}
+
 export function getSupabase(): SupabaseClient {
   if (!_supabase) {
     _supabase = createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.key);

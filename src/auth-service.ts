@@ -806,6 +806,12 @@ export class AuthService {
           console.warn('[Auth] Failed to schedule JSONL reconciliation (non-critical):', reconErr?.message ?? reconErr);
         }
 
+        // NOTE: interrupted-run recovery is intentionally NOT triggered here. login()
+        // does not run on a normal app restart (the session is silently restored from
+        // disk), so recovery is driven from the home-open handler (get-local-executions),
+        // which fires on every app start regardless of login-vs-restore. See
+        // src/ipc/analysis-handlers.ts and reconcileOrphanExecutions().
+
         return {
           success: true,
           user: data.user,
