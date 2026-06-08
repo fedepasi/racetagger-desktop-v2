@@ -201,6 +201,10 @@ type BatchProcessConfig = {
   // When set, RESUME that interrupted execution: reuse its id, skip already-analyzed images
   // (read from its local JSONL), charge only the remaining, append + finalize the JSONL.
   resumeExecutionId?: string;
+  // The original run's processed_images (from the DB row). Used as a SAFETY check: if the
+  // local JSONL can't account for this many done images, resume aborts rather than risk
+  // re-charging the whole folder.
+  resumeExpectedDone?: number;
 
   // Nuove opzioni avanzate per la gestione dei metadati
   metadataStrategy?: MetadataStrategy; // Strategia da usare se non c'è match CSV
@@ -1275,6 +1279,21 @@ async function trackExecutionSettings(
   }
 }
 
+/**
+ * Did this IMAGE_ANALYSIS event represent a SUCCESSFUL analysis? Used by resume to decide which
+ * images count as already-done. Conservative: only a CLEAR failure (an explicit `ERROR:` rawText
+ * or a non-recoverable processingError) counts as not-done, so a normal success is never
+ * re-queued (which would re-charge it); ambiguous shapes are treated as done.
+ */
+function imageAnalysisSucceeded(ev: any): boolean {
+  try {
+    const raw = ev?.aiResponse?.rawText;
+    if (typeof raw === 'string' && raw.trim().toUpperCase().startsWith('ERROR:')) return false;
+    if (Array.isArray(ev?.processingErrors) && ev.processingErrors.some((e: any) => e && e.recoverable === false)) return false;
+  } catch { /* be permissive on unexpected shapes */ }
+  return true;
+}
+
 async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchProcessConfig) {
   if (!mainWindow) {
     console.error('handleUnifiedImageProcessing: mainWindow is null');
@@ -1302,6 +1321,10 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
     // it (the recovery may have flipped it to 'failed') so the per-chunk checkpoint + finalize
     // status guards apply during this run.
     currentExecutionId = config.resumeExecutionId!;
+    // Guard BEFORE the reopen await: the home-open recovery must never flag/flip this run
+    // during the await window. Critical for resume, which reuses an OLD execution id (and old
+    // createdAt) that the recovery would otherwise treat as an interrupted prior-session run.
+    setActiveProcessingExecutionId(currentExecutionId);
     try {
       await updateExecutionOnline(currentExecutionId, { status: 'processing' });
     } catch (error: any) {
@@ -1414,29 +1437,65 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
       throw new Error('No supported image files found in the selected folder');
     }
 
-    // RESUME: drop images already analyzed in the original run (read from its local JSONL),
-    // so ONLY the remaining images are processed and charged (pre-auth keys off this array's
-    // length). Match by fileName — the only reliable on-device key; a renamed file counts as new.
+    // RESUME: process ONLY the images not yet SUCCESSFULLY analyzed in the original run. The
+    // done-set comes from the original run's LOCAL JSONL — the only trusted on-device record
+    // of what was analyzed here. Pre-auth keys off imageFiles.length, so filtering the array
+    // = charging only the remaining, for free. Match by fileName (the only reliable on-device
+    // key; a renamed file counts as new).
     let priorDoneCount = 0;
     if (isResume && currentExecutionId) {
+      let priorLog: Awaited<ReturnType<typeof loadExecutionLogIfExists>> = null;
+      let loadFailed = false;
       try {
-        const priorLog = await loadExecutionLogIfExists(currentExecutionId);
-        const done = new Set<string>();
-        for (const ev of (priorLog?.events ?? [])) {
-          if (ev && ev.type === 'IMAGE_ANALYSIS') {
-            if (typeof ev.fileName === 'string') done.add(ev.fileName);
-            if (typeof ev.originalFileName === 'string') done.add(ev.originalFileName);
-          }
-        }
-        if (done.size > 0) {
-          const before = imageFiles.length;
-          imageFiles = imageFiles.filter(f => !done.has(f.fileName));
-          priorDoneCount = before - imageFiles.length;
-        }
-        console.log(`[Resume] ${priorDoneCount} already analyzed, ${imageFiles.length} remaining of ${fullFolderCount}`);
+        priorLog = await loadExecutionLogIfExists(currentExecutionId);
       } catch (error: any) {
-        console.warn(`[Resume] Could not read prior log for ${currentExecutionId}, processing full folder: ${error instanceof Error ? error.message : error}`);
+        loadFailed = true;
+        console.warn(`[Resume] Could not read prior log for ${currentExecutionId}: ${error instanceof Error ? error.message : error}`);
       }
+
+      // SAFETY — never double-charge. If the original run made progress (DB processed_images > 0)
+      // but we cannot account for it from a trusted LOCAL log (missing/unreadable — e.g. another
+      // device, deleted/corrupted log), we must NOT silently re-process and re-charge the whole
+      // folder. Abort and tell the user to re-run from the folder instead.
+      const expectedDone = config.resumeExpectedDone ?? 0;
+      if (!priorLog && expectedDone > 0) {
+        console.warn(`[Resume] Aborting: no local log for ${currentExecutionId} but DB shows ${expectedDone} done (loadFailed=${loadFailed}).`);
+        safeSend('analysis-aborted', {
+          reason: 'resume-unavailable',
+          message: "Can't resume on this device: the record of which photos were already analyzed isn't available here, and resuming would risk charging you twice. Re-run the analysis from the folder instead.",
+        });
+        setActiveProcessingExecutionId(null);
+        return;
+      }
+
+      // Build the done-set from SUCCESSFUL analyses only — an image that errored must be
+      // re-tried on resume, not treated as done.
+      const done = new Set<string>();
+      for (const ev of (priorLog?.events ?? [])) {
+        if (ev && ev.type === 'IMAGE_ANALYSIS' && imageAnalysisSucceeded(ev)) {
+          if (typeof ev.fileName === 'string') done.add(ev.fileName);
+          if (typeof ev.originalFileName === 'string') done.add(ev.originalFileName);
+        }
+      }
+
+      // Local log present but accounts for nothing while the DB says progress was made → the
+      // log is corrupt/truncated; abort rather than risk re-charging the done work.
+      if (done.size === 0 && expectedDone > 0) {
+        console.warn(`[Resume] Aborting: local log for ${currentExecutionId} has no successful analyses but DB shows ${expectedDone} done.`);
+        safeSend('analysis-aborted', {
+          reason: 'resume-unavailable',
+          message: "Can't resume on this device: the local analysis record looks incomplete, and resuming would risk charging you twice. Re-run the analysis from the folder instead.",
+        });
+        setActiveProcessingExecutionId(null);
+        return;
+      }
+
+      if (done.size > 0) {
+        const before = imageFiles.length;
+        imageFiles = imageFiles.filter(f => !done.has(f.fileName));
+        priorDoneCount = before - imageFiles.length;
+      }
+      console.log(`[Resume] ${priorDoneCount} already analyzed, ${imageFiles.length} remaining of ${fullFolderCount}`);
 
       if (imageFiles.length === 0) {
         // Everything was already analyzed — nothing left to resume. Finalize and notify.
@@ -1643,7 +1702,10 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
       visualTagging: config.visualTagging,
       // RESUME: tells the processor to append to the existing JSONL (not overwrite), reuse the
       // execution row (no re-create / no second EXECUTION_START). undefined for a normal run.
-      resumeExecutionId: config.resumeExecutionId
+      resumeExecutionId: config.resumeExecutionId,
+      // Images already analyzed before this resume, so the processor's local sidecar +
+      // per-chunk checkpoint report the CUMULATIVE count, not just this run's subset.
+      resumePriorDoneCount: priorDoneCount
     };
 
     // Configura il processor con i parametri necessari
@@ -1945,6 +2007,9 @@ async function handleResumeAnalysis(event: IpcMainEvent, payload: { executionId?
       // Empty participants → handleUnifiedImageProcessing reloads the preset from DB (Issue #104).
       participantPreset: presetId ? { id: presetId, name: settings.presetName || '', participants: [] } : undefined,
       resumeExecutionId: executionId,
+      // Safety baseline: how many images the original run reported as processed. If the local
+      // log can't account for these, resume aborts rather than risk a double charge.
+      resumeExpectedDone: typeof row.processed_images === 'number' ? row.processed_images : 0,
     } as BatchProcessConfig;
     console.log(`[Resume] Resuming execution ${executionId} (folder: ${folderPath}, preset: ${presetId || 'none'})`);
     await handleUnifiedImageProcessing(event, resumeConfig);

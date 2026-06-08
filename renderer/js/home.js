@@ -39,6 +39,19 @@ function initializeHomePage() {
 
   // Check if we need to navigate to a specific section from results page
   checkNavigationIntent();
+
+  // Surface resume/analysis abort notices (e.g. "already complete", "can't resume on this
+  // device"). The main process sends these on 'analysis-aborted'. Registered once.
+  if (window.api && window.api.receive && !window.__analysisAbortedWired) {
+    window.__analysisAbortedWired = true;
+    window.api.receive('analysis-aborted', (data) => {
+      const msg = (data && data.message) ? data.message : 'The analysis could not be started.';
+      // Refresh the list so a now-completed/failed run reflects its new state.
+      try { loadRecentExecutions(); } catch (_) {}
+      // eslint-disable-next-line no-alert
+      alert(msg);
+    });
+  }
 }
 
 /**
@@ -376,15 +389,14 @@ function renderRecentExecutions(executions) {
         e.stopPropagation();
         return;
       }
-      // Interrupted runs (local OR cloud) stopped before finishing — there's no complete
-      // result to organize. Explain that and point to re-running, rather than opening a
-      // partial/empty results page.
-      if (row.dataset.interrupted === 'true') {
+      // LOCAL interrupted run (has the partial JSONL on this device) → offer Resume: the app
+      // can skip the already-analyzed photos and charge only the rest.
+      if (row.dataset.interrupted === 'true' && row.dataset.cloudOnly !== 'true') {
         showInterruptedModal(executionId);
         return;
       }
-      // Cloud-only (completed elsewhere) executions have no local JSONL — the results page
-      // would be empty. Show an informational modal instead.
+      // Cloud-only rows (completed elsewhere, OR interrupted with no local data) have no usable
+      // local JSONL — Resume can't be done safely here, so show the informational cloud modal.
       if (row.dataset.cloudOnly === 'true') {
         showCloudOnlyModal();
         return;
