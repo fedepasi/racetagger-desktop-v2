@@ -315,6 +315,8 @@ export interface UnifiedProcessorConfig {
   participantPresetData?: any[]; // Direct participant data array from frontend
   category?: string;
   executionId?: string; // Add execution_id for linking images to desktop executions
+  resumeExecutionId?: string; // When set, this run RESUMES that execution: append to the
+                              // existing JSONL, don't re-create the row, don't re-log START.
   presetId?: string; // Preset ID for loading face descriptors specific to this preset
   presetName?: string; // Preset name for JSONL EXECUTION_START logging
   keywordsMode?: 'append' | 'overwrite'; // How to handle existing keywords
@@ -8457,6 +8459,7 @@ export class UnifiedImageProcessor extends EventEmitter {
     // (i chunk mantengono i contatori globali impostati da processBatchInChunks)
     // Se totalImages è già maggiore del batch corrente, siamo in modalità chunk
     const isChunkProcessing = this.totalImages > imageFiles.length;
+    const isResume = !!this.config.resumeExecutionId;
     if (!isChunkProcessing) {
       this.totalImages = imageFiles.length;
       this.processedImages = 0;
@@ -8485,12 +8488,13 @@ export class UnifiedImageProcessor extends EventEmitter {
         const userId = authState.isAuthenticated ? authState.user?.id : 'anonymous';
 
         // For chunked processing, use appendMode so subsequent chunks don't overwrite
-        // the JSONL file created by the first chunk
+        // the JSONL file created by the first chunk. On a RESUME we likewise append, so the
+        // already-analyzed IMAGE_ANALYSIS lines from the original run are preserved.
         this.analysisLogger = new AnalysisLogger(
           this.config.executionId,
           this.config.category || 'motorsport',
           userId,
-          { appendMode: isChunkProcessing }
+          { appendMode: isChunkProcessing || isResume }
         );
 
         // Capture the start instant ONCE, only on the first chunk. Used at
@@ -8587,24 +8591,31 @@ export class UnifiedImageProcessor extends EventEmitter {
           this.summaryFolderPath = sourceFolderForLog;
         }
 
-        this.analysisLogger.logExecutionStart(
-          totalImageCount,
-          this.config.presetId,
-          this.systemEnvironment, // Optional enhanced telemetry
-          this.config.presetId ? {
-            id: this.config.presetId,
-            name: this.config.presetName || 'Unknown',
-            participantCount: this.config.participantPresetData?.length || 0
-          } : undefined,
-          sourceFolderForLog
-        );
+        // On a RESUME the original EXECUTION_START already lives in the appended JSONL — do
+        // NOT write a second one. The scanner reads the FIRST EXECUTION_START for the total,
+        // so a duplicate would be misleading and the original (full-folder) total must stand.
+        if (!isResume) {
+          this.analysisLogger.logExecutionStart(
+            totalImageCount,
+            this.config.presetId,
+            this.systemEnvironment, // Optional enhanced telemetry
+            this.config.presetId ? {
+              id: this.config.presetId,
+              name: this.config.presetName || 'Unknown',
+              participantCount: this.config.participantPresetData?.length || 0
+            } : undefined,
+            sourceFolderForLog
+          );
+        }
 
-        if (DEBUG_MODE) console.log(`[UnifiedProcessor] Analysis logging enabled for execution ${this.config.executionId} (total: ${totalImageCount} images)`);
+        if (DEBUG_MODE) console.log(`[UnifiedProcessor] Analysis logging ${isResume ? 'resumed (append)' : 'enabled'} for execution ${this.config.executionId} (total: ${totalImageCount} images)`);
       }
 
       // CREATE EXECUTION RECORD IN DATABASE (only on first chunk or non-chunked processing)
-      // Skip for subsequent chunks to avoid overwriting total_images with chunk size
-      if (!isChunkProcessing || this.processedImages === 0) try {
+      // Skip for subsequent chunks to avoid overwriting total_images with chunk size.
+      // Skip on RESUME: the row already exists (reopened to 'processing' by main.ts); upserting
+      // would reset total_images/processed_images to the subset and regenerate name/project.
+      if ((!isChunkProcessing || this.processedImages === 0) && !isResume) try {
         const { getSupabaseClient } = await import('./database-service');
         const { authService: auth } = await import('./auth-service');
         const supabase = getSupabaseClient();

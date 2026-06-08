@@ -52,6 +52,13 @@ export type BatchProcessConfig = {
   presetId?: string;
   presetName?: string;
   useSmartMatcher?: boolean;
+  /**
+   * When set, this run RESUMES an interrupted execution instead of creating a new one:
+   * the same execution id is reused, already-analyzed images (read from the existing local
+   * JSONL) are skipped, and ONLY the remaining images are processed and charged. The local
+   * JSONL is appended to (not overwritten) and finalized so the result covers the full set.
+   */
+  resumeExecutionId?: string;
   folderOrganization?: {
     enabled: boolean;
     destinationPath: string;

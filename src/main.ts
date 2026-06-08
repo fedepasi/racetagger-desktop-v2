@@ -110,7 +110,8 @@ import { FolderOrganizerConfig } from './utils/folder-organizer';
 import { getFaceDetectionBridge } from './face-detection-bridge';
 import { getModelManager } from './model-manager';
 // Modular IPC handlers
-import { registerAllHandlers, initializeIpcContext, isForceUpdateRequired, checkAppVersion, isBatchProcessingCancelled, setBatchProcessingCancelled } from './ipc';
+import { registerAllHandlers, initializeIpcContext, isForceUpdateRequired, checkAppVersion, isBatchProcessingCancelled, setBatchProcessingCancelled, setActiveProcessingExecutionId } from './ipc';
+import { loadExecutionLogIfExists } from './utils/execution-log-loader';
 
 // Definisci le estensioni supportate a livello globale per riutilizzo
 const RAW_EXTENSIONS = ['.nef', '.arw', '.cr2', '.cr3', '.orf', '.raw', '.rw2', '.dng'];
@@ -197,7 +198,10 @@ type BatchProcessConfig = {
   executionName?: string;
   model?: string;                      // Modello AI da utilizzare per l'analisi
   category?: string;                   // Categoria di sport per prompt dedicato
-  
+  // When set, RESUME that interrupted execution: reuse its id, skip already-analyzed images
+  // (read from its local JSONL), charge only the remaining, append + finalize the JSONL.
+  resumeExecutionId?: string;
+
   // Nuove opzioni avanzate per la gestione dei metadati
   metadataStrategy?: MetadataStrategy; // Strategia da usare se non c'è match CSV
   manualMetadataValue?: string;        // Valore del metatag manuale (se strategia = manual)
@@ -1291,9 +1295,21 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
   
   const executionStartTime = Date.now();
   let currentExecutionId: string | null = null;
+  const isResume = !!config.resumeExecutionId;
 
-  // Crea sempre un'execution per tracciare questa operazione se l'utente è autenticato
-  if (authService.getAuthState().isAuthenticated) {
+  if (isResume) {
+    // RESUME: reuse the interrupted execution's id instead of creating a new one, and reopen
+    // it (the recovery may have flipped it to 'failed') so the per-chunk checkpoint + finalize
+    // status guards apply during this run.
+    currentExecutionId = config.resumeExecutionId!;
+    try {
+      await updateExecutionOnline(currentExecutionId, { status: 'processing' });
+    } catch (error: any) {
+      console.warn(`[Resume] Could not reopen execution ${currentExecutionId}: ${error instanceof Error ? error.message : error}`);
+    }
+    console.log(`[Resume] Reusing execution ${currentExecutionId}`);
+  } else if (authService.getAuthState().isAuthenticated) {
+    // Crea sempre un'execution per tracciare questa operazione se l'utente è autenticato
     try {
       // Determina il nome dell'execution
       const executionName = config.executionName || `Analysis_${new Date().toISOString().replace(/[:.]/g, '-')}`;
@@ -1322,6 +1338,11 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
       if (error?.code) console.error(`[Execution] Error code: ${error.code} (42501=RLS violation, 42P01=missing table)`);
     }
   }
+
+  // Mark this execution as the one actively processing in this session, so the
+  // interrupted-run recovery (home-open) never flags/flips it while it is live. Cleared
+  // when the run completes or errors (the processBatch .then/.catch below).
+  if (currentExecutionId) setActiveProcessingExecutionId(currentExecutionId);
 
   try {
     const { folderPath, updateExif, csvData } = config;
@@ -1372,7 +1393,7 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
     const filesWithTimestamps = filesWithStatsUnsorted.sort((a, b) => a.timestamp - b.timestamp);
 
     // Ora mappa i file ordinati alla struttura UnifiedImageFile
-    const imageFiles: UnifiedImageFile[] = filesWithTimestamps.map((item, index) => ({
+    let imageFiles: UnifiedImageFile[] = filesWithTimestamps.map((item, index) => ({
       id: `img_${index}_${Date.now()}`,
       originalPath: item.path,
       fileName: item.file,
@@ -1380,13 +1401,60 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
       originalFormat: path.extname(item.file).toLowerCase()
     }));
 
+    // The full folder count is the execution's total regardless of resume — a resumed run
+    // keeps the ORIGINAL total so the row/JSONL reflect the complete set, not the subset.
+    const fullFolderCount = imageFiles.length;
+
     // Aggiorna le statistiche
-    executionStats.totalImages = imageFiles.length;
+    executionStats.totalImages = fullFolderCount;
     executionStats.totalRawFiles = imageFiles.filter(f => f.isRaw).length;
     executionStats.totalStandardFiles = imageFiles.filter(f => !f.isRaw).length;
 
     if (imageFiles.length === 0) {
       throw new Error('No supported image files found in the selected folder');
+    }
+
+    // RESUME: drop images already analyzed in the original run (read from its local JSONL),
+    // so ONLY the remaining images are processed and charged (pre-auth keys off this array's
+    // length). Match by fileName — the only reliable on-device key; a renamed file counts as new.
+    let priorDoneCount = 0;
+    if (isResume && currentExecutionId) {
+      try {
+        const priorLog = await loadExecutionLogIfExists(currentExecutionId);
+        const done = new Set<string>();
+        for (const ev of (priorLog?.events ?? [])) {
+          if (ev && ev.type === 'IMAGE_ANALYSIS') {
+            if (typeof ev.fileName === 'string') done.add(ev.fileName);
+            if (typeof ev.originalFileName === 'string') done.add(ev.originalFileName);
+          }
+        }
+        if (done.size > 0) {
+          const before = imageFiles.length;
+          imageFiles = imageFiles.filter(f => !done.has(f.fileName));
+          priorDoneCount = before - imageFiles.length;
+        }
+        console.log(`[Resume] ${priorDoneCount} already analyzed, ${imageFiles.length} remaining of ${fullFolderCount}`);
+      } catch (error: any) {
+        console.warn(`[Resume] Could not read prior log for ${currentExecutionId}, processing full folder: ${error instanceof Error ? error.message : error}`);
+      }
+
+      if (imageFiles.length === 0) {
+        // Everything was already analyzed — nothing left to resume. Finalize and notify.
+        try {
+          await updateExecutionOnline(currentExecutionId, {
+            status: 'completed',
+            processed_images: priorDoneCount || fullFolderCount,
+            total_images: fullFolderCount,
+            completed_at: new Date().toISOString(),
+          });
+        } catch { /* non-fatal */ }
+        safeSend('analysis-aborted', {
+          reason: 'resume-nothing-to-do',
+          message: 'This analysis was already complete — there is nothing left to resume.',
+        });
+        setActiveProcessingExecutionId(null);
+        return;
+      }
     }
 
     // Setup event listeners per progress tracking
@@ -1529,6 +1597,7 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
             reason: 'preset-empty',
             message: `Il preset "${config.participantPreset.name || config.participantPreset.id}" risulta vuoto o non raggiungibile. L'analisi è stata annullata per evitare risultati non attendibili.`,
           });
+          setActiveProcessingExecutionId(null);
           return;
         }
       } catch (reloadErr) {
@@ -1540,6 +1609,7 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
           reason: 'preset-reload-failed',
           message: `Impossibile ricaricare il preset "${config.participantPreset.name || config.participantPreset.id}". Riseleziona il preset e riprova.`,
         });
+        setActiveProcessingExecutionId(null);
         return;
       }
     }
@@ -1570,7 +1640,10 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
         }
       },
       // Visual Tagging configuration
-      visualTagging: config.visualTagging
+      visualTagging: config.visualTagging,
+      // RESUME: tells the processor to append to the existing JSONL (not overwrite), reuse the
+      // execution row (no re-create / no second EXECUTION_START). undefined for a normal run.
+      resumeExecutionId: config.resumeExecutionId
     };
 
     // Configura il processor con i parametri necessari
@@ -1609,19 +1682,27 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
           ? executionStats.executionDurationMs / results.length
           : 0;
 
+        // This run has stopped processing — release the active-execution guard so the
+        // interrupted-run recovery can act on it again (e.g. if it was cancelled/failed).
+        setActiveProcessingExecutionId(null);
+
+        // For a resume, the terminal counts must cover the FULL set (prior + this run), not
+        // just the resumed subset, so the row reflects one complete execution.
+        const processedTotal = priorDoneCount + results.length;
+
         // Aggiorna status execution se creata
         if (currentExecutionId) {
           try {
             await updateExecutionOnline(currentExecutionId, {
               status: wasCancelled ? 'cancelled' : 'completed',
               results_reference: wasCancelled
-                ? `Cancelled after ${results.length}/${executionStats.totalImages} images`
-                : `${results.length} images processed`,
+                ? `Cancelled after ${processedTotal}/${executionStats.totalImages} images`
+                : `${processedTotal} images processed`,
               completed_at: new Date().toISOString(),
               total_images: executionStats.totalImages,
-              processed_images: results.length
+              processed_images: processedTotal
             });
-            console.log(`[Execution] Updated execution ${currentExecutionId} → ${wasCancelled ? 'cancelled' : 'completed'} (${results.length}/${executionStats.totalImages} images)`);
+            console.log(`[Execution] Updated execution ${currentExecutionId} → ${wasCancelled ? 'cancelled' : 'completed'} (${processedTotal}/${executionStats.totalImages} images${isResume ? `, resumed +${results.length}` : ''})`);
           } catch (error: any) {
             // ALWAYS log — execution update failures affect management portal visibility
             console.error(`[Execution] ⚠️ Failed to update execution status: ${error instanceof Error ? error.message : JSON.stringify(error)}`);
@@ -1773,6 +1854,10 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
         console.error('[Main Process] Unified processing error:', errorMessage);
         if (errorStack) console.error('[Main Process] Stack trace:', errorStack);
 
+        // Run stopped — release the active-execution guard (a re-interrupted resume becomes
+        // recoverable/resumable again on the next home open).
+        setActiveProcessingExecutionId(null);
+
         // Aggiorna status execution in caso di errore
         if (currentExecutionId) {
           try {
@@ -1814,10 +1899,58 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
   } catch (error) {
     // This catch only handles errors in setup, not in processing
     console.error('[Main Process] Unified processing setup error:', error);
+    // Setup failed before processing started — release the active-execution guard so a resumed
+    // run that errored during setup is recoverable/resumable again.
+    setActiveProcessingExecutionId(null);
     safeSend('processing-error', {
       error: error instanceof Error ? error.message : 'Failed to start processing',
       details: error
     });
+  }
+}
+
+/**
+ * Resume an interrupted analysis: rebuild the original run's config from its DB row +
+ * execution_settings (folder, category, preset) and hand off to handleUnifiedImageProcessing
+ * with `resumeExecutionId` set. That path reuses the execution id, skips the images already
+ * analyzed in the original local JSONL, charges ONLY the remaining ones, appends to the same
+ * JSONL and finalizes — so the result covers the full set without re-charging the done work.
+ */
+async function handleResumeAnalysis(event: IpcMainEvent, payload: { executionId?: string }) {
+  const executionId = payload?.executionId;
+  if (!executionId) {
+    safeSend('processing-error', { error: 'Resume failed: missing execution id' });
+    return;
+  }
+  try {
+    const row: any = await getExecutionByIdOnline(executionId);
+    if (!row) {
+      safeSend('analysis-aborted', { reason: 'resume-not-found', message: 'Could not find that analysis to resume.' });
+      return;
+    }
+    const settings: any = row.execution_settings || {};
+    const folderPath: string = row.source_folder || '';
+    if (!folderPath) {
+      safeSend('analysis-aborted', {
+        reason: 'resume-no-folder',
+        message: 'The original folder for this analysis is unknown on this device. Re-run the analysis from the folder instead.',
+      });
+      return;
+    }
+    const presetId: string | undefined = settings.participantPresetId || undefined;
+    const resumeConfig: BatchProcessConfig = {
+      folderPath,
+      updateExif: true,
+      category: row.category || settings.category || 'motorsport',
+      // Empty participants → handleUnifiedImageProcessing reloads the preset from DB (Issue #104).
+      participantPreset: presetId ? { id: presetId, name: settings.presetName || '', participants: [] } : undefined,
+      resumeExecutionId: executionId,
+    } as BatchProcessConfig;
+    console.log(`[Resume] Resuming execution ${executionId} (folder: ${folderPath}, preset: ${presetId || 'none'})`);
+    await handleUnifiedImageProcessing(event, resumeConfig);
+  } catch (error: any) {
+    console.error('[Resume] Failed to start resume:', error instanceof Error ? error.message : error);
+    safeSend('processing-error', { error: `Resume failed: ${error instanceof Error ? error.message : 'unknown error'}` });
   }
 }
 
@@ -3975,6 +4108,12 @@ app.whenReady().then(async () => { // Added async here
   ipcMain.on('analyze-folder', (event: IpcMainEvent, config: BatchProcessConfig) => {
     // Always use unified processor
     handleUnifiedImageProcessing(event, config);
+  });
+
+  // Resume an interrupted analysis: process only the images not yet analyzed, charging
+  // only those. Config is rebuilt server-side from the original execution's DB settings.
+  ipcMain.on('resume-analysis', (event: IpcMainEvent, payload: { executionId?: string }) => {
+    handleResumeAnalysis(event, payload);
   });
   
   

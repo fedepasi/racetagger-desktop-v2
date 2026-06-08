@@ -380,7 +380,7 @@ function renderRecentExecutions(executions) {
       // result to organize. Explain that and point to re-running, rather than opening a
       // partial/empty results page.
       if (row.dataset.interrupted === 'true') {
-        showInterruptedModal();
+        showInterruptedModal(executionId);
         return;
       }
       // Cloud-only (completed elsewhere) executions have no local JSONL — the results page
@@ -634,12 +634,12 @@ function showCloudOnlyModal() {
 }
 
 /**
- * Show an informational modal for an analysis that was interrupted before it finished.
- * Unlike the cloud-only case, there is no completed result anywhere — the run stopped
- * partway, so the honest guidance is to re-run it. Copy follows support-voice.md
- * (plain language, own the problem, "credits" not "tokens").
+ * Show a modal for an analysis that was interrupted before it finished. Offers to RESUME:
+ * the app re-analyzes only the photos that weren't done yet and charges only for those —
+ * it does NOT re-process (or re-charge) the part already completed. Copy follows
+ * support-voice.md (plain language, own the problem, "credits" not "tokens").
  */
-function showInterruptedModal() {
+function showInterruptedModal(executionId) {
   const existing = document.getElementById('interrupted-modal');
   if (existing) existing.remove();
 
@@ -649,13 +649,14 @@ function showInterruptedModal() {
   overlay.innerHTML = `
     <div class="delete-modal" role="dialog" aria-modal="true" aria-labelledby="interrupted-title">
       <h3 id="interrupted-title" class="delete-modal-title">⚠ Analysis Interrupted</h3>
-      <p class="delete-modal-body">
-        This analysis stopped before it finished, so there are no results to organize into folders yet.
-        Only the photos that were analyzed before it stopped used credits — the rest were refunded automatically.<br><br>
-        To complete it, re-run the analysis on the same folder. If anything looks off with your credits, reach out and we'll sort it out.
+      <p class="delete-modal-body" data-role="body">
+        This analysis stopped before it finished, so the folders aren't organized yet.
+        You can pick up right where it left off — only the photos that weren't analyzed yet
+        will be processed, and you'll only be charged for those. The part already done is kept.
       </p>
       <div class="delete-modal-actions">
         <button type="button" class="delete-modal-btn delete-modal-btn-cancel" data-role="close">Close</button>
+        <button type="button" class="delete-modal-btn delete-modal-btn-confirm" data-role="resume">Resume analysis</button>
       </div>
     </div>
   `;
@@ -664,6 +665,20 @@ function showInterruptedModal() {
   const cleanup = () => overlay.remove();
   overlay.addEventListener('click', (ev) => { if (ev.target === overlay) cleanup(); });
   overlay.querySelector('[data-role="close"]').addEventListener('click', cleanup);
+
+  const resumeBtn = overlay.querySelector('[data-role="resume"]');
+  resumeBtn.addEventListener('click', () => {
+    if (executionId && window.api && window.api.send) {
+      window.api.send('resume-analysis', { executionId });
+    }
+    // Confirm in place — the run continues in the background; progress appears on the
+    // Analysis screen. (We don't auto-navigate so an in-progress view isn't disrupted.)
+    const body = overlay.querySelector('[data-role="body"]');
+    if (body) body.textContent = 'Resuming… the remaining photos are being analyzed in the background. You can follow progress on the Analysis screen.';
+    resumeBtn.remove();
+    setTimeout(cleanup, 3500);
+  });
+
   document.addEventListener('keydown', function onKey(ev) {
     if (ev.key === 'Escape') { ev.preventDefault(); cleanup(); document.removeEventListener('keydown', onKey); }
   });

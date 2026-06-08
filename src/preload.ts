@@ -111,6 +111,7 @@ const validInvokeChannels: string[] = [
   'load-csv',
   'download-csv-template',
   'analyze-folder',
+  'resume-analysis',
   'extract-raw-preview',
   // Enhanced File Browser Operations
   'dialog-show-open',
