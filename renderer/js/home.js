@@ -45,6 +45,10 @@ function initializeHomePage() {
   if (window.api && window.api.receive && !window.__analysisAbortedWired) {
     window.__analysisAbortedWired = true;
     window.api.receive('analysis-aborted', (data) => {
+      // When a resume is showing its live view on the Analysis screen, that screen surfaces the
+      // abort itself (inline message, or redirect to results if the run was already complete) —
+      // don't also pop a Home alert() on the wrong screen.
+      if (window.__resumeViewActive) return;
       const msg = (data && data.message) ? data.message : 'The analysis could not be started.';
       // Refresh the list so a now-completed/failed run reflects its new state.
       try { loadRecentExecutions(); } catch (_) {}
@@ -327,7 +331,7 @@ function renderRecentExecutions(executions) {
     const noLocalResult = exec.cloudOnly || exec.interrupted;
 
     return `
-      <div class="card-b${exec.cloudOnly ? ' card-b-cloud-only' : ''}" data-execution-id="${escapeHtml(exec.id)}" ${exec.cloudOnly ? 'data-cloud-only="true"' : ''}${exec.interrupted ? ' data-interrupted="true"' : ''}>
+      <div class="card-b${exec.cloudOnly ? ' card-b-cloud-only' : ''}" data-execution-id="${escapeHtml(exec.id)}" ${exec.cloudOnly ? 'data-cloud-only="true"' : ''}${exec.interrupted ? ` data-interrupted="true" data-total="${Number(exec.totalImages) || 0}" data-processed="${Number(exec.processedImages) || 0}"` : ''}>
         <div class="card-b-main">
           <div class="title-row">
             <span class="${titleClass}" data-role="title">${escapeHtml(displayName)}</span>
@@ -392,7 +396,7 @@ function renderRecentExecutions(executions) {
       // LOCAL interrupted run (has the partial JSONL on this device) → offer Resume: the app
       // can skip the already-analyzed photos and charge only the rest.
       if (row.dataset.interrupted === 'true' && row.dataset.cloudOnly !== 'true') {
-        showInterruptedModal(executionId);
+        showInterruptedModal(executionId, Number(row.dataset.total) || 0, Number(row.dataset.processed) || 0);
         return;
       }
       // Cloud-only rows (completed elsewhere, OR interrupted with no local data) have no usable
@@ -651,7 +655,7 @@ function showCloudOnlyModal() {
  * it does NOT re-process (or re-charge) the part already completed. Copy follows
  * support-voice.md (plain language, own the problem, "credits" not "tokens").
  */
-function showInterruptedModal(executionId) {
+function showInterruptedModal(executionId, totalImages = 0, processedImages = 0) {
   const existing = document.getElementById('interrupted-modal');
   if (existing) existing.remove();
 
@@ -680,15 +684,27 @@ function showInterruptedModal(executionId) {
 
   const resumeBtn = overlay.querySelector('[data-role="resume"]');
   resumeBtn.addEventListener('click', () => {
-    if (executionId && window.api && window.api.send) {
-      window.api.send('resume-analysis', { executionId });
+    if (!executionId || !window.api || !window.api.send) { cleanup(); return; }
+    // Hand the Analysis screen the context it needs to show live progress the moment it
+    // loads (the resume's remaining count), so the user sees activity right away instead
+    // of a screen that looks like nothing happened.
+    try {
+      sessionStorage.setItem('resumeInProgress', JSON.stringify({
+        executionId,
+        total: Number(totalImages) || 0,
+        processed: Number(processedImages) || 0,
+      }));
+    } catch (_) { /* sessionStorage unavailable — the page falls back to event-driven counts */ }
+    // Start the resume in the main process…
+    window.api.send('resume-analysis', { executionId });
+    cleanup();
+    // …then open the Analysis screen so progress shows in the usual place. When the run
+    // finishes, the global batch-complete handler redirects to the results page as normal.
+    if (window.router && typeof window.router.navigate === 'function') {
+      window.router.navigate('/analysis');
+    } else {
+      window.location.hash = '#/analysis';
     }
-    // Confirm in place — the run continues in the background; progress appears on the
-    // Analysis screen. (We don't auto-navigate so an in-progress view isn't disrupted.)
-    const body = overlay.querySelector('[data-role="body"]');
-    if (body) body.textContent = 'Resuming… the remaining photos are being analyzed in the background. You can follow progress on the Analysis screen.';
-    resumeBtn.remove();
-    setTimeout(cleanup, 3500);
   });
 
   document.addEventListener('keydown', function onKey(ev) {

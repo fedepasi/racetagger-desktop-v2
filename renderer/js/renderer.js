@@ -290,6 +290,13 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
 
+    // When a batch is cancelled, sync renderer.js's module-level `uploading` flag. The
+    // enhanced-progress UI resets the button, but `uploading` would otherwise stay true and
+    // re-disable Analyze the next time the user picks a folder. Covers normal runs and resumes.
+    window.api.receive('batch-cancelled', () => {
+      setUploading(false);
+    });
+
     // Old parallel processing statistics removed - using unified telemetry now
 
     // Real-time image processing updates
@@ -2071,6 +2078,88 @@ function completeUnifiedTelemetry() {
   // Update final display
   updateUnifiedTelemetryDisplay();
 }
+
+/**
+ * Enter the live progress view for a resume that was just started from the Home screen.
+ *
+ * The resume job is already running in the main process (Home sent 'resume-analysis'
+ * and navigated here). This makes the Analysis page show activity *immediately* — so it
+ * never looks like nothing happened — until the standard unified-processing-started /
+ * image-processed events take over and drive the real counts. batch-complete then
+ * redirects to the results page as usual, exactly like a normal run.
+ *
+ * Exposed on window so router.js can call it after it rebuilds the Analysis page DOM.
+ * No-op unless Home left a `resumeInProgress` marker in sessionStorage.
+ */
+window.enterResumeProcessingView = function enterResumeProcessingView() {
+  let payload = null;
+  try { payload = JSON.parse(sessionStorage.getItem('resumeInProgress') || 'null'); } catch (_) { payload = null; }
+  if (!payload || !payload.executionId) return;
+  // One-shot: clear the marker so a later manual visit to Analysis doesn't re-trigger this.
+  sessionStorage.removeItem('resumeInProgress');
+
+  // Re-entry safety: tear down any terminal-event listeners left over from a previous resume in
+  // this session (e.g. one that was cancelled rather than completed) before wiring fresh ones,
+  // so they can't stack on the persistent IPC channel.
+  if (typeof window.__resumeFailureCleanup === 'function') {
+    try { window.__resumeFailureCleanup(); } catch (_) { /* already gone */ }
+  }
+  // Tell Home's global 'analysis-aborted' handler to stay quiet while this view is up — the
+  // Analysis screen surfaces resume failures itself, so a Home alert() would pop on the wrong screen.
+  window.__resumeViewActive = true;
+
+  // Show the same processing UI a normal run uses.
+  setUploading(true);
+
+  // Label it as a resume so the user understands it's continuing, not restarting.
+  const title = document.querySelector('#progress-container .processing-title');
+  if (title) title.textContent = 'Resuming analysis…';
+
+  // Seed the counter with this resume's remaining count for an instant, honest number;
+  // unified-processing-started arrives moments later and confirms the authoritative total.
+  const total = Number(payload.total) || 0;
+  const done = Number(payload.processed) || 0;
+  const remaining = total > done ? total - done : 0;
+  startUnifiedTelemetry(remaining);
+  updateUnifiedTelemetryDisplay();
+
+  // Wire terminal-event handling for THIS resume. Every terminal event tears our listeners down
+  // so they never leak or fire on a later unrelated run; failures additionally recover the screen.
+  if (window.api && window.api.receive) {
+    let offAbort = null;
+    let offError = null;
+    let offDone = null;
+    let offCancel = null;
+    const teardown = () => {
+      if (typeof offAbort === 'function') offAbort();
+      if (typeof offError === 'function') offError();
+      if (typeof offDone === 'function') offDone();
+      if (typeof offCancel === 'function') offCancel();
+      offAbort = offError = offDone = offCancel = null;
+      window.__resumeViewActive = false;
+      window.__resumeFailureCleanup = null;
+    };
+    const onFailure = (data) => {
+      // 'Already complete' isn't a failure — main marked the run completed, so just show results.
+      if (data && data.reason === 'resume-nothing-to-do' && payload.executionId) {
+        teardown();
+        window.location.href = `results.html?executionId=${encodeURIComponent(payload.executionId)}`;
+        return;
+      }
+      // Genuine failure (can't resume here / folder gone): drop the panel and explain inline.
+      setUploading(false);
+      if (data && data.message && typeof showError === 'function') showError(data.message);
+      teardown();
+    };
+    offAbort = window.api.receive('analysis-aborted', onFailure);
+    offError = window.api.receive('processing-error', onFailure);
+    // Success redirects to results.html (full page nav); cancel is handled by the global
+    // batch-cancelled listener. Here we only need to stop listening so nothing leaks.
+    offDone = window.api.receive('batch-complete', teardown);
+    offCancel = window.api.receive('batch-cancelled', teardown);
+    window.__resumeFailureCleanup = teardown;
+  }
+};
 
 function updateUnifiedTelemetryDisplay() {
   // Use existing telemetry elements or fall back gracefully
