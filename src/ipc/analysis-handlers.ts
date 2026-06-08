@@ -9,7 +9,7 @@
 import { ipcMain, app } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
-import { setBatchProcessingCancelled } from './context';
+import { setBatchProcessingCancelled, getActiveProcessingExecutionId } from './context';
 import { DEBUG_MODE } from '../config';
 import { unifiedImageProcessor } from '../unified-image-processor';
 import { AnalysisLogger } from '../utils/analysis-logger';
@@ -229,9 +229,13 @@ export function registerAnalysisHandlers(): void {
       try {
         const bootTimeMs = Date.now() - process.uptime() * 1000;
         const RECONCILE_MARGIN_MS = 5 * 60 * 1000;
+        // A run/resume processing RIGHT NOW in this session must never be flagged or flipped.
+        // This matters most for a RESUMED run, which reuses an OLD execution id (old createdAt)
+        // and would otherwise look like an interrupted prior-session run while it is mid-flight.
+        const activeId = getActiveProcessingExecutionId();
         const localInterruptedIds: string[] = [];
         for (const e of executions as any[]) {
-          if (e && e.status === 'processing' && e.createdAt) {
+          if (e && e.status === 'processing' && e.createdAt && e.id !== activeId) {
             const createdMs = new Date(e.createdAt).getTime();
             if (createdMs < bootTimeMs) {
               e.interrupted = true; // display flag — shared object ref, also reflected in `top`

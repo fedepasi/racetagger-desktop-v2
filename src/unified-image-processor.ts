@@ -315,6 +315,10 @@ export interface UnifiedProcessorConfig {
   participantPresetData?: any[]; // Direct participant data array from frontend
   category?: string;
   executionId?: string; // Add execution_id for linking images to desktop executions
+  resumeExecutionId?: string; // When set, this run RESUMES that execution: append to the
+                              // existing JSONL, don't re-create the row, don't re-log START.
+  resumePriorDoneCount?: number; // Images already analyzed before this resume, so the local
+                                 // sidecar + per-chunk checkpoint report the cumulative count.
   presetId?: string; // Preset ID for loading face descriptors specific to this preset
   presetName?: string; // Preset name for JSONL EXECUTION_START logging
   keywordsMode?: 'append' | 'overwrite'; // How to handle existing keywords
@@ -8339,8 +8343,12 @@ export class UnifiedImageProcessor extends EventEmitter {
       const currentUserId = authState.isAuthenticated ? authState.user?.id : null;
       if (!currentUserId) return;
 
+      // On a resume, `processed` counts only THIS run's images — add the already-done baseline
+      // so the DB row reflects the cumulative progress (and so a re-interruption mid-resume
+      // doesn't under-report what's been done).
+      const cumulativeProcessed = processed + (this.config.resumePriorDoneCount || 0);
       const patch: Record<string, unknown> = {
-        processed_images: processed,
+        processed_images: cumulativeProcessed,
         updated_at: new Date().toISOString(),
       };
       if (fail) {
@@ -8457,6 +8465,7 @@ export class UnifiedImageProcessor extends EventEmitter {
     // (i chunk mantengono i contatori globali impostati da processBatchInChunks)
     // Se totalImages è già maggiore del batch corrente, siamo in modalità chunk
     const isChunkProcessing = this.totalImages > imageFiles.length;
+    const isResume = !!this.config.resumeExecutionId;
     if (!isChunkProcessing) {
       this.totalImages = imageFiles.length;
       this.processedImages = 0;
@@ -8485,12 +8494,13 @@ export class UnifiedImageProcessor extends EventEmitter {
         const userId = authState.isAuthenticated ? authState.user?.id : 'anonymous';
 
         // For chunked processing, use appendMode so subsequent chunks don't overwrite
-        // the JSONL file created by the first chunk
+        // the JSONL file created by the first chunk. On a RESUME we likewise append, so the
+        // already-analyzed IMAGE_ANALYSIS lines from the original run are preserved.
         this.analysisLogger = new AnalysisLogger(
           this.config.executionId,
           this.config.category || 'motorsport',
           userId,
-          { appendMode: isChunkProcessing }
+          { appendMode: isChunkProcessing || isResume }
         );
 
         // Capture the start instant ONCE, only on the first chunk. Used at
@@ -8587,24 +8597,31 @@ export class UnifiedImageProcessor extends EventEmitter {
           this.summaryFolderPath = sourceFolderForLog;
         }
 
-        this.analysisLogger.logExecutionStart(
-          totalImageCount,
-          this.config.presetId,
-          this.systemEnvironment, // Optional enhanced telemetry
-          this.config.presetId ? {
-            id: this.config.presetId,
-            name: this.config.presetName || 'Unknown',
-            participantCount: this.config.participantPresetData?.length || 0
-          } : undefined,
-          sourceFolderForLog
-        );
+        // On a RESUME the original EXECUTION_START already lives in the appended JSONL — do
+        // NOT write a second one. The scanner reads the FIRST EXECUTION_START for the total,
+        // so a duplicate would be misleading and the original (full-folder) total must stand.
+        if (!isResume) {
+          this.analysisLogger.logExecutionStart(
+            totalImageCount,
+            this.config.presetId,
+            this.systemEnvironment, // Optional enhanced telemetry
+            this.config.presetId ? {
+              id: this.config.presetId,
+              name: this.config.presetName || 'Unknown',
+              participantCount: this.config.participantPresetData?.length || 0
+            } : undefined,
+            sourceFolderForLog
+          );
+        }
 
-        if (DEBUG_MODE) console.log(`[UnifiedProcessor] Analysis logging enabled for execution ${this.config.executionId} (total: ${totalImageCount} images)`);
+        if (DEBUG_MODE) console.log(`[UnifiedProcessor] Analysis logging ${isResume ? 'resumed (append)' : 'enabled'} for execution ${this.config.executionId} (total: ${totalImageCount} images)`);
       }
 
       // CREATE EXECUTION RECORD IN DATABASE (only on first chunk or non-chunked processing)
-      // Skip for subsequent chunks to avoid overwriting total_images with chunk size
-      if (!isChunkProcessing || this.processedImages === 0) try {
+      // Skip for subsequent chunks to avoid overwriting total_images with chunk size.
+      // Skip on RESUME: the row already exists (reopened to 'processing' by main.ts); upserting
+      // would reset total_images/processed_images to the subset and regenerate name/project.
+      if ((!isChunkProcessing || this.processedImages === 0) && !isResume) try {
         const { getSupabaseClient } = await import('./database-service');
         const { authService: auth } = await import('./auth-service');
         const supabase = getSupabaseClient();
@@ -9496,7 +9513,9 @@ export class UnifiedImageProcessor extends EventEmitter {
           completedAt: new Date().toISOString(),
           status: finalStatus,
           sportCategory: this.config.category || 'motorsport',
-          totalImages: results.length,
+          // On a resume `results` is only this run's subset — add the prior-done baseline so the
+          // recovery sidecar (a fallback when the JSONL is unreadable) reports the full set.
+          totalImages: results.length + (this.config.resumePriorDoneCount || 0),
           imagesWithNumbers,
           folderPath: this.summaryFolderPath,
           executionName: null,
@@ -9595,7 +9614,11 @@ export class UnifiedImageProcessor extends EventEmitter {
         const authState = auth.getAuthState();
         const currentUserId = authState.isAuthenticated ? authState.user?.id : null;
 
-        if (currentUserId && this.config.executionId) {
+        // On a RESUME the processor sees only this run's subset, so it must NOT write the
+        // terminal processed_images/total_images here — main.ts is the single writer of the
+        // resumed row's final counts (priorDoneCount + this run), avoiding a subset/cumulative
+        // disagreement and a fragile write-ordering dependency.
+        if (currentUserId && this.config.executionId && !isResume) {
           // Get current execution_settings from database (with timeout)
           const execSelectPromise = supabase
             .from('executions')

@@ -130,6 +130,7 @@ export { getMainWindow, setMainWindow, safeSend, safeSendToSender } from './cont
 export { getGlobalCsvData, setGlobalCsvData } from './context';
 export { getBatchConfig, setBatchConfig } from './context';
 export { isBatchProcessingCancelled, setBatchProcessingCancelled } from './context';
+export { getActiveProcessingExecutionId, setActiveProcessingExecutionId } from './context';
 export { getSupabase, getSupabaseImageUrlCache } from './context';
 export { isForceUpdateRequired, setVersionCheckResult, getVersionCheckResult } from './context';
 

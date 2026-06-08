@@ -31,7 +31,7 @@ const validSendReceiveChannels: string[] = [
   // General processing channels
   'processing-started', 'processing-progress', 'processing-file-started',
   'processing-phase-changed', 'processing-completed', 'processing-error',
-  'processing-paused', 'processing-resumed',
+  'processing-paused', 'processing-resumed', 'analysis-aborted',
   // Unified processor and temporal analysis channels
   'unified-processing-started',
   'temporal-analysis-started', 'temporal-batch-progress', 'temporal-analysis-complete',
@@ -111,6 +111,7 @@ const validInvokeChannels: string[] = [
   'load-csv',
   'download-csv-template',
   'analyze-folder',
+  'resume-analysis',
   'extract-raw-preview',
   // Enhanced File Browser Operations
   'dialog-show-open',

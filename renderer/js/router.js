@@ -295,6 +295,13 @@
         if (typeof window.loadLastAnalysisSettings === 'function') {
           window.loadLastAnalysisSettings();
         }
+
+        // If Home navigated here to resume an interrupted run, switch straight into the
+        // live progress view (the resume job is already running in the main process). Must
+        // run last, after the DOM is rebuilt and settings restored, so nothing overwrites it.
+        if (typeof window.enterResumeProcessingView === 'function') {
+          window.enterResumeProcessingView();
+        }
         break;
       }
     }
