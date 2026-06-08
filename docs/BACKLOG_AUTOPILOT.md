@@ -1,5 +1,11 @@
 # Backlog Autopilot · operator guide
 
+> ## ⚠️ RITIRATO (2026-06-08)
+> Questo sistema è **ritirato** e sostituito dalla **routine di triage Claude** (vedi
+> [`ISSUE_TRIAGE_ROUTINE.md`](./ISSUE_TRIAGE_ROUTINE.md) e [`ROUTINES_REGISTRY.md`](./ROUTINES_REGISTRY.md)).
+> I workflow `backlog-autopilot-sweep.yml` / `-implement.yml` hanno il **cron commentato + `if: false`**.
+> Questo documento resta solo come **riferimento storico / procedura di rollback**.
+
 GitHub Actions–based pipeline that picks one open issue, decides if it's still relevant, and opens a small draft PR (≤50 lines, ≤3 files) with a fix. Always reviewed by a second Claude run (devil-advocate pattern) before being marked ready. Never auto-merges.
 
 **Design doc**: [.studio/state/2026-05-19-backlog-autopilot-build-kickoff.md](../.studio/state/2026-05-19-backlog-autopilot-build-kickoff.md)
