@@ -26,6 +26,17 @@
 - Secret a runtime (MAI loggare/echo): `SUPABASE_SERVICE_ROLE_KEY`, `GH_TOKEN`/`GITHUB_PAT`.
 - Brand/tone per qualsiasi testo verso il cliente: `racetagger-app/brand-docs/support-voice.md` (+ `brand-voice.md`).
 
+## Modalità di trigger (per non confondere routine multiple)
+
+Questa routine può partire in due modi; il comportamento dipende dalla riga `TRIGGER` nel payload `text`:
+
+- **Fire MIRATO** (da Edge Function su nuovo ticket/azione cliente) — il `text` contiene:
+  `TRIGGER source=support-triage mode=customer-triage ticket_id=<uuid> github_issue_number=<n> repo=fedepasi/racetagger-desktop-v2`
+  → esegui **solo** il **Percorso CLIENTE (Passo 2)** per **quel** `ticket_id`. **Salta il Passo 1**, non toccare altre issue/ticket.
+- **Run schedulata / manuale** (nessuna riga `TRIGGER`) → comportati come da **Passo 1**: scansiona la coda e lavora i candidati con idempotenza.
+
+**Identità** (audit + distinzione da altre routine): `agent_name = triage-routine-remote` (questa, cloud). Elenco completo di tutte le routine, ID `trig_…` e chi le lancia → `docs/ROUTINES_REGISTRY.md`.
+
 ## Guardrail GLOBALI — MAI violare (tutti i percorsi)
 
 Se un fix richiede di toccare **una qualsiasi** di queste aree, **NON** implementare: per i ticket clienti
@@ -57,6 +68,8 @@ Prima di agire su una issue N:
 
 ## Passo 1 — Trova le issue da lavorare
 
+> **Salta questo passo** se il trigger conteneva una riga `TRIGGER … mode=customer-triage ticket_id=…`: vai diretto al **Passo 2** su quel singolo ticket (vedi "Modalità di trigger").
+
 ```bash
 # Ticket clienti in attesa di triage (creati dal webhook → support-triage EF)
 curl -sS "$SUPABASE_URL/rest/v1/support_tickets?status=eq.triaging&select=id,user_id,github_repo,github_issue_number,category,language,current_round,created_at&order=created_at.asc" \
@@ -84,7 +97,7 @@ Per ogni `support_tickets` in `triaging`:
    `support_triage_runs?ticket_id=eq.$TID&select=round,claude_decision,claude_output,created_at&order=round.asc`;
    eventuali risposte `support_followup_forms?ticket_id=eq.$TID&status=eq.submitted&select=round,schema,answers&order=round.desc&limit=1`.
    Continuità utente: `support_tickets?user_id=eq.$UID&select=github_issue_number,status,category,created_at` (per vedere problemi passati dello stesso utente — utile nella scheda user-profiles).
-2. **Indaga il codice/DB** per individuare la causa (Grep/Glob su desktop + web; hot spot: `src/unified-image-processor.ts`, `src/utils/raw-preview-native.ts`, `src/matching/smart-matcher.ts`, `supabase/functions/analyzeImageDesktopV6/`). Rispetta i guardrail globali.
+2. **Indaga il codice/DB** per individuare la causa (Grep/Glob su desktop + web; hot spot: `src/unified-image-processor.ts`, `src/utils/raw-preview-native.ts`, `src/matching/smart-matcher.ts`, `supabase/functions/analyzeImageDesktopV7/` — **V7 è la versione corrente**; verifica sempre con `ls supabase/functions/` perché evolve). Rispetta i guardrail globali.
 3. **Decidi** una di: `ask_user` | `ready_to_implement` | `reject` | `duplicate` (multilingua: rispondi nella lingua dell'utente; `ask_user` = form di MAX 4 campi; se hai già chiesto 2 volte e manca ancora info → `reject` con nota "needs human triage").
 4. **Scrivi nella pipeline** (NON commentare la issue, NON aprire PR qui): POST su `support_triage_runs` con `round = max+1`, poi PATCH `support_tickets` → `status='pending_review'`, `language`, `current_round`. Poi chiama `notify-support-review` per avvisare Fede. **Lascia `review_action`/`reviewed_at` non valorizzati** (default NULL): il portale mostra in coda **solo** le righe con `review_action IS NULL`; quando approvi/modifichi/rifiuti, `support-action-approve` valorizza `review_action` e la riga esce dalla coda.
 
