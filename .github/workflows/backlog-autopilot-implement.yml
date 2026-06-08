@@ -33,6 +33,7 @@ env:
 
 jobs:
   implement:
+    if: false  # DISABLED 2026-06-08 — autopilot retired (triage routine takes over). Reversible: remove this line.
     runs-on: ubuntu-latest
     permissions:
       contents: write       # branch + commit

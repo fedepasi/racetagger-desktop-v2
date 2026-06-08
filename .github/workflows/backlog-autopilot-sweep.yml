@@ -8,8 +8,10 @@ name: Backlog Autopilot · Sweep
 # Design: .studio/state/2026-05-19-backlog-autopilot-build-kickoff.md
 
 on:
-  schedule:
-    - cron: '0 6 * * *'  # daily 06:00 UTC (08:00 IT in estate) — aligned with studio-autotune
+  # DISABLED 2026-06-08 — Backlog Autopilot retired; replaced by the issue-triage routine
+  # (see docs/ISSUE_TRIAGE_ROUTINE.md). Reversible: uncomment the schedule block below.
+  # schedule:
+  #   - cron: '0 6 * * *'  # daily 06:00 UTC (08:00 IT in estate) — aligned with studio-autotune
   workflow_dispatch:
     inputs:
       max_issues:
@@ -30,6 +32,7 @@ env:
 
 jobs:
   select-and-dispatch:
+    if: false  # DISABLED 2026-06-08 — autopilot retired (triage routine takes over). Reversible: remove this line.
     runs-on: ubuntu-latest
     permissions:
       contents: read
