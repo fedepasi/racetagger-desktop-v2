@@ -120,7 +120,7 @@ jobs:
             FINGERPRINT=$(echo "$MAPPING" | jq -r '.[0].fingerprint // empty')
 
             if [ -n "$FINGERPRINT" ]; then
-              curl -sS "$SUPABASE_URL/rest/v1/error_reports?fingerprint=eq.$FINGERPRINT&select=last_seen,occurrence_count,user_count,first_seen,error_type,first_message" \
+              curl -sS "$SUPABASE_URL/rest/v1/error_reports?fingerprint=eq.$FINGERPRINT&select=last_seen:last_seen_at,occurrence_count:total_occurrences,user_count:affected_user_count,first_seen:first_seen_at,error_type,first_message:error_message" \
                 -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
                 -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" > /tmp/error_report.json
             fi
