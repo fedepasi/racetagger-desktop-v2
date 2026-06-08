@@ -264,7 +264,7 @@ export function registerFeedbackHandlers(): void {
   // ==================== OPEN GITHUB ISSUES ====================
 
   ipcMain.handle('open-github-issues', async () => {
-    await shell.openExternal('https://github.com/federicopasinetti/racetagger-clean/issues');
+    await shell.openExternal('https://github.com/fedepasi/racetagger-desktop-v2/issues');
     return true;
   });
 

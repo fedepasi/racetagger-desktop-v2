@@ -1,4 +1,4 @@
-// racetagger-clean/scripts/capture-guide-screenshots.js
+// racetagger-desktop-v2/scripts/capture-guide-screenshots.js
 //
 // Captures real desktop-app screenshots for the website /docs guide, driving the
 // dev Electron build with Playwright `_electron`. Zero token spend: it only
@@ -28,7 +28,7 @@ const path = require('path');
 const os = require('os');
 const { _electron: electron } = require('@playwright/test');
 
-const REPO = path.resolve(__dirname, '..'); // racetagger-clean
+const REPO = path.resolve(__dirname, '..'); // racetagger-desktop-v2
 const ELECTRON_BIN = path.join(REPO, 'node_modules', '.bin', 'electron');
 const APP_READY_SELECTOR = '#main-app-container:not(.hidden)'; // authenticated shell is visible
 

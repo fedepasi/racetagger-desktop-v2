@@ -9,7 +9,7 @@
 # - SQLite database migration file
 # - dcraw macOS install script
 #
-# Run from the racetagger-clean root directory:
+# Run from the racetagger-desktop-v2 root directory:
 #   chmod +x scripts/cleanup-legacy-files.sh
 #   ./scripts/cleanup-legacy-files.sh
 # ============================================================
