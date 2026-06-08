@@ -4707,6 +4707,13 @@ class UnifiedImageWorker extends EventEmitter {
     // Read file ONCE and keep in memory for all operations
     const imageBuffer = await fsPromises.readFile(imagePath);
 
+    // Guard: empty source files cause Sharp to throw the opaque "Input Buffer is empty"
+    // error (issue #155). Fail fast with an actionable message naming the file path so
+    // the per-image error handler in processImage() can surface it cleanly.
+    if (imageBuffer.length === 0) {
+      throw new Error(`Source image file is empty (0 bytes): ${imagePath}`);
+    }
+
     // Get image metadata to calculate optimal quality
     let metadata;
     try {
