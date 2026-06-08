@@ -298,21 +298,27 @@ function renderRecentExecutions(executions) {
       : exec.status === 'failed' ? 'Failed'
       : 'Pending';
 
-    // Cloud-only executions have no local JSONL. Two flavours:
-    //  - interrupted: the run stalled/failed partway, so there is no usable local result
-    //  - cloud: completed elsewhere (another device, or after a reinstall)
-    const cloudBadge = exec.cloudOnly
-      ? (exec.interrupted
-          ? `<span class="status-pill" style="background:rgba(245,158,11,0.15);color:#f59e0b;border:1px solid rgba(245,158,11,0.35);" title="This analysis was interrupted before it finished, so there are no local results to organize. Re-run it to complete.">⚠ Interrupted</span>`
-          : `<span class="status-pill" style="background:rgba(99,179,237,0.15);color:#63b3ed;border:1px solid rgba(99,179,237,0.3);" title="Local data not available. This analysis was completed on another device or local files were removed. Re-running the analysis will restore full functionality.">☁ Cloud</span>`)
-      : '';
+    // Side badge precedence:
+    //  - interrupted (local OR cloud): the run stopped before finishing → amber "⚠ Interrupted"
+    //  - cloud-only but completed elsewhere (another device / reinstall) → blue "☁ Cloud"
+    //  - otherwise → the normal status pill
+    const interruptedBadge = `<span class="status-pill" style="background:rgba(245,158,11,0.15);color:#f59e0b;border:1px solid rgba(245,158,11,0.35);" title="This analysis was interrupted before it finished. Re-run it to complete.">⚠ Interrupted</span>`;
+    const cloudBadge = `<span class="status-pill" style="background:rgba(99,179,237,0.15);color:#63b3ed;border:1px solid rgba(99,179,237,0.3);" title="Local data not available. This analysis was completed on another device or local files were removed. Re-running the analysis will restore full functionality.">☁ Cloud</span>`;
+    // 'completed_with_errors' has no dedicated pill style — render it green like 'completed'
+    // (its label is already "Completed") so it isn't an uncolored pill.
+    const pillClass = exec.status === 'completed_with_errors' ? 'completed' : (exec.status || 'pending');
+    const sideBadge = exec.interrupted ? interruptedBadge
+      : exec.cloudOnly ? cloudBadge
+      : `<span class="status-pill ${escapeHtml(pillClass)}">${statusLabel}</span>`;
+    // Rows with no complete, usable local result: cloud-only OR interrupted.
+    const noLocalResult = exec.cloudOnly || exec.interrupted;
 
     return `
       <div class="card-b${exec.cloudOnly ? ' card-b-cloud-only' : ''}" data-execution-id="${escapeHtml(exec.id)}" ${exec.cloudOnly ? 'data-cloud-only="true"' : ''}${exec.interrupted ? ' data-interrupted="true"' : ''}>
         <div class="card-b-main">
           <div class="title-row">
             <span class="${titleClass}" data-role="title">${escapeHtml(displayName)}</span>
-            ${exec.cloudOnly ? '' : `<button class="rename-btn" data-role="rename" title="Rename analysis" aria-label="Rename analysis">✏️</button>`}
+            ${noLocalResult ? '' : `<button class="rename-btn" data-role="rename" title="Rename analysis" aria-label="Rename analysis">✏️</button>`}
           </div>
           <div class="meta-line">
             <span>${escapeHtml(formattedDate)}</span>
@@ -320,11 +326,11 @@ function renderRecentExecutions(executions) {
             <span>${sportLabel}</span>
             ${presetLabel ? `<span class="sep">·</span><span class="preset-chip">${presetLabel}</span>` : ''}
           </div>
-          ${exec.cloudOnly
-            ? (exec.interrupted
-                ? `<div class="folder-line" style="font-size:11px;color:var(--text-muted,#94a3b8);">⚠️ Interrupted before finishing${(exec.processedImages && exec.totalImages) ? ` — ${exec.processedImages} of ${exec.totalImages} photos analyzed` : ''} · re-run to complete</div>`
-                : `<div class="folder-line" style="font-size:11px;color:var(--text-muted,#94a3b8);">📡 Local data unavailable — completed on another device or after reinstall</div>`)
-            : folderLine}
+          ${exec.interrupted
+            ? `<div class="folder-line" style="font-size:11px;color:var(--text-muted,#94a3b8);">⚠️ Interrupted before finishing${(exec.processedImages && exec.totalImages) ? ` — ${exec.processedImages} of ${exec.totalImages} photos analyzed` : ''} · re-run to complete</div>`
+            : exec.cloudOnly
+                ? `<div class="folder-line" style="font-size:11px;color:var(--text-muted,#94a3b8);">📡 Local data unavailable — completed on another device or after reinstall</div>`
+                : folderLine}
         </div>
         <div class="card-b-side">
           <div class="mini-stats">
@@ -333,15 +339,15 @@ function renderRecentExecutions(executions) {
               <span class="mini-stat-label">Photos</span>
             </div>
             <div class="mini-stat">
-              <span class="mini-stat-value">${exec.cloudOnly ? '—' : exec.imagesWithNumbers}</span>
+              <span class="mini-stat-value">${noLocalResult ? '—' : exec.imagesWithNumbers}</span>
               <span class="mini-stat-label">Detected</span>
             </div>
             <div class="mini-stat">
-              <span class="mini-stat-value success-rate">${exec.cloudOnly ? '—' : successRate + '%'}</span>
+              <span class="mini-stat-value success-rate">${noLocalResult ? '—' : successRate + '%'}</span>
               <span class="mini-stat-label">Success</span>
             </div>
           </div>
-          ${exec.cloudOnly ? cloudBadge : `<span class="status-pill ${escapeHtml(exec.status || 'pending')}">${statusLabel}</span>`}
+          ${sideBadge}
           <button class="delete-execution-btn" data-role="delete" title="Remove from history" aria-label="Remove from history">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
               <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
@@ -370,14 +376,17 @@ function renderRecentExecutions(executions) {
         e.stopPropagation();
         return;
       }
-      // Cloud-only executions have no local JSONL — the results page would be empty.
-      // Show an informational modal instead so the user knows what happened.
+      // Interrupted runs (local OR cloud) stopped before finishing — there's no complete
+      // result to organize. Explain that and point to re-running, rather than opening a
+      // partial/empty results page.
+      if (row.dataset.interrupted === 'true') {
+        showInterruptedModal();
+        return;
+      }
+      // Cloud-only (completed elsewhere) executions have no local JSONL — the results page
+      // would be empty. Show an informational modal instead.
       if (row.dataset.cloudOnly === 'true') {
-        if (row.dataset.interrupted === 'true') {
-          showInterruptedModal();
-        } else {
-          showCloudOnlyModal();
-        }
+        showCloudOnlyModal();
         return;
       }
       openExecutionResults(executionId);

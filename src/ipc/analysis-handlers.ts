@@ -13,7 +13,7 @@ import { setBatchProcessingCancelled } from './context';
 import { DEBUG_MODE } from '../config';
 import { unifiedImageProcessor } from '../unified-image-processor';
 import { AnalysisLogger } from '../utils/analysis-logger';
-import { getSupabaseClient, getUserPlanLimits } from '../database-service';
+import { getSupabaseClient, getUserPlanLimits, reconcileOrphanExecutions } from '../database-service';
 import { authService } from '../auth-service';
 
 // ==================== Log Reading Utilities ====================
@@ -206,6 +206,54 @@ export function registerAnalysisHandlers(): void {
       executions.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       const top = executions.slice(0, 10);
 
+      // --- Recover interrupted local runs (this device) ---
+      // A local execution still 'processing' that was CREATED IN A PREVIOUS app session
+      // was interrupted here (crash / force-quit before the run could finalize). The
+      // local exec_<id>.jsonl is the proof it ran on THIS machine, so it's safe to treat
+      // as interrupted regardless of the token reservation. We flag it (`interrupted`) so
+      // the UI shows "Interrupted" immediately. Visibility does NOT depend on the DB write
+      // below — re-add dedup vs the cloud fallback is handled by the `localIds` Set there,
+      // and the reconcileOrphanExecutions call is fire-and-forget (it only keeps the DB /
+      // cloud stats consistent and races, so we never rely on it for dedup or display).
+      //
+      // The boot-time guard is what makes this safe: a run started in THIS session is still
+      // genuinely live and must NOT be flagged — only runs that predate this process, which
+      // by definition aren't running anymore.
+      //
+      // Display vs DB-write are deliberately decoupled. The "Interrupted" FLAG uses the bare
+      // boot-time test so even a run killed seconds before a quick relaunch shows correctly.
+      // The DB reconcile (which flips status to 'failed') additionally requires the run to be
+      // comfortably older than boot — a 5-minute margin — so that a backward clock jump (NTP /
+      // DST / manual change) during a genuinely live run can at most cause a brief, self-
+      // correcting "Interrupted" label, never an erroneous 'failed' write that kills a live run.
+      try {
+        const bootTimeMs = Date.now() - process.uptime() * 1000;
+        const RECONCILE_MARGIN_MS = 5 * 60 * 1000;
+        const localInterruptedIds: string[] = [];
+        for (const e of executions as any[]) {
+          if (e && e.status === 'processing' && e.createdAt) {
+            const createdMs = new Date(e.createdAt).getTime();
+            if (createdMs < bootTimeMs) {
+              e.interrupted = true; // display flag — shared object ref, also reflected in `top`
+              if (createdMs < bootTimeMs - RECONCILE_MARGIN_MS) {
+                localInterruptedIds.push(e.id); // only comfortably-old runs are DB-flipped to failed
+              }
+            }
+          }
+        }
+        if (localInterruptedIds.length > 0) {
+          const authState = authService.getAuthState();
+          const uid = authState.isAuthenticated ? authState.user?.id : null;
+          if (uid) {
+            // Fire-and-forget: visibility already comes from the `interrupted` flag above;
+            // this only reconciles the DB (Tier-A local-signal, no reservation wait).
+            Promise.resolve(reconcileOrphanExecutions(uid, localInterruptedIds)).catch(() => { /* non-fatal */ });
+          }
+        }
+      } catch (recoverErr: any) {
+        if (DEBUG_MODE) console.warn('[Analysis] Local interrupted-run recovery failed (non-fatal):', recoverErr?.message ?? recoverErr);
+      }
+
       // --- DB fallback: add cloud executions with no local JSONL to the list ---
       // Recovers from reinstalls, multi-device usage, or corrupted/missing local files.
       // Without this, the home-page stats counter (which reads from the DB) can show more
@@ -219,24 +267,28 @@ export function registerAnalysisHandlers(): void {
             .select('id, name, execution_at, status, processed_images, total_images, source_folder')
             .eq('user_id', authState.user.id)
             // completed/with-errors → ran on another device or local files were lost.
-            // failed / stale-processing → interrupted partway through: surfaced so the
-            // analysis the user was charged for is visible (and recoverable) instead of
-            // silently vanishing from the list.
-            .in('status', ['completed', 'completed_with_errors', 'failed', 'processing'])
+            // failed / stale processing|running → interrupted partway through: surfaced so
+            // the analysis the user was charged for is visible (and recoverable) instead of
+            // silently vanishing. 'running' is included because a very-early interruption
+            // (before the processor upserts the row to 'processing') leaves it at 'running'.
+            .in('status', ['completed', 'completed_with_errors', 'failed', 'processing', 'running'])
             .is('deleted_at', null) // never resurface entries the user deleted
             .order('execution_at', { ascending: false })
             .limit(20);
           if (!dbErr && dbExecs) {
-            // A 'processing' row is only treated as interrupted once it is clearly stale.
-            // Otherwise it is a run currently in progress and must NOT be flagged as broken.
+            // A 'processing'/'running' row is only treated as interrupted once it is clearly
+            // stale. Otherwise it is a run currently in progress and must NOT be flagged broken.
             const STALE_PROCESSING_MS = 90 * 60 * 1000; // 90 min — well beyond a normal large batch
             const now = Date.now();
-            const localIds = new Set(top.map((e: any) => e.id));
+            // Dedup against EVERY locally-scanned execution (not just the visible top-10), so a
+            // local interrupted run beyond the top-10 is never re-added here as a cloud row.
+            const localIds = new Set((executions as any[]).map((e: any) => e.id));
             for (const dbExec of (dbExecs as any[])) {
               if (localIds.has(dbExec.id)) continue; // Already shown from local file
               const ts = dbExec.execution_at ? new Date(dbExec.execution_at).getTime() : now;
-              const isStaleProcessing = dbExec.status === 'processing' && (now - ts) > STALE_PROCESSING_MS;
-              if (dbExec.status === 'processing' && !isStaleProcessing) continue; // live run — skip
+              const inFlightStatus = dbExec.status === 'processing' || dbExec.status === 'running';
+              const isStaleProcessing = inFlightStatus && (now - ts) > STALE_PROCESSING_MS;
+              if (inFlightStatus && !isStaleProcessing) continue; // live run — skip
               const interrupted = dbExec.status === 'failed' || isStaleProcessing;
               top.push({
                 id: dbExec.id,

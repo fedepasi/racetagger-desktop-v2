@@ -275,72 +275,67 @@ export async function updateExecutionOnline(id: string, executionUpdateData: Par
 }
 
 /**
- * Recover orphaned analysis executions for a user: runs stuck as `processing`
- * even though their token reservation has already closed.
+ * Recover analysis executions interrupted ON THIS DEVICE: runs left stuck as `processing`
+ * (or `running`) because the app was closed/crashed mid-batch before they could finalize.
+ * Left alone such a row is a zombie — it looks like work still in progress. We flip it to
+ * `failed` so it stops looking active and surfaces as "Interrupted".
  *
- * That pairing only happens when a run was interrupted before it finished — the
- * app was closed/crashed/lost the network mid-batch, the reservation timed out
- * and was auto-finalized, but the execution row never reached a terminal state.
- * Left alone it's a zombie: it looks like work that's still in progress and is
- * indistinguishable from a live run, so the home page can't surface it.
+ * The caller passes `locallyIncompleteIds`: execution ids it has PROVEN are interrupted
+ * here, because a local `exec_<id>.jsonl` exists that started but never logged completion.
+ * That file is on THIS machine and the process has since restarted, so the run died here —
+ * it cannot still be live. (A run live in the CURRENT session is excluded by the caller's
+ * boot-time guard, and survives a laptop sleep because the same process resumes it: its id
+ * is never in this list.) `running` is included because the local JSONL is written before
+ * the processor upserts the row from `running` to `processing`, so a very-early interruption
+ * can leave it `running`.
  *
- * We flip those rows to `failed` so they show up (as "Interrupted") and stop
- * looking active. **Safety:** we only touch executions whose reservation is
- * already terminal (`finalized` / `auto_finalized`), so a run genuinely in
- * progress on another device — whose reservation is still open — is never
- * affected. Best-effort and non-throwing; intended to be fired-and-forgotten on
- * login/startup.
+ * Deliberately there is NO reservation-based recovery for runs we CANNOT prove locally
+ * (other device / reinstall / deleted local log). A token reservation can be `auto_finalized`
+ * by the TTL cron while a run is still genuinely live (e.g. the laptop slept past the 30-min
+ * TTL floor, and small batches never refresh `updated_at` mid-run), so reservation status is
+ * NOT a safe liveness signal and must never drive a `failed` write. Those runs are instead
+ * surfaced as "Interrupted" by the home page's display-only staleness heuristic — no DB write,
+ * no risk of clobbering a live run.
  *
- * @returns the number of executions marked failed (0 on any error).
+ * Best-effort and non-throwing; fired-and-forgotten from the home-open handler.
+ *
+ * @returns the number of executions actually marked failed (0 on any error / nothing to do).
  */
-export async function reconcileOrphanExecutions(userId?: string): Promise<number> {
+export async function reconcileOrphanExecutions(userId?: string, locallyIncompleteIds?: string[]): Promise<number> {
   const uid = userId ?? getCurrentUserId();
   if (!uid) return 0;
 
+  const ids = Array.isArray(locallyIncompleteIds)
+    ? Array.from(new Set(locallyIncompleteIds.filter((x): x is string => typeof x === 'string' && x.length > 0)))
+    : [];
+  if (ids.length === 0) return 0;
+
   try {
     const client = getSupabaseClient();
-
-    // 1) Candidates: this user's executions still marked 'processing'.
-    const { data: stuck, error: stuckErr } = await client
-      .from('executions')
-      .select('id')
-      .eq('user_id', uid)
-      .eq('status', 'processing')
-      .is('deleted_at', null)
-      .limit(50);
-    if (stuckErr || !stuck || stuck.length === 0) return 0;
-
-    // 2) Keep only those whose token reservation has already closed (run is over).
-    const ids: string[] = stuck.map((e: { id: string }) => e.id);
-    const { data: deadRes, error: resErr } = await client
-      .from('batch_token_reservations')
-      .select('batch_id')
-      .in('batch_id', ids)
-      .in('status', ['finalized', 'auto_finalized']);
-    if (resErr || !deadRes || deadRes.length === 0) return 0;
-
-    const orphanIds = Array.from(new Set(deadRes.map((r: { batch_id: string }) => r.batch_id)));
-    if (orphanIds.length === 0) return 0;
-
-    // 3) Flip them to 'failed'. The status guard keeps this idempotent and means
-    //    we never clobber a row that finished in the meantime.
-    const { error: updErr } = await client
+    // The status + deleted_at guards keep this idempotent and ensure we only ever flip a row
+    // that is genuinely still mid-flight (never one that finalized in the meantime). .select()
+    // returns the rows actually updated, so the count reflects real writes.
+    const { data: updated, error: updErr } = await client
       .from('executions')
       .update({
         status: 'failed',
-        error_summary: { reason: 'interrupted_recovered', recovered_at: new Date().toISOString() },
+        error_summary: { reason: 'interrupted_local', recovered_at: new Date().toISOString() },
         updated_at: new Date().toISOString(),
       })
-      .in('id', orphanIds)
+      .in('id', ids)
       .eq('user_id', uid)
-      .eq('status', 'processing');
+      .in('status', ['processing', 'running'])
+      .is('deleted_at', null)
+      .select('id');
     if (updErr) {
-      console.warn('[OrphanReconcile] Failed to mark orphan executions (non-fatal):', updErr.message);
+      console.warn('[OrphanReconcile] Failed to mark interrupted executions (non-fatal):', updErr.message);
       return 0;
     }
-
-    console.log(`[OrphanReconcile] Marked ${orphanIds.length} interrupted execution(s) as failed for user ${uid}`);
-    return orphanIds.length;
+    const marked = updated?.length ?? 0;
+    if (marked > 0) {
+      console.log(`[OrphanReconcile] Marked ${marked} interrupted execution(s) as failed for user ${uid}`);
+    }
+    return marked;
   } catch (err) {
     console.warn('[OrphanReconcile] Reconcile error (non-fatal):', err instanceof Error ? err.message : err);
     return 0;
