@@ -195,14 +195,21 @@ jobs:
             decision = ask_user. Only include `implementation_plan` when
             decision = ready_to_implement. `related_issues` is optional.
 
-            POST it with:
+            POST it as an IDEMPOTENT UPSERT. The table has a UNIQUE index on
+            (ticket_id, round) (`support_triage_runs_ticket_round_uidx`), so use
+            `on_conflict=ticket_id,round` + `Prefer: resolution=merge-duplicates`.
+            That way, if the primary triage routine already wrote this
+            (ticket_id, round), you UPDATE it in place instead of creating a
+            duplicate row that would clutter the support queue. merge-duplicates
+            only rewrites the columns in the payload, so any human review fields
+            (review_action / reviewed_at) on an existing row are preserved.
 
             ```bash
-            curl -sS -X POST "$SUPABASE_URL/rest/v1/support_triage_runs" \
+            curl -sS -X POST "$SUPABASE_URL/rest/v1/support_triage_runs?on_conflict=ticket_id,round" \
               -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
               -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
               -H "Content-Type: application/json" \
-              -H "Prefer: return=minimal" \
+              -H "Prefer: return=minimal,resolution=merge-duplicates" \
               --data-binary @/tmp/decision.json
             ```
 

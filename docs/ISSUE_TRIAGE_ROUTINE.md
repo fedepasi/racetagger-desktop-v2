@@ -60,6 +60,7 @@ Prima di agire su una issue N:
     -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" | jq -r '.[0].created_at // empty')
   # se LAST esiste e (now - LAST) < 900s → skip: un'altra run (locale/remota) o l'Action ha già triagiato
   ```
+  Il guard temporale è la prima linea; il **backstop a livello DB** è l'indice UNIQUE `(ticket_id, round)`: anche se due run sfuggono al guard, l'upsert idempotente (Passo 2 punto 4) garantisce **una sola riga** per giro e nessun doppione in coda.
 - **Interna:** salta se esiste una riga `agent_decisions` per quella issue **< 15 min** fa, o se esiste già una
   PR aperta della routine per quella issue (branch `triage-routine/issue-N-*`).
 - Logga sempre su `agent_decisions` con `agent_name` = `triage-routine-remote` (copia remota) o `triage-routine-local` (mirror locale), così l'audit distingue chi ha agito.
@@ -99,7 +100,18 @@ Per ogni `support_tickets` in `triaging`:
    Continuità utente: `support_tickets?user_id=eq.$UID&select=github_issue_number,status,category,created_at` (per vedere problemi passati dello stesso utente — utile nella scheda user-profiles).
 2. **Indaga il codice/DB** per individuare la causa (Grep/Glob su desktop + web; hot spot: `src/unified-image-processor.ts`, `src/utils/raw-preview-native.ts`, `src/matching/smart-matcher.ts`, `supabase/functions/analyzeImageDesktopV7/` — **V7 è la versione corrente**; verifica sempre con `ls supabase/functions/` perché evolve). Rispetta i guardrail globali.
 3. **Decidi** una di: `ask_user` | `ready_to_implement` | `reject` | `duplicate` (multilingua: rispondi nella lingua dell'utente; `ask_user` = form di MAX 4 campi; se hai già chiesto 2 volte e manca ancora info → `reject` con nota "needs human triage").
-4. **Scrivi nella pipeline** (NON commentare la issue, NON aprire PR qui): POST su `support_triage_runs` con `round = max+1`, poi PATCH `support_tickets` → `status='pending_review'`, `language`, `current_round`. Poi chiama `notify-support-review` per avvisare Fede. **Lascia `review_action`/`reviewed_at` non valorizzati** (default NULL): il portale mostra in coda **solo** le righe con `review_action IS NULL`; quando approvi/modifichi/rifiuti, `support-action-approve` valorizza `review_action` e la riga esce dalla coda.
+4. **Scrivi nella pipeline** (NON commentare la issue, NON aprire PR qui): **UPSERT** su `support_triage_runs` con `round = max+1` (1 per il primo giro), poi PATCH `support_tickets` → `status='pending_review'`, `language`, `current_round`. Poi chiama `notify-support-review` per avvisare Fede. **Lascia `review_action`/`reviewed_at` non valorizzati** (default NULL): il portale mostra in coda **solo** le righe con `review_action IS NULL`; quando approvi/modifichi/rifiuti, `support-action-approve` valorizza `review_action` e la riga esce dalla coda.
+
+   **Scrivi la riga UNA sola volta — upsert idempotente.** La tabella ha un indice UNIQUE su `(ticket_id, round)` (`support_triage_runs_ticket_round_uidx`, migration `20260608150000`). Usa SEMPRE l'upsert su quel conflict target, così una doppia esecuzione (remota+locale, o tu + l'Action airbag) **aggiorna** la riga invece di crearne una gemella che intaserebbe la coda. `merge-duplicates` riscrive solo i campi nel payload → `review_action`/`reviewed_at`/`reviewed_by` di un'eventuale riga già revisionata restano intatti.
+   ```bash
+   # on_conflict=ticket_id,round + Prefer: resolution=merge-duplicates → UPSERT idempotente
+   curl -sS -X POST "$SUPABASE_URL/rest/v1/support_triage_runs?on_conflict=ticket_id,round" \
+     -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+     -H "Content-Type: application/json" \
+     -H "Prefer: return=minimal,resolution=merge-duplicates" \
+     --data-binary @/tmp/decision.json
+   ```
+   Se per qualunque motivo NON usi `merge-duplicates` e ricevi un **409 (duplicate key)**, è benigno: significa che un'altra run/l'Action ha già scritto quella `(ticket_id, round)` → **non è un errore**, prosegui col PATCH e la notifica senza ritentare l'insert.
 
    Schema `claude_output` (identico a quello dell'Action, per non rompere il portale):
    ```json
