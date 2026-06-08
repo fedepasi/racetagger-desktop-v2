@@ -293,16 +293,23 @@ function renderRecentExecutions(executions) {
           : '');
 
     const statusLabel = exec.status === 'completed' ? 'Completed'
+      : exec.status === 'completed_with_errors' ? 'Completed'
       : exec.status === 'processing' ? 'Processing'
       : exec.status === 'failed' ? 'Failed'
       : 'Pending';
 
+    // Cloud-only executions have no local JSONL — results were run on another device
+    // or local files were lost after a reinstall. We show them so the counter matches.
+    const cloudBadge = exec.cloudOnly
+      ? `<span class="status-pill" style="background:rgba(99,179,237,0.15);color:#63b3ed;border:1px solid rgba(99,179,237,0.3);" title="Local data not available. This analysis was completed on another device or local files were removed. Re-running the analysis will restore full functionality.">☁ Cloud</span>`
+      : '';
+
     return `
-      <div class="card-b" data-execution-id="${escapeHtml(exec.id)}">
+      <div class="card-b${exec.cloudOnly ? ' card-b-cloud-only' : ''}" data-execution-id="${escapeHtml(exec.id)}" ${exec.cloudOnly ? 'data-cloud-only="true"' : ''}>
         <div class="card-b-main">
           <div class="title-row">
             <span class="${titleClass}" data-role="title">${escapeHtml(displayName)}</span>
-            <button class="rename-btn" data-role="rename" title="Rename analysis" aria-label="Rename analysis">✏️</button>
+            ${exec.cloudOnly ? '' : `<button class="rename-btn" data-role="rename" title="Rename analysis" aria-label="Rename analysis">✏️</button>`}
           </div>
           <div class="meta-line">
             <span>${escapeHtml(formattedDate)}</span>
@@ -310,7 +317,9 @@ function renderRecentExecutions(executions) {
             <span>${sportLabel}</span>
             ${presetLabel ? `<span class="sep">·</span><span class="preset-chip">${presetLabel}</span>` : ''}
           </div>
-          ${folderLine}
+          ${exec.cloudOnly
+            ? `<div class="folder-line" style="font-size:11px;color:var(--text-muted,#94a3b8);">📡 Local data unavailable — completed on another device or after reinstall</div>`
+            : folderLine}
         </div>
         <div class="card-b-side">
           <div class="mini-stats">
@@ -319,15 +328,15 @@ function renderRecentExecutions(executions) {
               <span class="mini-stat-label">Photos</span>
             </div>
             <div class="mini-stat">
-              <span class="mini-stat-value">${exec.imagesWithNumbers}</span>
+              <span class="mini-stat-value">${exec.cloudOnly ? '—' : exec.imagesWithNumbers}</span>
               <span class="mini-stat-label">Detected</span>
             </div>
             <div class="mini-stat">
-              <span class="mini-stat-value success-rate">${successRate}%</span>
+              <span class="mini-stat-value success-rate">${exec.cloudOnly ? '—' : successRate + '%'}</span>
               <span class="mini-stat-label">Success</span>
             </div>
           </div>
-          <span class="status-pill ${escapeHtml(exec.status || 'pending')}">${statusLabel}</span>
+          ${exec.cloudOnly ? cloudBadge : `<span class="status-pill ${escapeHtml(exec.status || 'pending')}">${statusLabel}</span>`}
           <button class="delete-execution-btn" data-role="delete" title="Remove from history" aria-label="Remove from history">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
               <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
@@ -354,6 +363,12 @@ function renderRecentExecutions(executions) {
         // Reserved: in the future, clicking a gallery badge can navigate to the gallery
         // detail page. For now we just prevent the row click from firing.
         e.stopPropagation();
+        return;
+      }
+      // Cloud-only executions have no local JSONL — the results page would be empty.
+      // Show an informational modal instead so the user knows what happened.
+      if (row.dataset.cloudOnly === 'true') {
+        showCloudOnlyModal();
         return;
       }
       openExecutionResults(executionId);
@@ -567,6 +582,39 @@ function enterRenameMode(row, executionId) {
 /**
  * Open execution results in the dedicated results page
  */
+/**
+ * Show an informational modal explaining why a cloud-only execution can't be opened locally.
+ */
+function showCloudOnlyModal() {
+  const existing = document.getElementById('cloud-only-modal');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'cloud-only-modal';
+  overlay.className = 'delete-modal-overlay';
+  overlay.innerHTML = `
+    <div class="delete-modal" role="dialog" aria-modal="true" aria-labelledby="cloud-only-title">
+      <h3 id="cloud-only-title" class="delete-modal-title">☁ Analysis on Another Device</h3>
+      <p class="delete-modal-body">
+        This analysis was completed on a different device or the local data was removed after a reinstall.
+        The results are stored in the cloud but cannot be re-organized on this device without the original files and local data.<br><br>
+        To restore full functionality, re-run the analysis on this device with the same folder.
+      </p>
+      <div class="delete-modal-actions">
+        <button type="button" class="delete-modal-btn delete-modal-btn-cancel" data-role="close">Close</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const cleanup = () => overlay.remove();
+  overlay.addEventListener('click', (ev) => { if (ev.target === overlay) cleanup(); });
+  overlay.querySelector('[data-role="close"]').addEventListener('click', cleanup);
+  document.addEventListener('keydown', function onKey(ev) {
+    if (ev.key === 'Escape') { ev.preventDefault(); cleanup(); document.removeEventListener('keydown', onKey); }
+  });
+}
+
 window.openExecutionResults = function(executionId) {
   console.log('[Home] Opening execution results:', executionId);
   // Navigate to results page with execution ID

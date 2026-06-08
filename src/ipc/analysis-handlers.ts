@@ -206,6 +206,46 @@ export function registerAnalysisHandlers(): void {
       executions.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       const top = executions.slice(0, 10);
 
+      // --- DB fallback: add cloud executions with no local JSONL to the list ---
+      // Recovers from reinstalls, multi-device usage, or corrupted/missing local files.
+      // Without this, the home-page stats counter (which reads from the DB) can show more
+      // executions than the Recent Analyses list (which reads local files), confusing users.
+      try {
+        const authState = authService.getAuthState();
+        if (authState.isAuthenticated && authState.user?.id) {
+          const supabase = getSupabaseClient();
+          const { data: dbExecs, error: dbErr } = await supabase
+            .from('executions')
+            .select('id, name, execution_at, status, processed_images, source_folder')
+            .eq('user_id', authState.user.id)
+            .in('status', ['completed', 'completed_with_errors'])
+            .order('execution_at', { ascending: false })
+            .limit(20);
+          if (!dbErr && dbExecs) {
+            const localIds = new Set(top.map((e: any) => e.id));
+            for (const dbExec of (dbExecs as any[])) {
+              if (localIds.has(dbExec.id)) continue; // Already shown from local file
+              top.push({
+                id: dbExec.id,
+                createdAt: dbExec.execution_at || new Date().toISOString(),
+                status: dbExec.status,
+                sportCategory: 'motorsport',
+                totalImages: dbExec.processed_images || 0,
+                imagesWithNumbers: 0,
+                folderPath: dbExec.source_folder || '',
+                executionName: dbExec.name || null,
+                participantPreset: null,
+                delivery: null,
+                cloudOnly: true, // Signals renderer to show "no local data" indicator
+              });
+            }
+            top.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          }
+        }
+      } catch (dbFallbackErr: any) {
+        if (DEBUG_MODE) console.warn('[Analysis] DB fallback for cloud executions failed (non-fatal):', (dbFallbackErr as any)?.message ?? dbFallbackErr);
+      }
+
       // ---- Delivery enrichment (feature-flagged, batched) ----
       try {
         const authState = authService.getAuthState();
