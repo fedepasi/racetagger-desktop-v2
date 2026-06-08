@@ -806,6 +806,20 @@ export class AuthService {
           console.warn('[Auth] Failed to schedule JSONL reconciliation (non-critical):', reconErr?.message ?? reconErr);
         }
 
+        // Recover orphaned executions left stuck as 'processing' by an interrupted
+        // run (app closed / crash mid-batch). Marks them 'failed' so they surface
+        // as "Interrupted" instead of lingering as zombie rows. Best-effort,
+        // never blocks login. See reconcileOrphanExecutions for the safety gate.
+        try {
+          const { reconcileOrphanExecutions } = require('./database-service');
+          const uid = this.authState.user?.id;
+          if (uid) {
+            Promise.resolve(reconcileOrphanExecutions(uid)).catch(() => { /* non-fatal */ });
+          }
+        } catch (orphanErr: any) {
+          console.warn('[Auth] Failed to schedule orphan-execution reconcile (non-critical):', orphanErr?.message ?? orphanErr);
+        }
+
         return {
           success: true,
           user: data.user,

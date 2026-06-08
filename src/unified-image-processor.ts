@@ -8316,57 +8316,121 @@ export class UnifiedImageProcessor extends EventEmitter {
   /**
    * Processa un batch molto grande in chunk più piccoli
    */
+  /**
+   * Best-effort, time-boxed write of how far the current execution has gotten.
+   *
+   * Called after each non-final chunk so an interrupted run (app closed, crash,
+   * or network drop mid-batch) leaves a truthful `processed_images` in the DB
+   * instead of being stuck at 0 — and, when `fail` is set, flips the row to
+   * `failed` so it doesn't linger as a zombie `processing` row that the home
+   * page can't tell apart from a live run.
+   *
+   * The terminal `completed` / `completed_with_errors` write still happens in the
+   * FINALIZE path on the last chunk. The `status = processing` guard makes this
+   * idempotent and means we never clobber a row that has already finalized.
+   */
+  private async persistExecutionProgress(processed: number, fail?: { error: string }): Promise<void> {
+    if (!this.config.executionId) return;
+    try {
+      const { getSupabaseClient } = await import('./database-service');
+      const { authService: auth } = await import('./auth-service');
+      const supabase = getSupabaseClient();
+      const authState = auth.getAuthState();
+      const currentUserId = authState.isAuthenticated ? authState.user?.id : null;
+      if (!currentUserId) return;
+
+      const patch: Record<string, unknown> = {
+        processed_images: processed,
+        updated_at: new Date().toISOString(),
+      };
+      if (fail) {
+        patch.status = 'failed';
+        patch.error_summary = {
+          reason: 'interrupted',
+          message: (fail.error || '').slice(0, 500),
+          failed_at: new Date().toISOString(),
+        };
+      }
+
+      const update = supabase
+        .from('executions')
+        .update(patch)
+        .eq('id', this.config.executionId)
+        .eq('user_id', currentUserId)
+        .eq('status', 'processing'); // idempotent; never clobber an already-finalized row
+      const timeout = new Promise((resolve) => setTimeout(resolve, 8000));
+      await Promise.race([update, timeout]);
+    } catch (err) {
+      if (DEBUG_MODE) console.warn('[Checkpoint] execution progress persist failed (non-fatal):', err instanceof Error ? err.message : err);
+    }
+  }
+
   private async processBatchInChunks(imageFiles: UnifiedImageFile[]): Promise<UnifiedProcessingResult[]> {
     const chunkSize = 500;
     const allResults: UnifiedProcessingResult[] = [];
 
-    for (let i = 0; i < imageFiles.length; i += chunkSize) {
-      // Check for cancellation before each chunk
-      if (this.config.isCancelled && this.config.isCancelled()) {
-        if (DEBUG_MODE) if (DEBUG_MODE) console.log(`[UnifiedProcessor] Processing cancelled at chunk ${Math.floor(i / chunkSize) + 1}`);
-        break;
-      }
-
-      const chunk = imageFiles.slice(i, i + chunkSize);
-      const chunkNumber = Math.floor(i / chunkSize) + 1;
-      const totalChunks = Math.ceil(imageFiles.length / chunkSize);
-
-      // Forza garbage collection prima di ogni chunk
-      if (global.gc) {
-        global.gc();
-      }
-
-      // Aggiorna i contatori totali per il progress reporting
-      this.totalImages = imageFiles.length;
-      this.processedImages = allResults.length;
-
-      // Processa il chunk (passa true per indicare che è chunk processing)
-      const chunkResults = await this.processBatchInternal(chunk);
-      allResults.push(...chunkResults);
-
-      // Aggiorna progress finale del chunk
-      this.processedImages = allResults.length;
-
-      // Emetti progress per il chunk completato
-      this.emit('imageProcessed', {
-        processed: this.processedImages,
-        total: this.totalImages,
-        ghostVehicleCount: this.ghostVehicleCount,
-        phase: 'recognition',
-        step: 2,
-        totalSteps: 2,
-        progress: Math.round((this.processedImages / this.totalImages) * 100),
-        chunkInfo: {
-          currentChunk: chunkNumber,
-          totalChunks: totalChunks,
-          chunkCompleted: true
+    try {
+      for (let i = 0; i < imageFiles.length; i += chunkSize) {
+        // Check for cancellation before each chunk
+        if (this.config.isCancelled && this.config.isCancelled()) {
+          if (DEBUG_MODE) if (DEBUG_MODE) console.log(`[UnifiedProcessor] Processing cancelled at chunk ${Math.floor(i / chunkSize) + 1}`);
+          break;
         }
-      });
 
-      // Pausa più lunga tra chunk per permettere alla memoria di stabilizzarsi
-      if (chunkNumber < totalChunks) {
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        const chunk = imageFiles.slice(i, i + chunkSize);
+        const chunkNumber = Math.floor(i / chunkSize) + 1;
+        const totalChunks = Math.ceil(imageFiles.length / chunkSize);
+
+        // Forza garbage collection prima di ogni chunk
+        if (global.gc) {
+          global.gc();
+        }
+
+        // Aggiorna i contatori totali per il progress reporting
+        this.totalImages = imageFiles.length;
+        this.processedImages = allResults.length;
+
+        // Processa il chunk (passa true per indicare che è chunk processing)
+        const chunkResults = await this.processBatchInternal(chunk);
+        allResults.push(...chunkResults);
+
+        // Aggiorna progress finale del chunk
+        this.processedImages = allResults.length;
+
+        // Emetti progress per il chunk completato
+        this.emit('imageProcessed', {
+          processed: this.processedImages,
+          total: this.totalImages,
+          ghostVehicleCount: this.ghostVehicleCount,
+          phase: 'recognition',
+          step: 2,
+          totalSteps: 2,
+          progress: Math.round((this.processedImages / this.totalImages) * 100),
+          chunkInfo: {
+            currentChunk: chunkNumber,
+            totalChunks: totalChunks,
+            chunkCompleted: true
+          }
+        });
+
+        // Persist progress after each non-final chunk so an interrupted run reflects
+        // how far it actually got. The last chunk is skipped — the FINALIZE path
+        // writes the terminal processed_images + status there.
+        if (chunkNumber < totalChunks) {
+          await this.persistExecutionProgress(this.processedImages);
+          // Pausa più lunga tra chunk per permettere alla memoria di stabilizzarsi
+          await new Promise(resolve => setTimeout(resolve, 3000));
+        }
       }
+    } catch (batchErr) {
+      // A throw before the FINALIZE path means the run was interrupted partway.
+      // Mark the execution 'failed' (best-effort) with the count reached so it
+      // surfaces as "Interrupted" instead of lingering as 'processing', then
+      // rethrow so the caller's existing error handling is unchanged.
+      await this.persistExecutionProgress(allResults.length, {
+        error: batchErr instanceof Error ? batchErr.message : String(batchErr),
+      });
+      throw batchErr;
     }
 
     return allResults;
