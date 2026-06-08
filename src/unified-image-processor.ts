@@ -4317,6 +4317,7 @@ class UnifiedImageWorker extends EventEmitter {
                    error.message?.includes('token') ? 'token_reservation' :
                    error.message?.includes('ONNX') || error.message?.includes('onnx') ? 'onnx_model' :
                    error.message?.includes('memory') || error.message?.includes('ENOMEM') ? 'memory' :
+                   error.code === 'ENOSPC' || error.message?.includes('No space left') || error.message?.includes('ENOSPC') ? 'filesystem' :
                    'uncaught',
         severity: 'recoverable',
         error: error,
