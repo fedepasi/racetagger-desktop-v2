@@ -203,6 +203,7 @@ const validInvokeChannels: string[] = [
   'get-local-executions',
   'rename-execution',
   'delete-local-execution',
+  'restore-execution-from-cloud',
   // Post-analysis user-action telemetry. Wrapper:
   // window.logUserAction(action, category, data) — see user-action-logger.js.
   'log-user-action',

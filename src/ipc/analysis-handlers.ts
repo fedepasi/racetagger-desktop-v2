@@ -12,7 +12,7 @@ import * as path from 'path';
 import { setBatchProcessingCancelled, getActiveProcessingExecutionId } from './context';
 import { DEBUG_MODE } from '../config';
 import { unifiedImageProcessor } from '../unified-image-processor';
-import { AnalysisLogger } from '../utils/analysis-logger';
+import { AnalysisLogger, writeUploadedMarker } from '../utils/analysis-logger';
 import { getSupabaseClient, getUserPlanLimits, reconcileOrphanExecutions } from '../database-service';
 import { authService } from '../auth-service';
 
@@ -554,6 +554,100 @@ export function registerAnalysisHandlers(): void {
       return { success: true, data: { executionId } };
     } catch (error) {
       console.error('[Analysis] Error deleting local execution:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  // Restore an analysis from the cloud. When a run shows as "☁ Cloud" (its local JSONL is
+  // missing — reinstall, another device, or a deleted/corrupt file) but a byte-exact backup
+  // exists in the 'analysis-logs' Storage bucket, download it back into .analysis-logs/ so the
+  // run becomes a normal local run again — results view, organize and export all read from the
+  // JSONL, so writing it back IS the whole fix. No re-analysis, no credits.
+  //
+  // Returns code:'no_cloud_copy' (not an error) when there is no cloud backup — the run never
+  // finished uploading — so the UI can be honest instead of dangling a dead button. Original
+  // photos are NOT restored: organize/export still need them on disk (surfaced in the modal copy).
+  ipcMain.handle('restore-execution-from-cloud', async (_, executionId: string) => {
+    try {
+      if (!executionId || typeof executionId !== 'string') {
+        return { success: false, error: 'Invalid execution id' };
+      }
+      // Defense in depth: executionId is interpolated into a local file path below. Require the
+      // UUID shape outright instead of relying on the remote uuid-column cast to reject anything
+      // odd — keeps the fs write safe even if this is ever reused against a non-uuid key.
+      if (!/^[0-9a-fA-F-]{36}$/.test(executionId)) {
+        return { success: false, error: 'Invalid execution id' };
+      }
+
+      const authState = authService.getAuthState();
+      if (!authState.isAuthenticated || !authState.user?.id) {
+        return { success: false, error: 'You need to be signed in to restore an analysis.' };
+      }
+      const userId = authState.user.id;
+      const supabase = getSupabaseClient();
+
+      // 1. Find the cloud backup's exact object path. Scoped by user_id (defense in depth; RLS
+      //    already enforces it). analysis_log_metadata has no unique constraint and can hold
+      //    duplicate rows per execution (e.g. an in-flight 0-image row + the final one), so pick
+      //    the most complete row deterministically and ignore null/empty paths.
+      const { data: metaRows, error: metaErr } = await supabase
+        .from('analysis_log_metadata')
+        .select('storage_path, total_images')
+        .eq('execution_id', executionId)
+        .eq('user_id', userId);
+
+      if (metaErr) {
+        if (DEBUG_MODE) console.warn('[Analysis] restore: metadata lookup failed:', metaErr);
+        return { success: false, error: "Couldn't reach the cloud to look up this analysis. Check your connection and try again." };
+      }
+
+      const candidate = (metaRows || [])
+        .filter((r: any) => r && typeof r.storage_path === 'string' && r.storage_path.length > 0)
+        .sort((a: any, b: any) => (b.total_images || 0) - (a.total_images || 0))[0];
+
+      if (!candidate) {
+        // No cloud backup — the run never finished uploading. Honest signal, not an error.
+        return { success: false, code: 'no_cloud_copy' };
+      }
+
+      // 2. Download the JSONL bytes from the 'analysis-logs' bucket.
+      const { data: blob, error: dlErr } = await supabase.storage
+        .from('analysis-logs')
+        .download(candidate.storage_path);
+      if (dlErr || !blob) {
+        if (DEBUG_MODE) console.warn('[Analysis] restore: download failed:', dlErr);
+        return { success: false, error: "Found the cloud backup but couldn't download it. Check your connection and try again." };
+      }
+      const buffer = Buffer.from(await blob.arrayBuffer());
+      if (buffer.length === 0) {
+        return { success: false, error: "The cloud backup came back empty. Try again in a moment." };
+      }
+
+      // 2b. Only restore a COMPLETED run. The reconciler also backs up the partial logs of
+      //     interrupted runs (EXECUTION_START but no EXECUTION_COMPLETE) — writing one back would
+      //     scan as 'processing' and get re-flagged "Interrupted" on the next Home open: a
+      //     confusing restore-that-didn't-restore. If the backup isn't a finished run, don't write
+      //     it; tell the user honestly (the modal treats 'incomplete_backup' like nothing-to-restore).
+      if (!buffer.includes('"EXECUTION_COMPLETE"')) {
+        return { success: false, code: 'incomplete_backup' };
+      }
+
+      // 3. Write it back atomically (tmp + rename) so a concurrent Home refresh / scanLocalExecutions
+      //    never sees a half-written file (mirrors writeExecutionSummary's tmp+rename).
+      const logsDir = path.join(app.getPath('userData'), '.analysis-logs');
+      fs.mkdirSync(logsDir, { recursive: true });
+      const jsonlPath = path.join(logsDir, `exec_${executionId}.jsonl`);
+      const tmpPath = `${jsonlPath}.tmp`;
+      fs.writeFileSync(tmpPath, buffer);
+      fs.renameSync(tmpPath, jsonlPath);
+
+      // 4. Mark it already-uploaded so the reconciler fast-paths it (it's identical to the cloud
+      //    copy — no need to push it straight back up).
+      writeUploadedMarker(jsonlPath);
+
+      return { success: true, data: { executionId } };
+    } catch (error) {
+      console.error('[Analysis] Error restoring execution from cloud:', error);
       return { success: false, error: (error as Error).message };
     }
   });

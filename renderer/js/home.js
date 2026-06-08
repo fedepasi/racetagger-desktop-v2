@@ -402,7 +402,7 @@ function renderRecentExecutions(executions) {
       // Cloud-only rows (completed elsewhere, OR interrupted with no local data) have no usable
       // local JSONL — Resume can't be done safely here, so show the informational cloud modal.
       if (row.dataset.cloudOnly === 'true') {
-        showCloudOnlyModal();
+        showCloudOnlyModal(executionId);
         return;
       }
       openExecutionResults(executionId);
@@ -617,9 +617,14 @@ function enterRenameMode(row, executionId) {
  * Open execution results in the dedicated results page
  */
 /**
- * Show an informational modal explaining why a cloud-only execution can't be opened locally.
+ * Modal for a "☁ Cloud" run — one whose local data isn't on this device (reinstall, another
+ * device, or a deleted/corrupt local file). The results are backed up in the cloud, so we offer
+ * to RESTORE: download the original analysis log back onto this computer so the run becomes a
+ * normal local analysis again — no re-analyzing, no credits. Copy follows support-voice.md:
+ * lead with what we can do, own the limit honestly (restoring brings back results, not the
+ * original photos), no false promises, "credits" not "tokens".
  */
-function showCloudOnlyModal() {
+function showCloudOnlyModal(executionId) {
   const existing = document.getElementById('cloud-only-modal');
   if (existing) existing.remove();
 
@@ -628,25 +633,69 @@ function showCloudOnlyModal() {
   overlay.className = 'delete-modal-overlay';
   overlay.innerHTML = `
     <div class="delete-modal" role="dialog" aria-modal="true" aria-labelledby="cloud-only-title">
-      <h3 id="cloud-only-title" class="delete-modal-title">☁ Analysis on Another Device</h3>
-      <p class="delete-modal-body">
-        This analysis was completed on a different device or the local data was removed after a reinstall.
-        The results are stored in the cloud but cannot be re-organized on this device without the original files and local data.<br><br>
-        To restore full functionality, re-run the analysis on this device with the same folder.
+      <h3 id="cloud-only-title" class="delete-modal-title">☁ Backed up in the cloud</h3>
+      <p class="delete-modal-body" data-role="body">
+        The results of this analysis are safely backed up in the cloud. We can bring them back to
+        this computer so you can view them again — no re-analyzing, and no credits.<br><br>
+        One thing to know: re-organizing into folders or exporting still needs the original photos
+        on this computer. Restoring brings back the results, not the photos themselves.
       </p>
       <div class="delete-modal-actions">
         <button type="button" class="delete-modal-btn delete-modal-btn-cancel" data-role="close">Close</button>
+        <button type="button" class="delete-modal-btn delete-modal-btn-confirm" data-role="restore">Restore from cloud</button>
       </div>
     </div>
   `;
   document.body.appendChild(overlay);
 
-  const cleanup = () => overlay.remove();
+  const cleanup = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
   overlay.addEventListener('click', (ev) => { if (ev.target === overlay) cleanup(); });
   overlay.querySelector('[data-role="close"]').addEventListener('click', cleanup);
-  document.addEventListener('keydown', function onKey(ev) {
-    if (ev.key === 'Escape') { ev.preventDefault(); cleanup(); document.removeEventListener('keydown', onKey); }
-  });
+
+  const restoreBtn = overlay.querySelector('[data-role="restore"]');
+  const body = overlay.querySelector('[data-role="body"]');
+
+  if (!executionId || !window.api || !window.api.invoke) {
+    // Can't restore without an id / IPC — degrade to an info-only modal.
+    if (restoreBtn) restoreBtn.remove();
+  } else {
+    restoreBtn.addEventListener('click', async () => {
+      restoreBtn.disabled = true;
+      restoreBtn.textContent = 'Restoring…';
+      try {
+        const res = await window.api.invoke('restore-execution-from-cloud', executionId);
+        if (res && res.success) {
+          // The log is back on disk — the row becomes a normal completed analysis on refresh.
+          cleanup();
+          if (typeof loadRecentExecutions === 'function') { try { loadRecentExecutions(); } catch (_) {} }
+          return;
+        }
+        if (res && (res.code === 'no_cloud_copy' || res.code === 'incomplete_backup')) {
+          // Be honest — there's nothing complete to restore. Don't leave a button that can't work.
+          if (body) {
+            body.textContent = res.code === 'incomplete_backup'
+              ? "The cloud copy of this analysis is from a run that didn't finish, so there's nothing complete to bring back. To get full results, re-run it on the same folder — re-running costs credits."
+              : "We couldn't find a cloud backup for this analysis — it looks like it never finished uploading, so there's nothing to bring back. To get these results you'd have to re-run it on the same folder, and re-running costs credits.";
+          }
+          restoreBtn.remove();
+          return;
+        }
+        // Something else went wrong — let the user try again.
+        if (body) body.textContent = (res && res.error) ? res.error : "Couldn't restore right now — check your connection and try again.";
+        restoreBtn.disabled = false;
+        restoreBtn.textContent = 'Restore from cloud';
+      } catch (_) {
+        if (body) body.textContent = "Couldn't restore right now — check your connection and try again.";
+        restoreBtn.disabled = false;
+        restoreBtn.textContent = 'Restore from cloud';
+      }
+    });
+  }
+
+  function onKey(ev) {
+    if (ev.key === 'Escape') { ev.preventDefault(); cleanup(); }
+  }
+  document.addEventListener('keydown', onKey);
 }
 
 /**
@@ -678,7 +727,7 @@ function showInterruptedModal(executionId, totalImages = 0, processedImages = 0)
   `;
   document.body.appendChild(overlay);
 
-  const cleanup = () => overlay.remove();
+  const cleanup = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
   overlay.addEventListener('click', (ev) => { if (ev.target === overlay) cleanup(); });
   overlay.querySelector('[data-role="close"]').addEventListener('click', cleanup);
 
@@ -707,9 +756,10 @@ function showInterruptedModal(executionId, totalImages = 0, processedImages = 0)
     }
   });
 
-  document.addEventListener('keydown', function onKey(ev) {
-    if (ev.key === 'Escape') { ev.preventDefault(); cleanup(); document.removeEventListener('keydown', onKey); }
-  });
+  function onKey(ev) {
+    if (ev.key === 'Escape') { ev.preventDefault(); cleanup(); }
+  }
+  document.addEventListener('keydown', onKey);
 }
 
 window.openExecutionResults = function(executionId) {
