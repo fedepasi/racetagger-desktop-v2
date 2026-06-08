@@ -274,6 +274,79 @@ export async function updateExecutionOnline(id: string, executionUpdateData: Par
   return data as Execution;
 }
 
+/**
+ * Recover orphaned analysis executions for a user: runs stuck as `processing`
+ * even though their token reservation has already closed.
+ *
+ * That pairing only happens when a run was interrupted before it finished — the
+ * app was closed/crashed/lost the network mid-batch, the reservation timed out
+ * and was auto-finalized, but the execution row never reached a terminal state.
+ * Left alone it's a zombie: it looks like work that's still in progress and is
+ * indistinguishable from a live run, so the home page can't surface it.
+ *
+ * We flip those rows to `failed` so they show up (as "Interrupted") and stop
+ * looking active. **Safety:** we only touch executions whose reservation is
+ * already terminal (`finalized` / `auto_finalized`), so a run genuinely in
+ * progress on another device — whose reservation is still open — is never
+ * affected. Best-effort and non-throwing; intended to be fired-and-forgotten on
+ * login/startup.
+ *
+ * @returns the number of executions marked failed (0 on any error).
+ */
+export async function reconcileOrphanExecutions(userId?: string): Promise<number> {
+  const uid = userId ?? getCurrentUserId();
+  if (!uid) return 0;
+
+  try {
+    const client = getSupabaseClient();
+
+    // 1) Candidates: this user's executions still marked 'processing'.
+    const { data: stuck, error: stuckErr } = await client
+      .from('executions')
+      .select('id')
+      .eq('user_id', uid)
+      .eq('status', 'processing')
+      .is('deleted_at', null)
+      .limit(50);
+    if (stuckErr || !stuck || stuck.length === 0) return 0;
+
+    // 2) Keep only those whose token reservation has already closed (run is over).
+    const ids: string[] = stuck.map((e: { id: string }) => e.id);
+    const { data: deadRes, error: resErr } = await client
+      .from('batch_token_reservations')
+      .select('batch_id')
+      .in('batch_id', ids)
+      .in('status', ['finalized', 'auto_finalized']);
+    if (resErr || !deadRes || deadRes.length === 0) return 0;
+
+    const orphanIds = Array.from(new Set(deadRes.map((r: { batch_id: string }) => r.batch_id)));
+    if (orphanIds.length === 0) return 0;
+
+    // 3) Flip them to 'failed'. The status guard keeps this idempotent and means
+    //    we never clobber a row that finished in the meantime.
+    const { error: updErr } = await client
+      .from('executions')
+      .update({
+        status: 'failed',
+        error_summary: { reason: 'interrupted_recovered', recovered_at: new Date().toISOString() },
+        updated_at: new Date().toISOString(),
+      })
+      .in('id', orphanIds)
+      .eq('user_id', uid)
+      .eq('status', 'processing');
+    if (updErr) {
+      console.warn('[OrphanReconcile] Failed to mark orphan executions (non-fatal):', updErr.message);
+      return 0;
+    }
+
+    console.log(`[OrphanReconcile] Marked ${orphanIds.length} interrupted execution(s) as failed for user ${uid}`);
+    return orphanIds.length;
+  } catch (err) {
+    console.warn('[OrphanReconcile] Reconcile error (non-fatal):', err instanceof Error ? err.message : err);
+    return 0;
+  }
+}
+
 export async function deleteExecutionOnline(id: string): Promise<void> {
   const userId = getCurrentUserId();
   if (!userId) throw new Error('User not authenticated.');
