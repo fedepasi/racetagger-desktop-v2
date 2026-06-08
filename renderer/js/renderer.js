@@ -2123,6 +2123,17 @@ window.enterResumeProcessingView = function enterResumeProcessingView() {
   startUnifiedTelemetry(remaining);
   updateUnifiedTelemetryDisplay();
 
+  // Scroll the progress panel into view so the user sees the analysis start right away,
+  // instead of landing at the top of the (long) config form and having to scroll down.
+  // rAF waits one frame so the just-shown panel has layout before we scroll to it.
+  const panel = document.getElementById('progress-container');
+  if (panel && typeof panel.scrollIntoView === 'function') {
+    requestAnimationFrame(() => {
+      try { panel.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+      catch (_) { panel.scrollIntoView(); }
+    });
+  }
+
   // Wire terminal-event handling for THIS resume. Every terminal event tears our listeners down
   // so they never leak or fire on a later unrelated run; failures additionally recover the screen.
   if (window.api && window.api.receive) {
