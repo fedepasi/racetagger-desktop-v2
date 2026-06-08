@@ -110,7 +110,7 @@ jobs:
             error_reports via the error_issue_mappings table:
 
             ```bash
-            curl -sS "$SUPABASE_URL/rest/v1/error_issue_mappings?github_issue_number=eq.$ISSUE&select=fingerprint,error_reports(last_seen,occurrence_count,user_count)" \
+            curl -sS "$SUPABASE_URL/rest/v1/error_issue_mappings?github_issue_number=eq.$ISSUE&select=fingerprint,error_reports(last_seen:last_seen_at,occurrence_count:total_occurrences,user_count:affected_user_count)" \
               -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
               -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY"
             ```
