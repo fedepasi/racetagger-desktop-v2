@@ -298,14 +298,17 @@ function renderRecentExecutions(executions) {
       : exec.status === 'failed' ? 'Failed'
       : 'Pending';
 
-    // Cloud-only executions have no local JSONL — results were run on another device
-    // or local files were lost after a reinstall. We show them so the counter matches.
+    // Cloud-only executions have no local JSONL. Two flavours:
+    //  - interrupted: the run stalled/failed partway, so there is no usable local result
+    //  - cloud: completed elsewhere (another device, or after a reinstall)
     const cloudBadge = exec.cloudOnly
-      ? `<span class="status-pill" style="background:rgba(99,179,237,0.15);color:#63b3ed;border:1px solid rgba(99,179,237,0.3);" title="Local data not available. This analysis was completed on another device or local files were removed. Re-running the analysis will restore full functionality.">☁ Cloud</span>`
+      ? (exec.interrupted
+          ? `<span class="status-pill" style="background:rgba(245,158,11,0.15);color:#f59e0b;border:1px solid rgba(245,158,11,0.35);" title="This analysis was interrupted before it finished, so there are no local results to organize. Re-run it to complete.">⚠ Interrupted</span>`
+          : `<span class="status-pill" style="background:rgba(99,179,237,0.15);color:#63b3ed;border:1px solid rgba(99,179,237,0.3);" title="Local data not available. This analysis was completed on another device or local files were removed. Re-running the analysis will restore full functionality.">☁ Cloud</span>`)
       : '';
 
     return `
-      <div class="card-b${exec.cloudOnly ? ' card-b-cloud-only' : ''}" data-execution-id="${escapeHtml(exec.id)}" ${exec.cloudOnly ? 'data-cloud-only="true"' : ''}>
+      <div class="card-b${exec.cloudOnly ? ' card-b-cloud-only' : ''}" data-execution-id="${escapeHtml(exec.id)}" ${exec.cloudOnly ? 'data-cloud-only="true"' : ''}${exec.interrupted ? ' data-interrupted="true"' : ''}>
         <div class="card-b-main">
           <div class="title-row">
             <span class="${titleClass}" data-role="title">${escapeHtml(displayName)}</span>
@@ -318,7 +321,9 @@ function renderRecentExecutions(executions) {
             ${presetLabel ? `<span class="sep">·</span><span class="preset-chip">${presetLabel}</span>` : ''}
           </div>
           ${exec.cloudOnly
-            ? `<div class="folder-line" style="font-size:11px;color:var(--text-muted,#94a3b8);">📡 Local data unavailable — completed on another device or after reinstall</div>`
+            ? (exec.interrupted
+                ? `<div class="folder-line" style="font-size:11px;color:var(--text-muted,#94a3b8);">⚠️ Interrupted before finishing${(exec.processedImages && exec.totalImages) ? ` — ${exec.processedImages} of ${exec.totalImages} photos analyzed` : ''} · re-run to complete</div>`
+                : `<div class="folder-line" style="font-size:11px;color:var(--text-muted,#94a3b8);">📡 Local data unavailable — completed on another device or after reinstall</div>`)
             : folderLine}
         </div>
         <div class="card-b-side">
@@ -368,7 +373,11 @@ function renderRecentExecutions(executions) {
       // Cloud-only executions have no local JSONL — the results page would be empty.
       // Show an informational modal instead so the user knows what happened.
       if (row.dataset.cloudOnly === 'true') {
-        showCloudOnlyModal();
+        if (row.dataset.interrupted === 'true') {
+          showInterruptedModal();
+        } else {
+          showCloudOnlyModal();
+        }
         return;
       }
       openExecutionResults(executionId);
@@ -599,6 +608,42 @@ function showCloudOnlyModal() {
         This analysis was completed on a different device or the local data was removed after a reinstall.
         The results are stored in the cloud but cannot be re-organized on this device without the original files and local data.<br><br>
         To restore full functionality, re-run the analysis on this device with the same folder.
+      </p>
+      <div class="delete-modal-actions">
+        <button type="button" class="delete-modal-btn delete-modal-btn-cancel" data-role="close">Close</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const cleanup = () => overlay.remove();
+  overlay.addEventListener('click', (ev) => { if (ev.target === overlay) cleanup(); });
+  overlay.querySelector('[data-role="close"]').addEventListener('click', cleanup);
+  document.addEventListener('keydown', function onKey(ev) {
+    if (ev.key === 'Escape') { ev.preventDefault(); cleanup(); document.removeEventListener('keydown', onKey); }
+  });
+}
+
+/**
+ * Show an informational modal for an analysis that was interrupted before it finished.
+ * Unlike the cloud-only case, there is no completed result anywhere — the run stopped
+ * partway, so the honest guidance is to re-run it. Copy follows support-voice.md
+ * (plain language, own the problem, "credits" not "tokens").
+ */
+function showInterruptedModal() {
+  const existing = document.getElementById('interrupted-modal');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'interrupted-modal';
+  overlay.className = 'delete-modal-overlay';
+  overlay.innerHTML = `
+    <div class="delete-modal" role="dialog" aria-modal="true" aria-labelledby="interrupted-title">
+      <h3 id="interrupted-title" class="delete-modal-title">⚠ Analysis Interrupted</h3>
+      <p class="delete-modal-body">
+        This analysis stopped before it finished, so there are no results to organize into folders yet.
+        Only the photos that were analyzed before it stopped used credits — the rest were refunded automatically.<br><br>
+        To complete it, re-run the analysis on the same folder. If anything looks off with your credits, reach out and we'll sort it out.
       </p>
       <div class="delete-modal-actions">
         <button type="button" class="delete-modal-btn delete-modal-btn-cancel" data-role="close">Close</button>

@@ -216,27 +216,42 @@ export function registerAnalysisHandlers(): void {
           const supabase = getSupabaseClient();
           const { data: dbExecs, error: dbErr } = await supabase
             .from('executions')
-            .select('id, name, execution_at, status, processed_images, source_folder')
+            .select('id, name, execution_at, status, processed_images, total_images, source_folder')
             .eq('user_id', authState.user.id)
-            .in('status', ['completed', 'completed_with_errors'])
+            // completed/with-errors → ran on another device or local files were lost.
+            // failed / stale-processing → interrupted partway through: surfaced so the
+            // analysis the user was charged for is visible (and recoverable) instead of
+            // silently vanishing from the list.
+            .in('status', ['completed', 'completed_with_errors', 'failed', 'processing'])
+            .is('deleted_at', null) // never resurface entries the user deleted
             .order('execution_at', { ascending: false })
             .limit(20);
           if (!dbErr && dbExecs) {
+            // A 'processing' row is only treated as interrupted once it is clearly stale.
+            // Otherwise it is a run currently in progress and must NOT be flagged as broken.
+            const STALE_PROCESSING_MS = 90 * 60 * 1000; // 90 min — well beyond a normal large batch
+            const now = Date.now();
             const localIds = new Set(top.map((e: any) => e.id));
             for (const dbExec of (dbExecs as any[])) {
               if (localIds.has(dbExec.id)) continue; // Already shown from local file
+              const ts = dbExec.execution_at ? new Date(dbExec.execution_at).getTime() : now;
+              const isStaleProcessing = dbExec.status === 'processing' && (now - ts) > STALE_PROCESSING_MS;
+              if (dbExec.status === 'processing' && !isStaleProcessing) continue; // live run — skip
+              const interrupted = dbExec.status === 'failed' || isStaleProcessing;
               top.push({
                 id: dbExec.id,
                 createdAt: dbExec.execution_at || new Date().toISOString(),
                 status: dbExec.status,
                 sportCategory: 'motorsport',
-                totalImages: dbExec.processed_images || 0,
+                totalImages: dbExec.total_images || dbExec.processed_images || 0,
+                processedImages: dbExec.processed_images || 0,
                 imagesWithNumbers: 0,
                 folderPath: dbExec.source_folder || '',
                 executionName: dbExec.name || null,
                 participantPreset: null,
                 delivery: null,
                 cloudOnly: true, // Signals renderer to show "no local data" indicator
+                interrupted, // Stalled/failed run: recoverable, surfaced so spent credits aren't a mystery
               });
             }
             top.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
