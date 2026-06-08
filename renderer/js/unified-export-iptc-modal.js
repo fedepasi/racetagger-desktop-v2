@@ -77,11 +77,20 @@ async function openUnifiedExportModal() {
 
   // 1) Save unsaved corrections first (if any) so the user's edits aren't lost
   //    when we refetch the preset and rebuild the form.
+  //
+  //    `skipRefresh: true` — the modal we're about to open will re-fetch and
+  //    rebuild from current in-memory + on-disk state anyway, so the
+  //    `refreshDataFromLogs()` round-trip inside saveAllChanges (which
+  //    re-reads the entire JSONL — the single most expensive step of that
+  //    function, see log-visualizer.js around the save flow) is pure
+  //    duplicated work in this code path. Lisa Hallmann (support thread,
+  //    2026-05-15) saw multi-minute waits with the modal stuck because
+  //    of this refresh on a 300+ photo session.
   if (lv.hasUnsavedChanges) {
     const confirmed = confirm('You have unsaved corrections. Save them before proceeding? (Recommended)');
     if (confirmed) {
       try {
-        await lv.saveAllChanges();
+        await lv.saveAllChanges({ skipRefresh: true });
       } catch (err) {
         console.error('[Unified Export] Error saving changes:', err);
         // Continue anyway — the user has been warned.

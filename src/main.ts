@@ -4333,6 +4333,112 @@ app.whenReady().then(async () => { // Added async here
         }
       }
 
+      // =====================================================================
+      // PIPELINE PREP — Batched pre-fetch + parallel/background accumulators
+      // =====================================================================
+      // Historical behaviour: the per-correction loop below did ALL its I/O
+      // sequentially — one exiftool spawn, one `analysis_results` SELECT, one
+      // outbox UPDATE, one outbox INSERT, then on to the next correction.
+      // On a batch of 60 corrections that meant ~120 sequential DB round-trips
+      // plus 60 sequential exiftool spawns, dominating the IPC response time
+      // and freezing the renderer's Export & IPTC modal for minutes (Lisa
+      // Hallmann support thread, 2026-05-15).
+      //
+      // The new pipeline keeps the same SEMANTICS but reorders the I/O:
+      //
+      //   1. Loop in-memory only (snapshot pre-mutation state, apply B1 fix,
+      //      compute `valuesActuallyChanged`). Accumulate per-correction
+      //      `ctxs` for later phases. No filesystem, no DB.
+      //   2. Single batched SELECT on `analysis_results` for every dbImageId
+      //      touched by a raceNumber change (one IN(...) query instead of N).
+      //   3. Parallel exiftool writes (pool of 4) — still on the critical
+      //      path because Export reads the file with its IPTC keywords.
+      //   4. Parallel folder reorg (pool of 4) — still on the critical path
+      //      because Export reads `organizedPath` from the JSONL.
+      //   5. Write the updated JSONL to disk.
+      //   6. Return success → renderer unblocks immediately.
+      //   7. BACKGROUND (fire-and-forget): batched `analysis_results` updates
+      //      + bulk `image_corrections` insert via the correction-outbox.
+      //      Safe because Export & IPTC does NOT read these tables — they
+      //      feed the management portal, web platform, and training pipeline,
+      //      all of which tolerate eventual consistency. The outbox already
+      //      persists to disk before the network attempt so nothing is lost
+      //      if the app dies mid-flush.
+
+      // UUID regex hoisted out of the loop (used both for pre-fetch and for
+      // the per-correction `dbImageIdForUpdate` derivation below).
+      const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+      // Resolve dbImageId for each correction up-front. We use the same logic
+      // as the per-correction derivation (prefer `dbImageId`, fall back to
+      // legacy `imageId` only if it parses as a UUID — non-UUID legacy ids
+      // would produce "invalid input syntax for type uuid" against Postgres).
+      const dbImageIdByFileName = new Map<string, string>();
+      for (const c of corrections) {
+        const ev = logEvents.find(
+          (e: any) => e.type === 'IMAGE_ANALYSIS' && e.fileName === c.fileName
+        );
+        if (!ev) continue;
+        const id: string | undefined =
+          ev.dbImageId ||
+          (ev.imageId && UUID_REGEX.test(ev.imageId) ? ev.imageId : undefined);
+        if (id) dbImageIdByFileName.set(c.fileName, id);
+      }
+
+      // Batched pre-fetch of raw_response + training_flags. Only fetch for
+      // corrections that change raceNumber (the only field that triggers a
+      // DB UPDATE downstream). One IN(...) round-trip replaces what was
+      // previously N sequential SELECTs.
+      const rawResponseMap = new Map<string, { raw_response: any; training_flags: any }>();
+      const idsToFetch = corrections
+        .filter((c: any) => c?.changes?.raceNumber)
+        .map((c: any) => dbImageIdByFileName.get(c.fileName))
+        .filter((id: string | undefined): id is string => Boolean(id));
+      if (idsToFetch.length > 0) {
+        try {
+          const { getSupabaseClient } = await import('./database-service');
+          const supabase = getSupabaseClient();
+          const { data: rows, error: preFetchErr } = await supabase
+            .from('analysis_results')
+            .select('image_id, raw_response, training_flags')
+            .in('image_id', idsToFetch);
+          if (preFetchErr) {
+            console.warn(
+              '[Main Process] Batched raw_response pre-fetch failed (non-critical, downstream updates skip the merge):',
+              preFetchErr.message
+            );
+          } else if (rows) {
+            for (const row of rows) {
+              rawResponseMap.set(row.image_id, {
+                raw_response: row.raw_response,
+                training_flags: row.training_flags,
+              });
+            }
+          }
+        } catch (preFetchErr) {
+          console.warn('[Main Process] Batched raw_response pre-fetch threw (non-critical):', preFetchErr);
+        }
+      }
+
+      // Per-correction tasks collected during the in-memory loop. Each phase
+      // (exiftool, DB updates, image_corrections inserts) consumes the
+      // entries that are relevant to it. We capture references to the
+      // mutable `imageAnalysisEvent` so phase 3 can flip
+      // `metadataWritten=true` on the same object the JSONL writer
+      // serialises later.
+      type ExiftoolTask = {
+        correction: any;
+        imageAnalysisEvent: any | null;
+      };
+      type AnalysisResultsUpdate = {
+        fileName: string;
+        image_id: string;
+        update: Record<string, any>;
+      };
+      const exiftoolTasks: ExiftoolTask[] = [];
+      const analysisResultsUpdates: AnalysisResultsUpdate[] = [];
+      const imageCorrectionInserts: Record<string, any>[] = [];
+
       // Add manual correction events
       for (const correction of corrections) {
         const manualCorrectionEvent = {
@@ -4379,6 +4485,20 @@ app.whenReady().then(async () => { // Added async here
         // gate the feedback-learning table accumulates the same dedup-noise
         // we filter out of the JSONB array.
         let valuesActuallyChanged = true;
+        // Pre-mutation snapshot of the vehicle's tracked fields, also hoisted.
+        // The image_corrections insert farther down must read these values
+        // (NOT the live `vehicle[*]`) when serializing the `original_value`
+        // payload — by the time we reach that insert the Object.assign at
+        // L4207 + the B1 fix have already overwritten the vehicle with the
+        // corrected state, so a fresh read produces a phantom row where
+        // `original_value == corrected_value`. Audit on 2026-05-13 found
+        // 141/141 USER_MANUAL rows for info@gruppec.de were such phantoms,
+        // making the management portal show 30-76% correction rates while
+        // the AI was actually right. Same reason `originalConfidence` is
+        // captured separately: the asymmetric confidence-on-raceNumber-change
+        // attachment below would otherwise always read 1.0 (set by B1 fix).
+        const originalValues: Record<string, any> = {};
+        let originalConfidence: number | null = null;
         if (imageAnalysisEvent) {
           imageAnalysisEvent.aiResponse = imageAnalysisEvent.aiResponse || {};
           imageAnalysisEvent.aiResponse.vehicles = imageAnalysisEvent.aiResponse.vehicles || [];
@@ -4398,12 +4518,19 @@ app.whenReady().then(async () => { // Added async here
 
           // Snapshot original values for `originalValues` — only the keys we
           // are about to overwrite, to keep the correction record compact.
-          const originalValues: any = {};
+          // `originalValues` is declared in the outer scope (above the
+          // `if (imageAnalysisEvent)` branch) so the image_corrections insert
+          // farther down reads pre-mutation values.
           for (const [key] of Object.entries(correction.changes)) {
             if (vehicle[key] !== undefined) {
               originalValues[key] = vehicle[key];
             }
           }
+          // Capture confidence separately — it is attached asymmetrically to
+          // the image_corrections payload (only on raceNumber changes) and
+          // must come from the pre-mutation vehicle, not the 1.0 set by the
+          // B1 fix below.
+          originalConfidence = vehicle.confidence ?? null;
 
           // Apply user changes to BOTH the vehicle root and finalResult.
           // Vehicle root is what older code paths read; finalResult is what
@@ -4452,8 +4579,22 @@ app.whenReady().then(async () => { // Added async here
           if (!vehicle.corrections) {
             vehicle.corrections = [];
           }
-          valuesActuallyChanged = Object.entries(correction.changes).some(
+          // Semantic-field whitelist: only count a correction when the user
+          // visibly changed something the photographer reviews — race number,
+          // team, drivers list, match status, or the deleted flag. Without
+          // this filter the renderer's "open photo → save" round-trip writes
+          // a phantom correction every time, because it always flips
+          // `matchedBy` from `user_manual` to `user_review` (and drops
+          // `confidence` from the payload) regardless of whether the user
+          // actually edited a field. Audit of 4 motorsport_v3 executions on
+          // 2026-05-13 found 53 such rows where `matchedBy` was the ONLY
+          // delta, masquerading as real corrections in the management portal.
+          const SEMANTIC_FIELDS = new Set([
+            'raceNumber', 'team', 'drivers', 'matchStatus', 'deleted',
+          ]);
+          const semanticDiff = Object.entries(correction.changes).some(
             ([key, newVal]) => {
+              if (!SEMANTIC_FIELDS.has(key)) return false;
               const oldVal = originalValues[key];
               // Use JSON.stringify for deep equality on arrays (drivers).
               // Treat undefined/null as the same "absence" so a save that
@@ -4464,6 +4605,13 @@ app.whenReady().then(async () => { // Added async here
               return JSON.stringify(oldNorm) !== JSON.stringify(newNorm);
             }
           );
+          // Re-delete (deleted: true → true) is a no-op even though `deleted`
+          // is in the whitelist: the user clicked Delete on something already
+          // deleted from a stale UI. Audit found 7 such rows on 2026-05-13.
+          const isReDelete =
+            correction.changes.deleted === true &&
+            originalValues.deleted === true;
+          valuesActuallyChanged = semanticDiff && !isReDelete;
           if (valuesActuallyChanged) {
             vehicle.corrections.push({
               type: 'USER_MANUAL',
@@ -4479,39 +4627,20 @@ app.whenReady().then(async () => { // Added async here
           }
         }
 
-        // Update image metadata using exiftool. If the IPTC keyword write
-        // succeeds, flip the IMAGE_ANALYSIS event's `metadataWritten` flag
-        // to true so the renderer drops the "NO METADATA" badge on the
-        // preview card. The flag is initially set at analysis time based
-        // on whether keywords were emitted (see unified-image-processor
-        // around lines 4122/4163); when the AI couldn't match a preset
-        // participant it stays false even after the user manually
-        // corrects the photo — the user then sees a card with all the
-        // right fields PLUS a stale "NO METADATA" badge.
-        try {
-          const metaResult = await updateImageMetadataWithCorrection(
-            correction,
-            imageAnalysisEvent?.originalPath,
-            imageAnalysisEvent?.organizedPath
-          );
-          if (metaResult?.success && imageAnalysisEvent) {
-            imageAnalysisEvent.metadataWritten = true;
-            if (DEBUG_MODE) {
-              console.log(
-                `[Main Process] Flipped metadataWritten=true for ${correction.fileName} ` +
-                `after USER_MANUAL keyword write (was: ${imageAnalysisEvent.metadataWritten === false ? 'false' : 'undefined'}).`
-              );
-            }
-          }
-        } catch (metadataError) {
-          if (DEBUG_MODE) console.warn('[Main Process] Failed to update image metadata:', metadataError);
-          // Continue with log update even if metadata update fails
-        }
+        // Defer exiftool / IPTC keyword writes to a parallel pool (Phase 3,
+        // below). The Export flow downstream reads the file with its
+        // keywords so this MUST run before we respond — but each exiftool
+        // spawn is 300ms-1s, and the original sequential loop of N spawns
+        // dominated the IPC response time on large batches. We just collect
+        // a task here; the pool runs them with concurrency=4 and applies
+        // `metadataWritten=true` to the same `imageAnalysisEvent` reference
+        // we captured (mutation through the live JSONL events array).
+        exiftoolTasks.push({ correction, imageAnalysisEvent });
 
-        // === Update analysis_results in Supabase DB ===
+        // === Build analysis_results update payload ===
         // Critical for: retraining pipelines (ONNX/YOLO), web platform accuracy,
-        // management portal data, and gallery correctness.
-        // Each manual correction is valuable ground truth for model improvement.
+        // management portal data, and gallery correctness. Each manual
+        // correction is valuable ground truth for model improvement.
         //
         // NOTE: analysis_results.image_id is a UUID. Historically we passed
         // imageAnalysisEvent.imageId here, but that field holds the legacy
@@ -4519,7 +4648,13 @@ app.whenReady().then(async () => { // Added async here
         // "invalid input syntax for type uuid" errors in Postgres and silently
         // drops the correction. Prefer the new dbImageId field; fall back to
         // imageId only if it looks like a UUID (older JSONL logs may not have dbImageId).
-        const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        //
+        // The actual DB UPDATE is deferred to a background task (see Phase 7
+        // after the JSONL writeFileSync). This handler returns to the renderer
+        // as soon as JSONL + IPTC + folder reorg are durable on disk; the
+        // Export & IPTC flow does NOT read analysis_results so eventual
+        // consistency here is safe. The raw_response merge below reads from
+        // the batched pre-fetch (`rawResponseMap`) populated in PIPELINE PREP.
         const dbImageIdForUpdate: string | undefined =
           imageAnalysisEvent?.dbImageId ||
           (imageAnalysisEvent?.imageId && UUID_REGEX.test(imageAnalysisEvent.imageId)
@@ -4527,83 +4662,42 @@ app.whenReady().then(async () => { // Added async here
             : undefined);
 
         if (dbImageIdForUpdate && correction.changes.raceNumber) {
-          try {
-            const { getSupabaseClient } = await import('./database-service');
-            const supabase = getSupabaseClient();
+          const dbUpdate: Record<string, any> = {
+            recognized_number: correction.changes.raceNumber,
+            confidence_score: 1.0, // Manual correction = 100% confidence
+            confidence_level: 'manual',
+          };
 
-            // Build the update payload
-            const dbUpdate: Record<string, any> = {
-              recognized_number: correction.changes.raceNumber,
-              confidence_score: 1.0, // Manual correction = 100% confidence
-              confidence_level: 'manual',
-            };
-
-            // Update raw_response.vehicles with corrected data
-            // First read current raw_response to merge
-            const { data: currentRow } = await supabase
-              .from('analysis_results')
-              .select('raw_response, training_flags')
-              .eq('image_id', dbImageIdForUpdate)
-              .maybeSingle();
-
-            if (currentRow?.raw_response) {
-              const rawResponse = { ...currentRow.raw_response };
-              // Update the specific vehicle in the vehicles array
-              if (rawResponse.vehicles && rawResponse.vehicles[correction.vehicleIndex]) {
-                const vehicle = rawResponse.vehicles[correction.vehicleIndex];
-                vehicle.raceNumber = correction.changes.raceNumber;
-                if (correction.changes.team) vehicle.teamName = correction.changes.team;
-                if (correction.changes.drivers) vehicle.drivers = correction.changes.drivers;
-                vehicle.manuallyCorreected = true;
-                vehicle.correctedAt = correction.timestamp;
-              }
-              rawResponse.lastManualCorrection = correction.timestamp;
-              dbUpdate.raw_response = rawResponse;
-
-              // Mark training_flags to indicate manual correction (ground truth for retraining)
-              const trainingFlags = currentRow.training_flags || {};
-              trainingFlags.has_manual_correction = true;
-              trainingFlags.manual_correction_at = correction.timestamp;
-              trainingFlags.corrected_vehicle_index = correction.vehicleIndex;
-              trainingFlags.original_number = currentRow.raw_response?.vehicles?.[correction.vehicleIndex]?.raceNumber || null;
-              trainingFlags.corrected_number = correction.changes.raceNumber;
-              dbUpdate.training_flags = trainingFlags;
+          const currentRow = rawResponseMap.get(dbImageIdForUpdate);
+          if (currentRow?.raw_response) {
+            const rawResponse = { ...currentRow.raw_response };
+            // Update the specific vehicle in the vehicles array
+            if (rawResponse.vehicles && rawResponse.vehicles[correction.vehicleIndex]) {
+              const vehicle = rawResponse.vehicles[correction.vehicleIndex];
+              vehicle.raceNumber = correction.changes.raceNumber;
+              if (correction.changes.team) vehicle.teamName = correction.changes.team;
+              if (correction.changes.drivers) vehicle.drivers = correction.changes.drivers;
+              vehicle.manuallyCorreected = true;
+              vehicle.correctedAt = correction.timestamp;
             }
+            rawResponse.lastManualCorrection = correction.timestamp;
+            dbUpdate.raw_response = rawResponse;
 
-            // Route the analysis_results UPDATE through the correction
-            // outbox too (see the image_corrections insert below for
-            // motivation). The update is idempotent: re-running it with
-            // the same payload yields the same end state, and the
-            // `recognized_number` + manual-correction training_flags
-            // accumulate to the user's last-corrected value either way.
-            try {
-              const outbox = require('./utils/correction-outbox');
-              const res = await outbox.enqueueAndTry('analysis_results_update', {
-                image_id: dbImageIdForUpdate,
-                update: dbUpdate,
-              });
-              if (res.ok) {
-                console.log(`[Main Process] ✅ Updated analysis_results for ${correction.fileName} (image_id: ${dbImageIdForUpdate}, #${correction.changes.raceNumber})`);
-              } else if (res.queued) {
-                console.warn(`[Main Process] analysis_results update queued for retry (network issue) — correction safe in outbox: ${correction.fileName} (image_id: ${dbImageIdForUpdate})`);
-              }
-            } catch (outboxErr) {
-              // Outbox itself failed — fall back to a direct attempt.
-              console.warn('[Main Process] Outbox unavailable for analysis_results, falling back to direct update:', outboxErr);
-              const { error: dbError } = await supabase
-                .from('analysis_results')
-                .update(dbUpdate)
-                .eq('image_id', dbImageIdForUpdate);
-              if (dbError) {
-                console.warn(`[Main Process] Failed to update analysis_results for ${correction.fileName}: ${dbError.message}`);
-              } else {
-                console.log(`[Main Process] ✅ Updated analysis_results for ${correction.fileName} (image_id: ${dbImageIdForUpdate}, #${correction.changes.raceNumber})`);
-              }
-            }
-          } catch (dbUpdateError) {
-            console.warn('[Main Process] Failed to update analysis_results in DB:', dbUpdateError);
-            // Non-critical: JSONL and metadata updates still succeed
+            // Mark training_flags to indicate manual correction (ground truth for retraining)
+            const trainingFlags = currentRow.training_flags || {};
+            trainingFlags.has_manual_correction = true;
+            trainingFlags.manual_correction_at = correction.timestamp;
+            trainingFlags.corrected_vehicle_index = correction.vehicleIndex;
+            trainingFlags.original_number = currentRow.raw_response?.vehicles?.[correction.vehicleIndex]?.raceNumber || null;
+            trainingFlags.corrected_number = correction.changes.raceNumber;
+            dbUpdate.training_flags = trainingFlags;
           }
+
+          analysisResultsUpdates.push({
+            fileName: correction.fileName,
+            image_id: dbImageIdForUpdate,
+            update: dbUpdate,
+          });
         } else if (imageAnalysisEvent?.imageId && !dbImageIdForUpdate && correction.changes.raceNumber) {
           // Legacy JSONL without dbImageId and non-UUID imageId: skip silently to avoid
           // flooding logs. The correction still lands in image_corrections + XMP.
@@ -4616,17 +4710,24 @@ app.whenReady().then(async () => { // Added async here
           }
         }
 
-        // === Write USER_MANUAL correction to image_corrections table ===
+        // === Build USER_MANUAL image_corrections insert payload ===
         // This feeds the feedback learning system (Strategy G):
         // When a user corrects a race number, we capture the Vehicle DNA
-        // (sponsors, team, make, model, livery) that Gemini detected for that crop.
-        // The learned-data-enricher will later aggregate these to enrich the preset.
+        // (sponsors, team, make, model, livery) that Gemini detected for that
+        // crop. The learned-data-enricher will later aggregate these to
+        // enrich the preset.
         //
         // Skip the insert when nothing actually changed — same dedup logic as
         // the JSONB `vehicle.corrections` array above. Without the gate the
         // training-data feedback loop sees dozens of "user corrected X to X"
         // rows per real correction, which (a) skews any learning weights and
         // (b) wastes RLS-checked DB writes on every autosave tick.
+        //
+        // The DB INSERT itself is deferred to a background task after the
+        // IPC response. We just collect the payload here; the bulk insert
+        // runs in Phase 7 via the correction-outbox (which already persists
+        // each op to disk before the network attempt, so a process crash
+        // mid-flush doesn't lose the correction).
         if (!valuesActuallyChanged) {
           if (DEBUG_MODE) {
             console.log(
@@ -4634,11 +4735,8 @@ app.whenReady().then(async () => { // Added async here
               `vehicle ${correction.vehicleIndex} (no-op save)`
             );
           }
-        } else try {
-          const { getSupabaseClient } = await import('./database-service');
-          const supabase = getSupabaseClient();
+        } else {
           const userId = authService.getAuthState().user?.id;
-
           if (userId) {
             // Extract Vehicle DNA snapshot from the Gemini analysis data
             const vehicleDna: Record<string, any> = {};
@@ -4656,37 +4754,30 @@ app.whenReady().then(async () => { // Added async here
               if (v.context) vehicleDna.detected_context = v.context;
             }
 
-            // Build the original and corrected values
+            // Build the original and corrected values. CRITICAL: read
+            // `original_value` from the pre-mutation snapshot captured
+            // earlier in this iteration, NOT from the live vehicle object.
+            // The Object.assign + B1 fix above have already overwritten
+            // `vehicle[*]` with the corrected values, so reading from the
+            // vehicle here produces a payload where
+            // `original_value == corrected_value` for every row — the
+            // phantom pattern that polluted image_corrections (141/141
+            // rows on 2026-05-13 for info@gruppec.de) and made the
+            // training feedback loop useless.
             const originalValue: Record<string, any> = {};
             const correctedValue: Record<string, any> = {};
-
-            // Capture all changed fields
             for (const [field, newVal] of Object.entries(correction.changes)) {
-              if (imageAnalysisEvent?.aiResponse?.vehicles?.[correction.vehicleIndex]) {
-                originalValue[field] = imageAnalysisEvent.aiResponse.vehicles[correction.vehicleIndex][field] ?? null;
-              }
+              originalValue[field] = originalValues[field] ?? null;
               correctedValue[field] = newVal;
             }
-
-            // Add confidence to original if it was a number change
-            if (correction.changes.raceNumber && imageAnalysisEvent?.aiResponse?.vehicles?.[correction.vehicleIndex]) {
-              originalValue.confidence = imageAnalysisEvent.aiResponse.vehicles[correction.vehicleIndex].confidence ?? null;
+            // Confidence is attached asymmetrically — only on raceNumber
+            // changes — and must come from the pre-mutation snapshot
+            // (`originalConfidence`). Reading the vehicle's confidence here
+            // would always yield 1.0 (the manual-correction value).
+            if (correction.changes.raceNumber) {
+              originalValue.confidence = originalConfidence;
             }
 
-            // Build the image_corrections insert payload. Routed through the
-            // correction outbox so a transient `TypeError: fetch failed`
-            // (seen in the field — Michele 13:58:30 dropped one such row)
-            // doesn't cause us to lose the correction: the outbox persists
-            // it to disk first, tries once synchronously, and retries with
-            // exponential backoff for up to ~30s if needed. Plus side: the
-            // organize defense-in-depth merge from image_corrections (see
-            // ~line 3290) now has a real safety net upstream of it.
-            //
-            // Also: this insert payload is uniquely determined by
-            // (execution_id, image_id, vehicle_index, correction_type),
-            // so a duplicate retry inserts a second equivalent row at
-            // worst — the management portal already dedups by these
-            // fields when aggregating.
             // Note on schema: image_corrections does NOT have a `file_name`
             // column today (see migrations 20251216000000 and
             // 20260320100000). The fileName lives implicitly inside
@@ -4695,7 +4786,7 @@ app.whenReady().then(async () => { // Added async here
             // The downstream "defense-in-depth" merge in organize reads
             // image_id + vehicle_index + corrected_value and joins back
             // to fileName via the in-memory imageAnalysisEvents list.
-            const corrPayload = {
+            imageCorrectionInserts.push({
               execution_id: executionId,
               user_id: userId,
               image_id: imageAnalysisEvent?.imageId || `${correction.fileName}_${correction.vehicleIndex}`,
@@ -4709,32 +4800,49 @@ app.whenReady().then(async () => { // Added async here
               vehicle_index: correction.vehicleIndex,
               details: Object.keys(vehicleDna).length > 0 ? vehicleDna : null,
               preset_id: executionStartEvent?.participantPresetId || null,
-            };
-            try {
-              const outbox = require('./utils/correction-outbox');
-              const res = await outbox.enqueueAndTry('image_corrections_insert', corrPayload);
-              if (res.ok) {
-                console.log(`[Main Process] ✅ Wrote USER_MANUAL correction to image_corrections for ${correction.fileName} vehicle ${correction.vehicleIndex}`);
-              } else if (res.queued) {
-                console.warn(`[Main Process] image_corrections write queued for retry (network issue) — correction safe in outbox: ${correction.fileName} vehicle ${correction.vehicleIndex}`);
-              }
-            } catch (outboxErr) {
-              // Outbox itself failed (very rare — disk full etc.). Fall back
-              // to the legacy in-line insert so we at least try once and log
-              // the failure visibly.
-              console.warn('[Main Process] Outbox unavailable, falling back to direct insert:', outboxErr);
-              const { error: corrError } = await supabase.from('image_corrections').insert(corrPayload);
-              if (corrError) {
-                console.warn(`[Main Process] Failed to write USER_MANUAL correction to image_corrections: ${corrError.message} [code: ${corrError.code}]`);
-              } else {
-                console.log(`[Main Process] ✅ Wrote USER_MANUAL correction to image_corrections for ${correction.fileName} vehicle ${correction.vehicleIndex}`);
+            });
+          }
+        }
+      }
+
+      // =====================================================================
+      // PHASE 3 — Parallel exiftool / IPTC keyword writes (pool of 4)
+      // =====================================================================
+      // The Export & IPTC flow copies physical files to destinations and reads
+      // their keywords, so this MUST complete before we respond. But the per-
+      // file exiftool spawn (300ms-1s each) was the dominant cost in the old
+      // sequential loop. Pool of 4 quarters wall-clock time without saturating
+      // disk I/O on the photographer's machine.
+      if (exiftoolTasks.length > 0) {
+        const concurrency = Math.min(4, exiftoolTasks.length);
+        const queue = exiftoolTasks.slice();
+        await Promise.all(
+          Array.from({ length: concurrency }, async () => {
+            while (queue.length > 0) {
+              const task = queue.shift();
+              if (!task) break;
+              try {
+                const metaResult = await updateImageMetadataWithCorrection(
+                  task.correction,
+                  task.imageAnalysisEvent?.originalPath,
+                  task.imageAnalysisEvent?.organizedPath
+                );
+                if (metaResult?.success && task.imageAnalysisEvent) {
+                  task.imageAnalysisEvent.metadataWritten = true;
+                  if (DEBUG_MODE) {
+                    console.log(
+                      `[Main Process] Flipped metadataWritten=true for ${task.correction.fileName} ` +
+                      `after USER_MANUAL keyword write.`
+                    );
+                  }
+                }
+              } catch (metadataError) {
+                if (DEBUG_MODE) console.warn('[Main Process] Failed to update image metadata:', metadataError);
+                // Continue with the rest of the pool even if one file fails.
               }
             }
-          }
-        } catch (corrInsertError) {
-          console.warn('[Main Process] Failed to insert USER_MANUAL correction:', corrInsertError);
-          // Non-critical: JSONL update already succeeded
-        }
+          })
+        );
       }
 
       // ====================================================================
@@ -4812,79 +4920,89 @@ app.whenReady().then(async () => { // Added async here
               // the user is the source of truth here.
             });
 
-            for (const correction of correctionsTouchingRaceNumber) {
-              try {
-                const ev = logEvents.find(
-                  (e: any) => e.type === 'IMAGE_ANALYSIS' && e.fileName === correction.fileName
-                );
-                // Source path priority:
-                //   1. organizedPath — where the file ended up after the original analysis
-                //   2. originalPath — where the user dropped it (works when org=copy)
-                const sourcePath = ev?.organizedPath || ev?.originalPath;
-                if (!sourcePath) {
-                  if (DEBUG_MODE) console.warn(`[Main Process] [B3] No source path for ${correction.fileName} — skipping reorg`);
-                  continue;
-                }
-                if (!fs.existsSync(sourcePath)) {
-                  if (DEBUG_MODE) console.warn(`[Main Process] [B3] Source path no longer exists for ${correction.fileName}: ${sourcePath}`);
-                  continue;
-                }
-
-                const newRaceNumber = String(correction.changes.raceNumber).trim();
-                const sourceDir = require('path').dirname(ev?.originalPath || sourcePath);
-
-                // organizeImage handles the move/copy semantics, conflict
-                // resolution, and the optional XMP sidecar move based on
-                // the mode the user originally chose for this run.
-                const orgResult = await organizer.organizeImage(
-                  sourcePath,
-                  [newRaceNumber],
-                  undefined, // CSV data not needed for re-org of a single file
-                  sourceDir
-                );
-
-                if (orgResult?.success && orgResult.organizedPath) {
-                  // Update organizedPath in the JSONL so subsequent corrections
-                  // and re-renders see the new location.
-                  if (ev) ev.organizedPath = orgResult.organizedPath;
-                  console.log(
-                    `[Main Process] [B3] Reorganized ${correction.fileName} → ${orgResult.folderName || orgResult.organizedPath}`
-                  );
-
-                  // Best-effort cleanup: remove the OLD folder if it's now empty
-                  // (e.g. Unknown_Numbers/ after the only file in it was moved).
-                  // We only attempt this when mode='move' — in copy mode the
-                  // original folder structure is intentional.
-                  if (folderOrgConfig.mode === 'move' && sourcePath !== orgResult.organizedPath) {
-                    try {
-                      const oldDir = require('path').dirname(sourcePath);
-                      const remaining = fs.readdirSync(oldDir);
-                      // Only sweep folders that are truly empty (no hidden files
-                      // either) AND that look like organizer-created (rough heuristic
-                      // — they live under destinationPath).
-                      if (
-                        remaining.length === 0 &&
-                        oldDir.startsWith(resolvedDestinationPath) &&
-                        oldDir !== resolvedDestinationPath
-                      ) {
-                        fs.rmdirSync(oldDir);
-                        if (DEBUG_MODE) console.log(`[Main Process] [B3] Cleaned up empty folder: ${oldDir}`);
-                      }
-                    } catch (cleanupErr) {
-                      // Cleanup is opportunistic — never fatal.
-                      if (DEBUG_MODE) console.warn('[Main Process] [B3] Cleanup error:', cleanupErr);
+            // Parallel pool of 4. Each per-correction reorg is independent
+            // (different source paths) so they can safely run concurrently;
+            // cap concurrency at 4 to avoid hammering disk I/O on slow
+            // external drives. Old behaviour: strictly sequential — 50ms-500ms
+            // per file × 60 corrections dominated the response time on large
+            // batches.
+            const reorgConcurrency = Math.min(4, correctionsTouchingRaceNumber.length);
+            const reorgQueue = correctionsTouchingRaceNumber.slice();
+            await Promise.all(
+              Array.from({ length: reorgConcurrency }, async () => {
+                while (reorgQueue.length > 0) {
+                  const correction = reorgQueue.shift();
+                  if (!correction) break;
+                  try {
+                    const ev = logEvents.find(
+                      (e: any) => e.type === 'IMAGE_ANALYSIS' && e.fileName === correction.fileName
+                    );
+                    // Source path priority:
+                    //   1. organizedPath — where the file ended up after the original analysis
+                    //   2. originalPath — where the user dropped it (works when org=copy)
+                    const sourcePath = ev?.organizedPath || ev?.originalPath;
+                    if (!sourcePath) {
+                      if (DEBUG_MODE) console.warn(`[Main Process] [B3] No source path for ${correction.fileName} — skipping reorg`);
+                      continue;
                     }
+                    if (!fs.existsSync(sourcePath)) {
+                      if (DEBUG_MODE) console.warn(`[Main Process] [B3] Source path no longer exists for ${correction.fileName}: ${sourcePath}`);
+                      continue;
+                    }
+
+                    const newRaceNumber = String(correction.changes.raceNumber).trim();
+                    const sourceDir = require('path').dirname(ev?.originalPath || sourcePath);
+
+                    // organizeImage handles the move/copy semantics, conflict
+                    // resolution, and the optional XMP sidecar move based on
+                    // the mode the user originally chose for this run.
+                    const orgResult = await organizer.organizeImage(
+                      sourcePath,
+                      [newRaceNumber],
+                      undefined, // CSV data not needed for re-org of a single file
+                      sourceDir
+                    );
+
+                    if (orgResult?.success && orgResult.organizedPath) {
+                      // Update organizedPath in the JSONL so subsequent
+                      // corrections and re-renders see the new location.
+                      if (ev) ev.organizedPath = orgResult.organizedPath;
+                      console.log(
+                        `[Main Process] [B3] Reorganized ${correction.fileName} → ${orgResult.folderName || orgResult.organizedPath}`
+                      );
+
+                      // Best-effort cleanup: remove the OLD folder if it's
+                      // now empty (e.g. Unknown_Numbers/ after the only
+                      // file in it was moved). Only attempt when mode='move'.
+                      if (folderOrgConfig.mode === 'move' && sourcePath !== orgResult.organizedPath) {
+                        try {
+                          const oldDir = require('path').dirname(sourcePath);
+                          const remaining = fs.readdirSync(oldDir);
+                          if (
+                            remaining.length === 0 &&
+                            oldDir.startsWith(resolvedDestinationPath) &&
+                            oldDir !== resolvedDestinationPath
+                          ) {
+                            fs.rmdirSync(oldDir);
+                            if (DEBUG_MODE) console.log(`[Main Process] [B3] Cleaned up empty folder: ${oldDir}`);
+                          }
+                        } catch (cleanupErr) {
+                          // Cleanup is opportunistic — never fatal.
+                          if (DEBUG_MODE) console.warn('[Main Process] [B3] Cleanup error:', cleanupErr);
+                        }
+                      }
+                    } else {
+                      console.warn(
+                        `[Main Process] [B3] Reorg returned no destination for ${correction.fileName}: ${orgResult?.error || 'unknown'}`
+                      );
+                    }
+                  } catch (perCorrectionErr) {
+                    console.warn(`[Main Process] [B3] Failed to reorg ${correction.fileName}:`, perCorrectionErr);
+                    // Continue with the rest of the pool — one bad file shouldn't poison the rest.
                   }
-                } else {
-                  console.warn(
-                    `[Main Process] [B3] Reorg returned no destination for ${correction.fileName}: ${orgResult?.error || 'unknown'}`
-                  );
                 }
-              } catch (perCorrectionErr) {
-                console.warn(`[Main Process] [B3] Failed to reorg ${correction.fileName}:`, perCorrectionErr);
-                // Continue with the other corrections — one bad file shouldn't poison the rest.
-              }
-            }
+              })
+            );
           } else {
             if (DEBUG_MODE) {
               console.log(
@@ -4997,47 +5115,118 @@ app.whenReady().then(async () => { // Added async here
         console.error('[Main Process] CRITICAL: File verification failed!', verificationError);
       }
 
-      // Upload updated log to Supabase if possible
-      try {
-        const { getSupabaseClient } = await import('./database-service');
-        const supabase = getSupabaseClient();
-        const userId = authService.getAuthState().user?.id || 'unknown';
-        const date = new Date().toISOString().split('T')[0];
-        const supabaseUploadPath = `${userId}/${date}/exec_${executionId}.jsonl`;
+      // =====================================================================
+      // PHASE 7 — Background DB writes (fire-and-forget, safe to defer)
+      // =====================================================================
+      // All durable state the Export & IPTC flow consumes is already on disk:
+      //   - JSONL with the corrected fields, organizedPath, metadataWritten
+      //   - The image files themselves with new IPTC keywords (exiftool)
+      //   - The new physical folder layout (FolderOrganizer)
+      //
+      // The remaining sync targets — analysis_results, image_corrections,
+      // and the Supabase Storage log mirror — are eventually-consistent:
+      // they feed the management portal, the training pipeline, and the
+      // web platform, none of which the desktop Export flow reads. So we
+      // dispatch them in the background and respond to the renderer now.
+      //
+      // Durability: every Supabase write goes through the correction-outbox,
+      // which persists the op to userData/.outbox/corrections.jsonl BEFORE
+      // the network attempt. Even if the app is closed before the flush
+      // completes, the periodic flusher will retry at next boot.
+      //
+      // Bulk semantics: image_corrections becomes ONE multi-row insert
+      // (Supabase .insert() accepts an array). analysis_results stays as
+      // N parallel UPDATEs because each targets a different image_id with
+      // a different payload — PostgREST has no clean primitive for
+      // heterogeneous bulk update.
+      const corrCountForBg = corrections.length;
+      const fileContentForBg = fs.readFileSync(logFilePath);
+      const userIdForBg = authService.getAuthState().user?.id || 'unknown';
+      void (async () => {
+        try {
+          const outbox = require('./utils/correction-outbox');
 
-        // Read the file we just saved and upload it
-        const fileContent = fs.readFileSync(logFilePath);
+          if (imageCorrectionInserts.length > 0) {
+            try {
+              const res = await outbox.enqueueAndTry('image_corrections_insert', imageCorrectionInserts);
+              if (res.ok) {
+                console.log(
+                  `[Main Process] ✅ Bulk-inserted ${imageCorrectionInserts.length} USER_MANUAL row(s) into image_corrections`
+                );
+              } else if (res.queued) {
+                console.warn(
+                  `[Main Process] image_corrections bulk insert queued for retry (network issue) — ` +
+                  `${imageCorrectionInserts.length} row(s) safe in outbox`
+                );
+              }
+            } catch (bulkErr) {
+              console.warn('[Main Process] image_corrections bulk insert threw:', bulkErr);
+            }
+          }
 
-        const { error } = await supabase.storage
-          .from('analysis-logs')
-          .upload(supabaseUploadPath, fileContent, {
-            cacheControl: '3600',
-            upsert: true, // Allow overwriting
-            contentType: 'application/x-ndjson'
-          });
-
-        if (error) {
-          if (DEBUG_MODE) console.warn('[Main Process] Direct upload failed:', error);
-        } else {
-          // Also create/update metadata record
-          await supabase
-            .from('analysis_log_metadata')
-            .upsert({
-              execution_id: executionId,
-              user_id: userId,
-              storage_path: supabaseUploadPath,
-              total_images: 0,
-              total_corrections: corrections.length,
-              correction_types: { USER_MANUAL: corrections.length },
-              category: 'unknown',
-              app_version: app.getVersion()
-            });
+          if (analysisResultsUpdates.length > 0) {
+            const results = await Promise.allSettled(
+              analysisResultsUpdates.map(u =>
+                outbox.enqueueAndTry('analysis_results_update', {
+                  image_id: u.image_id,
+                  update: u.update,
+                })
+              )
+            );
+            const ok = results.filter(r => r.status === 'fulfilled' && (r.value as any).ok).length;
+            const queued = results.filter(r => r.status === 'fulfilled' && (r.value as any).queued).length;
+            const failed = results.filter(r => r.status === 'rejected').length;
+            console.log(
+              `[Main Process] analysis_results background sync: ${ok} ok, ${queued} queued for retry, ${failed} threw (outbox will retry).`
+            );
+          }
+        } catch (bgErr) {
+          console.warn('[Main Process] Background DB write block failed (non-critical, outbox will retry):', bgErr);
         }
-      } catch (uploadError) {
-        if (DEBUG_MODE) console.warn('[Main Process] Failed to upload updated log to Supabase:', uploadError);
-      }
 
-      if (DEBUG_MODE) console.log(`[Main Process] Updated analysis log with ${corrections.length} manual corrections`);
+        // Log file upload — also moved off the critical path. Consumed by
+        // the management portal and support tooling, not by Export.
+        try {
+          const { getSupabaseClient } = await import('./database-service');
+          const supabase = getSupabaseClient();
+          const date = new Date().toISOString().split('T')[0];
+          const supabaseUploadPath = `${userIdForBg}/${date}/exec_${executionId}.jsonl`;
+
+          const { error } = await supabase.storage
+            .from('analysis-logs')
+            .upload(supabaseUploadPath, fileContentForBg, {
+              cacheControl: '3600',
+              upsert: true,
+              contentType: 'application/x-ndjson',
+            });
+
+          if (error) {
+            if (DEBUG_MODE) console.warn('[Main Process] Direct upload failed:', error);
+          } else {
+            await supabase
+              .from('analysis_log_metadata')
+              .upsert({
+                execution_id: executionId,
+                user_id: userIdForBg,
+                storage_path: supabaseUploadPath,
+                total_images: 0,
+                total_corrections: corrCountForBg,
+                correction_types: { USER_MANUAL: corrCountForBg },
+                category: 'unknown',
+                app_version: app.getVersion(),
+              });
+          }
+        } catch (uploadError) {
+          if (DEBUG_MODE) console.warn('[Main Process] Failed to upload updated log to Supabase:', uploadError);
+        }
+      })();
+
+      if (DEBUG_MODE) {
+        console.log(
+          `[Main Process] Updated analysis log with ${corrections.length} manual corrections ` +
+          `(DB writes + storage upload deferred to background)`
+        );
+      }
       return { success: true };
 
     } catch (error) {
