@@ -6,14 +6,18 @@
  * and sequential photo analysis.
  */
 
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs/promises';
 import os from 'os';
 import { extractAfPoint, AfPointData } from './af-point-extractor';
 
-const execAsync = promisify(exec);
+// Use execFile (no shell) so paths with spaces work — the default macOS DMG
+// mount is `/Volumes/RaceTagger <version>-arm64/...`, and a shell would split
+// that space and fail to find exiftool (issues #146/#147). Args are passed as
+// an array, never interpolated into a command string.
+const execFileAsync = promisify(execFile);
 
 /**
  * Simple semaphore implementation to limit concurrent processes
@@ -127,28 +131,60 @@ export interface TemporalConfig {
   };
 }
 
+/**
+ * Resolved exiftool invocation for `execFile` (no shell).
+ * - `cmd` is the executable to run.
+ * - `prefixArgs` are args prepended before the tool flags. On Windows the
+ *   bundled exiftool is Strawberry Perl (`perl.exe`) driving `exiftool.pl`, so
+ *   prefixArgs carries the `.pl` script path. On macOS/Linux it's a single
+ *   native binary and prefixArgs is empty.
+ */
+interface ExiftoolInvocation {
+  cmd: string;
+  prefixArgs: string[];
+}
+
 export class TemporalClusterManager {
   private config: TemporalConfig;
-  private exiftoolPath: string;
+  private exiftool: ExiftoolInvocation;
   private clusters: Map<string, TemporalCluster[]> = new Map();
   private analysisLogger?: any; // Optional logger for detailed tracking
   private exiftoolSemaphore: SimpleSemaphore; // Limita i processi ExifTool concorrenti
   private batchProgressCallback?: (processed: number, total: number, currentBatch: number, totalBatches: number) => void;
 
   constructor(exiftoolPath?: string) {
-    this.exiftoolPath = exiftoolPath || this.getExiftoolPath();
+    // A caller-supplied path is treated as a single native binary (no perl
+    // wrapper). With no override we resolve the bundled tool per-platform.
+    this.exiftool = exiftoolPath
+      ? { cmd: exiftoolPath, prefixArgs: [] }
+      : this.resolveExiftool();
     this.config = this.getDefaultConfig();
     this.exiftoolSemaphore = new SimpleSemaphore(15); // Max 15 processi ExifTool concorrenti
   }
 
   /**
-   * Get the correct path for exiftool based on development/production environment and OS
+   * Resolve the exiftool invocation for `execFile` based on dev/prod and OS.
+   * Returns `{ cmd, prefixArgs }` instead of a shell string so the executable
+   * path can contain spaces (e.g. the default macOS DMG mount
+   * `/Volumes/RaceTagger 1.1.9-arm64/...`) without the shell splitting it.
    */
-  private getExiftoolPath(): string {
+  private resolveExiftool(): ExiftoolInvocation {
     const path = require('path');
 
     // Detect operating system
     const platform = process.platform; // 'win32', 'darwin', 'linux'
+
+    const build = (vendorDir: string): ExiftoolInvocation => {
+      // Windows: bundled exiftool is Strawberry Perl (perl.exe) + exiftool.pl;
+      // other platforms ship a single native exiftool binary.
+      if (platform === 'win32') {
+        return {
+          cmd: path.join(vendorDir, 'perl.exe'),
+          prefixArgs: [path.join(vendorDir, 'exiftool.pl')],
+        };
+      }
+      return { cmd: path.join(vendorDir, 'exiftool'), prefixArgs: [] };
+    };
 
     try {
       // Safely determine if we're in development mode
@@ -169,25 +205,11 @@ export class TemporalClusterManager {
         vendorDir = path.join(process.resourcesPath, 'app.asar.unpacked', 'vendor', platform);
       }
 
-      // Windows uses perl.exe + exiftool.pl, other platforms use exiftool directly
-      if (platform === 'win32') {
-        const perlExe = path.join(vendorDir, 'perl.exe');
-        const exiftoolPl = path.join(vendorDir, 'exiftool.pl');
-        return `"${perlExe}" "${exiftoolPl}"`;
-      } else {
-        return path.join(vendorDir, 'exiftool');
-      }
+      return build(vendorDir);
     } catch {
       // Fallback for standalone testing
       // __dirname is dist/src/matching/, so ../../../vendor reaches project root
-      const vendorDir = path.join(__dirname, '../../../vendor', platform);
-      if (platform === 'win32') {
-        const perlExe = path.join(vendorDir, 'perl.exe');
-        const exiftoolPl = path.join(vendorDir, 'exiftool.pl');
-        return `"${perlExe}" "${exiftoolPl}"`;
-      } else {
-        return path.join(vendorDir, 'exiftool');
-      }
+      return build(path.join(__dirname, '../../../vendor', platform));
     }
   }
 
@@ -447,23 +469,39 @@ export class TemporalClusterManager {
       // Scrivi i percorsi dei file nel file temporaneo (uno per riga)
       await fs.writeFile(tmpFile, filePaths.join('\n'), 'utf-8');
 
-      // Usa il flag -@ di ExifTool per leggere i percorsi dal file
-      // Non quotare exiftoolPath perché potrebbe già contenere spazi gestiti internamente
-      // Extract timestamps + GPS coordinates + camera info in a single batch call
+      // Usa il flag -@ di ExifTool per leggere i percorsi dal file.
+      // Tags are passed as a real argv array to execFile (no shell), so neither
+      // the exiftool path nor the tmpFile path can be broken by spaces.
       // Note: AF/Focus fields are camera-brand specific and are parsed by
       // af-point-extractor.ts. We pass `-G1` to keep grouped tags (some bodies
       // expose AF fields under MakerNotes:Canon/Nikon/etc. — `-G1` is omitted
       // here intentionally so ExifTool flattens names; the parser handles all
       // common keys regardless of group).
-      // Extended ExifTool command:
+      // Extended ExifTool tag set:
       //   - timestamps + GPS + camera/lens (existing)
       //   - exposure trio (shutter/aperture/ISO) for analytics & sharpness filters
       //   - Orientation (for correct AF point rotation to displayed coords)
       //   - SubjectDistance + DriveMode/ContinuousDrive/ShootingMode (drive mode is brand-specific)
       //   - AF-related fields (existing)
-      const command = `${this.exiftoolPath} -DateTimeOriginal -CreateDate -ModifyDate -SubSecTimeOriginal -GPSLatitude -GPSLongitude -GPSAltitude -GPSImgDirection -Make -Model -LensModel -FocalLength -ExposureTime -FNumber -ISO -Orientation -SubjectDistance -DriveMode -ContinuousDrive -ShootingMode -ImageWidth -ImageHeight -ExifImageWidth -ExifImageHeight -RawImageFullWidth -RawImageFullHeight -AFAreaXPositions -AFAreaYPositions -AFAreaWidths -AFAreaHeights -AFImageWidth -AFImageHeight -AFAreaXPosition -AFAreaYPosition -AFAreaWidth -AFAreaHeight -PrimaryAFPoint -AFPointSelected -AFPointsInFocus -AFPointsUsed -FocalPlaneAFPointsUsed -FocusPixel -FocusLocation -FocusPosition2 -AFMode -AFAreaMode -AFAreaSelectMethod -FocusMode -n -json -@ "${tmpFile}"`;
+      const args = [
+        ...this.exiftool.prefixArgs,
+        '-DateTimeOriginal', '-CreateDate', '-ModifyDate', '-SubSecTimeOriginal',
+        '-GPSLatitude', '-GPSLongitude', '-GPSAltitude', '-GPSImgDirection',
+        '-Make', '-Model', '-LensModel', '-FocalLength',
+        '-ExposureTime', '-FNumber', '-ISO', '-Orientation', '-SubjectDistance',
+        '-DriveMode', '-ContinuousDrive', '-ShootingMode',
+        '-ImageWidth', '-ImageHeight', '-ExifImageWidth', '-ExifImageHeight',
+        '-RawImageFullWidth', '-RawImageFullHeight',
+        '-AFAreaXPositions', '-AFAreaYPositions', '-AFAreaWidths', '-AFAreaHeights',
+        '-AFImageWidth', '-AFImageHeight',
+        '-AFAreaXPosition', '-AFAreaYPosition', '-AFAreaWidth', '-AFAreaHeight',
+        '-PrimaryAFPoint', '-AFPointSelected', '-AFPointsInFocus', '-AFPointsUsed',
+        '-FocalPlaneAFPointsUsed', '-FocusPixel', '-FocusLocation', '-FocusPosition2',
+        '-AFMode', '-AFAreaMode', '-AFAreaSelectMethod', '-FocusMode',
+        '-n', '-json', '-@', tmpFile,
+      ];
 
-      const { stdout, stderr } = await execAsync(command, {
+      const { stdout, stderr } = await execFileAsync(this.exiftool.cmd, args, {
         maxBuffer: 50 * 1024 * 1024, // 50MB buffer per batch grandi
         timeout: 10000 // 10 secondi timeout
       });
@@ -616,9 +654,15 @@ export class TemporalClusterManager {
     await this.exiftoolSemaphore.acquire();
 
     try {
-      const command = `${this.exiftoolPath} -DateTimeOriginal -CreateDate -ModifyDate -SubSecTimeOriginal -json "${filePath}"`;
+      // execFile (no shell): exiftool path + filePath are argv entries, so
+      // spaces in either are safe (e.g. the macOS DMG mount path).
+      const args = [
+        ...this.exiftool.prefixArgs,
+        '-DateTimeOriginal', '-CreateDate', '-ModifyDate', '-SubSecTimeOriginal',
+        '-json', filePath,
+      ];
 
-      const { stdout, stderr } = await execAsync(command);
+      const { stdout, stderr } = await execFileAsync(this.exiftool.cmd, args);
 
       const jsonData = JSON.parse(stdout);
       if (!jsonData || jsonData.length === 0) {

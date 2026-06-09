@@ -1,5 +1,21 @@
 # Changelog - RaceTagger Desktop
 
+## [Unreleased]
+
+### 🐛 Fixes
+
+- **ExifTool now runs from mount paths with spaces (macOS DMG)**: temporal
+  clustering built the ExifTool command as a single shell string with an
+  **unquoted** executable path. When the app ran from the default DMG mount
+  `/Volumes/RaceTagger <version>-arm64/…`, the shell split the path at the
+  space, ExifTool never ran, and no `DateTimeOriginal` timestamps were
+  extracted — degrading matching to **0 recognized numbers** on the whole
+  batch. Both invocations now use `execFile` (no shell) with a real argv
+  array, and the path resolver returns `{ cmd, prefixArgs }` (preserving the
+  Windows `perl.exe` + `exiftool.pl` wrapper). Local exec-safety fix only —
+  no token logic / Edge Functions / schema touched. Adds
+  `tests/temporal-clustering-exec.test.ts`. (#147, refs #146 — PR #182)
+
 ## [1.1.9] - 2026-05-12
 
 ### 🐛 Manual corrections — durability and consistency
