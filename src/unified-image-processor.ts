@@ -13,6 +13,8 @@ import { writeDescriptionToImage, writeKeywordsToImage, writeSpecialInstructions
 import { CleanupManager, getCleanupManager } from './utils/cleanup-manager';
 import { SmartMatcher, MatchResult, AnalysisResult as SmartMatcherAnalysisResult, getParticipantDriverNames, getPrimaryDriverName, normalizeRaceNumber } from './matching/smart-matcher';
 import { CacheManager } from './matching/cache-manager';
+import { dnaConsensusAndValidate, DNADetectionInput } from './matching/dna-consensus';
+import { mergeDnaSettings } from './matching/sport-config';
 import { AnalysisLogger, CorrectionData } from './utils/analysis-logger';
 import { TemporalClusterManager, ImageTimestamp } from './matching/temporal-clustering';
 import { isAfPointInBbox } from './matching/af-point-extractor';
@@ -2377,7 +2379,13 @@ class UnifiedImageWorker extends EventEmitter {
                 modelSource: 'gemini-v6-crop-seq',
                 // Issue #104: propagate filtered otherPeople (empty unless preset opted in).
                 otherPeople: this.extractOtherPeopleFromCrop(cropResult),
-                cropIndex: originalCropIdx
+                cropIndex: originalCropIdx,
+                // Vehicle DNA (P1): preserve; category_dna = DNA race category, not the sport.
+                make: cropResult.make ?? null,
+                model: cropResult.model ?? null,
+                livery: cropResult.livery ?? null,
+                category_dna: cropResult.category ?? null,
+                context: cropResult.context ?? null
               };
 
               const medOnnxSeq = mediumOnnxByCropIndex.get(originalCropIdx);
@@ -2539,7 +2547,15 @@ class UnifiedImageWorker extends EventEmitter {
             modelSource: 'gemini-v6-crop',
             // Issue #104: propagate filtered otherPeople.
             otherPeople: this.extractOtherPeopleFromCrop(crop),
-            cropIndex: originalCropIdx
+            cropIndex: originalCropIdx,
+            // Vehicle DNA (P1 DNA-reconciliation): preserve so the downstream consensus
+            // pass can see it (was discarded here). `category_dna` is the DNA race
+            // category (GT3/LMP2/Motocross), kept SEPARATE from `category` above = the sport.
+            make: crop.make ?? null,
+            model: crop.model ?? null,
+            livery: crop.livery ?? null,
+            category_dna: crop.category ?? null,
+            context: crop.context ?? null
           };
 
           const medOnnx = mediumOnnxByCropIndex.get(originalCropIdx);
@@ -4075,7 +4091,8 @@ class UnifiedImageWorker extends EventEmitter {
           // V6 Vehicle DNA fields
           make: vehicle.make || null,           // Manufacturer (Ferrari, Porsche, etc.)
           model: vehicle.model || null,         // Model (296 GT3, 911 RSR, etc.)
-          category: vehicle.category || null,   // Race category (GT3, LMP2, Hypercar, etc.)
+          category: vehicle.category || null,   // Sport code (legacy: set from this.category upstream)
+          category_dna: vehicle.category_dna || null,  // P1: DNA race category from crop (GT3/LMP2/Motocross); NOT the sport
           livery: vehicle.livery || null,       // { primary: string, secondary: string[] }
           context: vehicle.context || null,     // Scene context (race, pit, podium, portrait)
           // Include both formats for maximum compatibility
@@ -9430,6 +9447,81 @@ export class UnifiedImageProcessor extends EventEmitter {
           data.confidence_score = c;
           data.confidence_level = lvl;
         }
+      }
+
+      // ─────────────────────────────────────────────────────────────────────
+      // P1 DNA-reconciliation: make-consensus + conservative demote-to-review.
+      // Runs AFTER numbers are finalized (temporal), as a SECOND pass over
+      // allWrites so clusters span the whole batch. Feature-gated: the pass only
+      // runs when the sport's `enableDNAContradictionDemote` is true (default OFF
+      // → fully inert, zero release risk). With shadow ON it records the verdict
+      // for telemetry but NEVER changes a match; with shadow OFF (armed) it demotes
+      // contradicted detections to needs_review. It NEVER changes a race number.
+      try {
+        const dnaSettings = mergeDnaSettings(this.currentSportCategory?.matching_config?.dnaSettings);
+        if (dnaSettings.enableDNAContradictionDemote) {
+          const armed = dnaSettings.dnaConsensusShadowMode === false;
+          const dnaDetections: DNADetectionInput[] = [];
+          const vehicleByKey = new Map<string, { data: any; v: any }>();
+          for (const w of allWrites) {
+            const data: any = w.kind === 'update' ? w.ref.updateData : w.ref.data;
+            const dbId: string | undefined = w.kind === 'update' ? w.ref.imageId : data?.image_id;
+            const ts: number = (w.ref as any).timestamp || 0;
+            const vehicles: any[] | undefined = data?.raw_response?.vehicles;
+            if (!dbId || !Array.isArray(vehicles)) continue;
+            vehicles.forEach((v: any, vi: number) => {
+              const key = `${dbId}#${vi}`;
+              vehicleByKey.set(key, { data, v });
+              dnaDetections.push({
+                key,
+                raceNumber: (v?.finalResult?.raceNumber ?? v?.raceNumber) ?? null,
+                make: v?.make ?? null,
+                categoryDna: v?.category_dna ?? null,
+                ts,
+                wasClearWinner: v?.participantMatch?.smartMatch?.matchStatus === 'matched',
+              });
+            });
+          }
+
+          if (dnaDetections.length > 0) {
+            const dnaResult = dnaConsensusAndValidate(dnaDetections, dnaSettings);
+            if (dnaResult.demotions.length > 0) {
+              console.log(`[DNAConsensus] ${dnaResult.demotions.length} contradiction(s) over ${dnaResult.clusters.length} cluster(s) — ${armed ? 'ARMED (demoting)' : 'SHADOW (telemetry only)'}`);
+            }
+            for (const dem of dnaResult.demotions) {
+              const target = vehicleByKey.get(dem.key);
+              const sm = target?.v?.participantMatch?.smartMatch;
+              if (!target || !sm) continue; // can't demote without a smartMatch to flag
+              const { data, v } = target;
+              // Verdict persisted in BOTH shadow + armed (additive, no behavior change in shadow).
+              sm.dnaValidation = {
+                verdict: armed ? 'DEMOTE_TO_REVIEW' : 'SHADOW_FLAG',
+                consensusMake: dem.consensusMake,
+                consensusCategory: dem.consensusCategory,
+                detectedMake: dem.detectedMake,
+                coherenceShare: dem.coherenceShare,
+                votesForWinner: dem.votesForWinner,
+                clusterSize: dem.clusterSize,
+                reason: dem.reason,
+              };
+              console.log(`[DNAConsensus]  ${armed ? 'DEMOTE' : 'shadow'} #${dem.raceNumber} (${dem.key}): ${dem.reason}`);
+              if (!armed) continue;
+              // ARMED: demote to needs_review. The race NUMBER is NOT touched.
+              sm.matchStatus = 'needs_review';
+              sm.needsDNAReview = true;
+              if (v.finalResult) v.finalResult.matchStatus = 'needs_review';
+              // JSONB-only flag — NEVER a top-level updateData column (an unknown
+              // column would make PostgREST reject the whole UPDATE).
+              data.raw_response = { ...data.raw_response, needsHumanReview: true };
+              // Pull the top-level level to LOW only if the demoted vehicle is primary.
+              if (data.raw_response?.vehicles?.[0] === v) {
+                data.confidence_level = 'LOW';
+              }
+            }
+          }
+        }
+      } catch (dnaErr) {
+        console.warn('[DNAConsensus] pass skipped (non-fatal):', dnaErr instanceof Error ? dnaErr.message : String(dnaErr));
       }
 
       const rescoreMs = Date.now() - rescoreStart;

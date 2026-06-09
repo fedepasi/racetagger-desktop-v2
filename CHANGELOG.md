@@ -16,6 +16,23 @@
   no token logic / Edge Functions / schema touched. Adds
   `tests/temporal-clustering-exec.test.ts`. (#147, refs #146 — PR #182)
 
+### 🧬 Vehicle-DNA reconciliation (P1 — internal, default OFF)
+
+- **Preserve vehicle DNA through the pipeline**: the desktop was discarding the
+  make/model/livery/category the V6 edge function already returns in
+  `crop_analysis`. The Gemini-crop entries (batch + sequential paths) now carry
+  them, and the result map exposes `category_dna` (the DNA race category, kept
+  separate from the sport `category`). Additive — no schema/token/Edge-Function
+  change.
+- **Gated DNA-consensus demote-to-review scaffolding** (`matching/dna-consensus.ts`):
+  per race-number cluster, a count-based make+category consensus that can move a
+  contradicted detection to `needs_review` — it NEVER changes the race number.
+  Fully feature-gated via `sport_categories.matching_config.dnaSettings`
+  (`enableDNAContradictionDemote`, default **false** → the pass is inert), with a
+  shadow mode for measurement. Conservative by construction (multi-photo cluster
+  only, make-led — model is advisory, burst-correlated clusters shadow-only).
+  Adds `tests/dna-consensus.test.ts` (21 cases incl. the no-number-mutation invariant).
+
 ## [1.1.9] - 2026-05-12
 
 ### 🐛 Manual corrections — durability and consistency

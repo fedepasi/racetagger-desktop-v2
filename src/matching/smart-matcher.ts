@@ -11,7 +11,7 @@
 
 import { EvidenceCollector, Evidence, EvidenceType } from './evidence-collector';
 import { OCRCorrector } from './ocr-corrector';
-import { SportConfig, MatchingConfig } from './sport-config';
+import { SportConfig, MatchingConfig, DNASettings, DEFAULT_DNA_SETTINGS } from './sport-config';
 import { TemporalClusterManager, ImageTimestamp } from './temporal-clustering';
 import { CorrectionData } from '../utils/analysis-logger';
 
@@ -250,6 +250,14 @@ export class SmartMatcher {
     this.evidenceCollector = new EvidenceCollector(this.config);
     this.ocrCorrector = new OCRCorrector();
     this.temporalManager = new TemporalClusterManager();
+  }
+
+  /**
+   * P1 DNA-reconciliation: expose the current sport's DNA settings (conservative
+   * defaults — feature OFF, shadow ON — when the sport_categories config omits them).
+   */
+  getDnaSettings(): DNASettings {
+    return this.config?.dnaSettings ?? DEFAULT_DNA_SETTINGS;
   }
 
   /**

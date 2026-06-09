@@ -45,6 +45,49 @@ export interface MatchingConfig {
   afPointBonus: number;          // multiplicative factor 0-1 (e.g. 0.1 = +10%)
   sport: string;
   version: string;
+  /**
+   * P1 DNA-reconciliation (default OFF). Absent/partial → safe defaults
+   * (feature inert, shadow ON). Populated from
+   * sport_categories.matching_config.dnaSettings.
+   */
+  dnaSettings?: DNASettings;
+}
+
+export interface DNASettings {
+  enableDNAContradictionDemote: boolean;    // master gate (default false)
+  dnaConsensusShadowMode: boolean;          // compute+log but never change matchStatus (default true)
+  makeConsensusShare: number;               // min coherence share (votesForWinner/nonAbstaining) to act (default 0.80)
+  minConsensusVotes: number;                // distinct images voting the winning make (default 3)
+  minClusterVotes: number;                  // min cluster size to attempt a verdict (default 4)
+  dnaRequireCategoryCorroboration: boolean; // lone make outlier needs category to also disagree (default true)
+  tieMargin: number;                        // two top buckets within N votes → indecisive (default 1)
+  burstThresholdMs: number;                 // tight-burst clusters stay shadow-only in P1 (default 4000)
+}
+
+export const DEFAULT_DNA_SETTINGS: DNASettings = {
+  enableDNAContradictionDemote: false,
+  dnaConsensusShadowMode: true,
+  makeConsensusShare: 0.80,
+  minConsensusVotes: 3,
+  minClusterVotes: 4,
+  dnaRequireCategoryCorroboration: true,
+  tieMargin: 1,
+  burstThresholdMs: 4000,
+};
+
+/** Merge a raw matching_config.dnaSettings blob over the conservative defaults. */
+export function mergeDnaSettings(raw: any): DNASettings {
+  if (!raw || typeof raw !== 'object') return { ...DEFAULT_DNA_SETTINGS };
+  return {
+    enableDNAContradictionDemote: raw.enableDNAContradictionDemote === true,
+    dnaConsensusShadowMode: raw.dnaConsensusShadowMode !== false, // default true (shadow)
+    makeConsensusShare: typeof raw.makeConsensusShare === 'number' ? raw.makeConsensusShare : DEFAULT_DNA_SETTINGS.makeConsensusShare,
+    minConsensusVotes: typeof raw.minConsensusVotes === 'number' ? raw.minConsensusVotes : DEFAULT_DNA_SETTINGS.minConsensusVotes,
+    minClusterVotes: typeof raw.minClusterVotes === 'number' ? raw.minClusterVotes : DEFAULT_DNA_SETTINGS.minClusterVotes,
+    dnaRequireCategoryCorroboration: raw.dnaRequireCategoryCorroboration !== false, // default true
+    tieMargin: typeof raw.tieMargin === 'number' ? raw.tieMargin : DEFAULT_DNA_SETTINGS.tieMargin,
+    burstThresholdMs: typeof raw.burstThresholdMs === 'number' ? raw.burstThresholdMs : DEFAULT_DNA_SETTINGS.burstThresholdMs,
+  };
 }
 
 export interface SportProfile {
@@ -116,7 +159,9 @@ export class SportConfig {
           enableAfPointScoring: category.matching_config.enableAfPointScoring === true,
           afPointBonus: typeof category.matching_config.afPointBonus === 'number' ? category.matching_config.afPointBonus : 0.1,
           sport: category.code,
-          version: '1.1.0-supabase'
+          version: '1.1.0-supabase',
+          // P1 DNA-reconciliation: merge over conservative defaults (OFF + shadow).
+          dnaSettings: mergeDnaSettings(category.matching_config.dnaSettings)
         };
 
         this.configs.set(category.code.toLowerCase(), matchingConfig);
