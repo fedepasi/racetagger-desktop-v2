@@ -4,6 +4,17 @@
 
 ### 🐛 Fixes
 
+- **Add a missing detection on a group photo from the review gallery**: the
+  "+ Add detection" button was rendered **only** in the empty-state branch of
+  the gallery's detection editor (`updateVehicleEditor`), so a photo that
+  already had 1+ detections offered no way to add a plate the AI missed (e.g.
+  3 of 5 plates found). The button now also renders after the existing
+  detection cards, reusing the same `lv-add-vehicle-btn` / `data-action="add"`
+  delegated handler — the new card saves a normal `MANUAL_CORRECTION` that
+  flows into folder org / IPTC like any other correction. Renderer-only
+  (`renderer/js/log-visualizer.js` + `renderer/css/processing-status.css`);
+  no token logic / Edge Functions / schema touched. (#167)
+
 - **ExifTool now runs from mount paths with spaces (macOS DMG)**: temporal
   clustering built the ExifTool command as a single shell string with an
   **unquoted** executable path. When the app ran from the default DMG mount
@@ -15,6 +26,21 @@
   Windows `perl.exe` + `exiftool.pl` wrapper). Local exec-safety fix only —
   no token logic / Edge Functions / schema touched. Adds
   `tests/temporal-clustering-exec.test.ts`. (#147, refs #146 — PR #182)
+
+- **IPTC keyword integrity on group photos & corrections**: a manual correction
+  now rebuilds keywords from **every** current detection, so correcting/adding
+  one plate no longer wipes the sibling detections' number/team/driver; the
+  write is collapsed to one pass per file. Overwrite mode now truly **replaces**
+  (the previous `-IPTC:Keywords=` + `+=` idiom silently *accumulated* stale
+  keywords). Single-digit race numbers (#1–#9) are no longer dropped, and
+  embedded visual tags (location/weather/scene) survive a correction (only those
+  already on the file are re-added, respecting the user's embed choice). (#167)
+- **ExifTool packaging hardened**: the git-ignored Windows launcher is now
+  fetched **launcher-only** (never bumping the deliberately pinned 13.38
+  `exiftool.pl`/`lib`); the build **fails loudly** if ExifTool is missing
+  (`validate-native-deps.js`), so a release can't ship without metadata writing;
+  and the metadata test suites now exercise the **bundled** ExifTool instead of
+  silently skipping. (#147)
 
 ### ✨ Gruppe C field-feedback fixes (Nürburgring 24h)
 

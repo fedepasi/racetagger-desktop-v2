@@ -56,6 +56,7 @@ import {
   DEFAULT_SHARPNESS_FILTER_CONFIG,
 } from './utils/crop-context-extractor';
 import { AdaptiveUploadSemaphore, AdaptiveUploadConfig } from './utils/adaptive-upload-semaphore';
+import { isEdgeFunctionRetryable, isUploadRetryable, isDeferredUploadRetryCandidate } from './utils/upload-retry-classifier';
 
 // Create component loggers for macro-flow visibility
 const log = createComponentLogger('Processor');
@@ -163,66 +164,6 @@ async function extractEdgeFunctionErrorDetails(error: any): Promise<string> {
     // If reading the body fails, return what we have
     return error?.message || error?.statusText || 'Unknown Edge Function error';
   }
-}
-
-/**
- * Determine if an Edge Function error is retryable.
- * Covers both network failures and capacity/rate-limit errors (429, 503).
- * Issues: #55 (timeout), #57 (429 Resource Exhausted), #58 (Failed to send)
- */
-function isEdgeFunctionRetryable(errorMessage: string): boolean {
-  const msg = errorMessage.toLowerCase();
-  // Network errors
-  if (msg.includes('fetch failed') || msg.includes('econnrefused') ||
-      msg.includes('etimedout') || msg.includes('failed to send') ||
-      msg.includes('econnreset') || msg.includes('socket hang up') ||
-      msg.includes('failed to load image') || msg.includes('error reading a body') ||
-      msg.includes('connection error') || msg.includes('connection reset')) {
-    return true;
-  }
-  // HTTP capacity/rate-limit errors
-  if (msg.includes('429') || msg.includes('503') ||
-      msg.includes('resource exhausted') || msg.includes('resource_exhausted') ||
-      msg.includes('overloaded') || msg.includes('quota') ||
-      msg.includes('rate limit') || msg.includes('rate_limit') ||
-      msg.includes('too many requests') || msg.includes('service unavailable')) {
-    return true;
-  }
-  // Supabase Edge Function boot timeout (issue #55)
-  if (msg.includes('function invocation timeout') || msg.includes('boot error') ||
-      msg.includes('worker limit')) {
-    return true;
-  }
-  return false;
-}
-
-/**
- * Determine if an upload-to-storage error is retryable.
- * Extends `isEdgeFunctionRetryable` with storage-gateway failures that surface
- * as HTML error pages being parsed as JSON.
- *
- * Issues covered:
- *  - #108, #103, #95  "fetch failed" in UnifiedImageWorker.uploadToStorage
- *  - #107, #106, #100, #98  "Unexpected token '<', \"<!DOCTYPE ...\" is not valid JSON"
- *    (storage/edge gateway returns an HTML error page that the SDK tries to JSON.parse)
- */
-function isUploadRetryable(errorMessage: string): boolean {
-  if (isEdgeFunctionRetryable(errorMessage)) return true;
-  const msg = errorMessage.toLowerCase();
-  // JSON parse errors indicating HTML response from gateway (502/503/504 pages)
-  if (msg.includes("unexpected token '<'") ||
-      msg.includes('unexpected token <') ||
-      msg.includes('<!doctype') ||
-      msg.includes('is not valid json') ||
-      msg.includes('unexpected end of json input')) {
-    return true;
-  }
-  // Common transient HTTP 5xx/gateway responses
-  if (msg.includes('502') || msg.includes('504') ||
-      msg.includes('bad gateway') || msg.includes('gateway timeout')) {
-    return true;
-  }
-  return false;
 }
 
 const sharp = getSharp();
@@ -3570,6 +3511,9 @@ class UnifiedImageWorker extends EventEmitter {
           // ============================================
           let faceRecognitionStoragePath: string | null = null;
           let faceRecognitionImageId: string | null = null;
+          // Issue #136: hoisted above the try so the JSONL log (moved out of the
+          // try/catch below) can still read the visual tags after the catch.
+          let faceVisualTagsResult: { tags: any; usage: any } | null = null;
 
           try {
             // Get userId from authService (same as other flows)
@@ -3649,7 +3593,6 @@ class UnifiedImageWorker extends EventEmitter {
             }
 
             // 5. Visual Tagging for face recognition path (same as standard flow)
-            let faceVisualTagsResult: { tags: any; usage: any } | null = null;
             if (this.config.visualTagging?.enabled && faceRecognitionStoragePath) {
               try {
                 faceVisualTagsResult = await this.invokeVisualTagging(faceRecognitionStoragePath, {
@@ -3664,51 +3607,60 @@ class UnifiedImageWorker extends EventEmitter {
               }
             }
 
-            // 6. Log to JSONL with real Supabase URL
-            if (this.analysisLogger) {
-              const { SUPABASE_CONFIG } = await import('./config');
-              const faceSupabaseUrl = faceRecognitionStoragePath
-                ? `${SUPABASE_CONFIG.url}/storage/v1/object/public/uploaded-images/${faceRecognitionStoragePath}`
-                : `local://${imageFile.originalPath}`;
-
-              const faceVehiclesForLog = matchedDrivers.map((driver, idx) => ({
-                vehicleIndex: idx,
-                raceNumber: driver.raceNumber ?? undefined,
-                drivers: driver.drivers,
-                team: driver.teamName ?? undefined,
-                confidence: driver.confidence,
-                corrections: [] as any[],
-                finalResult: {
-                  raceNumber: driver.raceNumber ?? undefined,
-                  team: driver.teamName ?? undefined,
-                  drivers: driver.drivers,
-                  matchedBy: 'face_recognition'
-                }
-              }));
-
-              this.analysisLogger.logImageAnalysis({
-                imageId: imageFile.id,
-                fileName: imageFile.fileName,
-                originalFileName: path.basename(imageFile.originalPath),
-                originalPath: imageFile.originalPath,
-                supabaseUrl: faceSupabaseUrl,
-                aiResponse: {
-                  rawText: `FACE_RECOGNITION: ${matchedDrivers.length} drivers identified`,
-                  totalVehicles: matchedDrivers.length,
-                  vehicles: faceVehiclesForLog
-                },
-                thumbnailPath,
-                microThumbPath,
-                compressedPath,
-                visualTags: faceVisualTagsResult?.tags,
-                recognitionMethod: 'face_recognition'
-              });
-              workerLog.info(`[FaceRecognition] Logged to JSONL with URL: ${faceSupabaseUrl}`);
-            }
-
           } catch (uploadError: any) {
             workerLog.error(`[FaceRecognition] Error during Supabase upload/save: ${uploadError.message}`);
             // Non bloccare il processing per errori di upload
+          }
+
+          // 6. Log to JSONL — ALWAYS, even if the upload/DB steps in the try
+          // above threw. Issue #136: this JSONL entry is the local source of
+          // truth for the review report. Previously it was the last step INSIDE
+          // the try, so a failed uploadToStorage()/images insert (transient
+          // "max connections" / HTML-error / network — see #144/#116/#113/#164)
+          // was swallowed by the catch and the log was skipped, making
+          // face-matched photos vanish from the report even though their
+          // metadata was already written above. Decoupled so every processed
+          // photo stays reviewable/correctable (falls back to a local:// URL
+          // when the upload didn't land).
+          if (this.analysisLogger) {
+            const { SUPABASE_CONFIG } = await import('./config');
+            const faceSupabaseUrl = faceRecognitionStoragePath
+              ? `${SUPABASE_CONFIG.url}/storage/v1/object/public/uploaded-images/${faceRecognitionStoragePath}`
+              : `local://${imageFile.originalPath}`;
+
+            const faceVehiclesForLog = matchedDrivers.map((driver, idx) => ({
+              vehicleIndex: idx,
+              raceNumber: driver.raceNumber ?? undefined,
+              drivers: driver.drivers,
+              team: driver.teamName ?? undefined,
+              confidence: driver.confidence,
+              corrections: [] as any[],
+              finalResult: {
+                raceNumber: driver.raceNumber ?? undefined,
+                team: driver.teamName ?? undefined,
+                drivers: driver.drivers,
+                matchedBy: 'face_recognition'
+              }
+            }));
+
+            this.analysisLogger.logImageAnalysis({
+              imageId: imageFile.id,
+              fileName: imageFile.fileName,
+              originalFileName: path.basename(imageFile.originalPath),
+              originalPath: imageFile.originalPath,
+              supabaseUrl: faceSupabaseUrl,
+              aiResponse: {
+                rawText: `FACE_RECOGNITION: ${matchedDrivers.length} drivers identified`,
+                totalVehicles: matchedDrivers.length,
+                vehicles: faceVehiclesForLog
+              },
+              thumbnailPath,
+              microThumbPath,
+              compressedPath,
+              visualTags: faceVisualTagsResult?.tags,
+              recognitionMethod: 'face_recognition'
+            });
+            workerLog.info(`[FaceRecognition] Logged to JSONL with URL: ${faceSupabaseUrl}`);
           }
 
           return {
@@ -9116,6 +9068,18 @@ export class UnifiedImageProcessor extends EventEmitter {
       }
     }
 
+    // ==================== DEFERRED UPLOAD RETRY DRAIN ====================
+    // The high-concurrency main pass can transiently exhaust the Supabase
+    // connection pool (issues #142/#143/#144 — Nürburgring 24h batch), making a
+    // handful of uploads fail outright and produce ghost images + 0 results.
+    // Now that the main loop is done and upload pressure is gone, re-run just
+    // those hard transient upload failures once more, gently (sequential), so the
+    // batch completes whole without the user lifting a finger. Runs BEFORE the
+    // flush/finalize below (recovered rows persist normally) and BEFORE token
+    // finalization in the outer processBatch() (so a recovered image is charged
+    // exactly once, within the existing pre-authorization).
+    await this.drainDeferredUploads(results, imageFiles);
+
     console.log(`\n${'='.repeat(60)}`);
     console.log(`[FINALIZE] 🏁 Batch processing complete: ${results.length} images. Starting finalization...`);
     console.log(`${'='.repeat(60)}`);
@@ -9964,6 +9928,104 @@ export class UnifiedImageProcessor extends EventEmitter {
   /**
    * Processa una singola immagine con un worker
    */
+  /**
+   * End-of-batch "deferred upload retry" drain.
+   *
+   * Re-runs the per-image pipeline for images that failed with a HARD, transient
+   * upload error during the high-concurrency main pass (e.g. Supabase connection-
+   * pool exhaustion — issues #142/#143/#144). Detection is conservative and
+   * token-safe (see isDeferredUploadRetryCandidate): only `success:false` results
+   * whose error was minted by uploadToStorage and is classified transient. Those
+   * never reached analyzeImage, so their pre-authorized token is unspent and the
+   * re-run is charged exactly once — never twice — and creates no duplicate row.
+   *
+   * Recovered results are merged back into `results` IN PLACE (by fileId), so the
+   * downstream temporal-backfill / flush / execution-finalize / ghost-detection
+   * all see the corrected rows. The re-run goes through the SAME processWithWorker
+   * path, so it appends a fresh successful IMAGE_ANALYSIS entry to the JSONL —
+   * which means the existing resume flow treats a recovered image as done, and an
+   * un-recovered one (e.g. app killed mid-drain) as still-to-do. No new table, no
+   * second source of truth.
+   *
+   * Gentle by design: sequential (effective upload concurrency 1) so we don't
+   * re-saturate the pool we just relieved, with an early-abort if the pool is
+   * clearly still down.
+   */
+  private async drainDeferredUploads(
+    results: UnifiedProcessingResult[],
+    imageFiles: UnifiedImageFile[]
+  ): Promise<void> {
+    if (this.config.isCancelled && this.config.isCancelled()) return;
+
+    // Map results → original UnifiedImageFile so we can re-run the pipeline.
+    // Prefer fileId (always present on the common processImage() return path);
+    // fall back to fileName for the rare worker-rejection result that omits it.
+    const byId = new Map(imageFiles.map(f => [f.id, f]));
+    const byName = new Map(imageFiles.map(f => [f.fileName, f]));
+
+    const candidates: Array<{ index: number; original: UnifiedImageFile }> = [];
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      if (!isDeferredUploadRetryCandidate(r)) continue;
+      const original = (r.fileId ? byId.get(r.fileId) : undefined) || byName.get(r.fileName);
+      if (!original) {
+        log.warn(`[DeferredDrain] Cannot locate source file for failed upload "${r.fileName}" — skipping retry`);
+        continue;
+      }
+      candidates.push({ index: i, original });
+    }
+
+    if (candidates.length === 0) return;
+
+    log.warn(
+      `[DeferredDrain] ${candidates.length} image(s) failed to upload with a transient error during the ` +
+      `high-concurrency pass. Retrying now at low concurrency (sequential)…`
+    );
+
+    // Early-abort guard: if the pool is still saturated the first retries will all
+    // fail their own internal backoff (3 attempts each). Bail after a short run of
+    // consecutive failures with nothing recovered, so we don't burn minutes
+    // re-failing — un-recovered images keep their ERROR JSONL entry and are picked
+    // up by the normal resume flow.
+    const ABORT_AFTER_CONSECUTIVE_FAILURES = 5;
+    let recovered = 0;
+    let consecutiveFailures = 0;
+
+    for (let n = 0; n < candidates.length; n++) {
+      if (this.config.isCancelled && this.config.isCancelled()) {
+        log.warn(`[DeferredDrain] Cancelled by user — stopping drain (${candidates.length - n} image(s) left for resume).`);
+        break;
+      }
+
+      const { index, original } = candidates[n];
+      try {
+        const retried = await this.processWithWorker(original);
+        results[index] = retried; // merge in place
+        const stillGhost = (retried.supabaseUrl || '').startsWith('local://');
+        if (retried.success && !stillGhost) {
+          recovered++;
+          consecutiveFailures = 0;
+          log.info(`[DeferredDrain] Recovered ${original.fileName} (${recovered}/${candidates.length})`);
+        } else {
+          consecutiveFailures++;
+        }
+      } catch (err: any) {
+        consecutiveFailures++;
+        log.error(`[DeferredDrain] Retry still failed for ${original.fileName}: ${err?.message || err}`);
+      }
+
+      if (recovered === 0 && consecutiveFailures >= ABORT_AFTER_CONSECUTIVE_FAILURES) {
+        log.warn(
+          `[DeferredDrain] First ${consecutiveFailures} retries all failed and nothing recovered — pool likely ` +
+          `still saturated. Aborting drain; ${candidates.length - (n + 1)} image(s) left for resume.`
+        );
+        break;
+      }
+    }
+
+    log.warn(`[DeferredDrain] Done: recovered ${recovered}/${candidates.length} previously-failed upload(s).`);
+  }
+
   private async processWithWorker(imageFile: UnifiedImageFile): Promise<UnifiedProcessingResult> {
     let worker: UnifiedImageWorker;
     let usePool = false;
