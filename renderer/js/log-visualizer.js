@@ -484,6 +484,9 @@ class LogVisualizer {
 
         <!-- Quick actions -->
         <div class="lv-footer">
+          <button id="lv-refresh-cloud" class="lv-action-btn lv-btn-secondary" title="Re-pull this analysis from the cloud (e.g. corrections made on another device)">
+            🔄 Refresh
+          </button>
           <button id="lv-export-csv" class="lv-action-btn lv-btn-secondary">
             📊 Export Results
           </button>
@@ -890,6 +893,42 @@ class LogVisualizer {
   }
 
   /**
+   * Manual "Refresh" — re-pull this execution's events from the cloud DB
+   * (#184 Phase 1). With ENABLE_DB_EXECUTION_FALLBACK off this just reloads the
+   * local copy (a safe no-op). Re-extracts results, re-enriches, re-renders.
+   * Resets the active filter; the user can re-filter after.
+   */
+  async refreshFromCloud() {
+    if (!this.executionId) return;
+    const btn = document.getElementById('lv-refresh-cloud');
+    const prevLabel = btn ? btn.innerHTML : null;
+    if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Refreshing…'; }
+    try {
+      const response = await window.api.invoke('get-execution-log', this.executionId, { preferRemote: true });
+      if (response && response.success && Array.isArray(response.data)) {
+        this.logData = response.data;
+        if (response.data.length > 0) {
+          this.imageResults = await this.extractResultsFromLogs(response.data);
+          this.filteredResults = [...this.imageResults];
+          this.enrichResultsWithLogData();
+          this.renderResults();
+          this.updateStatistics();
+          this.showNotification(response.source === 'db' ? '✅ Refreshed from cloud' : '✅ Refreshed', 'success');
+        } else {
+          this.showNotification('No cloud data found for this analysis', 'info');
+        }
+      } else {
+        this.showNotification("Couldn't refresh — check your connection", 'error');
+      }
+    } catch (err) {
+      console.error('[LogVisualizer] refreshFromCloud failed:', err);
+      this.showNotification("Couldn't refresh — check your connection", 'error');
+    } finally {
+      if (btn) { btn.disabled = false; if (prevLabel !== null) btn.innerHTML = prevLabel; }
+    }
+  }
+
+  /**
    * Setup action button listeners
    */
   setupActionButtons() {
@@ -922,6 +961,12 @@ class LogVisualizer {
 
     if (exportTagsBtn) {
       exportTagsBtn.addEventListener('click', () => this.exportTagsAsCSV());
+    }
+
+    // #184 Phase 1 — manual cloud refresh (re-pull events from the DB).
+    const refreshBtn = document.getElementById('lv-refresh-cloud');
+    if (refreshBtn) {
+      refreshBtn.addEventListener('click', () => this.refreshFromCloud());
     }
 
     // Post-analysis folder organization buttons

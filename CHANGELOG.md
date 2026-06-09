@@ -34,6 +34,22 @@
   IPTC modal reads the default directly over IPC and falls back to a local mirror
   for offline export. No token logic / Edge Functions touched. (UX-04)
 
+- **Cross-device review (#184 Phase 1, dark launch)**: opening an execution whose
+  local JSONL is missing (another device ran it, a reinstall, or a lost local file)
+  can now reconstruct its event stream from the Supabase DB so the **review gallery
+  still renders** — plus a manual **Refresh** button to re-pull the cloud copy
+  (e.g. to pick up corrections made on another device). **Per-user gated via the
+  `feature_flags` table** (`db_execution_fallback`, default off) — the same
+  DB-delivered mechanism as `face_recognition_enabled`, so it can be turned on for
+  individual users or by `rollout_percentage` without a rebuild; the
+  `RACETAGGER_DB_EXECUTION_FALLBACK` env still forces it on for local dev. With the
+  flag off, behavior is identical to today. Additive and defensive — any DB/network
+  failure degrades to the previous behavior (empty gallery), never throws. The
+  local-first path is unchanged. No token logic / Edge Functions / schema touched.
+  Online-only by policy (CLAUDE.md → Offline Capability Policy). *Known v1
+  limitation:* cross-device thumbnails (signed URLs) are a follow-up; recognized
+  data reconstructs. (PR #187)
+
 ### 🐛 Fixes
 
 - **Backlog-autopilot workflows now use the real `error_reports` column names**: the
