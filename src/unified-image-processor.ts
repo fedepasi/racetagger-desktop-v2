@@ -3570,6 +3570,9 @@ class UnifiedImageWorker extends EventEmitter {
           // ============================================
           let faceRecognitionStoragePath: string | null = null;
           let faceRecognitionImageId: string | null = null;
+          // Issue #136: hoisted above the try so the JSONL log (moved out of the
+          // try/catch below) can still read the visual tags after the catch.
+          let faceVisualTagsResult: { tags: any; usage: any } | null = null;
 
           try {
             // Get userId from authService (same as other flows)
@@ -3649,7 +3652,6 @@ class UnifiedImageWorker extends EventEmitter {
             }
 
             // 5. Visual Tagging for face recognition path (same as standard flow)
-            let faceVisualTagsResult: { tags: any; usage: any } | null = null;
             if (this.config.visualTagging?.enabled && faceRecognitionStoragePath) {
               try {
                 faceVisualTagsResult = await this.invokeVisualTagging(faceRecognitionStoragePath, {
@@ -3664,51 +3666,60 @@ class UnifiedImageWorker extends EventEmitter {
               }
             }
 
-            // 6. Log to JSONL with real Supabase URL
-            if (this.analysisLogger) {
-              const { SUPABASE_CONFIG } = await import('./config');
-              const faceSupabaseUrl = faceRecognitionStoragePath
-                ? `${SUPABASE_CONFIG.url}/storage/v1/object/public/uploaded-images/${faceRecognitionStoragePath}`
-                : `local://${imageFile.originalPath}`;
-
-              const faceVehiclesForLog = matchedDrivers.map((driver, idx) => ({
-                vehicleIndex: idx,
-                raceNumber: driver.raceNumber ?? undefined,
-                drivers: driver.drivers,
-                team: driver.teamName ?? undefined,
-                confidence: driver.confidence,
-                corrections: [] as any[],
-                finalResult: {
-                  raceNumber: driver.raceNumber ?? undefined,
-                  team: driver.teamName ?? undefined,
-                  drivers: driver.drivers,
-                  matchedBy: 'face_recognition'
-                }
-              }));
-
-              this.analysisLogger.logImageAnalysis({
-                imageId: imageFile.id,
-                fileName: imageFile.fileName,
-                originalFileName: path.basename(imageFile.originalPath),
-                originalPath: imageFile.originalPath,
-                supabaseUrl: faceSupabaseUrl,
-                aiResponse: {
-                  rawText: `FACE_RECOGNITION: ${matchedDrivers.length} drivers identified`,
-                  totalVehicles: matchedDrivers.length,
-                  vehicles: faceVehiclesForLog
-                },
-                thumbnailPath,
-                microThumbPath,
-                compressedPath,
-                visualTags: faceVisualTagsResult?.tags,
-                recognitionMethod: 'face_recognition'
-              });
-              workerLog.info(`[FaceRecognition] Logged to JSONL with URL: ${faceSupabaseUrl}`);
-            }
-
           } catch (uploadError: any) {
             workerLog.error(`[FaceRecognition] Error during Supabase upload/save: ${uploadError.message}`);
             // Non bloccare il processing per errori di upload
+          }
+
+          // 6. Log to JSONL — ALWAYS, even if the upload/DB steps in the try
+          // above threw. Issue #136: this JSONL entry is the local source of
+          // truth for the review report. Previously it was the last step INSIDE
+          // the try, so a failed uploadToStorage()/images insert (transient
+          // "max connections" / HTML-error / network — see #144/#116/#113/#164)
+          // was swallowed by the catch and the log was skipped, making
+          // face-matched photos vanish from the report even though their
+          // metadata was already written above. Decoupled so every processed
+          // photo stays reviewable/correctable (falls back to a local:// URL
+          // when the upload didn't land).
+          if (this.analysisLogger) {
+            const { SUPABASE_CONFIG } = await import('./config');
+            const faceSupabaseUrl = faceRecognitionStoragePath
+              ? `${SUPABASE_CONFIG.url}/storage/v1/object/public/uploaded-images/${faceRecognitionStoragePath}`
+              : `local://${imageFile.originalPath}`;
+
+            const faceVehiclesForLog = matchedDrivers.map((driver, idx) => ({
+              vehicleIndex: idx,
+              raceNumber: driver.raceNumber ?? undefined,
+              drivers: driver.drivers,
+              team: driver.teamName ?? undefined,
+              confidence: driver.confidence,
+              corrections: [] as any[],
+              finalResult: {
+                raceNumber: driver.raceNumber ?? undefined,
+                team: driver.teamName ?? undefined,
+                drivers: driver.drivers,
+                matchedBy: 'face_recognition'
+              }
+            }));
+
+            this.analysisLogger.logImageAnalysis({
+              imageId: imageFile.id,
+              fileName: imageFile.fileName,
+              originalFileName: path.basename(imageFile.originalPath),
+              originalPath: imageFile.originalPath,
+              supabaseUrl: faceSupabaseUrl,
+              aiResponse: {
+                rawText: `FACE_RECOGNITION: ${matchedDrivers.length} drivers identified`,
+                totalVehicles: matchedDrivers.length,
+                vehicles: faceVehiclesForLog
+              },
+              thumbnailPath,
+              microThumbPath,
+              compressedPath,
+              visualTags: faceVisualTagsResult?.tags,
+              recognitionMethod: 'face_recognition'
+            });
+            workerLog.info(`[FaceRecognition] Logged to JSONL with URL: ${faceSupabaseUrl}`);
           }
 
           return {
