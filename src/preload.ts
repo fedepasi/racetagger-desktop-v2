@@ -327,6 +327,8 @@ const validInvokeChannels: string[] = [
   'delivery-link-gallery',
   'delivery-submit-survey',
   'delivery-check-survey',
+  // Model download retry (BUG-04 — in-modal "Retry" instead of app restart)
+  'retry-model-download',
 ];
 
 

@@ -14,6 +14,9 @@ class LogVisualizer {
     this.isGalleryOpen = false;
     this.zoomController = null;
     this.manualCorrections = new Map(); // Track manual corrections
+    // WF-01 — multi-select state for bulk actions in the results grid (by fileName).
+    this.selectedCardKeys = new Set();
+    this._lastSelectedIndex = null; // anchor for shift-click range selection
 
     // Auto-save properties
     this.autoSaveTimer = null;
@@ -467,6 +470,13 @@ class LogVisualizer {
 
         <!-- Results grid without virtual scrolling -->
         <div class="lv-results-container">
+          <!-- WF-01 — bulk multi-select toolbar (shown when ≥1 photo is selected) -->
+          <div class="lv-bulk-bar" id="lv-bulk-bar" style="display:none;align-items:center;gap:12px;padding:10px 14px;margin-bottom:10px;background:#1a2236;border:1px solid #2a3551;border-radius:8px;flex-wrap:wrap;">
+            <span id="lv-bulk-count" style="font-weight:600;color:#f1f4fa;">0 selected</span>
+            <button id="lv-bulk-nomatch" class="lv-action-btn" style="background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.45);color:#f1f4fa;">🚫 Mark 0 as No Match</button>
+            <button id="lv-bulk-clear" class="lv-action-btn lv-btn-secondary">Clear</button>
+            <span style="font-size:11px;color:#9aa5bd;">Ctrl/⌘-click to select · Shift-click for a range · originals are kept for training</span>
+          </div>
           <div class="lv-results-grid" id="lv-results">
             <!-- All items will be rendered here -->
           </div>
@@ -519,6 +529,15 @@ class LogVisualizer {
           <div class="lv-gallery-controls">
             <div class="lv-recognition-panel">
               <h4>Recognition Results</h4>
+              <!-- WF-02 — keyboard-correction shortcuts, communicated to the user -->
+              <div class="lv-kbd-hint" style="font-size:11px;color:#9aa5bd;margin:-2px 0 12px;line-height:1.8;">
+                <strong style="color:#f1f4fa;">Fast keys:</strong>
+                <span style="font-family:'JetBrains Mono',ui-monospace,monospace;">type a number</span> correct ·
+                <span style="font-family:'JetBrains Mono',ui-monospace,monospace;">Enter</span> confirm &amp; next ·
+                <span style="font-family:'JetBrains Mono',ui-monospace,monospace;">Space</span> edit ·
+                <span style="font-family:'JetBrains Mono',ui-monospace,monospace;">← →</span> skip ·
+                <span style="font-family:'JetBrains Mono',ui-monospace,monospace;">Esc</span> close
+              </div>
 
               <div class="lv-vehicles-container" id="lv-vehicles">
                 <!-- Vehicle recognition results will be populated here -->
@@ -829,6 +848,22 @@ class LogVisualizer {
           // otherwise: let the browser move the caret inside the text
           break;
 
+        case ' ':
+        case 'Spacebar': // legacy key name
+          // WF-02 — Space enters "edit number" mode: focus the Race Number field
+          // with the caret at the END (no select, so ←/→ keep navigating). Typing
+          // a digit while NOT focused already replaces the value (fast-path above);
+          // Space is for editing the existing value (backspace/append).
+          if (!isInputFocused) {
+            e.preventDefault(); // never let Space scroll the gallery (even on no-match photos)
+            const raceInput = document.querySelector('#lv-vehicles [data-field="raceNumber"]');
+            if (raceInput) {
+              raceInput.focus();
+              try { raceInput.setSelectionRange(raceInput.value.length, raceInput.value.length); } catch (_) {}
+            }
+          }
+          break;
+
         case 'Enter':
           // Shift+Enter goes back one image (handy if Enter advanced too eagerly).
           // Plain Enter on the Race Number input is handled by its own listener
@@ -837,6 +872,16 @@ class LogVisualizer {
             e.preventDefault();
             if (this.currentImageIndex > 0) {
               this.navigateGallery(-1);
+            }
+          } else if (!isInputFocused) {
+            // WF-02 — keyboard-only correction: plain Enter while NO field is
+            // focused CONFIRMS the current detection (the shown race number) and
+            // advances to the next photo. Mirrors the in-field Enter so the user
+            // never needs the mouse. Works for matched AND no-match photos.
+            e.preventDefault(); // don't let Enter bubble to the browser (incl. empty no-match photos)
+            const raceInput = document.querySelector('#lv-vehicles [data-field="raceNumber"]');
+            if (raceInput) {
+              this._handleRaceNumberEnter(raceInput);
             }
           }
           break;
@@ -851,6 +896,12 @@ class LogVisualizer {
     const exportBtn = document.getElementById('lv-export-csv');
     const exportTagsBtn = document.getElementById('lv-export-tags');
     const saveAllBtn = document.getElementById('lv-save-all');
+
+    // WF-01 — bulk multi-select actions (results grid)
+    const bulkNoMatchBtn = document.getElementById('lv-bulk-nomatch');
+    const bulkClearBtn = document.getElementById('lv-bulk-clear');
+    if (bulkNoMatchBtn) bulkNoMatchBtn.addEventListener('click', () => this.bulkMarkSelectedNoMatch());
+    if (bulkClearBtn) bulkClearBtn.addEventListener('click', () => this.clearSelection());
 
     // Hide Save All button by default (show only when there are unsaved changes)
     if (saveAllBtn) {
@@ -1497,6 +1548,7 @@ class LogVisualizer {
    * by the user).
    */
   _hasCorrection(r) {
+    if (r && r._markedNoMatch) return false; // WF-01 — a bulk "No Match" is not a correction
     return r.hasCorrection === true || this.manualCorrections.has(r.fileName);
   }
 
@@ -1515,6 +1567,7 @@ class LogVisualizer {
    * (or has been manually corrected). Excludes unresolved needs_review.
    */
   _isMatched(r) {
+    if (r && r._markedNoMatch) return false;                  // WF-01 — bulk "No Match" is never matched
     if (this._hasCorrection(r)) return true;                  // manual correction wins
     if (!r.analysis || r.analysis.length === 0) return false;
     const hasRaceNumber = r.analysis.some(v => v.raceNumber && v.raceNumber !== 'N/A');
@@ -1530,6 +1583,7 @@ class LogVisualizer {
    * missing or 'N/A').
    */
   _isNoMatch(r) {
+    if (r && r._markedNoMatch) return true;                   // WF-01 — explicitly marked No Match
     if (this._hasCorrection(r)) return false;                 // user touched it → not no-match
     if (this._isMatched(r)) return false;
     if (this._isNeedsReview(r)) return false;
@@ -1570,6 +1624,17 @@ class LogVisualizer {
           return true;
       }
     });
+
+    // WF-01 — keep the multi-selection coherent across a filter change: drop any
+    // selected fileNames that are no longer visible, and reset the shift-click
+    // anchor (its index referred to the OLD filteredResults order).
+    if (this.selectedCardKeys.size > 0) {
+      const visible = new Set(this.filteredResults.map(r => r.fileName));
+      this.selectedCardKeys = new Set(
+        Array.from(this.selectedCardKeys).filter(fn => visible.has(fn))
+      );
+    }
+    this._lastSelectedIndex = null;
 
     this.updateStatistics();
     this.renderResults();
@@ -1820,8 +1885,9 @@ class LogVisualizer {
       .join(', ');
 
     return `
-      <div class="lv-result-card ${isModified ? 'modified' : ''} ${needsReview && !isResolved ? 'needs-review' : ''} ${isResolved ? 'review-resolved' : ''}" data-index="${index}">
+      <div class="lv-result-card ${isModified ? 'modified' : ''} ${needsReview && !isResolved ? 'needs-review' : ''} ${isResolved ? 'review-resolved' : ''} ${this.selectedCardKeys.has(result.fileName) ? 'selected' : ''}" data-index="${index}" data-file-name="${result.fileName}">
         <div class="lv-card-image">
+          <input type="checkbox" class="lv-card-select" data-file-name="${result.fileName}" ${this.selectedCardKeys.has(result.fileName) ? 'checked' : ''} aria-label="Select photo for bulk action" title="Select for bulk action" style="position:absolute;top:8px;left:8px;width:18px;height:18px;z-index:6;cursor:pointer;accent-color:#1a9ee0;" />
           <img src="${imageSrc}"
                alt="${result.fileName}"
                loading="lazy"
@@ -1908,12 +1974,14 @@ class LogVisualizer {
       const newCardHTML = this.createResultCardHTML(result, index);
       card.outerHTML = newCardHTML;
 
-      // Re-setup click listener for the new card
+      // Re-setup listeners for the new card. WF-01 — use the shared wiring so
+      // multi-select (checkbox / Ctrl / Shift) keeps working after a single-card
+      // re-render, not just plain click-to-open.
       const newCard = resultContainer.querySelector(`img[data-file-name="${fileName}"]`)?.closest('.lv-result-card');
       if (newCard) {
-        newCard.addEventListener('click', () => {
-          this.openGallery(index);
-        });
+        this._wireCard(newCard);
+        this._applySelectionVisual();
+        this._updateBulkBar();
       }
 
       console.log(`[LogVisualizer] Updated result card for ${fileName}`);
@@ -1926,13 +1994,200 @@ class LogVisualizer {
    * Setup click listeners for result cards
    */
   setupResultCardListeners(container) {
-    const cards = container.querySelectorAll('.lv-result-card');
-    cards.forEach(card => {
-      card.addEventListener('click', () => {
-        const index = parseInt(card.dataset.index);
-        this.openGallery(index);
+    container.querySelectorAll('.lv-result-card').forEach(card => this._wireCard(card));
+    // Reflect any existing selection onto the freshly-rendered cards + the bar.
+    this._applySelectionVisual();
+    this._updateBulkBar();
+  }
+
+  /** Wire a single result card's selection + click handlers (WF-01). Shared by
+   *  the full render (setupResultCardListeners) and single-card re-renders
+   *  (updateResultCard) so multi-select keeps working after an inline edit. */
+  _wireCard(card) {
+    // The per-card checkbox toggles selection without opening the gallery.
+    const cb = card.querySelector('.lv-card-select');
+    if (cb) {
+      cb.addEventListener('click', (e) => e.stopPropagation());
+      cb.addEventListener('change', (e) => {
+        e.stopPropagation();
+        const index = parseInt(card.dataset.index, 10);
+        this._setCardSelected(card.dataset.fileName, index, cb.checked);
       });
+    }
+    card.addEventListener('click', (e) => {
+      const index = parseInt(card.dataset.index, 10);
+      // Ctrl/Cmd-click toggles selection; Shift-click selects a contiguous range.
+      if (e.metaKey || e.ctrlKey) {
+        e.preventDefault();
+        this._toggleCardSelection(card.dataset.fileName, index);
+        return;
+      }
+      if (e.shiftKey && this._lastSelectedIndex !== null) {
+        e.preventDefault();
+        this._selectRange(this._lastSelectedIndex, index);
+        return;
+      }
+      // Plain click → open the gallery (unchanged behavior).
+      this.openGallery(index);
     });
+  }
+
+  // ============================================================
+  // WF-01 — bulk multi-select in the results grid
+  // ============================================================
+
+  _fileNameAtIndex(index) {
+    const r = this.filteredResults[index];
+    return r ? r.fileName : null;
+  }
+
+  _setCardSelected(fileName, index, selected) {
+    if (!fileName) return;
+    if (selected) {
+      this.selectedCardKeys.add(fileName);
+      this._lastSelectedIndex = index;
+    } else {
+      this.selectedCardKeys.delete(fileName);
+    }
+    this._applySelectionVisual();
+    this._updateBulkBar();
+  }
+
+  _toggleCardSelection(fileName, index) {
+    if (!fileName) return;
+    this._setCardSelected(fileName, index, !this.selectedCardKeys.has(fileName));
+  }
+
+  _selectRange(fromIndex, toIndex) {
+    const [a, b] = fromIndex <= toIndex ? [fromIndex, toIndex] : [toIndex, fromIndex];
+    for (let i = a; i <= b; i++) {
+      const r = this.filteredResults[i];
+      if (r) this.selectedCardKeys.add(r.fileName);
+    }
+    this._lastSelectedIndex = toIndex;
+    this._applySelectionVisual();
+    this._updateBulkBar();
+  }
+
+  clearSelection() {
+    this.selectedCardKeys.clear();
+    this._lastSelectedIndex = null;
+    this._applySelectionVisual();
+    this._updateBulkBar();
+  }
+
+  _applySelectionVisual() {
+    document.querySelectorAll('.lv-result-card').forEach(card => {
+      const fn = card.dataset.fileName;
+      const sel = !!(fn && this.selectedCardKeys.has(fn));
+      card.classList.toggle('selected', sel);
+      const cb = card.querySelector('.lv-card-select');
+      if (cb) cb.checked = sel;
+    });
+  }
+
+  _updateBulkBar() {
+    const count = this.selectedCardKeys.size;
+    const bar = document.getElementById('lv-bulk-bar');
+    if (bar) bar.style.display = count > 0 ? 'flex' : 'none';
+    const countEl = document.getElementById('lv-bulk-count');
+    if (countEl) countEl.textContent = `${count} selected`;
+    const nmBtn = document.getElementById('lv-bulk-nomatch');
+    if (nmBtn) nmBtn.textContent = `🚫 Mark ${count} as No Match`;
+  }
+
+  /** Plain, JSON-safe copy of a detection (for the training record). */
+  _plainVehicle(v) {
+    const out = {};
+    for (const [k, val] of Object.entries(v || {})) {
+      if (val === null || ['string', 'number', 'boolean'].includes(typeof val)) {
+        out[k] = val;
+      } else if (Array.isArray(val)) {
+        out[k] = val.filter(x => ['string', 'number', 'boolean'].includes(typeof x));
+      }
+    }
+    return out;
+  }
+
+  /**
+   * WF-01 — bulk-mark the selected photos as a REAL No-Match (they count as
+   * No-Match and organize into the unknown folder), while preserving the
+   * original AI detection in the analysis log for future auto-training
+   * (Federico: "salva la correzione a storico"). Persists all in one IPC call.
+   */
+  async bulkMarkSelectedNoMatch() {
+    const fileNames = Array.from(this.selectedCardKeys);
+    if (fileNames.length === 0) return;
+
+    const corrections = [];
+    let count = 0;
+    fileNames.forEach(fileName => {
+      const result = this.imageResults.find(r => r.fileName === fileName);
+      if (!result) return;
+      const original = Array.isArray(result.analysis)
+        ? result.analysis.map(v => this._plainVehicle(v))
+        : [];
+
+      // Real No-Match in memory; original kept for the training record.
+      result._markedNoMatch = true;
+      result._noMatchOriginal = original;
+      result.analysis = [];
+      result.hasCorrection = false;
+
+      // Mirror onto filteredResults if it holds a different object reference.
+      const fr = this.filteredResults.find(r => r.fileName === fileName);
+      if (fr && fr !== result) {
+        fr._markedNoMatch = true;
+        fr._noMatchOriginal = original;
+        fr.analysis = [];
+        fr.hasCorrection = false;
+      }
+
+      const correction = {
+        fileName,
+        vehicleIndex: 0,
+        // originalData is JSON-stringified so it survives any primitive-only
+        // filtering in the correction-log handler and stays a faithful record
+        // of what the AI had detected (for future auto-training).
+        changes: { markedNoMatch: true, originalData: JSON.stringify(original) },
+        timestamp: new Date().toISOString()
+      };
+      corrections.push(correction);
+      // Queue under the `${fileName}_${vehicleIndex}` key (the format
+      // saveAllChanges deletes by) so "Save All Changes" can genuinely retry —
+      // and then drop — this if the immediate persist below fails (offline).
+      // _hasCorrection ignores this entry because _markedNoMatch short-circuits
+      // it, so the photo stays a real No-Match, not a "Correction".
+      this.manualCorrections.set(`${fileName}_0`, correction);
+      count++;
+    });
+
+    if (corrections.length > 0) {
+      try {
+        const res = await window.api.invoke('update-analysis-log', {
+          executionId: this.executionId,
+          corrections,
+          timestamp: new Date().toISOString()
+        });
+        if (!res || !res.success) throw new Error(res && res.error ? res.error : 'persist failed');
+        // Persisted — drop from the retry queue.
+        fileNames.forEach(fn => this.manualCorrections.delete(`${fn}_0`));
+        if (this.manualCorrections.size === 0) this._hideSaveAllButton();
+      } catch (err) {
+        // Offline / persistence failure degrades gracefully: the in-memory state
+        // shows No-Match and the corrections stay queued, so "Save All Changes"
+        // really does retry them.
+        console.error('[LogVisualizer] Bulk no-match persist failed:', err);
+        this.hasUnsavedChanges = true;
+        const saveBtn = document.getElementById('lv-save-all');
+        if (saveBtn) saveBtn.style.display = '';
+        this.showNotification('⚠️ Marked locally — saving failed (offline?). Use "Save All Changes" to retry.', 'warning');
+      }
+    }
+
+    this.clearSelection();
+    this.filterResults(); // re-filter + re-render + refresh statistics
+    this.showNotification(`🚫 ${count} photo${count !== 1 ? 's' : ''} set to No Match — originals kept for training.`, 'success');
   }
 
   /**
@@ -2903,14 +3158,33 @@ class LogVisualizer {
     const vehicles = result.analysis || [];
     const confidence = this.getAverageConfidence(result);
 
-    vehiclesContainer.innerHTML = vehicles.length > 0 ?
-      vehicles.map((vehicle, index) => this.createVehicleEditorHTML(vehicle, index, result.fileName, actualImageIndex)).join('') :
-      `<div class="lv-no-vehicle">
-        <p>No detections in this image</p>
-        <button class="lv-add-vehicle-btn" data-action="add" data-file-name="${result.fileName}">
-          + Add Manual Recognition
-        </button>
-      </div>`;
+    if (vehicles.length > 0) {
+      // Render the existing detection cards…
+      const cardsHtml = vehicles
+        .map((vehicle, index) => this.createVehicleEditorHTML(vehicle, index, result.fileName, actualImageIndex))
+        .join('');
+      // …then ALSO expose the "add detection" action. Previously this button
+      // only lived in the empty-state branch below, so on a group photo that
+      // detected e.g. 3 of 5 plates the user had no way to add the 2 missing
+      // ones (GitHub #167). Same class + data-action as the empty-state button,
+      // so the existing delegated handler (setupVehicleEditorEvents → 'add' →
+      // addVehicleByFileName) picks it up unchanged.
+      const addDetectionHtml =
+        `<div class="lv-add-detection-row">
+          <button class="lv-add-vehicle-btn" data-action="add" data-file-name="${result.fileName}">
+            + Add detection
+          </button>
+        </div>`;
+      vehiclesContainer.innerHTML = cardsHtml + addDetectionHtml;
+    } else {
+      vehiclesContainer.innerHTML =
+        `<div class="lv-no-vehicle">
+          <p>No detections in this image</p>
+          <button class="lv-add-vehicle-btn" data-action="add" data-file-name="${result.fileName}">
+            + Add detection
+          </button>
+        </div>`;
+    }
 
     // Update metadata info
     const confidenceEl = document.getElementById('lv-confidence');
@@ -3959,12 +4233,10 @@ class LogVisualizer {
     try {
       console.log(`[LogVisualizer] deleteVehicleByFileName called:`, { fileName, vehicleIndex });
 
-      // Ask for confirmation
-      const confirmDelete = confirm(`Are you sure you want to delete Detection ${vehicleIndex + 1} from ${fileName}?\n\nThis action cannot be undone.`);
-      if (!confirmDelete) {
-        console.log(`[LogVisualizer] Delete cancelled by user for ${fileName} vehicle ${vehicleIndex}`);
-        return;
-      }
+      // UX-01 — no confirmation popup (slows the review flow). The deletion is
+      // tracked in manualCorrections with originalData, so it stays recoverable
+      // (re-add the detection, or don't save changes) rather than being gated
+      // behind a blocking confirm() on every click.
 
       // Find the result by fileName
       let results = this.filteredResults.length > 0 ? this.filteredResults : this.imageResults;
@@ -4693,7 +4965,13 @@ class LogVisualizer {
       }
 
       // Apply the correction based on its type
-      if (changes && changes.deleted) {
+      if (changes && changes.markedNoMatch) {
+        // WF-01 — user bulk-marked this photo "No Match". Clear the detections so
+        // it classifies as a real No-Match, while the original detection survives
+        // in changes.originalData for future auto-training.
+        result.analysis = [];
+        result._markedNoMatch = true;
+      } else if (changes && changes.deleted) {
         // Handle deletion: remove the vehicle from analysis
         if (result.analysis && vehicleIndex >= 0 && vehicleIndex < result.analysis.length) {
           console.log(`[LogVisualizer] Applying deletion: ${fileName} vehicle ${vehicleIndex}`);

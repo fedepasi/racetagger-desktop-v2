@@ -399,6 +399,7 @@ function setupModelDownloadListeners() {
   const currentText = document.getElementById('download-current');
   const totalText = document.getElementById('download-total');
   const funFact = document.getElementById('download-fun-fact');
+  const retryBtn = document.getElementById('download-retry-btn');
 
   if (!modal) {
     return;
@@ -415,9 +416,32 @@ function setupModelDownloadListeners() {
   let factIndex = 0;
   let factInterval = null;
 
+  // BUG-04 — Retry button re-triggers the download without an app restart.
+  if (retryBtn) {
+    retryBtn.addEventListener('click', async () => {
+      retryBtn.disabled = true;
+      retryBtn.style.display = 'none';
+      if (funFact) {
+        funFact.textContent = funFacts[0];
+        funFact.style.color = '';
+      }
+      try {
+        await window.api.invoke('retry-model-download');
+      } catch (e) {
+        // Failure surfaces via the 'model-download-error' event handler below.
+      } finally {
+        retryBtn.disabled = false;
+      }
+    });
+  }
+
   window.api.receive('model-download-start', (data) => {
     modal.style.display = 'flex';
     document.body.classList.add('modal-open');
+    if (retryBtn) retryBtn.style.display = 'none';
+    // BUG-04 — clear any prior interval before starting a new one (e.g. on retry)
+    // so fun-fact intervals can never stack across runs.
+    if (factInterval) { clearInterval(factInterval); factInterval = null; }
     if (totalText) totalText.textContent = `${data.totalSizeMB.toFixed(1)} MB`;
     if (currentText) currentText.textContent = '0 MB';
     if (percentText) percentText.textContent = '0%';
@@ -451,11 +475,12 @@ function setupModelDownloadListeners() {
       clearInterval(factInterval);
       factInterval = null;
     }
-    // Show error state - user can close and retry on next app start
+    // BUG-04 — show an in-modal Retry button instead of forcing an app restart.
     if (funFact) {
-      funFact.textContent = '\u{274C} Download failed. Please restart the app to retry.';
+      funFact.textContent = '\u{274C} Download failed. Click Retry to try again.';
       funFact.style.color = 'var(--accent-danger, #ef4444)';
     }
+    if (retryBtn) retryBtn.style.display = 'inline-flex';
   });
 }
 

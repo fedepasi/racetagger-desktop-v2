@@ -347,14 +347,17 @@ export class ModelManager {
       }
     }
 
-    // Combine chunks and write to file
+    // BUG-04 — write atomically (.tmp → validate → rename) so an interrupted
+    // write can never leave a truncated file at the final path (a half-written
+    // .onnx was "sticky": existsSync passed and it was never re-downloaded).
     const fileBuffer = Buffer.concat(chunks.map(chunk => Buffer.from(chunk)));
-    fs.writeFileSync(localPath, fileBuffer);
+    const tmpPath = `${localPath}.tmp`;
+    fs.writeFileSync(tmpPath, fileBuffer);
 
-    // Validate checksum
-    const isValid = await this.validateChecksum(localPath, modelInfo.checksum_sha256);
+    // Validate checksum on the temp file BEFORE promoting it to the final path
+    const isValid = await this.validateChecksum(tmpPath, modelInfo.checksum_sha256);
     if (!isValid) {
-      fs.unlinkSync(localPath);
+      try { fs.unlinkSync(tmpPath); } catch { /* best-effort cleanup */ }
       const checksumError = new Error('Model checksum validation failed - file may be corrupted');
       errorTelemetryService.reportCriticalError({
         errorType: 'onnx_model',
@@ -364,6 +367,12 @@ export class ModelManager {
       });
       throw checksumError;
     }
+    // Remove any existing file first — fs.renameSync over an existing/in-use
+    // destination is unreliable on Windows.
+    if (fs.existsSync(localPath)) {
+      try { fs.unlinkSync(localPath); } catch { /* will surface on rename */ }
+    }
+    fs.renameSync(tmpPath, localPath);
 
     // Update manifest
     this.manifest.models[categoryCode] = {
@@ -706,10 +715,19 @@ ModelManager.prototype.ensureGenericModelAvailable = async function(
 
   const localPath = path.join(modelCacheDir, `${modelId}-v${modelConfig.version}.onnx`);
 
-  // Check if already cached
+  // Check if already cached — BUG-04: validate size to reject a truncated /
+  // partially-written file left by an interrupted download (existsSync alone
+  // let a corrupt file stay "sticky" forever). The registry sizeBytes is
+  // approximate, so we use a generous 50% floor to avoid false rejects.
   if (fs.existsSync(localPath)) {
-    console.log(`[ModelManager] Found cached model at: ${localPath}`);
-    return localPath;
+    const cachedBytes = fs.statSync(localPath).size;
+    const minBytes = Math.floor(modelConfig.sizeBytes * 0.5);
+    if (cachedBytes >= minBytes) {
+      console.log(`[ModelManager] Found cached model at: ${localPath} (${cachedBytes} bytes)`);
+      return localPath;
+    }
+    console.warn(`[ModelManager] Cached model at ${localPath} looks truncated (${cachedBytes} < ${minBytes} bytes); re-downloading.`);
+    try { fs.unlinkSync(localPath); } catch { /* best-effort cleanup */ }
   }
 
   console.log(`[ModelManager] Model not cached at: ${localPath}, downloading from Supabase...`);
@@ -757,9 +775,25 @@ ModelManager.prototype.ensureGenericModelAvailable = async function(
     }
   }
 
-  // Combine chunks and write to file
+  // BUG-04 — write atomically (.tmp → verify size → rename) so an interrupted
+  // write can never leave a truncated file at the final path. The YOLO registry
+  // carries no checksum, so we sanity-check the downloaded size against the
+  // (approximate) expected size with a generous floor.
   const fileBuffer = Buffer.concat(chunks.map(chunk => Buffer.from(chunk)));
-  fs.writeFileSync(localPath, fileBuffer);
+  const tmpPath = `${localPath}.tmp`;
+  fs.writeFileSync(tmpPath, fileBuffer);
+
+  const minBytes = Math.floor(modelConfig.sizeBytes * 0.5);
+  if (fileBuffer.length < minBytes) {
+    try { fs.unlinkSync(tmpPath); } catch { /* best-effort cleanup */ }
+    throw new Error(`Downloaded model ${modelId} is too small (${fileBuffer.length} < ${minBytes} bytes) — likely truncated`);
+  }
+  // Remove any existing file first — fs.renameSync over an existing/in-use
+  // destination is unreliable on Windows.
+  if (fs.existsSync(localPath)) {
+    try { fs.unlinkSync(localPath); } catch { /* will surface on rename */ }
+  }
+  fs.renameSync(tmpPath, localPath);
 
   return localPath;
 };
