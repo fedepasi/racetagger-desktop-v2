@@ -1,10 +1,46 @@
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs/promises';
+import { existsSync } from 'fs';
 import * as path from 'path';
 import { FileHasher } from './file-hasher';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+/**
+ * Resolve the ExifTool the app actually SHIPS (under vendor/), mirroring
+ * native-tool-manager's resolution. Without this the validator probed a system
+ * `exiftool` on PATH — which the dev/CI box usually lacks — so every metadata
+ * test gated on isExifToolAvailable() and SILENTLY SKIPPED (green = untested).
+ * On Windows the bundled exiftool.exe is Strawberry Perl and must run
+ * exiftool.pl. Falls back to a PATH `exiftool` when no bundled binary exists.
+ */
+let _exiftool: { cmd: string; prefixArgs: string[] } | null = null;
+function resolveExiftool(): { cmd: string; prefixArgs: string[] } {
+  if (_exiftool) return _exiftool;
+  const vendor = path.resolve(__dirname, '../../vendor'); // tests/helpers -> project root
+  if (process.platform === 'win32') {
+    const candidates = [
+      path.join(vendor, 'win32', 'exiftool.exe'),
+      path.join(vendor, 'win32', process.arch, 'exiftool.exe'),
+      path.join(vendor, 'win32', 'x64', 'exiftool.exe'),
+    ];
+    const exe = candidates.find(existsSync);
+    if (exe) {
+      const pl = path.join(path.dirname(exe), 'exiftool.pl');
+      _exiftool = { cmd: exe, prefixArgs: existsSync(pl) ? [pl] : [] };
+      return _exiftool;
+    }
+  } else {
+    const bin = path.join(vendor, process.platform === 'darwin' ? 'darwin' : 'linux', 'exiftool');
+    if (existsSync(bin)) {
+      _exiftool = { cmd: bin, prefixArgs: [] };
+      return _exiftool;
+    }
+  }
+  _exiftool = { cmd: 'exiftool', prefixArgs: [] };
+  return _exiftool;
+}
 
 /**
  * Helper class for validating EXIF/XMP metadata using ExifTool
@@ -15,7 +51,10 @@ export class ExifToolValidator {
    */
   async readMetadata(filePath: string): Promise<Record<string, any>> {
     try {
-      const { stdout } = await execAsync(`exiftool -json "${filePath}"`);
+      const { cmd, prefixArgs } = resolveExiftool();
+      const { stdout } = await execFileAsync(cmd, [...prefixArgs, '-json', filePath], {
+        maxBuffer: 50 * 1024 * 1024,
+      });
       const metadata = JSON.parse(stdout);
       return metadata[0] || {};
     } catch (error) {
@@ -102,7 +141,8 @@ export class ExifToolValidator {
    */
   async isExifToolAvailable(): Promise<boolean> {
     try {
-      await execAsync('exiftool -ver');
+      const { cmd, prefixArgs } = resolveExiftool();
+      await execFileAsync(cmd, [...prefixArgs, '-ver']);
       return true;
     } catch {
       return false;

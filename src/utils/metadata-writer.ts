@@ -1,7 +1,19 @@
 import * as path from 'path';
+import * as fs from 'fs';
 import { nativeToolManager } from './native-tool-manager';
 import { createXmpSidecar, createFullXmpSidecar } from './xmp-manager';
 import { PresetIptcMetadata } from './iptc-types';
+
+/**
+ * Keyword-token filter: keep tokens longer than one character, AND keep single
+ * DIGITS so single-digit race numbers (#1–#9) survive simplification. A single
+ * letter (e.g. a split name initial like "J" in "J Smith") is still dropped as
+ * noise. Without the digit exception, correcting a car to #5 lost the number
+ * keyword entirely (only team/driver survived).
+ */
+function isMeaningfulKeywordToken(token: string): boolean {
+  return token.length > 1 || /^[0-9]$/.test(token);
+}
 
 /**
  * Known RAW file extensions. For these formats, metadata must be written
@@ -109,19 +121,19 @@ function simplifyKeywords(keywords: string[]): string[] {
             if (subValue) {
               // Split compound names into individual words (John Smith -> John, Smith)
               const words = subValue.split(/\s+/).map(word => sanitizeKeyword(word));
-              simplified.push(...words.filter(w => w.length > 1)); // Only keep words longer than 1 char
+              simplified.push(...words.filter(isMeaningfulKeywordToken)); // keep >1 char OR single digits
             }
           }
         } else {
           // Single value - split into individual words
           const words = content.split(/\s+/).map(word => sanitizeKeyword(word));
-          simplified.push(...words.filter(w => w.length > 1));
+          simplified.push(...words.filter(isMeaningfulKeywordToken));
         }
       }
     } else {
       // No colon prefix - treat as regular keyword but split words
       const words = keyword.split(/\s+/).map(word => sanitizeKeyword(word));
-      simplified.push(...words.filter(w => w.length > 1));
+      simplified.push(...words.filter(isMeaningfulKeywordToken));
     }
   }
 
@@ -188,11 +200,20 @@ export async function writeKeywordsToImage(imagePath: string, keywords: string[]
     ];
 
     if (mode === 'overwrite') {
-      // Overwrite mode: replace all existing keywords
-      // First clear existing keywords, then add new ones
-      args.push('-IPTC:Keywords=');
+      // Replace ALL existing keywords with exactly this set. Use repeated
+      // `-IPTC:Keywords=VALUE` assignments: for a List-type tag ExifTool treats
+      // the FIRST `=` as a replace (clearing prior values) and each subsequent
+      // `=` as an append, so the file ends up with precisely `filteredNewKeywords`.
+      //
+      // Do NOT use `-IPTC:Keywords=` (empty clear) + `-IPTC:Keywords+=VALUE`:
+      // when an empty clear and `+=` are combined on the same list tag in ONE
+      // command, ExifTool drops the clear and ACCUMULATES — leaving stale
+      // keywords behind (e.g. a corrected race number would keep the old number
+      // too, and group-photo sibling rewrites would pile up). Verified against
+      // the bundled ExifTool 13.59. `filteredNewKeywords` is always non-empty
+      // here (the function returns early above when there is nothing to write).
       for (const keyword of filteredNewKeywords) {
-        args.push(`-IPTC:Keywords+=${keyword}`);
+        args.push(`-IPTC:Keywords=${keyword}`);
       }
     } else {
       // Append mode: add to existing keywords (default behavior)
@@ -221,6 +242,149 @@ export async function writeKeywordsToImage(imagePath: string, keywords: string[]
     console.error(`[MetadataWriter] Failed to write metadata:`, error);
     throw new Error(`Failed to write metadata with ExifTool: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
+}
+
+/** Minimal shape of a detection used for keyword derivation. */
+export interface CorrectionVehicleLike {
+  raceNumber?: string | null;
+  team?: string | null;
+  drivers?: string[] | string | null;
+  deleted?: boolean;
+  finalResult?: { raceNumber?: string | null; team?: string | null; drivers?: string[] | string | null };
+}
+
+/**
+ * Build the prefixed IPTC/XMP keyword set for a photo from ALL of its current
+ * detections (post-correction state).
+ *
+ * The manual-correction flow writes keywords with `writeKeywordsToImage(...,
+ * 'overwrite')`, which CLEARS the file's keywords (IPTC:Keywords for JPEG, the
+ * XMP `dc:subject` block for RAW sidecars) before re-adding the supplied ones.
+ * Deriving keywords from a single corrected vehicle therefore wiped every
+ * sibling detection's RaceNumber/Team/Driver on multi-detection group photos
+ * (GitHub #167). Rebuilding from the union of all non-deleted detections keeps
+ * siblings intact while corrected numbers still replace the stale ones, since
+ * the overwrite re-clears first.
+ *
+ * Each detection contributes `RaceNumber:`/`Team:`/`Driver:` prefixed keywords;
+ * `writeKeywordsToImage(useSimplified=true)` later normalizes and de-dups them.
+ * A detection flagged `deleted` contributes nothing, so deleting a plate also
+ * removes just its keywords (siblings survive).
+ *
+ * Falls back to the single correction's `changes` when the full detection list
+ * is unavailable (legacy JSONL without an IMAGE_ANALYSIS event).
+ */
+export function buildCorrectionKeywords(
+  vehicles: CorrectionVehicleLike[] | undefined,
+  fallbackChanges?: { raceNumber?: string | null; team?: string | null; drivers?: string[] | string | null }
+): string[] {
+  const keywords: string[] = [];
+
+  const pushFrom = (src: { raceNumber?: string | null; team?: string | null; drivers?: string[] | string | null }) => {
+    if (src.raceNumber) keywords.push(`RaceNumber:${src.raceNumber}`);
+    if (src.team) keywords.push(`Team:${src.team}`);
+    if (src.drivers) {
+      const drivers = Array.isArray(src.drivers) ? src.drivers : [src.drivers];
+      for (const driver of drivers) {
+        if (driver) keywords.push(`Driver:${driver}`);
+      }
+    }
+  };
+
+  if (Array.isArray(vehicles) && vehicles.length > 0) {
+    for (const vehicle of vehicles) {
+      if (!vehicle) continue;
+      if (vehicle.deleted === true) continue; // user-deleted detection writes no keywords
+      const fr = vehicle.finalResult || {};
+      // Prefer the vehicle root (where the correction handler applies changes),
+      // fall back to finalResult (what the results renderer reads).
+      pushFrom({
+        raceNumber: vehicle.raceNumber ?? fr.raceNumber,
+        team: vehicle.team ?? fr.team,
+        drivers: vehicle.drivers ?? fr.drivers,
+      });
+    }
+  } else if (fallbackChanges) {
+    pushFrom(fallbackChanges);
+  }
+
+  return keywords;
+}
+
+/**
+ * Read the keywords CURRENTLY embedded on a file, so a correction can preserve
+ * the ones it must not touch (e.g. visual tags). JPEG keywords live in
+ * IPTC:Keywords on the file; RAW keywords live in the XMP sidecar's dc:subject
+ * (XMP:Subject), never inside the RAW. Returns lowercase tokens; empty on miss.
+ */
+async function readEmbeddedKeywords(imagePath: string): Promise<string[]> {
+  try {
+    if (isRawFile(imagePath)) {
+      const sidecar = imagePath.replace(/\.[^.]+$/, '.xmp');
+      if (!fs.existsSync(sidecar)) return [];
+      const result = await nativeToolManager.executeTool('exiftool', ['-s', '-s', '-s', '-XMP:Subject', sidecar]);
+      return result.stdout.trim()
+        ? result.stdout.trim().split(/[;,]/).map(k => k.trim().toLowerCase()).filter(Boolean)
+        : [];
+    }
+    return (await readExistingKeywords(imagePath)).map(k => k.toLowerCase());
+  } catch {
+    return [];
+  }
+}
+
+/** Visual-tag buckets carried on an IMAGE_ANALYSIS event (subset of VisualTagsData). */
+export interface CorrectionVisualTags {
+  location?: string[];
+  weather?: string[];
+  sceneType?: string[];
+  subjects?: string[];
+  visualStyle?: string[];
+  emotion?: string[];
+}
+
+/**
+ * Write the keyword set for a manual correction in ONE overwrite pass:
+ * `detectionKeywords` (the full RaceNumber:/Team:/Driver: set for every current
+ * detection — from buildCorrectionKeywords) PLUS any visual-tag keywords that
+ * are ALREADY embedded on the file.
+ *
+ * Why re-add the visual tags: the correction write uses overwrite mode, which
+ * now correctly CLEARS IPTC:Keywords / the RAW dc:subject before writing — so
+ * without this, correcting one number would wipe the photographer's location/
+ * weather/scene tags. We only re-add tags that are actually present on the file,
+ * which transparently respects the user's `embedInMetadata` choice (a flag we
+ * cannot read at correction time — it isn't persisted): tags the user chose not
+ * to embed simply aren't on the file, so they are not re-added. RAW sidecars are
+ * handled too (read + the subsequent overwrite both target the .xmp).
+ */
+export async function writeCorrectionKeywords(
+  imagePath: string,
+  detectionKeywords: string[],
+  visualTags?: CorrectionVisualTags
+): Promise<void> {
+  let preserved: string[] = [];
+
+  if (visualTags) {
+    const flat = [
+      ...(visualTags.location || []),
+      ...(visualTags.weather || []),
+      ...(visualTags.sceneType || []),
+      ...(visualTags.subjects || []),
+      ...(visualTags.visualStyle || []),
+      ...(visualTags.emotion || []),
+    ].filter(Boolean);
+
+    if (flat.length > 0) {
+      // Normalize the event's visual tags the same way they were written
+      // (simplifyKeywords) and keep only those still present on the file.
+      const wanted = simplifyKeywords(flat).filter(k => k !== 'racetagger');
+      const onFile = new Set(await readEmbeddedKeywords(imagePath));
+      preserved = wanted.filter(k => onFile.has(k));
+    }
+  }
+
+  await writeKeywordsToImage(imagePath, [...detectionKeywords, ...preserved], true, 'overwrite');
 }
 
 /**
