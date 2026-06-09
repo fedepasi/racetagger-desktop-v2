@@ -2903,14 +2903,33 @@ class LogVisualizer {
     const vehicles = result.analysis || [];
     const confidence = this.getAverageConfidence(result);
 
-    vehiclesContainer.innerHTML = vehicles.length > 0 ?
-      vehicles.map((vehicle, index) => this.createVehicleEditorHTML(vehicle, index, result.fileName, actualImageIndex)).join('') :
-      `<div class="lv-no-vehicle">
-        <p>No detections in this image</p>
-        <button class="lv-add-vehicle-btn" data-action="add" data-file-name="${result.fileName}">
-          + Add Manual Recognition
-        </button>
-      </div>`;
+    if (vehicles.length > 0) {
+      // Render the existing detection cards…
+      const cardsHtml = vehicles
+        .map((vehicle, index) => this.createVehicleEditorHTML(vehicle, index, result.fileName, actualImageIndex))
+        .join('');
+      // …then ALSO expose the "add detection" action. Previously this button
+      // only lived in the empty-state branch below, so on a group photo that
+      // detected e.g. 3 of 5 plates the user had no way to add the 2 missing
+      // ones (GitHub #167). Same class + data-action as the empty-state button,
+      // so the existing delegated handler (setupVehicleEditorEvents → 'add' →
+      // addVehicleByFileName) picks it up unchanged.
+      const addDetectionHtml =
+        `<div class="lv-add-detection-row">
+          <button class="lv-add-vehicle-btn" data-action="add" data-file-name="${result.fileName}">
+            + Add detection
+          </button>
+        </div>`;
+      vehiclesContainer.innerHTML = cardsHtml + addDetectionHtml;
+    } else {
+      vehiclesContainer.innerHTML =
+        `<div class="lv-no-vehicle">
+          <p>No detections in this image</p>
+          <button class="lv-add-vehicle-btn" data-action="add" data-file-name="${result.fileName}">
+            + Add detection
+          </button>
+        </div>`;
+    }
 
     // Update metadata info
     const confidenceEl = document.getElementById('lv-confidence');

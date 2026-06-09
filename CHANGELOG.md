@@ -4,6 +4,17 @@
 
 ### 🐛 Fixes
 
+- **Add a missing detection on a group photo from the review gallery**: the
+  "+ Add detection" button was rendered **only** in the empty-state branch of
+  the gallery's detection editor (`updateVehicleEditor`), so a photo that
+  already had 1+ detections offered no way to add a plate the AI missed (e.g.
+  3 of 5 plates found). The button now also renders after the existing
+  detection cards, reusing the same `lv-add-vehicle-btn` / `data-action="add"`
+  delegated handler — the new card saves a normal `MANUAL_CORRECTION` that
+  flows into folder org / IPTC like any other correction. Renderer-only
+  (`renderer/js/log-visualizer.js` + `renderer/css/processing-status.css`);
+  no token logic / Edge Functions / schema touched. (#167)
+
 - **ExifTool now runs from mount paths with spaces (macOS DMG)**: temporal
   clustering built the ExifTool command as a single shell string with an
   **unquoted** executable path. When the app ran from the default DMG mount

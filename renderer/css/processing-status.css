@@ -1958,6 +1958,16 @@
   background: var(--accent-secondary);
 }
 
+/* Row hosting the "+ Add detection" button when a photo already has 1+
+   detection cards. #lv-vehicles is a flex column, so this wrapper keeps the
+   button content-width and centered instead of stretching it full width.
+   The button's own margin-top + the column gap give it breathing room from
+   the last card. */
+.lv-add-detection-row {
+  display: flex;
+  justify-content: center;
+}
+
 .lv-metadata-info {
   margin-top: var(--spacing-lg);
   padding-top: var(--spacing-lg);
