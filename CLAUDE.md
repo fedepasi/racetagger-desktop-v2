@@ -6,6 +6,15 @@ Professional Electron desktop application for AI-powered race number detection i
 
 > Cross-repo orchestration, token logic, migration template, and shared conventions live in the root **[../CLAUDE.md](../CLAUDE.md)** (auto-loaded). This file covers desktop-specific architecture only — it does not repeat root content.
 
+## Offline Capability Policy
+
+**Decision (2026-06-09, Federico) — applies to the whole desktop app.** The app is **online-required by default**. It works **offline for ONLY two things**:
+
+1. **Reviewing already-analyzed results** (the review gallery, on data already present on this device).
+2. **Export** of already-processed results.
+
+**Everything else requires an active connection** — running an analysis (including the local **ONNX** flows, for now), participant/preset loading, token operations, and cross-device sync. Design every new feature against this constraint: assume the network is available for anything except *review* + *export*, and **fail clearly (not silently)** when it isn't. This is the guiding rule for the planned **JSONL → DB primary-source** migration: the **DB is the source of truth**, and the local cache exists only to keep *review* + *export* working offline.
+
 ## Essential Context
 
 - **[DATABASE.md](./DATABASE.md)** — complete schema (85+ tables), Edge Functions, storage buckets
