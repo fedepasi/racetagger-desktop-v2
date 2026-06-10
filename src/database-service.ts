@@ -1048,6 +1048,7 @@ export interface ParticipantPresetSupabase {
   sport_categories?: SportCategory;
   is_official?: boolean;
   iptc_metadata?: any;  // PresetIptcMetadata stored as JSONB
+  person_shown_template?: string | null;  // Template for IPTC PersonInImage field (e.g. "{name} {team} {car_model}")
 
   // Issue #104: When true, Gemini is allowed to identify persons outside the
   // preset participant list (team principals, VIPs, celebrities). Results go
@@ -2976,13 +2977,21 @@ export async function duplicateOfficialPresetSupabase(sourcePresetId: string): P
       throw new Error('Source preset not found');
     }
 
-    // Create the new preset (personal copy)
+    // Create the new preset (personal copy).
+    // Carry over the preset-level profile fields too — without these the copy
+    // silently lost the curated IPTC Pro profile, the PersonInImage template and
+    // the external-recognition flag, leaving the photographer to rebuild them.
     const newPreset = await createParticipantPresetSupabase({
       user_id: userId,
       name: `${sourcePreset.name} (My Copy)`,
       description: sourcePreset.description || `Duplicated from: ${sourcePreset.name}`,
       category_id: sourcePreset.category_id,
-      custom_folders: sourcePreset.custom_folders || []
+      custom_folders: sourcePreset.custom_folders || [],
+      iptc_metadata: sourcePreset.iptc_metadata ?? null,
+      person_shown_template: sourcePreset.person_shown_template ?? null,
+      allow_external_person_recognition: sourcePreset.allow_external_person_recognition ?? false
+      // NOTE: when the ACC-01 `series_sponsor_ignore` column lands on
+      // participant_presets, copy it here too (verified absent in prod 2026-06-10).
     });
 
     // Copy participants

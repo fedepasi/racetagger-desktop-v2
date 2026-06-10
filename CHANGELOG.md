@@ -27,6 +27,20 @@
   recurring Postgres errors on every triage run. No schema change; no app impact.
   (PR #195)
 
+- **Duplicating a preset no longer loses its IPTC profile & recognition flags**:
+  `duplicateOfficialPresetSupabase` copied only `name`/`description`/`category_id`/
+  `custom_folders`, silently dropping the preset-level columns
+  `iptc_metadata` (the curated IPTC Pro profile), `person_shown_template`
+  (the IPTC PersonInImage template) and `allow_external_person_recognition`. An
+  editorial photographer who duplicated an official preset got a copy stripped of
+  its Getty-ready metadata profile with no warning, and had to rebuild it. The
+  duplication payload now carries all three (defaulting to `null`/`null`/`false`),
+  and `ParticipantPresetSupabase` gains the `person_shown_template` field. The
+  ACC-01 `series_sponsor_ignore` column is intentionally **not** copied yet —
+  verified absent from production `participant_presets` (would 400 the insert);
+  a code comment flags it for when that column ships. `database-service.ts` only;
+  no token logic / Edge Functions / schema touched.
+
 - **Add a missing detection on a group photo from the review gallery**: the
   "+ Add detection" button was rendered **only** in the empty-state branch of
   the gallery's detection editor (`updateVehicleEditor`), so a photo that
