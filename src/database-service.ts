@@ -1132,6 +1132,13 @@ let presetsCache: ParticipantPresetSupabase[] = [];
 let cacheLastUpdated: number = 0;
 let cacheIncludesInactive: boolean = false; // Track if cache includes inactive categories (admin mode)
 
+// BUG-02 — preset ids whose ownership has been verified this app session.
+// The per-row save path (upsertSinglePresetParticipantSupabase) fires once per
+// "Save & Next", so memoizing the ownership SELECT here avoids paying +1
+// round-trip on every keystroke-fast save. RLS is the real backstop on the
+// write itself; this is only a redundant courtesy check we don't want to repeat.
+const verifiedOwnedPresetIds = new Set<string>();
+
 /**
  * Invalidate the presets cache so next fetch returns fresh data from Supabase.
  * Used after learned data is saved to preset_participants.
@@ -2054,6 +2061,110 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
     safeSend('preset-save-progress', { presetId, stage: 'error', percent: 100, message, error: message });
     throw error;
   }
+}
+
+/**
+ * BUG-02 — persist a SINGLE preset participant immediately.
+ *
+ * The participant-editor's "Save & Next" / "Save Changes" buttons used to only
+ * mutate the in-memory list; nothing reached the DB until the preset-level
+ * "Save Preset". A crash or a stray Escape mid-session lost every edit. This is
+ * the narrow write that backs the new per-row persist: ONE row, upsert-or-insert,
+ * no delete-diff, no touching of sibling rows.
+ *
+ * Deliberately NOT a thin wrapper over savePresetParticipantsSupabase:
+ *   - It must NEVER run the delete-diff. The bulk path deletes DB rows absent
+ *     from the in-memory array, which would commit CSV/PDF-merge "remove"
+ *     results before the user reviews them (the documented merge gate).
+ *   - It must NOT bump participant_presets.updated_at — that stays owned by the
+ *     preset-level Save (Federico's default).
+ * It otherwise mirrors the bulk path field-for-field: applyDualWriteFolders for
+ * legacy 1.1.4 folder slots, FIX #78 id/created_at stripping on insert, and the
+ * exact same presetsCache invalidation so an analysis started within the 30s TTL
+ * never reads a stale roster.
+ *
+ * Ownership is verified once per preset per app session (memoized in
+ * verifiedOwnedPresetIds); RLS is the real backstop on the write.
+ */
+export async function upsertSinglePresetParticipantSupabase(
+  presetId: string,
+  participant: Partial<PresetParticipantSupabase> & { id?: string }
+): Promise<PresetParticipantSupabase> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+  if (!presetId) throw new Error('presetId is required');
+
+  const supabase = getSupabaseClient();
+
+  // Ownership check — memoized for the session so fast repeated saves don't
+  // each pay a round-trip. Mirrors savePresetParticipantsSupabase's check.
+  if (!verifiedOwnedPresetIds.has(presetId)) {
+    const { data: preset, error: presetError } = await supabase
+      .from('participant_presets')
+      .select('id, user_id')
+      .eq('id', presetId)
+      .single();
+
+    if (presetError) {
+      console.error('[DB UpsertOne] preset lookup failed:', presetError);
+      throw new Error(`Preset lookup failed: ${presetError.message}`);
+    }
+    if (!preset) {
+      throw new Error(`Preset ${presetId} not found`);
+    }
+    if (preset.user_id !== userId) {
+      console.error(`[DB UpsertOne] user mismatch: preset.user_id=${preset.user_id}, userId=${userId}`);
+      throw new Error('Access denied: preset belongs to another user');
+    }
+    verifiedOwnedPresetIds.add(presetId);
+  }
+
+  // Build the row. Dual-write derives the legacy folder_1/2/3(+_path) columns
+  // from the canonical folders[] for 1.1.4 clients. We deliberately do NOT set
+  // sort_order (the bulk path omits it too).
+  const record: any = { ...participant, preset_id: presetId };
+  applyDualWriteFolders(record);
+
+  let saved: PresetParticipantSupabase | null = null;
+
+  if (participant.id) {
+    // Update-or-insert by primary key. The row already exists → this resolves
+    // to an UPDATE, preserving the id and its associated drivers/photos.
+    const { data, error } = await supabase
+      .from('preset_participants')
+      .upsert([record], { onConflict: 'id' })
+      .select()
+      .single();
+    if (error) {
+      console.error('[DB UpsertOne] upsert failed:', error);
+      throw error;
+    }
+    saved = data as PresetParticipantSupabase;
+  } else {
+    // FIX #78: strip id/created_at so Postgres uses DEFAULT gen_random_uuid().
+    delete record.id;
+    delete record.created_at;
+    const { data, error } = await supabase
+      .from('preset_participants')
+      .insert(record)
+      .select()
+      .single();
+    if (error) {
+      console.error('[DB UpsertOne] insert failed:', error);
+      throw error;
+    }
+    saved = data as PresetParticipantSupabase;
+  }
+
+  // Invalidate the presets cache exactly like the bulk path, so a subsequent
+  // analysis (or list read) within the 30s TTL doesn't serve a stale roster.
+  const cacheIndex = presetsCache.findIndex(p => p.id === presetId);
+  if (cacheIndex !== -1) {
+    presetsCache.splice(cacheIndex, 1);
+  }
+  cacheLastUpdated = 0;
+
+  return saved;
 }
 
 // ============================================================================

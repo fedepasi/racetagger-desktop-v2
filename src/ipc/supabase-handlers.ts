@@ -7,6 +7,7 @@
 import { ipcMain } from 'electron';
 import { authService } from '../auth-service';
 import { errorTelemetryService } from '../utils/error-telemetry-service';
+import { HandlerResult } from './types';
 import {
   // Sport Categories
   getSportCategories,
@@ -21,6 +22,7 @@ import {
   getUserParticipantPresetsSupabase,
   getParticipantPresetByIdSupabase,
   savePresetParticipantsSupabase,
+  upsertSinglePresetParticipantSupabase,
   bulkAssignFoldersSupabase,
   updatePresetLastUsedSupabase,
   updateParticipantPresetSupabase,
@@ -116,6 +118,20 @@ export function registerSupabaseHandlers(): void {
     try {
       const savedParticipants = await savePresetParticipantsSupabase(presetId, participants);
       return { success: true, participants: savedParticipants };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  // BUG-02 — persist a single participant row immediately (backs the editor's
+  // "Save & Next" / "Save Changes" per-row persist). Single-row upsert only:
+  // no delete-diff, no sibling rows, no updated_at bump. Returns the saved row
+  // (with its DB id) so the renderer can write the id back into the in-memory
+  // object before any later preset-level Save.
+  ipcMain.handle('supabase-upsert-preset-participant', async (_, { presetId, participant }: { presetId: string, participant: Partial<PresetParticipantSupabase> & { id?: string } }): Promise<HandlerResult<PresetParticipantSupabase>> => {
+    try {
+      const saved = await upsertSinglePresetParticipantSupabase(presetId, participant);
+      return { success: true, data: saved };
     } catch (e: any) {
       return { success: false, error: e.message };
     }
