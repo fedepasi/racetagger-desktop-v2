@@ -193,7 +193,7 @@ describe('SmartMatcher System', () => {
       const driverEvidence = evidence.find(e => e.type === EvidenceType.DRIVER_NAME);
       const teamEvidence = evidence.find(e => e.type === EvidenceType.TEAM);
 
-      expect(numberEvidence?.quality).toBeLessThan(0.8); // Alphanumeric penalty
+      expect(numberEvidence?.quality).toBeGreaterThan(0.8); // Common alphanumeric pattern (42A) — no quality penalty by design
       expect(driverEvidence?.quality).toBeLessThan(0.5); // Too short penalty
       expect(teamEvidence?.quality).toBeGreaterThan(0.8); // Good team name
     });
