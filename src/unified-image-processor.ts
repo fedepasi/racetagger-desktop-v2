@@ -9488,6 +9488,13 @@ export class UnifiedImageProcessor extends EventEmitter {
             if (dnaResult.demotions.length > 0) {
               console.log(`[DNAConsensus] ${dnaResult.demotions.length} contradiction(s) over ${dnaResult.clusters.length} cluster(s) — ${armed ? 'ARMED (demoting)' : 'SHADOW (telemetry only)'}`);
             }
+            // JSONL telemetry for the gate analysis (shadow + armed). Bound the size
+            // by dropping the 'too-small' clusters (the bulk) — keep the actionable ones.
+            this.analysisLogger?.logDnaConsensus({
+              mode: armed ? 'armed' : 'shadow',
+              clusters: dnaResult.clusters.filter((c) => c.status !== 'too-small'),
+              demotions: dnaResult.demotions,
+            });
             for (const dem of dnaResult.demotions) {
               const target = vehicleByKey.get(dem.key);
               const sm = target?.v?.participantMatch?.smartMatch;

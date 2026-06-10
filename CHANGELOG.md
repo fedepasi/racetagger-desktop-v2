@@ -32,6 +32,11 @@
   shadow mode for measurement. Conservative by construction (multi-photo cluster
   only, make-led — model is advisory, burst-correlated clusters shadow-only).
   Adds `tests/dna-consensus.test.ts` (21 cases incl. the no-number-mutation invariant).
+- **Measurement + review surface**: a `DNA_CONSENSUS` JSONL event records the
+  per-batch cluster verdicts + demotions (shadow *and* armed) so a shadow run is
+  measurable against reviewer outcomes; the review gallery shows a neutral
+  "🔎 Looks like {make} {category}" context line on a demoted photo (armed only —
+  shadow stays invisible), never an accusation and never changing the number.
 
 ## [1.1.9] - 2026-05-12
 

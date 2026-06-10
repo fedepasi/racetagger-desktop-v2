@@ -1884,6 +1884,24 @@ class LogVisualizer {
       .map(p => p.role ? `${this.escapeHtml(p.name)} (${this.escapeHtml(p.role)})` : this.escapeHtml(p.name))
       .join(', ');
 
+    // P1 DNA-reconciliation: a neutral "Looks like <make> <category>" context line,
+    // shown ONLY when the photo was actually demoted to review by the consensus
+    // (armed mode). Shadow flags stay invisible to the user. Never an accusation,
+    // never implies the number is wrong — just shows what the cluster's cars looked
+    // like so the reviewer can pick faster. The number itself is never changed.
+    const dnaContext = (() => {
+      const flagged = vehicles.find(v => v && v.dnaValidation && v.dnaValidation.verdict === 'DEMOTE_TO_REVIEW');
+      if (!flagged) return '';
+      const dv = flagged.dnaValidation;
+      const tc = s => s ? String(s).charAt(0).toUpperCase() + String(s).slice(1) : '';
+      const make = tc(dv.consensusMake || flagged.make || '');
+      const cat = String(dv.consensusCategory || flagged.categoryDna || '').toUpperCase();
+      const label = [make, cat].filter(Boolean).map(s => this.escapeHtml(s)).join(' ');
+      if (!label) return '';
+      const tip = `Other photos of this number look like a ${this.escapeHtml(make || 'different car')}. AI-detected context for your review — the number was not changed.`;
+      return `<div class="lv-dna-context" title="${tip}" style="font-size:11px;color:#9aa5bd;margin-top:3px;">🔎 Looks like ${label}</div>`;
+    })();
+
     return `
       <div class="lv-result-card ${isModified ? 'modified' : ''} ${needsReview && !isResolved ? 'needs-review' : ''} ${isResolved ? 'review-resolved' : ''} ${this.selectedCardKeys.has(result.fileName) ? 'selected' : ''}" data-index="${index}" data-file-name="${result.fileName}">
         <div class="lv-card-image">
@@ -1915,6 +1933,7 @@ class LogVisualizer {
               <div class="lv-team-name">${primaryVehicle.team || 'Unknown Team'}</div>
               ${primaryVehicle.drivers ? `<div class="lv-drivers">${primaryVehicle.drivers.join(', ')}</div>` : ''}
               ${otherPeople.length > 0 ? `<div class="lv-other-people" title="People outside the preset (VIPs/guests)">★ ${otherPeopleLabel}</div>` : ''}
+              ${dnaContext}
               ${needsReview && !isResolved && altCount > 1 ? `
                 <div class="lv-ambiguous-hint">${altCount} candidates — click to choose</div>
               ` : ''}
@@ -4922,6 +4941,13 @@ class LogVisualizer {
         matchedBy: vehicle.finalResult?.matchedBy || 'none',
         matchStatus: vehicle.finalResult?.matchStatus || 'no_match',
         alternativeCandidates: vehicle.finalResult?.alternativeCandidates || null,
+        // Vehicle DNA (P1) — surfaced as review CONTEXT (a neutral badge), never as an
+        // accusation, and never used to change the number. dnaValidation is set by the
+        // post-temporal consensus pass; absent on older logs (treated as "no DNA review").
+        make: vehicle.make || null,
+        categoryDna: vehicle.category_dna || null,
+        livery: vehicle.livery || null,
+        dnaValidation: vehicle.participantMatch?.smartMatch?.dnaValidation || vehicle.dnaValidation || null,
         // Issue #104 — extra-preset people (VIPs, team principals, etc.), only populated
         // when the preset has allow_external_person_recognition = true.
         otherPeople: Array.isArray(vehicle.otherPeople) ? vehicle.otherPeople : []
