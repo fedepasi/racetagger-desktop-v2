@@ -128,6 +128,24 @@
           </label>
         </div>
 
+        <hr style="border: none; border-top: 1px solid var(--border-color); margin: 16px 0;">
+
+        <!-- Default IPTC template (UX-04) -->
+        <div class="settings-iptc-template-row">
+          <div class="settings-iptc-template-info">
+            <div class="toggle-title">Default IPTC template</div>
+            <div class="form-text">
+              Applied to new presets and used as the fallback in <strong>Export & IPTC</strong> when a preset has no profile of its own. Per-preset profiles always take precedence.
+            </div>
+            <div class="settings-iptc-template-status" id="settings-iptc-template-status">Not configured</div>
+          </div>
+          <div class="settings-iptc-template-actions">
+            <button class="btn btn-secondary btn-sm" id="settings-iptc-template-edit">Edit template…</button>
+            <button class="btn btn-secondary btn-sm" id="settings-iptc-template-import">Import from XMP…</button>
+            <button class="btn btn-secondary btn-sm" id="settings-iptc-template-clear">Clear</button>
+          </div>
+        </div>
+
         <div class="info-box mt-md">
           <span class="info-icon">💡</span>
           <div class="info-text text-sm">
@@ -171,6 +189,27 @@
             <a href="#" id="about-support-link" class="settings-link">info@racetagger.cloud</a>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Default IPTC template editor modal (UX-04, Option B). The form markup is
+       mounted on demand into #iptc-defaults-form-mount by ensureIptcFormMarkup()
+       (the SAME shared partial used by the preset editor). Behavior options
+       (writing timing / face scope) are hidden here via scoped CSS — they are
+       per-preset only. -->
+  <div id="iptc-defaults-modal" class="modal">
+    <div class="modal-content iptc-defaults-modal-content">
+      <div class="modal-header">
+        <h2>Default IPTC Template</h2>
+        <button class="modal-close" id="iptc-defaults-modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="iptc-defaults-form-mount"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="iptc-defaults-cancel">Cancel</button>
+        <button class="btn btn-primary" id="iptc-defaults-save">Save default</button>
       </div>
     </div>
   </div>

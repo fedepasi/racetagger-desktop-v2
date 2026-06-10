@@ -1166,10 +1166,23 @@ function createNewPreset() {
   clearParticipantsTable();
   addParticipantRow(); // Add one empty row
 
-  // Clear IPTC metadata form (if preset-iptc-editor.js is loaded)
-  if (typeof clearIptcForm === 'function') {
-    clearIptcForm();
-  }
+  // Mount the shared IPTC form markup (UX-04, Option B), clear it, then prefill
+  // from the account-level default template. Ordering is load-bearing:
+  // ensureIptcFormMarkup() must finish BEFORE clearIptcForm()/prefill — values
+  // set on missing elements are silently lost. Runs async so the modal opens
+  // immediately; the IPTC section (collapsed by default) fills in right after.
+  (async () => {
+    const iptcBody = document.getElementById('iptc-section-body');
+    if (typeof ensureIptcFormMarkup === 'function') {
+      await ensureIptcFormMarkup(iptcBody);
+    }
+    if (typeof clearIptcForm === 'function') {
+      clearIptcForm();
+    }
+    if (typeof prefillIptcFromDefaults === 'function') {
+      prefillIptcFromDefaults();
+    }
+  })();
 
   // V1: open the editable form for new presets (user has nothing to read yet),
   // and refresh the summary strip with empty values.
@@ -3607,7 +3620,12 @@ async function editPreset(presetId) {
     // Apply saved sort preference (or default: number ascending)
     applySortState(loadSortPreference(currentPreset.id));
 
-    // Load IPTC metadata into form (if preset-iptc-editor.js is loaded)
+    // Load IPTC metadata into form (if preset-iptc-editor.js is loaded).
+    // UX-04, Option B: mount the shared IPTC form markup FIRST — ordering is
+    // load-bearing, values set on missing elements are silently lost.
+    if (typeof ensureIptcFormMarkup === 'function') {
+      await ensureIptcFormMarkup(document.getElementById('iptc-section-body'));
+    }
     if (typeof loadIptcDataIntoForm === 'function') {
       loadIptcDataIntoForm(currentPreset.iptc_metadata || null);
     }

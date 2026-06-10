@@ -1,0 +1,372 @@
+<!--
+  Shared IPTC editor form (UX-04, Option B).
+
+  This is the full IPTC Pro authoring form, extracted verbatim from the preset
+  editor so it can be mounted in TWO places:
+    1. The preset editor — injected into #iptc-section-body (participants page).
+    2. The Settings "Edit default template" modal — injected into
+       #iptc-defaults-form-mount.
+
+  Mounted on demand by ensureIptcFormMarkup() in preset-iptc-editor.js. Every
+  iptc-* ID is preserved verbatim — loadIptcDataIntoForm()/collectIptcDataFromForm()
+  bind by getElementById on these IDs. Behavior options (#iptc-writing-timing /
+  #iptc-face-scope) are per-preset only; they are hidden in the Settings modal via
+  scoped CSS and stripped before saving a global template.
+
+  Do NOT add an #iptc-section-body wrapper here — the wrapper lives in the mount
+  point; this file is its CONTENTS.
+-->
+<div class="iptc-info-banner">
+  <span class="info-icon">💡</span>
+  <div class="info-text">
+    Configure IPTC/XMP metadata to embed into your photos when you use the <strong>Export & IPTC</strong> button in the results page. Use placeholders like <code>{name}</code>, <code>{number}</code>, <code>{team}</code>, <code>{car_model}</code>, <code>{nationality}</code>, <code>{category}</code> in <strong>Caption Template</strong>, <strong>Base Keywords</strong>, and <strong>Person Shown</strong> — they will be replaced with each participant's actual data from the table below.
+    <br><br>
+    <strong>Multi-pilot photos</strong> (WEC, IMSA, endurance, etc.): wrap the per-pilot section in <code>[[ ]]</code> to repeat it for each matched pilot. Example: <code>Race 2026 [[#{number} {name}]]</code> becomes <code>Race 2026 #1 Driver A, #2 Driver B</code> when two pilots are detected in the same frame.
+  </div>
+</div>
+
+<!-- First row: Event & Caption, Base Keywords, Person Shown -->
+<div class="iptc-editor-grid iptc-editor-grid-top">
+  <!-- Event & Caption -->
+  <div class="iptc-editor-column">
+    <div class="iptc-column-header">
+      <label class="iptc-column-checkbox">
+        <input type="checkbox" id="iptc-section-event" checked>
+        <span>Event & Caption</span>
+      </label>
+    </div>
+    <div class="iptc-column-body">
+      <div class="form-group">
+        <label>Headline <span class="field-destination">→ IPTC:Headline</span></label>
+        <input type="text" id="iptc-headline" class="form-input form-input-iptc" placeholder="F1 GP Sao Paulo 2025">
+      </div>
+      <div class="form-group">
+        <label>Caption Template <span class="field-destination">→ IPTC:Caption</span></label>
+        <div class="iptc-template-shortcuts">
+          <span class="shortcuts-label">Quick add:</span>
+          <button type="button" class="template-shortcut-btn" data-target="iptc-description" data-placeholder="{name}">{name}</button>
+          <button type="button" class="template-shortcut-btn" data-target="iptc-description" data-placeholder="{number}">{number}</button>
+          <button type="button" class="template-shortcut-btn" data-target="iptc-description" data-placeholder="{team}">{team}</button>
+          <button type="button" class="template-shortcut-btn" data-target="iptc-description" data-placeholder="{car_model}">{car_model}</button>
+          <button type="button" class="template-shortcut-btn" data-target="iptc-description" data-placeholder="{nationality}">{nationality}</button>
+          <button type="button" class="template-shortcut-btn" data-target="iptc-description" data-placeholder="{category}">{category}</button>
+          <button type="button" class="template-shortcut-btn template-shortcut-btn-block" data-target="iptc-description" data-action="wrap" data-wrap-before="[[" data-wrap-after="]]" title="Wrap the selected text in a per-car block. The block is repeated once per matched pilot when a photo contains multiple participants (e.g. WEC, IMSA, endurance racing).">[[ per-car ]]</button>
+        </div>
+        <input type="hidden" id="iptc-description">
+        <div id="iptc-description-editor" class="form-input form-input-iptc iptc-textarea iptc-editable-template" contenteditable="true" data-target="iptc-description" data-placeholder="{name} during the Formula 1 Grande Premio..." role="textbox" aria-multiline="true"></div>
+        <small class="form-hint iptc-caption-preview" id="iptc-caption-preview"></small>
+      </div>
+      <div class="form-group">
+        <label>Event <span class="field-destination">→ XMP-iptcExt:Event</span></label>
+        <input type="text" id="iptc-event" class="form-input form-input-iptc" placeholder="F1 GP Brasil 2025">
+      </div>
+      <div class="form-group">
+        <label>Caption Writer <span class="field-destination">→ Writer-Editor</span></label>
+        <input type="text" id="iptc-caption-writer" class="form-input form-input-iptc" placeholder="Caption writer name">
+      </div>
+      <div class="form-group form-group-row">
+        <div class="form-group form-group-third">
+          <label>Category</label>
+          <input type="text" id="iptc-category" class="form-input form-input-iptc" placeholder="SPO">
+        </div>
+        <div class="form-group form-group-third">
+          <label>Urgency</label>
+          <select id="iptc-urgency" class="form-input form-input-iptc">
+            <option value="">-</option>
+            <option value="1">1 (Highest)</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5">5 (Normal)</option>
+            <option value="6">6</option>
+            <option value="7">7</option>
+            <option value="8">8 (Lowest)</option>
+          </select>
+        </div>
+        <div class="form-group form-group-third">
+          <label>Genre</label>
+          <input type="text" id="iptc-genre" class="form-input form-input-iptc" placeholder="SPO">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Date Created</label>
+        <input type="date" id="iptc-date-created" class="form-input form-input-iptc">
+      </div>
+    </div>
+  </div>
+
+  <!-- Base Keywords + Person Shown (stacked) -->
+  <div class="iptc-stacked-column">
+    <!-- Base Keywords -->
+    <div class="iptc-editor-column">
+      <div class="iptc-column-header">
+        <label class="iptc-column-checkbox">
+          <input type="checkbox" id="iptc-section-keywords" checked>
+          <span>Base Keywords</span>
+        </label>
+      </div>
+      <div class="iptc-column-body">
+        <div class="form-group">
+          <div class="iptc-keyword-shortcuts">
+            <span class="shortcuts-label">Quick add:</span>
+            <button type="button" class="keyword-shortcut-btn" data-keyword="{name}">{name}</button>
+            <button type="button" class="keyword-shortcut-btn" data-keyword="{number}">{number}</button>
+            <button type="button" class="keyword-shortcut-btn" data-keyword="{team}">{team}</button>
+            <button type="button" class="keyword-shortcut-btn" data-keyword="{car_model}">{car_model}</button>
+            <button type="button" class="keyword-shortcut-btn" data-keyword="{nationality}">{nationality}</button>
+            <button type="button" class="keyword-shortcut-btn" data-keyword="{category}">{category}</button>
+          </div>
+          <div class="iptc-tags-container" id="iptc-keywords-container">
+            <div class="iptc-tags-list" id="iptc-keywords-tags"></div>
+            <input type="text" id="iptc-keywords-input" class="iptc-tag-input" placeholder="Type keyword and press Enter">
+          </div>
+          <small class="form-hint">Press Enter or comma to add. These keywords are added to every photo. Placeholders are resolved per participant.</small>
+        </div>
+        <div class="form-group form-group-inline">
+          <label class="radio-label">
+            <input type="radio" name="iptc-keywords-mode" value="append" checked>
+            <span>Merge with existing keywords</span>
+          </label>
+          <label class="radio-label">
+            <input type="radio" name="iptc-keywords-mode" value="overwrite">
+            <span>Replace all keywords</span>
+          </label>
+        </div>
+        <div class="iptc-visual-tags-option">
+          <label class="visual-tags-toggle">
+            <input type="checkbox" id="iptc-include-visual-tags">
+            <span class="visual-tags-label">Include AI visual tags in keywords</span>
+          </label>
+          <div class="visual-tags-badges">
+            <span class="visual-tag-badge">location</span>
+            <span class="visual-tag-badge">weather</span>
+            <span class="visual-tag-badge">scene</span>
+            <span class="visual-tag-badge">subjects</span>
+            <span class="visual-tag-badge">style</span>
+            <span class="visual-tag-badge">emotion</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Person Shown -->
+    <div class="iptc-editor-column">
+      <div class="iptc-column-header">
+        <label class="iptc-column-checkbox">
+          <input type="checkbox" id="iptc-section-person" checked>
+          <span>Person Shown</span>
+        </label>
+      </div>
+      <div class="iptc-column-body">
+        <div class="form-group">
+          <label>Template <span class="field-destination">→ PersonInImage</span></label>
+          <div class="iptc-template-shortcuts">
+            <span class="shortcuts-label">Quick add:</span>
+            <button type="button" class="template-shortcut-btn" data-target="iptc-person-shown" data-placeholder="{name}">{name}</button>
+            <button type="button" class="template-shortcut-btn" data-target="iptc-person-shown" data-placeholder="{number}">{number}</button>
+            <button type="button" class="template-shortcut-btn" data-target="iptc-person-shown" data-placeholder="{team}">{team}</button>
+            <button type="button" class="template-shortcut-btn" data-target="iptc-person-shown" data-placeholder="{nationality}">{nationality}</button>
+          </div>
+          <input type="hidden" id="iptc-person-shown">
+          <div id="iptc-person-shown-editor" class="form-input form-input-iptc iptc-editable-template iptc-editable-single" contenteditable="true" data-target="iptc-person-shown" data-placeholder="{name}" role="textbox"></div>
+          <small class="form-hint iptc-person-preview" id="iptc-person-preview"></small>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Credits & Copyright -->
+  <div class="iptc-editor-column">
+    <div class="iptc-column-header">
+      <label class="iptc-column-checkbox">
+        <input type="checkbox" id="iptc-section-credits" checked>
+        <span>Credits & Copyright</span>
+      </label>
+    </div>
+    <div class="iptc-column-body">
+      <div class="form-group">
+        <label>Credit <span class="field-destination">→ IPTC:Credit</span></label>
+        <input type="text" id="iptc-credit" class="form-input form-input-iptc" placeholder="Photographer or agency name">
+      </div>
+      <div class="form-group">
+        <label>Source <span class="field-destination">→ IPTC:Source</span></label>
+        <input type="text" id="iptc-source" class="form-input form-input-iptc" placeholder="Agency or source">
+      </div>
+      <div class="form-group">
+        <label>Copyright <span class="field-destination">→ IPTC:Copyright</span></label>
+        <input type="text" id="iptc-copyright" class="form-input form-input-iptc" placeholder="© 2025 Your Name">
+      </div>
+      <div class="form-group">
+        <label>Copyright Owner <span class="field-destination">→ XMP-plus</span></label>
+        <input type="text" id="iptc-copyright-owner" class="form-input form-input-iptc" placeholder="Copyright owner name">
+      </div>
+      <div class="form-group form-group-inline">
+        <label class="checkbox-label">
+          <input type="checkbox" id="iptc-copyright-marked">
+          <span>Copyright Marked</span>
+        </label>
+      </div>
+      <div class="form-group">
+        <label>Copyright URL <span class="field-destination">→ xmpRights</span></label>
+        <input type="text" id="iptc-copyright-url" class="form-input form-input-iptc" placeholder="https://...">
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Second row: Creator & Contact, Location, Rights & Licensing -->
+<div class="iptc-editor-grid iptc-editor-grid-bottom">
+  <!-- Creator & Contact -->
+  <div class="iptc-editor-column">
+    <div class="iptc-column-header">
+      <label class="iptc-column-checkbox">
+        <input type="checkbox" id="iptc-section-creator" checked>
+        <span>Creator & Contact</span>
+      </label>
+    </div>
+    <div class="iptc-column-body">
+      <div class="form-group">
+        <label>Creator <span class="field-destination">→ IPTC:By-line</span></label>
+        <input type="text" id="iptc-creator" class="form-input form-input-iptc" placeholder="Photographer name">
+      </div>
+      <div class="form-group">
+        <label>Position <span class="field-destination">→ By-lineTitle</span></label>
+        <input type="text" id="iptc-authors-position" class="form-input form-input-iptc" placeholder="Photographer">
+      </div>
+      <div class="form-group">
+        <label>Email</label>
+        <input type="email" id="iptc-contact-email" class="form-input form-input-iptc" placeholder="email@example.com">
+      </div>
+      <div class="form-group">
+        <label>Phone</label>
+        <input type="tel" id="iptc-contact-phone" class="form-input form-input-iptc" placeholder="+39 ...">
+      </div>
+      <div class="form-group">
+        <label>Website</label>
+        <input type="url" id="iptc-contact-website" class="form-input form-input-iptc" placeholder="https://...">
+      </div>
+      <div class="form-group">
+        <label>Address</label>
+        <input type="text" id="iptc-contact-address" class="form-input form-input-iptc" placeholder="Street address">
+      </div>
+      <div class="form-group form-group-row">
+        <div class="form-group form-group-half">
+          <label>City</label>
+          <input type="text" id="iptc-contact-city" class="form-input form-input-iptc" placeholder="City">
+        </div>
+        <div class="form-group form-group-half">
+          <label>Postal Code</label>
+          <input type="text" id="iptc-contact-postal-code" class="form-input form-input-iptc" placeholder="ZIP">
+        </div>
+      </div>
+      <div class="form-group form-group-row">
+        <div class="form-group form-group-half">
+          <label>Region</label>
+          <input type="text" id="iptc-contact-region" class="form-input form-input-iptc" placeholder="State/Region">
+        </div>
+        <div class="form-group form-group-half">
+          <label>Country</label>
+          <input type="text" id="iptc-contact-country" class="form-input form-input-iptc" placeholder="Country">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Location -->
+  <div class="iptc-editor-column">
+    <div class="iptc-column-header">
+      <label class="iptc-column-checkbox">
+        <input type="checkbox" id="iptc-section-location" checked>
+        <span>Location</span>
+      </label>
+    </div>
+    <div class="iptc-column-body">
+      <div class="form-group">
+        <label>City <span class="field-destination">→ IPTC:City</span></label>
+        <input type="text" id="iptc-city" class="form-input form-input-iptc" placeholder="Sao Paulo">
+      </div>
+      <div class="form-group">
+        <label>Country <span class="field-destination">→ IPTC:Country</span></label>
+        <input type="text" id="iptc-country" class="form-input form-input-iptc" placeholder="Brasil">
+      </div>
+      <div class="form-group">
+        <label>Country Code <span class="field-destination">→ CountryCode</span></label>
+        <input type="text" id="iptc-country-code" class="form-input form-input-iptc" placeholder="BRA" maxlength="3">
+      </div>
+      <div class="form-group">
+        <label>Sub-location <span class="field-destination">→ Sub-location</span></label>
+        <input type="text" id="iptc-location" class="form-input form-input-iptc" placeholder="Autodromo Jose Carlos Pace">
+      </div>
+      <div class="form-group">
+        <label>State/Province</label>
+        <input type="text" id="iptc-province-state" class="form-input form-input-iptc" placeholder="Sao Paulo">
+      </div>
+      <div class="form-group">
+        <label>World Region</label>
+        <input type="text" id="iptc-world-region" class="form-input form-input-iptc" placeholder="America">
+      </div>
+    </div>
+  </div>
+
+  <!-- Rights & Licensing -->
+  <div class="iptc-editor-column">
+    <div class="iptc-column-header">
+      <label class="iptc-column-checkbox">
+        <input type="checkbox" id="iptc-section-rights" checked>
+        <span>Rights & Licensing</span>
+      </label>
+    </div>
+    <div class="iptc-column-body">
+      <div class="form-group">
+        <label>Digital Source Type</label>
+        <select id="iptc-digital-source" class="form-input form-input-iptc">
+          <option value="">-</option>
+          <option value="digitalCapture">Digital Capture</option>
+          <option value="negativeFilm">Negative Film</option>
+          <option value="positiveFilm">Positive Film</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Model Release</label>
+        <select id="iptc-model-release" class="form-input form-input-iptc">
+          <option value="">-</option>
+          <option value="MR-NON">Not Applicable (MR-NON)</option>
+          <option value="MR-NAP">Not Available (MR-NAP)</option>
+          <option value="MR-UPR">Unlimited Property Release</option>
+          <option value="MR-LPR">Limited Property Release</option>
+        </select>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- IPTC Pro Behavior Options (per-preset only — hidden in the Settings modal) -->
+<div class="iptc-behavior-options">
+  <h4 class="iptc-behavior-title">Writing Behavior</h4>
+
+  <div class="iptc-behavior-row">
+    <div class="iptc-behavior-option">
+      <label class="iptc-behavior-label">
+        <span class="iptc-behavior-name">Metadata writing timing</span>
+        <select id="iptc-writing-timing" class="form-input form-input-iptc iptc-behavior-select">
+          <option value="default">Use app default</option>
+          <option value="auto">Automatic during analysis</option>
+          <option value="manual">Manual only (Export & IPTC)</option>
+        </select>
+      </label>
+      <small class="form-hint">Controls when IPTC metadata is embedded into images for this preset</small>
+    </div>
+
+    <div class="iptc-behavior-option">
+      <label class="iptc-behavior-label">
+        <span class="iptc-behavior-name">Face recognition scope</span>
+        <select id="iptc-face-scope" class="form-input form-input-iptc iptc-behavior-select">
+          <option value="default">Use app default</option>
+          <option value="recognized-only">Write only recognized person</option>
+          <option value="all">Write all participants for number</option>
+        </select>
+      </label>
+      <small class="form-hint">When a face is recognized, choose whether to include only that person or all linked participants</small>
+    </div>
+  </div>
+</div>

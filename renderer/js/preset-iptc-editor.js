@@ -728,6 +728,114 @@ async function saveIptcMetadata(presetId) {
 }
 
 // ============================================================
+// Account-level default IPTC template (UX-04)
+// ============================================================
+
+/**
+ * Load the account-level default IPTC template into the current form, if one
+ * is configured. Best-effort: a blank form is an acceptable fallback, so this
+ * is a silent no-op on error or when no default exists.
+ *
+ * Called from the preset editor ("Apply default" button) and from
+ * createNewPreset() so every new preset starts pre-filled.
+ */
+async function prefillIptcFromDefaults() {
+  try {
+    const response = await window.api.invoke('iptc-defaults-get');
+    if (!response || !response.success || !response.data) return;
+
+    const template = response.data;
+    loadIptcDataIntoForm(template);
+
+    // Distinguish a prefilled-from-default form from a saved preset profile.
+    const status = document.getElementById('iptc-toggle-status');
+    if (status) {
+      status.textContent = 'Prefilled from default';
+      status.classList.add('iptc-status-active');
+      status.classList.remove('iptc-status-inactive');
+    }
+
+    // Mirror for the offline Export & IPTC fallback (results.html, same origin).
+    try {
+      localStorage.setItem('iptc-default-template-mirror', JSON.stringify(template));
+    } catch (e) { /* mirror is non-authoritative — ignore quota/serialize errors */ }
+  } catch (e) {
+    // Silent: prefill never blocks preset creation.
+  }
+}
+
+/**
+ * Save the current IPTC form as the account-level default template.
+ *
+ * Guards against an empty form: collectIptcDataFromForm() returns null when the
+ * form is effectively blank — that is "Nothing to save", NEVER a delete.
+ * Deletion only happens via Settings → "Clear". Per-preset behavior overrides
+ * (writingTiming/faceScope) are stripped before saving.
+ */
+async function saveCurrentIptcFormAsDefault() {
+  const data = collectIptcDataFromForm();
+  if (data === null) {
+    showNotification('Nothing to save — fill in the IPTC form first', 'error');
+    return;
+  }
+
+  // A global template never carries per-preset behavior overrides.
+  delete data.writingTiming;
+  delete data.faceScope;
+
+  try {
+    const response = await window.api.invoke('iptc-defaults-save', data);
+    if (!response || !response.success) {
+      showNotification('Could not save default template: ' + ((response && response.error) || 'unknown error'), 'error');
+      return;
+    }
+    showNotification('Saved as your default IPTC template', 'success');
+    try {
+      localStorage.setItem('iptc-default-template-mirror', JSON.stringify(data));
+    } catch (e) { /* mirror is non-authoritative — ignore */ }
+  } catch (e) {
+    console.error('[IPTC Editor] Error saving default template:', e);
+    showNotification('Could not save default template', 'error');
+  }
+}
+
+// ============================================================
+// Shared IPTC form markup (UX-04, Option B)
+// ============================================================
+// The full IPTC editor form lives in pages/partials/iptc-editor-form.html so it
+// can be mounted both inside the preset editor (#iptc-section-body) and inside
+// the Settings "Edit default template" modal. The partial string is fetched
+// once and cached (mirrors router.js pageCache).
+let _iptcFormMarkupCache = null;
+
+/**
+ * Ensure the shared IPTC form markup is mounted into `mountEl`.
+ * Idempotent per-mount: skips injection if the form is already there.
+ *
+ * ORDERING IS LOAD-BEARING: callers MUST await this BEFORE
+ * loadIptcDataIntoForm()/clearIptcForm() — values set on missing elements are
+ * silently lost.
+ */
+async function ensureIptcFormMarkup(mountEl) {
+  if (!mountEl) return;
+  // Already injected into this mount.
+  if (mountEl.querySelector('.iptc-editor-grid')) return;
+
+  if (_iptcFormMarkupCache == null) {
+    try {
+      const res = await fetch('pages/partials/iptc-editor-form.html');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      _iptcFormMarkupCache = await res.text();
+    } catch (e) {
+      console.error('[IPTC Editor] Failed to load IPTC form partial:', e);
+      return;
+    }
+  }
+
+  mountEl.innerHTML = _iptcFormMarkupCache;
+}
+
+// ============================================================
 // Status badge
 // ============================================================
 function updateIptcToggleStatus(configured) {
@@ -1058,4 +1166,18 @@ if (document.readyState === 'loading') {
 } else {
   // Small delay to ensure DOM elements from page templates are loaded
   setTimeout(initIptcEditor, 200);
+}
+
+// Expose the helpers other modules / inline onclick handlers rely on. These are
+// already globals (classic-script function declarations), but be explicit — the
+// Settings editor (settings.js) and participants-manager.js call into them, and
+// participants.html buttons reference them via onclick (pattern: see
+// window.createNewPreset in participants-manager.js).
+if (typeof window !== 'undefined') {
+  window.prefillIptcFromDefaults = prefillIptcFromDefaults;
+  window.saveCurrentIptcFormAsDefault = saveCurrentIptcFormAsDefault;
+  window.ensureIptcFormMarkup = ensureIptcFormMarkup;
+  window.loadIptcDataIntoForm = loadIptcDataIntoForm;
+  window.collectIptcDataFromForm = collectIptcDataFromForm;
+  window.importIptcFromXmp = importIptcFromXmp;
 }

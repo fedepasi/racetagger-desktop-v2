@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### ✨ Features
+
+- **Default IPTC template (account-level)**: configure your IPTC Pro profile
+  once and have it follow you. A new **default IPTC template** is stored on your
+  account (new `user_iptc_templates` table, owner-only RLS) so it syncs across
+  machines and survives logout. It **prefills every new preset** and is used as
+  the **fallback in the Export & IPTC modal** when a preset has no profile of its
+  own — precedence is always **preset profile > default > empty**, and existing
+  presets are never auto-modified (snapshot semantics: the default is *copied*
+  at preset creation or via the explicit **Apply default** button). The preset
+  IPTC editor gains **Apply default** / **Save as default** buttons, and
+  **Settings → IPTC Pro Defaults** gains a full template editor (**Edit
+  template…**), **Import from XMP…**, a status row, and **Clear**. The Export &
+  IPTC modal reads the default directly over IPC and falls back to a local mirror
+  for offline export. No token logic / Edge Functions touched. (UX-04)
+
 ### 🐛 Fixes
 
 - **Backlog-autopilot workflows now use the real `error_reports` column names**: the
