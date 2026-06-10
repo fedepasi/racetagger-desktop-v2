@@ -160,7 +160,86 @@ function validateRawPreviewExtractor() {
   return { ok: false, fatal: false };
 }
 
+// ==================== ExifTool Validation ====================
+
+/**
+ * ExifTool is CRITICAL, not optional: it writes ALL IPTC/XMP metadata
+ * (keywords, captions, Person Shown, RAW XMP sidecars) and is the RAW-preview
+ * fallback when raw-preview-extractor is absent. Its executable is git-ignored
+ * (the Windows launcher is `*.exe`; the darwin/linux launchers are large
+ * binaries fetched separately — see scripts/download-exiftool.js), so a fresh
+ * checkout has the Perl `lib/` + DLLs but NOT the launcher. Because
+ * electron-builder packages `vendor/**` straight from disk, a build with a
+ * missing launcher silently ships an app that cannot write metadata. Gate on it.
+ */
+function validateExifTool() {
+  log(`\n📦 Validating ExifTool for ${targetPlatform}...`, 'cyan');
+
+  const vendorDir = path.join(ROOT_DIR, 'vendor');
+  // Mirror native-tool-manager's resolution order so we validate exactly what
+  // the runtime will try to spawn.
+  let candidates;
+  if (targetPlatform === 'win32') {
+    candidates = [
+      path.join(vendorDir, 'win32', 'exiftool.exe'),
+      path.join(vendorDir, 'win32', targetArch, 'exiftool.exe'),
+      path.join(vendorDir, 'win32', 'x64', 'exiftool.exe'),
+    ];
+  } else if (targetPlatform === 'darwin') {
+    candidates = [path.join(vendorDir, 'darwin', 'exiftool')];
+  } else {
+    candidates = [path.join(vendorDir, 'linux', 'exiftool')];
+  }
+
+  const found = candidates.find(p => fs.existsSync(p));
+  if (!found) {
+    log(`   ❌ ExifTool executable MISSING (checked: ${candidates.map(p => path.relative(ROOT_DIR, p)).join(', ')})`, 'red');
+    return { ok: false };
+  }
+
+  log(`   ✅ ExifTool launcher found: ${path.relative(ROOT_DIR, found)}`, 'green');
+
+  // On Windows the launcher (perl.exe→exiftool.exe) needs the Perl script and a
+  // matching perlXXX.dll runtime next to it, or it spawns but does nothing.
+  if (targetPlatform === 'win32') {
+    const dir = path.dirname(found);
+    const hasScript = fs.existsSync(path.join(dir, 'exiftool.pl'));
+    const hasPerlDll = fs.existsSync(dir) && fs.readdirSync(dir).some(f => /^perl\d+\.dll$/i.test(f));
+    if (!hasScript || !hasPerlDll) {
+      log(`   ❌ Launcher present but Perl runtime incomplete (exiftool.pl=${hasScript}, perlXXX.dll=${hasPerlDll})`, 'red');
+      return { ok: false };
+    }
+    log('   ✅ Perl runtime (exiftool.pl + perlXXX.dll) present', 'green');
+  }
+
+  return { ok: true };
+}
+
 // ==================== Auto-Install ====================
+
+/**
+ * Auto-download ExifTool for the HOST platform. download-exiftool.js fetches
+ * based on process.platform, so it can only populate the current OS's vendor
+ * dir — cross-compile targets must be provisioned on a machine of that OS.
+ */
+function installExifTool() {
+  if (noInstall) {
+    log('\n   --no-install flag set, skipping ExifTool auto-download', 'yellow');
+    return false;
+  }
+  if (targetPlatform !== process.platform) {
+    log(`\n   ⚠️ Cross-compile: cannot auto-download ${targetPlatform} ExifTool from a ${process.platform} host.`, 'yellow');
+    return false;
+  }
+  log('\n🔧 Attempting to download ExifTool (node scripts/download-exiftool.js)...', 'cyan');
+  const result = execSafe('node scripts/download-exiftool.js');
+  if (result.success) {
+    log('   ✅ ExifTool download successful', 'green');
+    return true;
+  }
+  log(`   ❌ ExifTool download failed: ${result.error}`, 'red');
+  return false;
+}
 
 function installMissingSharpPackages(missing) {
   if (noInstall) {
@@ -224,13 +303,31 @@ function main() {
     exitCode = 1;
   }
 
+  // --- ExifTool (critical) ---
+  let exiftoolResult = validateExifTool();
+  if (!exiftoolResult.ok) {
+    const installed = installExifTool();
+    if (installed) {
+      // Re-validate after the download.
+      exiftoolResult = validateExifTool();
+    }
+  }
+
+  if (!exiftoolResult.ok) {
+    log('\n❌ ExifTool validation FAILED', 'red');
+    log('   The build would ship an app that cannot write IPTC/XMP metadata.', 'red');
+    log(`   Fix: run \`node scripts/download-exiftool.js\` on a ${targetPlatform} machine.`, 'yellow');
+    exitCode = 1;
+  }
+
   // --- RAW-preview-extractor (non-critical) ---
   const rawResult = validateRawPreviewExtractor();
-  // Not fatal even if missing — ExifTool fallback exists
+  // Not fatal even if missing — ExifTool fallback exists (validated above)
 
   // --- Summary ---
   log('\n' + '─'.repeat(50), 'cyan');
   log(`  Sharp:              ${sharpResult.ok ? '✅ Ready' : '❌ MISSING'}`, sharpResult.ok ? 'green' : 'red');
+  log(`  ExifTool:           ${exiftoolResult.ok ? '✅ Ready' : '❌ MISSING'}`, exiftoolResult.ok ? 'green' : 'red');
   log(`  raw-preview-ext:    ${rawResult.ok ? '✅ Ready' : '⚠️ Will use ExifTool'}`, rawResult.ok ? 'green' : 'yellow');
   log('─'.repeat(50), 'cyan');
 

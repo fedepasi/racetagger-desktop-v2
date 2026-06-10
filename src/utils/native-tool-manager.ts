@@ -96,8 +96,20 @@ export class NativeToolManager {
     }
 
     if (isDev) {
-      // In dev mode, __dirname is dist/src/utils/, so we need ../../../vendor to reach project root
-      return path.join(__dirname, '../../../vendor');
+      // In dev mode __dirname is dist/src/utils/, so ../../../vendor reaches the
+      // project root's vendor. Under ts-jest the source runs from src/utils/
+      // (one level shallower), so that same relative path overshoots by one and
+      // the metadata tests would resolve vendor too high, then fall back to a
+      // system exiftool that isn't installed (every metadata test silently
+      // skips). Probe the known-good candidates and use the first that exists;
+      // the original dist-relative path stays FIRST so packaged-dev behaviour is
+      // byte-identical.
+      const devCandidates = [
+        path.join(__dirname, '../../../vendor'), // compiled dist/src/utils
+        path.join(__dirname, '../../vendor'),    // ts-jest src/utils
+        path.join(process.cwd(), 'vendor'),      // last-resort: project root
+      ];
+      return devCandidates.find(p => fs.existsSync(p)) || devCandidates[0];
     }
 
     // In production, vendor files are unpacked from asar

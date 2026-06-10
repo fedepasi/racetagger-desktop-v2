@@ -400,6 +400,10 @@ export function registerPresetFaceHandlers(): void {
   ipcMain.handle('preset-driver-sync', async (_, params: {
     participantId: string;
     driverNames: string[];
+    // Optional per-driver metadata aligned by index with driverNames. Used by
+    // the CSV/PDF entry-list merge to carry nationality (and metatag) through.
+    // When absent, behavior is unchanged (names + order only).
+    driverMeta?: Array<{ nationality?: string; metatag?: string }>;
   }) => {
     try {
       const supabase = authService.getSupabaseClient();
@@ -458,9 +462,15 @@ export function registerPresetFaceHandlers(): void {
 
         if (!existingDriver) {
           toCreate.push(name);
-        } else if (existingDriver.driver_name !== name || existingDriver.driver_order !== index) {
-          // Update if name or order changed
-          toUpdate.push({ id: existingDriver.id, name, order: index });
+        } else {
+          // Update if name/order changed, or if import-provided per-driver
+          // metadata (nationality/metatag) differs from what's stored.
+          const meta = params.driverMeta?.[index];
+          const natChanged = !!meta?.nationality && existingDriver.driver_nationality !== meta.nationality;
+          const tagChanged = !!meta?.metatag && existingDriver.driver_metatag !== meta.metatag;
+          if (existingDriver.driver_name !== name || existingDriver.driver_order !== index || natChanged || tagChanged) {
+            toUpdate.push({ id: existingDriver.id, name, order: index });
+          }
         }
       });
 
@@ -476,11 +486,15 @@ export function registerPresetFaceHandlers(): void {
 
       // Create new drivers
       for (const name of toCreate) {
+        const order = newNames.indexOf(name);
+        const meta = params.driverMeta?.[order];
         await supabase.from('preset_participant_drivers').insert({
           id: uuidv4(),
           participant_id: params.participantId,
           driver_name: name,
-          driver_order: newNames.indexOf(name),
+          driver_order: order,
+          ...(meta?.nationality ? { driver_nationality: meta.nationality } : {}),
+          ...(meta?.metatag ? { driver_metatag: meta.metatag } : {}),
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString()
         });
@@ -488,8 +502,15 @@ export function registerPresetFaceHandlers(): void {
 
       // Update existing drivers
       for (const { id, name, order } of toUpdate) {
+        const meta = params.driverMeta?.[order];
         await supabase.from('preset_participant_drivers')
-          .update({ driver_name: name, driver_order: order, updated_at: new Date().toISOString() })
+          .update({
+            driver_name: name,
+            driver_order: order,
+            ...(meta?.nationality ? { driver_nationality: meta.nationality } : {}),
+            ...(meta?.metatag ? { driver_metatag: meta.metatag } : {}),
+            updated_at: new Date().toISOString()
+          })
           .eq('id', id);
       }
 

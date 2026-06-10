@@ -574,6 +574,10 @@
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="margin-right: 4px;"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"/></svg>
                 Import CSV
               </button>
+              <button class="btn btn-sm" onclick="openPdfImportModal()" title="Import / update participants from a PDF entry list">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="margin-right: 4px;"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"/></svg>
+                Import PDF
+              </button>
               <button class="btn btn-primary btn-sm" onclick="openParticipantEditModal(-1)" title="Add a new participant">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="margin-right: 4px;"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5z"/></svg>
                 Add Participant
@@ -808,7 +812,8 @@
   <div id="participant-edit-modal" class="modal">
     <div class="modal-content participant-edit-modal-fullscreen">
       <div class="modal-header">
-        <h2 id="participant-edit-title">Edit Participant</h2>
+        <button class="modal-back-btn" onclick="closeParticipantEditModal()" title="Back to participant list" aria-label="Back to participant list" style="background:none;border:none;color:inherit;font-size:22px;line-height:1;cursor:pointer;padding:0 12px 0 0;display:inline-flex;align-items:center;flex:0 0 auto;">&#8592;</button>
+        <h2 id="participant-edit-title" style="flex:1;">Edit Participant</h2>
         <button class="modal-close" onclick="closeParticipantEditModal()">&times;</button>
       </div>
 
@@ -1242,6 +1247,21 @@
           </small>
         </div>
 
+        <!-- BUG-03 — round-to-round handling (merge mode only) -->
+        <div class="form-group" id="csv-missing-action-group" style="display: none; margin-bottom: 2rem;">
+          <label for="csv-missing-action" style="display: block; margin-bottom: 0.5rem; font-weight: 600; color: #fff;">
+            Participants not in this CSV
+          </label>
+          <select id="csv-missing-action" class="form-input-sm" style="width: 100%; font-size: 0.95rem; padding: 0.6rem 0.75rem;">
+            <option value="deactivate" selected>Deactivate (keep their data &amp; photos)</option>
+            <option value="remove">Remove from preset</option>
+            <option value="keep">Keep unchanged</option>
+          </select>
+          <small class="form-hint" style="display: block; margin-top: 0.5rem;">
+            Cars missing from this list are disabled for AI matching by default — nothing is deleted until you Save.
+          </small>
+        </div>
+
         <!-- CSV File Upload Section -->
         <div class="form-group" style="margin-bottom: 2rem;">
           <label class for="csv-file-input" style="display: block; margin-bottom: 0.75rem; font-weight: 600; color: var(--text-dark);">
@@ -1389,7 +1409,7 @@
         <!-- Preview State -->
         <div id="pdf-preview-state" class="pdf-state" style="display: none;">
           <!-- Preset Name Section -->
-          <div class="form-group text-white>
+          <div class="form-group text-white" id="pdf-preset-name-group">
             <label for="pdf-preset-name">
               📋 Preset Name *
             </label>
@@ -1401,6 +1421,21 @@
             >
             <small class="form-hint">
               Give this participant list a meaningful name
+            </small>
+          </div>
+
+          <!-- BUG-03 — round-to-round handling (merge mode only) -->
+          <div class="form-group" id="pdf-missing-action-group" style="display: none;">
+            <label for="pdf-missing-action" style="font-weight: 600;">
+              Participants not in this PDF
+            </label>
+            <select id="pdf-missing-action" class="form-input-sm">
+              <option value="deactivate" selected>Deactivate (keep their data &amp; photos)</option>
+              <option value="remove">Remove from preset</option>
+              <option value="keep">Keep unchanged</option>
+            </select>
+            <small class="form-hint">
+              Cars missing from this list are disabled for AI matching by default — nothing is deleted until you Save.
             </small>
           </div>
 

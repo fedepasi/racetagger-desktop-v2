@@ -172,6 +172,7 @@ const validInvokeChannels: string[] = [
   'supabase-get-participant-presets',
   'supabase-get-participant-preset-by-id',
   'supabase-save-preset-participants',
+  'supabase-upsert-preset-participant',   // BUG-02: immediate single-row persist from the participant editor
   'supabase-bulk-assign-folders',
   'supabase-update-participant-preset',
   'supabase-update-preset-last-used',
@@ -327,6 +328,8 @@ const validInvokeChannels: string[] = [
   'delivery-link-gallery',
   'delivery-submit-survey',
   'delivery-check-survey',
+  // Model download retry (BUG-04 — in-modal "Retry" instead of app restart)
+  'retry-model-download',
 ];
 
 

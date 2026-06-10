@@ -102,7 +102,7 @@ import { authService } from './auth-service';
 import * as piexif from 'piexifjs';
 import { createImageProcessor, initializeImageProcessor } from './utils/native-modules';
 import { createXmpSidecar, xmpSidecarExists } from './utils/xmp-manager';
-import { writeKeywordsToImage } from './utils/metadata-writer';
+import { writeKeywordsToImage, buildCorrectionKeywords, writeCorrectionKeywords } from './utils/metadata-writer';
 import { rawConverter } from './utils/raw-converter'; // Import for temp cleanup only
 import { rawPreviewExtractor } from './utils/raw-preview-native'; // Native RAW preview extraction
 import { unifiedImageProcessor, UnifiedImageFile, UnifiedProcessingResult, UnifiedProcessorConfig } from './unified-image-processor';
@@ -2896,8 +2896,45 @@ async function handleFeedbackSubmission(event: IpcMainEvent, feedbackData: any) 
  * downloaded lazily at the first "Avvia analisi" click, blocking the pipeline
  * for ~30s on the first run after install/upgrade.
  */
+// BUG-04 — set while a model download is running, to reject concurrent runs.
+let modelDownloadInProgress = false;
+
+/**
+ * Retry an async model-download step with exponential backoff. BUG-04: the
+ * model-download path had no retry, so a single transient failure (expired
+ * signed URL, network not ready right after an OS update / reboot) aborted
+ * startup with "restart the app to retry". Mirrors the retry+backoff already
+ * used on the analysis edge-function call.
+ */
+async function downloadWithRetry<T>(
+  label: string,
+  fn: () => Promise<T>,
+  maxAttempts = 3
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      console.warn(`[Main Process] Model download "${label}" attempt ${attempt}/${maxAttempts} failed:`, error);
+      if (attempt < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(`Model download failed: ${label}`);
+}
+
 async function checkAndDownloadModels(): Promise<void> {
   console.log('[Main Process] checkAndDownloadModels() called');
+  // BUG-04 — guard against concurrent runs (the startup call overlapping a user
+  // "Retry" click): two parallel downloads would race on the same files.
+  if (modelDownloadInProgress) {
+    console.warn('[Main Process] Model download already in progress — ignoring concurrent call');
+    return;
+  }
+  modelDownloadInProgress = true;
   try {
     const modelManager = getModelManager();
     console.log('[Main Process] ModelManager instance obtained');
@@ -2947,24 +2984,8 @@ async function checkAndDownloadModels(): Promise<void> {
     // Stage 1 — code-based models via downloadModel(code)
     for (const model of codeModels) {
       modelIndex++;
-      await modelManager.downloadModel(model.code, (percent, downloadedMB, _totalMB) => {
-        safeSend('model-download-progress', {
-          currentModel: modelIndex,
-          totalModels,
-          modelPercent: percent,
-          downloadedMB: downloadedTotal + downloadedMB,
-          totalMB: totalSizeMB
-        });
-      });
-      downloadedTotal += model.sizeMB;
-    }
-
-    // Stage 2 — YOLO registry models via ensureGenericModelAvailable(modelId)
-    for (const yoloModel of yoloModels) {
-      modelIndex++;
-      await modelManager.ensureGenericModelAvailable(
-        yoloModel.modelId,
-        (percent, downloadedMB, _totalMB) => {
+      await downloadWithRetry(`code:${model.code}`, () =>
+        modelManager.downloadModel(model.code, (percent, downloadedMB, _totalMB) => {
           safeSend('model-download-progress', {
             currentModel: modelIndex,
             totalModels,
@@ -2972,7 +2993,27 @@ async function checkAndDownloadModels(): Promise<void> {
             downloadedMB: downloadedTotal + downloadedMB,
             totalMB: totalSizeMB
           });
-        }
+        })
+      );
+      downloadedTotal += model.sizeMB;
+    }
+
+    // Stage 2 — YOLO registry models via ensureGenericModelAvailable(modelId)
+    for (const yoloModel of yoloModels) {
+      modelIndex++;
+      await downloadWithRetry(`yolo:${yoloModel.modelId}`, () =>
+        modelManager.ensureGenericModelAvailable(
+          yoloModel.modelId,
+          (percent, downloadedMB, _totalMB) => {
+            safeSend('model-download-progress', {
+              currentModel: modelIndex,
+              totalModels,
+              modelPercent: percent,
+              downloadedMB: downloadedTotal + downloadedMB,
+              totalMB: totalSizeMB
+            });
+          }
+        )
       );
       downloadedTotal += yoloModel.sizeMB;
     }
@@ -2985,6 +3026,8 @@ async function checkAndDownloadModels(): Promise<void> {
       message: error instanceof Error ? error.message : 'Unknown error'
     });
     throw error;
+  } finally {
+    modelDownloadInProgress = false;
   }
 }
 
@@ -3284,6 +3327,18 @@ app.whenReady().then(async () => { // Added async here
   ipcMain.handle('get-token-balance', handleGetTokenBalance);
   ipcMain.handle('get-pending-tokens', handleGetPendingTokens);
   ipcMain.handle('get-token-info', handleGetTokenInfo);
+
+  // BUG-04 — let the renderer re-trigger model download via a "Retry" button
+  // instead of forcing an app restart. checkAndDownloadModels emits its own
+  // start/progress/complete/error events, so the modal updates as usual.
+  ipcMain.handle('retry-model-download', async () => {
+    try {
+      await checkAndDownloadModels();
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  });
 
   // Register modular IPC handlers BEFORE window creation
   registerAllHandlers();
@@ -4813,9 +4868,30 @@ app.whenReady().then(async () => { // Added async here
       // file exiftool spawn (300ms-1s each) was the dominant cost in the old
       // sequential loop. Pool of 4 quarters wall-clock time without saturating
       // disk I/O on the photographer's machine.
+      //
+      // #167 — COLLAPSE to one write per file. The keyword write uses
+      // 'overwrite' mode (clears IPTC:Keywords / the RAW XMP dc:subject before
+      // re-adding), so two corrections on the SAME group photo previously (a)
+      // each wrote only their own vehicle's keywords — last-write-wins clobbered
+      // the other — and (b) raced on the same file inside the pool. All
+      // corrections for a file share the same already-B1-mutated
+      // imageAnalysisEvent, so a single write rebuilds the union of every
+      // detection's keywords (see updateImageMetadataWithCorrection / #167).
       if (exiftoolTasks.length > 0) {
-        const concurrency = Math.min(4, exiftoolTasks.length);
-        const queue = exiftoolTasks.slice();
+        const tasksByFile = new Map<string, ExiftoolTask>();
+        for (const task of exiftoolTasks) {
+          const key = task.correction.fileName;
+          const existing = tasksByFile.get(key);
+          // Prefer a task that carries the analysis event so we can rebuild the
+          // full vehicle set; otherwise keep the first one seen.
+          if (!existing || (!existing.imageAnalysisEvent && task.imageAnalysisEvent)) {
+            tasksByFile.set(key, task);
+          }
+        }
+        const fileTasks = Array.from(tasksByFile.values());
+
+        const concurrency = Math.min(4, fileTasks.length);
+        const queue = fileTasks.slice();
         await Promise.all(
           Array.from({ length: concurrency }, async () => {
             while (queue.length > 0) {
@@ -4825,7 +4901,9 @@ app.whenReady().then(async () => { // Added async here
                 const metaResult = await updateImageMetadataWithCorrection(
                   task.correction,
                   task.imageAnalysisEvent?.originalPath,
-                  task.imageAnalysisEvent?.organizedPath
+                  task.imageAnalysisEvent?.organizedPath,
+                  task.imageAnalysisEvent?.aiResponse?.vehicles,
+                  task.imageAnalysisEvent?.visualTags
                 );
                 if (metaResult?.success && task.imageAnalysisEvent) {
                   task.imageAnalysisEvent.metadataWritten = true;
@@ -5424,7 +5502,16 @@ app.whenReady().then(async () => { // Added async here
       changes: any;
     },
     originalPath?: string,
-    organizedPath?: string
+    organizedPath?: string,
+    // ALL current detections of the photo (post-correction state). The
+    // `update-analysis-log` handler has already mutated these in place (B1
+    // fix, ~main.ts:4557+), so passing the whole array lets us rebuild the
+    // full keyword set instead of just the corrected vehicle's — see #167.
+    allVehicles?: any[],
+    // Visual tags the AI extracted for this photo (location/weather/scene).
+    // Passed so the overwrite keyword write can re-preserve the ones already
+    // embedded on the file instead of wiping them.
+    visualTags?: any
   ) {
     try {
       // Use organized path (after move/copy) if available, otherwise original
@@ -5440,26 +5527,23 @@ app.whenReady().then(async () => { // Added async here
         return { success: false, reason: 'file_not_found' };
       }
 
-      // Build keywords from correction changes
-      const keywords: string[] = [];
-      if (correction.changes.raceNumber) {
-        keywords.push(`RaceNumber:${correction.changes.raceNumber}`);
-      }
-      if (correction.changes.team) {
-        keywords.push(`Team:${correction.changes.team}`);
-      }
-      if (correction.changes.drivers) {
-        const drivers = Array.isArray(correction.changes.drivers)
-          ? correction.changes.drivers
-          : [correction.changes.drivers];
-        drivers.forEach((driver: string) => {
-          if (driver) keywords.push(`Driver:${driver}`);
-        });
-      }
+      // #167 — Rebuild the FULL keyword set from EVERY current detection of the
+      // photo, not just the one the user edited. writeKeywordsToImage(...,
+      // 'overwrite') clears IPTC:Keywords (and the RAW XMP dc:subject block)
+      // before re-adding, so a single-vehicle keyword list wiped sibling
+      // detections on group photos. `allVehicles` reflects the post-correction
+      // state of all detections; we fall back to `correction.changes` only when
+      // it is unavailable (legacy JSONL / missing IMAGE_ANALYSIS event).
+      const keywords = buildCorrectionKeywords(allVehicles, correction.changes);
 
       if (keywords.length > 0) {
-        if (DEBUG_MODE) console.log(`[Main Process] Writing corrected metadata to ${effectivePath}:`, keywords);
-        await writeKeywordsToImage(effectivePath, keywords, true, 'overwrite');
+        if (DEBUG_MODE) console.log(`[Main Process] Writing corrected metadata to ${effectivePath} (${Array.isArray(allVehicles) ? `${allVehicles.length} detection(s)` : 'single correction'}):`, keywords);
+        // Overwrite mode now truly clears keywords first, so re-add any visual
+        // tags (location/weather/scene) already embedded on this file — without
+        // this a correction would wipe them. writeCorrectionKeywords reads the
+        // file/sidecar and only re-adds tags actually present, so the user's
+        // embedInMetadata choice is respected. See #167 / metadata-writer.ts.
+        await writeCorrectionKeywords(effectivePath, keywords, visualTags);
       }
 
       // ─────────────────────────────────────────────────────────────────────
