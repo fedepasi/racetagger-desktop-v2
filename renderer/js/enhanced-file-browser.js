@@ -1089,7 +1089,9 @@ class EnhancedFileBrowser {
           name: preset.name,
           participants: preset.participants || [],
           // Issue #104 — preset-scope driver filter flag
-          allow_external_person_recognition: preset.allow_external_person_recognition === true
+          allow_external_person_recognition: preset.allow_external_person_recognition === true,
+          // ACC-01 (Gruppe C) — series-wide sponsors to ignore in matching
+          series_sponsor_ignore: preset.series_sponsor_ignore || []
         } : null
       };
       

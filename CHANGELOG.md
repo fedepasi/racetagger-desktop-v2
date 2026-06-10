@@ -34,12 +34,11 @@
   (the IPTC PersonInImage template) and `allow_external_person_recognition`. An
   editorial photographer who duplicated an official preset got a copy stripped of
   its Getty-ready metadata profile with no warning, and had to rebuild it. The
-  duplication payload now carries all three (defaulting to `null`/`null`/`false`),
-  and `ParticipantPresetSupabase` gains the `person_shown_template` field. The
-  ACC-01 `series_sponsor_ignore` column is intentionally **not** copied yet —
-  verified absent from production `participant_presets` (would 400 the insert);
-  a code comment flags it for when that column ships. `database-service.ts` only;
-  no token logic / Edge Functions / schema touched.
+  duplication payload now carries all four preset-level fields —
+  `iptc_metadata`, `person_shown_template`, `allow_external_person_recognition`
+  and the ACC-01 `series_sponsor_ignore` list (see the Gruppe C field-feedback
+  section) — and `ParticipantPresetSupabase` gains the `person_shown_template`
+  field. `database-service.ts` only; no token logic / Edge Functions touched.
 
 - **Add a missing detection on a group photo from the review gallery**: the
   "+ Add detection" button was rendered **only** in the empty-state branch of
@@ -128,6 +127,18 @@
 - **Startup reliability**: ONNX model download now retries with backoff, writes
   atomically (no more "sticky" truncated model files), validates size, and
   offers an in-app **Retry** button instead of "restart the app" (BUG-04).
+- **Matching — per-preset "Series sponsors to ignore" list (ACC-01)**: at events
+  like Le Mans the series sponsors (Michelin, Rolex, TotalEnergies …) appear on
+  every car and on trackside banners, so their text used to pollute match
+  scoring. Each preset now has a **Series sponsors to ignore** list (a chip input
+  in the preset editor): the SmartMatcher drops those brands from sponsor
+  evidence **before** scoring, so an ignored sponsor neither adds a match bonus
+  nor fires the −30/−15 contradiction penalties against any participant, and can
+  no longer trip a false ghost-vehicle alert. Stored in the new additive
+  `participant_presets.series_sponsor_ignore` JSONB column (migration in
+  `racetagger-app`); an empty list — the default for every existing preset —
+  means matching is unchanged. Matching is entirely local; no token logic /
+  Edge Functions touched.
 
 ## [1.1.9] - 2026-05-12
 

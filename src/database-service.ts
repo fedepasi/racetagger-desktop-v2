@@ -1055,6 +1055,11 @@ export interface ParticipantPresetSupabase {
   // into a separate `otherPeople[]` field in the V6 response, never into
   // `drivers[]`. Default false = strict preset-only mode.
   allow_external_person_recognition?: boolean;
+
+  // ACC-01 (Gruppe C): per-preset list of series-wide sponsor brands (Michelin,
+  // Rolex …) the SmartMatcher excludes from SPONSOR evidence before scoring.
+  // Stored JSONB; empty array = no filtering. Reads pick it up via select('*').
+  series_sponsor_ignore?: string[];
 }
 
 export interface PresetParticipantSupabase {
@@ -2465,7 +2470,7 @@ export async function updatePresetLastUsedSupabase(presetId: string): Promise<vo
 /**
  * Update participant preset details in Supabase
  */
-export async function updateParticipantPresetSupabase(presetId: string, updateData: Partial<Pick<ParticipantPresetSupabase, 'name' | 'description' | 'category_id' | 'custom_folders' | 'iptc_metadata' | 'allow_external_person_recognition'>>): Promise<void> {
+export async function updateParticipantPresetSupabase(presetId: string, updateData: Partial<Pick<ParticipantPresetSupabase, 'name' | 'description' | 'category_id' | 'custom_folders' | 'iptc_metadata' | 'allow_external_person_recognition' | 'series_sponsor_ignore'>>): Promise<void> {
   const userId = getCurrentUserId();
   if (!userId) throw new Error('User not authenticated');
 
@@ -2989,9 +2994,10 @@ export async function duplicateOfficialPresetSupabase(sourcePresetId: string): P
       custom_folders: sourcePreset.custom_folders || [],
       iptc_metadata: sourcePreset.iptc_metadata ?? null,
       person_shown_template: sourcePreset.person_shown_template ?? null,
-      allow_external_person_recognition: sourcePreset.allow_external_person_recognition ?? false
-      // NOTE: when the ACC-01 `series_sponsor_ignore` column lands on
-      // participant_presets, copy it here too (verified absent in prod 2026-06-10).
+      allow_external_person_recognition: sourcePreset.allow_external_person_recognition ?? false,
+      // ACC-01 (Gruppe C): keep the curated series-sponsor ignore list when
+      // duplicating an official preset so the copy starts pre-seeded.
+      series_sponsor_ignore: sourcePreset.series_sponsor_ignore || []
     });
 
     // Copy participants

@@ -7,6 +7,7 @@ var currentPreset = null;
 var participantsData = [];
 var isEditingPreset = false;
 var customFolders = []; // Array of {name, path?} objects for custom folders
+var seriesSponsorIgnore = []; // ACC-01 (Gruppe C): series-wide sponsor names to ignore in matching
 
 // =====================================================================
 // BUG-02 — immediate per-row persist of participant edits.
@@ -1140,6 +1141,15 @@ function createNewPreset() {
   resetParticipantPersistState(); // BUG-02 — fresh editing session
   participantsData = [];
   customFolders = [];
+
+  // ACC-01 (Gruppe C) — reset the series-sponsor ignore list for a fresh preset
+  seriesSponsorIgnore = [];
+  renderSeriesSponsorChips();
+  const seriesSponsorInputNew = document.getElementById('series-sponsor-input');
+  if (seriesSponsorInputNew) {
+    seriesSponsorInputNew.value = '';
+    seriesSponsorInputNew.disabled = false;
+  }
 
   // Reset form
   document.getElementById('preset-name').value = '';
@@ -3508,6 +3518,102 @@ function renderCustomFolders() {
   });
 }
 
+// =====================================================================
+// ACC-01 (Gruppe C) — "Series sponsors to ignore" chip input
+// Per-preset list of series-wide sponsor brands (Michelin, Rolex …) that the
+// SmartMatcher excludes from SPONSOR evidence. Mirrors the folder-chip visuals.
+// =====================================================================
+
+var SERIES_SPONSOR_MAX_ENTRIES = 50;
+var SERIES_SPONSOR_MAX_LEN = 60;
+
+/**
+ * Render the current seriesSponsorIgnore list as removable chips. Removal is
+ * by index to avoid quoting issues with names containing apostrophes/quotes.
+ */
+function renderSeriesSponsorChips() {
+  const container = document.getElementById('series-sponsor-chips');
+  if (!container) return;
+  container.innerHTML = '';
+  seriesSponsorIgnore.forEach((name, idx) => {
+    const chip = document.createElement('div');
+    chip.className = 'sponsor-chip';
+    chip.innerHTML = `
+      <span class="sponsor-chip-name">${escapeHtml(name)}</span>
+      <button type="button" class="sponsor-chip-remove" onclick="removeSeriesSponsorAt(${idx})" title="Remove sponsor">×</button>
+    `;
+    container.appendChild(chip);
+  });
+  ensureSeriesSponsorInputBound();
+}
+
+/**
+ * Add one or more sponsor names from a raw string. Splits on commas (so a
+ * pasted "Michelin, Rolex" becomes two chips), trims, drops empties, caps each
+ * entry at 60 chars, dedupes case-insensitively, and caps the list at 50.
+ */
+function addSeriesSponsorsFromText(text) {
+  if (!text) return;
+  let added = false;
+  String(text).split(',').forEach(part => {
+    const name = part.trim().slice(0, SERIES_SPONSOR_MAX_LEN).trim();
+    if (!name) return;
+    if (seriesSponsorIgnore.length >= SERIES_SPONSOR_MAX_ENTRIES) return;
+    const exists = seriesSponsorIgnore.some(s => s.toLowerCase() === name.toLowerCase());
+    if (!exists) {
+      seriesSponsorIgnore.push(name);
+      added = true;
+    }
+  });
+  if (added) renderSeriesSponsorChips();
+}
+
+/**
+ * Remove the chip at the given index.
+ */
+function removeSeriesSponsorAt(idx) {
+  if (idx >= 0 && idx < seriesSponsorIgnore.length) {
+    seriesSponsorIgnore.splice(idx, 1);
+    renderSeriesSponsorChips();
+  }
+}
+
+/**
+ * Bind the input's Enter / comma / paste / blur behavior once. Disabled inputs
+ * (official read-only view) receive no keyboard/focus events, so this is inert
+ * there even though the listeners are attached.
+ */
+function ensureSeriesSponsorInputBound() {
+  const input = document.getElementById('series-sponsor-input');
+  if (!input || input.dataset.sponsorBound === '1') return;
+  input.dataset.sponsorBound = '1';
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault();
+      addSeriesSponsorsFromText(input.value);
+      input.value = '';
+    }
+  });
+
+  input.addEventListener('paste', (e) => {
+    const text = (e.clipboardData || window.clipboardData)?.getData('text') || '';
+    if (text.indexOf(',') !== -1) {
+      e.preventDefault();
+      addSeriesSponsorsFromText(text);
+      input.value = '';
+    }
+  });
+
+  // Commit a typed-but-not-entered value on blur so it isn't silently lost on save.
+  input.addEventListener('blur', () => {
+    if (input.value.trim()) {
+      addSeriesSponsorsFromText(input.value);
+      input.value = '';
+    }
+  });
+}
+
 /**
  * Clear all custom folders
  */
@@ -3607,6 +3713,17 @@ async function editPreset(presetId) {
       allowExternalElEdit.disabled = false;
     }
 
+    // ACC-01 (Gruppe C) — load the series-sponsor ignore list (editable)
+    seriesSponsorIgnore = Array.isArray(currentPreset.series_sponsor_ignore)
+      ? [...currentPreset.series_sponsor_ignore]
+      : [];
+    renderSeriesSponsorChips();
+    const seriesSponsorInputEdit = document.getElementById('series-sponsor-input');
+    if (seriesSponsorInputEdit) {
+      seriesSponsorInputEdit.value = '';
+      seriesSponsorInputEdit.disabled = false;
+    }
+
     // (1.2.0 — the additive-default-folder flag is now per-participant,
     // loaded from `participant.include_default_folder` inside the edit
     // modal — see openParticipantEditModal.)
@@ -3699,6 +3816,17 @@ async function viewOfficialPreset(presetId) {
       allowExternalElView.disabled = true;
     }
 
+    // ACC-01 (Gruppe C) — load the series-sponsor ignore list (read-only view)
+    seriesSponsorIgnore = Array.isArray(currentPreset.series_sponsor_ignore)
+      ? [...currentPreset.series_sponsor_ignore]
+      : [];
+    renderSeriesSponsorChips();
+    const seriesSponsorInputView = document.getElementById('series-sponsor-input');
+    if (seriesSponsorInputView) {
+      seriesSponsorInputView.value = '';
+      seriesSponsorInputView.disabled = true;
+    }
+
     // Populate sport category dropdown
     populateSportCategoryDropdown(currentPreset.category_id);
 
@@ -3756,7 +3884,9 @@ function setPresetEditorReadOnly(readOnly) {
   if (!modal) return;
 
   // Disable/enable form fields
-  const fields = ['preset-name', 'preset-description', 'preset-sport-category'];
+  // ACC-01: include the series-sponsor input so it's locked in the read-only
+  // (official preset) view alongside name/description/category.
+  const fields = ['preset-name', 'preset-description', 'preset-sport-category', 'series-sponsor-input'];
   fields.forEach(id => {
     const el = document.getElementById(id);
     if (el) el.disabled = readOnly;
@@ -4663,6 +4793,14 @@ async function savePreset() {
     // Issue #104 — preset-scope driver filter flag
     const allowExternalPersons = document.getElementById('preset-allow-external-persons')?.checked === true;
 
+    // ACC-01 (Gruppe C) — flush any text typed into the series-sponsor input but
+    // not yet committed (Enter/blur), so a last-typed value isn't lost on save.
+    const seriesSponsorInputSave = document.getElementById('series-sponsor-input');
+    if (seriesSponsorInputSave && !seriesSponsorInputSave.disabled && seriesSponsorInputSave.value.trim()) {
+      addSeriesSponsorsFromText(seriesSponsorInputSave.value);
+      seriesSponsorInputSave.value = '';
+    }
+
     // Validation
     if (!presetName) {
       showNotification('Please enter a preset name', 'error');
@@ -4706,6 +4844,8 @@ async function savePreset() {
         custom_folders: customFolders,
         // Issue #104 — preset-scope driver filter flag
         allow_external_person_recognition: allowExternalPersons,
+        // ACC-01 (Gruppe C) — series-wide sponsors to ignore in matching
+        series_sponsor_ignore: seriesSponsorIgnore,
       };
 
       const updateResponse = await window.api.invoke('supabase-update-participant-preset', {
@@ -4725,6 +4865,8 @@ async function savePreset() {
         custom_folders: customFolders,
         // Issue #104 — preset-scope driver filter flag
         allow_external_person_recognition: allowExternalPersons,
+        // ACC-01 (Gruppe C) — series-wide sponsors to ignore in matching
+        series_sponsor_ignore: seriesSponsorIgnore,
       };
 
       const createResponse = await window.api.invoke('supabase-create-participant-preset', presetData);

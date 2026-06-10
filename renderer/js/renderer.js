@@ -1809,6 +1809,8 @@ async function proceedWithFolderAnalysis() {
         name: selectedPreset.name,
         participants: selectedPreset.participants || [],
         allow_external_person_recognition: selectedPreset.allow_external_person_recognition === true,
+        // ACC-01 (Gruppe C) — series-wide sponsors to ignore in matching
+        series_sponsor_ignore: selectedPreset.series_sponsor_ignore || [],
       };
     }
 

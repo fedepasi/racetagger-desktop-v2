@@ -1645,6 +1645,16 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
             (config.participantPreset as any).allow_external_person_recognition =
               reloaded.allow_external_person_recognition;
           }
+          // ACC-01 (Gruppe C): likewise pick up the series-sponsor ignore list from
+          // the reloaded preset when the renderer didn't send an array, so the
+          // empty-participants reload path doesn't drop the filter.
+          if (
+            !Array.isArray((config.participantPreset as any).series_sponsor_ignore) &&
+            Array.isArray((reloaded as any).series_sponsor_ignore)
+          ) {
+            (config.participantPreset as any).series_sponsor_ignore =
+              (reloaded as any).series_sponsor_ignore;
+          }
           console.log(
             `[main] [Issue #104] Reloaded ${reloaded.participants.length} participants from DB for preset ${config.participantPreset.id}`
           );
@@ -1685,6 +1695,11 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
       // external (non-participant) person recognition for this batch.
       allowExternalPersonRecognition:
         (config.participantPreset as any)?.allow_external_person_recognition === true,
+      // ACC-01 (Gruppe C): propagate the preset-level series-sponsor ignore list so
+      // each worker's SmartMatcher drops those brands from SPONSOR evidence.
+      seriesSponsorIgnore: Array.isArray((config.participantPreset as any)?.series_sponsor_ignore)
+        ? (config.participantPreset as any).series_sponsor_ignore
+        : [],
       personShownTemplate: config.participantPreset?.person_shown_template || undefined, // Template for IPTC PersonInImage field
       folderOrganization: folderOrgConfig,
       keywordsMode: config.keywordsMode || 'append', // How to handle existing keywords

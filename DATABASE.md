@@ -568,6 +568,9 @@ Preset di partecipanti (liste gara).
 | usage_count | integer | YES | Conteggio utilizzi |
 | custom_folders | jsonb | YES | Cartelle custom |
 | person_shown_template | varchar | YES | Template PersonShown |
+| iptc_metadata | jsonb | YES | Profilo IPTC Pro del preset (JSONB) |
+| allow_external_person_recognition | boolean | NO | Consenti riconoscimento persone fuori dal preset; default false (Issue #104) |
+| series_sponsor_ignore | jsonb | NO | Sponsor series-wide (Michelin, Rolex …) esclusi dal matching sponsor; default `[]` (ACC-01, Gruppe C) |
 | is_official | boolean | YES | È ufficiale |
 | approved_by | uuid | YES | Approvato da |
 | approved_at | timestamptz | YES | Data approvazione |
