@@ -123,8 +123,6 @@ const SettingsManager = {
 
     // IPTC Pro defaults
     const iptcDefaults = this.getIptcProDefaults();
-    const autoWriteToggle = document.getElementById('settings-iptc-auto-write');
-    if (autoWriteToggle) autoWriteToggle.checked = iptcDefaults.autoWrite;
     const faceOnlyToggle = document.getElementById('settings-iptc-face-only');
     if (faceOnlyToggle) faceOnlyToggle.checked = iptcDefaults.faceOnly;
 
@@ -370,20 +368,6 @@ const SettingsManager = {
         });
       }
     });
-
-    // IPTC Pro: auto-write toggle
-    const autoWriteToggle = document.getElementById('settings-iptc-auto-write');
-    if (autoWriteToggle) {
-      autoWriteToggle.addEventListener('change', (e) => {
-        const defaults = this.getIptcProDefaults();
-        defaults.autoWrite = e.target.checked;
-        this.saveIptcProDefaults(defaults);
-        const msg = e.target.checked
-          ? 'Metadata will be written automatically during analysis.'
-          : 'Metadata will only be written when you use Export & IPTC.';
-        this.showNotification('IPTC Pro Default Updated', msg, 'success');
-      });
-    }
 
     // IPTC Pro: face-only toggle
     const faceOnlyToggle = document.getElementById('settings-iptc-face-only');

@@ -38,6 +38,23 @@
   (`renderer/js/log-visualizer.js` + `renderer/css/processing-status.css`);
   no token logic / Edge Functions / schema touched. (#167)
 
+- **Removed a no-op "Write metadata automatically during analysis" toggle**
+  (Settings → IPTC Pro Defaults): the toggle persisted to
+  `localStorage['iptc-pro-defaults'].autoWrite` but was wired to **nothing** —
+  it never reached the main process, `UnifiedProcessorConfig.iptcMetadata` was
+  never populated from it, and the analysis pipeline ignored it entirely.
+  Turning it on (expecting metadata written *during* analysis) or off
+  (expecting writes suppressed) produced identical behavior, so the control
+  silently misrepresented what the app does — a trust bug. The toggle and its
+  no-op change handler are removed from `settings.html` / `settings.js`. Actual
+  behavior is unchanged and matches the toggle's former *disabled* copy: the
+  IPTC Pro profile is written when you use **Export & IPTC**. The per-preset
+  "Writing timing" override and the `UnifiedProcessorConfig.iptcMetadata`
+  safety-net hook are left intact as the architecturally-correct home for this
+  behavior if it is ever wired (note: that per-preset override is itself not
+  yet consumed during analysis). Renderer-only; no token logic / Edge Functions
+  / schema touched.
+
 - **ExifTool now runs from mount paths with spaces (macOS DMG)**: temporal
   clustering built the ExifTool command as a single shell string with an
   **unquoted** executable path. When the app ran from the default DMG mount
