@@ -172,6 +172,7 @@ const validInvokeChannels: string[] = [
   'supabase-get-participant-presets',
   'supabase-get-participant-preset-by-id',
   'supabase-save-preset-participants',
+  'supabase-upsert-preset-participant',   // BUG-02: immediate single-row persist from the participant editor
   'supabase-bulk-assign-folders',
   'supabase-update-participant-preset',
   'supabase-update-preset-last-used',

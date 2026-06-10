@@ -9,6 +9,21 @@ var isEditingPreset = false;
 var customFolders = []; // Array of {name, path?} objects for custom folders
 
 // =====================================================================
+// BUG-02 — immediate per-row persist of participant edits.
+// "Save & Next" / "Save Changes" used to only touch participantsData in
+// memory; nothing reached the DB until the preset-level "Save Preset", so a
+// crash or a stray Escape mid-session lost every edit. The state below backs a
+// FIFO, single-in-flight persist queue that writes each edited row to Supabase
+// in the background without ever blocking the keyboard-driven editor flow.
+// =====================================================================
+var participantPersistQueue = [];          // FIFO of participant OBJECT references awaiting persist
+var participantPersistInFlight = null;     // Promise of the row currently being written, or null
+var participantPersistDraining = false;    // Guards against two concurrent drain loops
+var participantPersistKeyCounter = 0;      // Monotonic source of __persistKey (see below)
+var presetEditorReadOnly = false;          // Mirror of the #preset-editor-modal .preset-read-only state
+var presetHasUnpersistedChanges = false;   // True when in-memory state isn't yet on the preset (close-guard)
+
+// =====================================================================
 // Preset Save Progress Overlay
 // Unified UI for save progress + success/error feedback. Replaces the
 // previous loading silence and the system success/error toasts for
@@ -1122,6 +1137,7 @@ function showEmptyPresetsState() {
 function createNewPreset() {
   currentPreset = null;
   isEditingPreset = false;
+  resetParticipantPersistState(); // BUG-02 — fresh editing session
   participantsData = [];
   customFolders = [];
 
@@ -1991,6 +2007,205 @@ function populateFolderSelects() {
 }
 
 /**
+ * BUG-02 — single source of truth for the per-participant DB payload.
+ *
+ * Used by BOTH savePreset (bulk) and the per-row persist queue so the two
+ * mappings can NEVER drift. Mirrors what the DB layer
+ * (savePresetParticipantsSupabase → applyDualWriteFolders) expects: canonical
+ * folders[] drives the legacy folder_1/2/3(+_path) dual-write, so we only
+ * forward the legacy slots when folders[] is absent.
+ */
+function buildParticipantSavePayload(p) {
+  const hasNewFolders = Array.isArray(p.folders);
+  return {
+    id: p.id || undefined, // ✅ Include ID for UPSERT logic
+    numero: p.numero || '',
+    nome: getDriverNamesFromParticipant(p).join(', ') || p.nome || '',
+    categoria: p.categoria || '',
+    squadra: p.squadra || '',
+    plate_number: p.plate_number || '',
+    sponsor: p.sponsor || '',
+    metatag: p.metatag || '',
+
+    // 1.2.0 canonical folder array — drives the dual-write at the DB layer.
+    folders: hasNewFolders ? p.folders : undefined,
+    // 1.2.0 per-participant additive-default flag. Default true when missing.
+    include_default_folder: p.include_default_folder !== false,
+
+    // Legacy slots: only forward when folders[] is absent (i.e. the user hasn't
+    // touched the new chip editor yet). When folders[] IS present, the DB layer
+    // derives these from it via applyDualWriteFolders.
+    folder_1: hasNewFolders ? undefined : (p.folder_1 || ''),
+    folder_2: hasNewFolders ? undefined : (p.folder_2 || ''),
+    folder_3: hasNewFolders ? undefined : (p.folder_3 || ''),
+    folder_1_path: hasNewFolders ? undefined : (getFolderPath(p.folder_1) || p.folder_1_path || ''),
+    folder_2_path: hasNewFolders ? undefined : (getFolderPath(p.folder_2) || p.folder_2_path || ''),
+    folder_3_path: hasNewFolders ? undefined : (getFolderPath(p.folder_3) || p.folder_3_path || ''),
+
+    delivery_to_client_id: p.delivery_to_client_id || null,
+
+    // Soft-disable flag (manual Active toggle or BUG-03 entry-list re-import).
+    // undefined is treated as active.
+    is_active: p.is_active !== false
+  };
+}
+
+/**
+ * BUG-02 — true when two participant objects would persist identically.
+ * Compares the full save payload (which encodes driver names via `nome` and all
+ * folder/field state) MINUS the id. Conservative by design: any doubt returns
+ * false, so the worst case is a redundant write, never a lost edit.
+ */
+function participantPersistedFieldsEqual(a, b) {
+  try {
+    const pa = buildParticipantSavePayload(a);
+    const pb = buildParticipantSavePayload(b);
+    delete pa.id;
+    delete pb.id;
+    return JSON.stringify(pa) === JSON.stringify(pb);
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * BUG-02 — read-only guard for the persist hook. Mirrors the
+ * `.preset-read-only` class that setPresetEditorReadOnly() toggles; the module
+ * boolean is the cheap canonical read.
+ */
+function isPresetEditorReadOnly() {
+  return presetEditorReadOnly === true;
+}
+
+/**
+ * BUG-02 — enqueue an async, non-blocking persist of ONE participant row.
+ * Pushes the object REFERENCE (saveParticipantEdit replaces objects on edit, so
+ * identity is the dedup key). Never blocks the caller — the editor stays
+ * instant; the write happens in the background drain loop.
+ */
+function enqueueParticipantPersist(participantObj) {
+  if (!participantObj) return;
+  if (participantPersistQueue.indexOf(participantObj) !== -1) return; // already queued
+  participantPersistQueue.push(participantObj);
+  if (!participantPersistDraining) {
+    // Fire-and-forget; drainParticipantPersistQueue guards re-entrancy itself.
+    drainParticipantPersistQueue();
+  }
+}
+
+/**
+ * BUG-02 — FIFO drain, single task in flight at a time.
+ * Skip-if-detached at dequeue: an object no longer identity-present in
+ * participantsData was superseded by a newer edit (a newer task sits behind it)
+ * or the editor was closed — either way its write is stale, skip it.
+ */
+async function drainParticipantPersistQueue() {
+  if (participantPersistDraining) return;
+  participantPersistDraining = true;
+  try {
+    while (participantPersistQueue.length > 0) {
+      const obj = participantPersistQueue.shift();
+      // Skip-if-detached: preset closed, row removed, or this exact object was
+      // replaced by a newer edit (the newer object is queued behind us).
+      if (!currentPreset || !currentPreset.id) continue;
+      if (!Array.isArray(participantsData) || participantsData.indexOf(obj) === -1) continue;
+      participantPersistInFlight = persistSingleParticipant(obj);
+      try {
+        await participantPersistInFlight;
+      } finally {
+        participantPersistInFlight = null;
+      }
+    }
+  } finally {
+    participantPersistDraining = false;
+  }
+}
+
+/**
+ * BUG-02 — persist one participant row, then sync its driver names.
+ *
+ * The returned-id write-back is the critical invariant: a newly-created row's
+ * DB id MUST land on the in-memory object before any later savePreset, or the
+ * bulk merge double-creates the row (and its delete-diff can delete the row we
+ * just inserted). We also propagate that id to any object in participantsData
+ * sharing the same __persistKey — i.e. a re-edit that superseded this object
+ * while its insert was in flight — so that re-edit becomes a harmless UPSERT
+ * instead of a second INSERT (duplicate-insert race).
+ *
+ * On success the preset_participant_drivers snapshot is reattached so
+ * savePreset's BUG-01 driver-sync loop skips this row. On ANY failure the
+ * snapshot is left absent (Save Preset is the documented retry path) and the
+ * preset is marked dirty so the close-guard warns.
+ */
+async function persistSingleParticipant(obj) {
+  try {
+    // If a prior in-flight insert for this same logical row already completed
+    // and propagated its id onto us, this resolves to an UPSERT.
+    const payload = buildParticipantSavePayload(obj);
+    const result = await window.api.invoke('supabase-upsert-preset-participant', {
+      presetId: currentPreset.id,
+      participant: payload
+    });
+    if (!result || !result.success) {
+      throw new Error((result && result.error) || 'Upsert failed');
+    }
+
+    const newId = result.data && result.data.id;
+    if (newId) {
+      obj.id = newId;
+      // Propagate to a superseding re-edit that's still waiting in the queue.
+      if (obj.__persistKey) {
+        participantsData.forEach(p => {
+          if (p !== obj && !p.id && p.__persistKey === obj.__persistKey) {
+            p.id = newId;
+          }
+        });
+      }
+    }
+
+    // Sync driver names into preset_participant_drivers (mirrors savePreset's
+    // BUG-01 loop). driverMeta is carried only when present (CSV/PDF merge).
+    const driverNames = (Array.isArray(obj.drivers) && obj.drivers.length > 0 && typeof obj.drivers[0] === 'string')
+      ? obj.drivers
+      : getDriverNamesFromParticipant(obj);
+    if (obj.id && driverNames.length > 0) {
+      const syncResult = await window.api.invoke('preset-driver-sync', {
+        participantId: obj.id,
+        driverNames: driverNames,
+        ...(Array.isArray(obj.driverMeta) ? { driverMeta: obj.driverMeta } : {})
+      });
+      if (syncResult && syncResult.success && Array.isArray(syncResult.drivers)) {
+        // Reattach the snapshot so savePreset's BUG-01 loop treats this row as
+        // already-current and skips the (now redundant) re-sync.
+        obj.preset_participant_drivers = syncResult.drivers;
+      }
+    }
+  } catch (err) {
+    console.warn('[Participants] Per-row persist failed (kept in session):', err);
+    presetHasUnpersistedChanges = true;
+    if (typeof showNotification === 'function') {
+      showNotification(
+        `Couldn't save #${obj.numero || '?'} — kept in this session. Save Preset will retry.`,
+        'warning'
+      );
+    }
+    // Leave the driver snapshot absent — Save Preset IS the retry path.
+  }
+}
+
+/**
+ * BUG-02 — reset the per-row persist state when a (different) preset is loaded
+ * into the editor. The fresh participantsData replaces every object reference,
+ * so any still-queued/in-flight task is skip-if-detached against the new array;
+ * we additionally drop the pending queue and clear the dirty flag so the new
+ * session starts clean.
+ */
+function resetParticipantPersistState() {
+  participantPersistQueue.length = 0;
+  presetHasUnpersistedChanges = false;
+}
+
+/**
  * Save participant edit
  * @param {boolean} closeAfterSave - Whether to close modal after save (default: true)
  * @returns {Promise<boolean>} true on success, false if validation aborted the save
@@ -2060,14 +2275,27 @@ async function saveParticipantEdit(closeAfterSave = true) {
   // Check if this is a new participant (no existing ID)
   const isNewParticipant = editingRowIndex === -1 || !participantsData[editingRowIndex]?.id;
 
+  // BUG-02 — capture the pre-replacement object so we can (a) detect an
+  // unchanged row (skip the persist + carry its driver snapshot forward) and
+  // (b) carry the __persistKey across the replacement (links a re-edit to its
+  // still-in-flight insert so the returned id propagates and we never double-
+  // create the row).
+  const previousParticipant = editingRowIndex >= 0 ? participantsData[editingRowIndex] : null;
+  let savedObjectRef;
+
   if (editingRowIndex === -1) {
     // Add new participant
+    participant.__persistKey = ++participantPersistKeyCounter;
     participantsData.push(participant);
     editingRowIndex = participantsData.length - 1; // Update index to new position
+    savedObjectRef = participant;
   } else {
     // Update existing participant - preserve ID if exists
     const existingId = participantsData[editingRowIndex]?.id;
-    participantsData[editingRowIndex] = { ...participant, id: existingId };
+    const replacement = { ...participant, id: existingId };
+    replacement.__persistKey = previousParticipant?.__persistKey || (++participantPersistKeyCounter);
+    participantsData[editingRowIndex] = replacement;
+    savedObjectRef = replacement;
   }
 
   // Refresh table display
@@ -2086,6 +2314,31 @@ async function saveParticipantEdit(closeAfterSave = true) {
 
   // Scorri al pilota modificato dopo un breve delay per permettere il re-render
   setTimeout(() => scrollToParticipant(participantNumero), 150);
+
+  // BUG-02 — persist this row to the DB immediately (async, non-blocking).
+  // Gated on an existing preset id (a brand-new, not-yet-created preset has
+  // nothing to upsert into) and a writable (non read-only) editor. This single
+  // hook covers Save Changes / Save & Next / Save & Previous uniformly.
+  if (currentPreset?.id && !isPresetEditorReadOnly()) {
+    // Skip-if-unchanged: a pure review walk (open → Save & Next without editing)
+    // must cost 0 round-trips. When the persisted fields are identical, carry
+    // the previous driver-rows snapshot across the replacement so savePreset's
+    // BUG-01 loop also skips re-syncing this untouched row.
+    const unchanged = !!previousParticipant
+      && !!previousParticipant.id
+      && participantPersistedFieldsEqual(previousParticipant, savedObjectRef);
+    if (unchanged) {
+      if (Array.isArray(previousParticipant.preset_participant_drivers)) {
+        savedObjectRef.preset_participant_drivers = previousParticipant.preset_participant_drivers;
+      }
+    } else {
+      enqueueParticipantPersist(savedObjectRef);
+    }
+  } else if (currentPreset && !currentPreset.id) {
+    // Brand-new preset not yet created → nothing to upsert into. Keep in memory;
+    // Save Preset creates the preset and all rows. Mark dirty for the close-guard.
+    presetHasUnpersistedChanges = true;
+  }
 
   if (closeAfterSave) {
     closeParticipantEditModal();
@@ -2119,6 +2372,14 @@ async function saveParticipantAndStay() {
   }
 
   try {
+    // BUG-02 — same drain as savePreset: await any in-flight per-row write so its
+    // id write-back lands before this full save, and drop the pending queue (this
+    // bulk save covers every row). Defensive: the face flow is disabled app-wide.
+    participantPersistQueue.length = 0;
+    if (participantPersistInFlight) {
+      try { await participantPersistInFlight; } catch (_) { /* failure already toasted */ }
+    }
+
     // Get current user ID for face photos
     let currentUserId = null;
     const sessionResult = await window.api.invoke('auth-get-session');
@@ -3286,6 +3547,7 @@ async function editPreset(presetId) {
 
     currentPreset = response.data;
     isEditingPreset = true;
+    resetParticipantPersistState(); // BUG-02 — fresh editing session
     // Base order is always race-number ascending. The DB returns participants in
     // insertion/sort_order, so the FIRST open (before any saved sort exists)
     // could otherwise show them unsorted. Sorting the DATA here makes the base
@@ -3392,6 +3654,7 @@ async function viewOfficialPreset(presetId) {
 
     currentPreset = response.data;
     isEditingPreset = false;
+    resetParticipantPersistState(); // BUG-02 — fresh (read-only) session
     participantsData = currentPreset.participants || [];
 
     // Load custom folders, merge with localStorage paths (per-device)
@@ -3467,6 +3730,10 @@ async function viewOfficialPreset(presetId) {
  * Disables form inputs, hides add/delete buttons, etc.
  */
 function setPresetEditorReadOnly(readOnly) {
+  // BUG-02 — keep the module mirror in sync so the per-row persist hook can
+  // cheaply skip official/read-only presets without a DOM read.
+  presetEditorReadOnly = !!readOnly;
+
   const modal = document.getElementById('preset-editor-modal');
   if (!modal) return;
 
@@ -3495,8 +3762,9 @@ async function duplicateAndEditOfficialPreset(presetId) {
     const response = await window.api.invoke('supabase-duplicate-official-preset', presetId);
 
     if (response.success && response.data) {
-      // Close the read-only view
-      closePresetEditor();
+      // Close the read-only view (force: read-only views never carry unsaved
+      // changes, and this is a programmatic close mid-duplicate-flow).
+      closePresetEditor(true);
 
       showNotification(`Created "${response.data.name}" - opening for editing...`, 'success');
 
@@ -4338,6 +4606,8 @@ function removeParticipant(rowIndex) {
     if (sortState) {
       applySortState(sortState);
     }
+    // BUG-02 — a removal only reaches the DB via Save Preset's delete-diff.
+    presetHasUnpersistedChanges = true;
   }
 }
 
@@ -4358,6 +4628,8 @@ function clearAllParticipants() {
     if (confirmed) {
       participantsData = [];
       clearParticipantsTable();
+      // BUG-02 — clearing only commits via Save Preset's delete-diff.
+      presetHasUnpersistedChanges = true;
     }
   }
 }
@@ -4382,55 +4654,21 @@ async function savePreset() {
 
     // Sport category is optional - no validation needed
 
-    // Use participants data from memory (already updated via modal)
-    // ⚠️ CRITICAL FIX: Include ID to enable UPSERT (UPDATE existing instead of INSERT new)
-    //
-    // 1.2.0 — Forward both the canonical `folders` array (set by the
-    // chip editor) AND the per-participant `include_default_folder`
-    // flag. The DB layer (savePresetParticipantsSupabase →
-    // applyDualWriteFolders) will derive folder_1/2/3 from folders[]
-    // for 1.1.4 backward compatibility, so we no longer need to
-    // populate the legacy slots here. Falling back to the legacy
-    // fields only when folders[] is missing protects rows that
-    // haven't been opened in the new chip editor yet.
-    const participants = participantsData.map(p => {
-      const hasNewFolders = Array.isArray(p.folders);
-      return {
-        id: p.id || undefined, // ✅ Include ID for UPSERT logic
-        numero: p.numero || '',
-        nome: getDriverNamesFromParticipant(p).join(', ') || p.nome || '',
-        categoria: p.categoria || '',
-        squadra: p.squadra || '',
-        plate_number: p.plate_number || '',
-        sponsor: p.sponsor || '',
-        metatag: p.metatag || '',
+    // BUG-02 — coordinate with the per-row persist queue BEFORE building the
+    // bulk payload. Clearing the pending FIFO alone is NOT enough: an in-flight
+    // insert for a new row completing mid-bulk-save would create a duplicate the
+    // delete-diff can miss. Awaiting the in-flight task means its returned-id
+    // write-back lands first, turning the bulk path into a harmless UPSERT.
+    participantPersistQueue.length = 0;
+    if (participantPersistInFlight) {
+      try { await participantPersistInFlight; } catch (_) { /* failure already toasted */ }
+    }
 
-        // 1.2.0 canonical folder array — drives the dual-write at the DB layer.
-        folders: hasNewFolders ? p.folders : undefined,
-        // 1.2.0 per-participant additive-default flag. Default true
-        // when the field is missing (matches the DB column default).
-        include_default_folder: p.include_default_folder !== false,
-
-        // Legacy slots: only forward when folders[] is absent (i.e. the
-        // user hasn't touched the new chip editor yet). When folders[]
-        // IS present, the DB layer derives these from it via
-        // applyDualWriteFolders, so we leave them undefined to avoid
-        // overwriting that derivation with stale renderer state.
-        folder_1: hasNewFolders ? undefined : (p.folder_1 || ''),
-        folder_2: hasNewFolders ? undefined : (p.folder_2 || ''),
-        folder_3: hasNewFolders ? undefined : (p.folder_3 || ''),
-        folder_1_path: hasNewFolders ? undefined : (getFolderPath(p.folder_1) || p.folder_1_path || ''),
-        folder_2_path: hasNewFolders ? undefined : (getFolderPath(p.folder_2) || p.folder_2_path || ''),
-        folder_3_path: hasNewFolders ? undefined : (getFolderPath(p.folder_3) || p.folder_3_path || ''),
-
-        delivery_to_client_id: p.delivery_to_client_id || null,
-
-        // Persist the soft-disable flag so deactivations — whether from the
-        // manual Active toggle or a round-to-round entry-list re-import (BUG-03)
-        // — survive a Save Preset. undefined is treated as active.
-        is_active: p.is_active !== false
-      };
-    });
+    // Use participants data from memory (already updated via modal).
+    // buildParticipantSavePayload is the SINGLE source of truth shared with the
+    // per-row persist path so the two mappings can never drift (folders[]
+    // dual-write, id-for-UPSERT, is_active, etc. all live there).
+    const participants = participantsData.map(p => buildParticipantSavePayload(p));
 
     // Disable save button during operation
     const saveBtn = document.getElementById('save-preset-btn');
@@ -4603,7 +4841,10 @@ async function savePreset() {
       );
     }
 
-    closePresetEditor();
+    // BUG-02 — everything in memory is now on the preset; force-close past the
+    // unsaved-changes guard (this IS the save).
+    presetHasUnpersistedChanges = false;
+    closePresetEditor(true);
     await loadParticipantPresets(); // Refresh list
 
   } catch (error) {
@@ -4673,14 +4914,38 @@ function collectParticipantsFromTable() {
 }
 
 /**
- * Close preset editor modal
+ * Close preset editor modal.
+ *
+ * BUG-02 — when there are changes not yet on the preset (a pending/failed per-row
+ * persist, an unreviewed CSV/PDF merge, a removal, or a brand-new preset that
+ * was never saved), warn before discarding. This finally defuses the silent-wipe
+ * vector: the X button, Cancel, a global Escape, and a modal-backdrop click all
+ * route here (the last two via closeAllModals) and now inherit the guard.
+ * Programmatic callers that legitimately discard in-memory state (savePreset
+ * success, duplicateAndEditOfficialPreset) pass force = true to skip it.
+ *
+ * @param {boolean} force - skip the unsaved-changes confirm (default false)
  */
-function closePresetEditor() {
+function closePresetEditor(force = false) {
+  const dirty = presetHasUnpersistedChanges
+    || participantPersistQueue.length > 0
+    || !!participantPersistInFlight;
+  if (dirty && !force) {
+    const ok = confirm("You have changes that aren't saved to this preset yet. Close and discard them?");
+    if (!ok) return; // abort the close — keep the editor open with its state intact
+  }
+
   const modal = document.getElementById('preset-editor-modal');
   modal.classList.remove('show');
   currentPreset = null;
   isEditingPreset = false;
   participantsData = [];
+
+  // BUG-02 — drop any queued per-row persists and clear dirty state. An
+  // already in-flight write is harmless: its target object is now detached from
+  // participantsData, so its id write-back lands on a discarded object.
+  participantPersistQueue.length = 0;
+  presetHasUnpersistedChanges = false;
 
   // Reset read-only state
   setPresetEditorReadOnly(false);
@@ -5040,6 +5305,13 @@ function mergeMappedRowsIntoCurrentPreset(mappedRows, missingAction = 'deactivat
   loadParticipantsIntoTable(participantsData);
   if (sortState && typeof applySortState === 'function') applySortState(sortState);
   if (typeof renderCustomFolders === 'function') renderCustomFolders();
+
+  // BUG-02 — a merge mutates the roster purely in memory; its "remove"/
+  // "deactivate" results are committed ONLY by Save Preset's delete-diff behind
+  // the review gate. Mark dirty so the close-guard warns before discarding.
+  if (added || updated || deactivated || removed) {
+    presetHasUnpersistedChanges = true;
+  }
 
   return { added, updated, deactivated, removed };
 }

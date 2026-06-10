@@ -52,6 +52,20 @@
   (deactivate / remove / keep the cars missing from the new list) and full-field
   import including per-driver nationality (BUG-03); a back arrow in Edit
   Participant (UX-02); `is_active` persisted on Save.
+- **Save & Next now actually saves (BUG-02, final piece)**: "Save & Next" /
+  "Save Changes" / "Save & Previous" persist each edited participant to the
+  cloud **immediately** — a background, non-blocking single-row write — instead
+  of holding every edit in memory until the preset-level Save. A crash or a
+  stray Escape mid-session no longer wipes a 60-car editing pass. A failed write
+  keeps the row in the session and surfaces a toast; **Save Preset is the retry
+  path**. Closing the preset editor (X / Cancel / Escape / backdrop click) now
+  **warns before discarding** any change not yet on the preset (a pending/failed
+  per-row write, an unreviewed CSV/PDF merge, a removal, or a brand-new unsaved
+  preset). Note (Option B, ratified): an analysis launched mid-editing now runs
+  against the partially-updated roster — the desired behavior for round-to-round
+  entry-list maintenance. No schema / token / Edge Function changes; merge
+  "remove"/"deactivate" results still commit only via Save Preset's review-gated
+  delete-diff.
 - **Results review**: bulk multi-select **"Mark as No Match"** that keeps the
   original AI detection in history for future training (WF-01); 100% keyboard
   correction in the gallery (Enter confirms + advances, Space edits, type a
