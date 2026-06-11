@@ -52,7 +52,14 @@ export async function createXmpSidecar(
   }
 
   // Write the XMP file
-  await fsPromises.writeFile(xmpFilePath, xmpContent, 'utf8');
+  try {
+    await fsPromises.writeFile(xmpFilePath, xmpContent, 'utf8');
+  } catch (err: any) {
+    if (err.code === 'ENOSPC') {
+      throw new Error(`No space left on device — could not write XMP sidecar for "${path.basename(rawFilePath)}". Free up disk space and retry.`);
+    }
+    throw err;
+  }
 
   return xmpFilePath;
 }
@@ -350,7 +357,14 @@ ${existingNonIptcContent}   <xmp:CreatorTool>Racetagger IPTC Pro</xmp:CreatorToo
  </rdf:RDF>
 </x:xmpmeta>`;
 
-  await fsPromises.writeFile(xmpFilePath, xmpContent, 'utf8');
+  try {
+    await fsPromises.writeFile(xmpFilePath, xmpContent, 'utf8');
+  } catch (err: any) {
+    if (err.code === 'ENOSPC') {
+      throw new Error(`No space left on device — could not write XMP sidecar for "${path.basename(rawFilePath)}". Free up disk space and retry.`);
+    }
+    throw err;
+  }
   return xmpFilePath;
 }
 
