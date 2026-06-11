@@ -31,6 +31,7 @@ const validSendReceiveChannels: string[] = [
   // General processing channels
   'processing-started', 'processing-progress', 'processing-file-started',
   'processing-phase-changed', 'processing-completed', 'processing-error',
+  'processing-warning',
   'processing-paused', 'processing-resumed', 'analysis-aborted',
   // Unified processor and temporal analysis channels
   'unified-processing-started',
