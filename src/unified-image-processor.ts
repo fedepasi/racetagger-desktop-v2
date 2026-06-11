@@ -744,6 +744,22 @@ class UnifiedImageWorker extends EventEmitter {
   }
 
   /**
+   * Per-category face MATCH threshold override (cosine, evidence-level).
+   * Undefined → the per-context defaults in COSINE_CONTEXT_CONFIG apply (0.50).
+   * Configurable via sport_categories.matching_config.thresholds.faceMatchThreshold.
+   */
+  private getFaceMatchThreshold(): number | undefined {
+    try {
+      const mc: any = this.currentSportCategory?.matching_config;
+      const cfg = typeof mc === 'string' ? JSON.parse(mc) : mc;
+      const v = cfg?.thresholds?.faceMatchThreshold;
+      return typeof v === 'number' && v > 0 && v <= 1 ? v : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * Initialize Face Recognition for driver identification
    * Uses ONNX pipeline (YuNet detection + AuraFace embedding) in main process.
    *
@@ -965,7 +981,11 @@ class UnifiedImageWorker extends EventEmitter {
       }
 
       const { matches: personMatches, outcomes: faceOutcomes } =
-        faceRecognitionProcessor.matchEmbeddingsDetailed(embeddings, context as FaceContext);
+        faceRecognitionProcessor.matchEmbeddingsDetailed(
+          embeddings,
+          context as FaceContext,
+          this.getFaceMatchThreshold()
+        );
       const matchingTimeMs = Date.now() - matchStartTime;
 
       // Convert to bridge-compatible format

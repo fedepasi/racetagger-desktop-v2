@@ -36,11 +36,18 @@ export interface MatchingConfig {
     nameSimilarity: number;      // Minimum similarity for fuzzy name matching
     lowOcrConfidence: number;    // Threshold for low OCR confidence
     strongNonNumberEvidence: number; // Threshold for strong non-number evidence
-    // Face-recognition TRUST threshold (cosine), distinct from the per-context
-    // MATCH threshold (0.50): a face match >= trust is confident enough to
-    // (a) take the face-only path and skip Gemini, and (b) force needs_review
-    // when it contradicts the number-based winner. Optional — use sites
-    // default to 0.6 when unset. Configurable per category via
+    // Face-recognition MATCH threshold (cosine): minimum similarity for a
+    // face to count as a match (evidence-level). Overrides the per-context
+    // defaults (0.50) when set. Calibration 2026-06-11 (50-img, 10-driver
+    // run): highest WRONG candidate scored 0.342, correct ones 0.41-1.0 —
+    // values down to ~0.45 are safe on small rosters. Configurable per
+    // category via matching_config.thresholds.faceMatchThreshold.
+    faceMatchThreshold?: number;
+    // Face-recognition TRUST threshold (cosine), distinct from the MATCH
+    // threshold: a face match >= trust is confident enough to (a) take the
+    // face-only path and skip Gemini, and (b) force needs_review when it
+    // contradicts the number-based winner. Optional — use sites default to
+    // 0.6 when unset. Configurable per category via
     // matching_config.thresholds.faceTrustThreshold.
     faceTrustThreshold?: number;
   };
@@ -118,6 +125,7 @@ export class SportConfig {
             nameSimilarity: category.matching_config.thresholds?.nameSimilarity || 0.75,
             lowOcrConfidence: category.matching_config.thresholds?.lowOcrConfidence || 0.6,
             strongNonNumberEvidence: category.matching_config.thresholds?.strongNonNumberEvidence || 80,
+            faceMatchThreshold: category.matching_config.thresholds?.faceMatchThreshold,
             faceTrustThreshold: category.matching_config.thresholds?.faceTrustThreshold
           },
           multiEvidenceBonus: category.matching_config.multiEvidenceBonus || 0.2,
@@ -158,6 +166,7 @@ export class SportConfig {
       nameSimilarity?: number;
       lowOcrConfidence?: number;
       strongNonNumberEvidence?: number;
+      faceMatchThreshold?: number;
       faceTrustThreshold?: number;
     };
     multiEvidenceBonus?: number;
@@ -187,6 +196,7 @@ export class SportConfig {
         nameSimilarity: matchingConfig.thresholds?.nameSimilarity ?? existingConfig.thresholds.nameSimilarity,
         lowOcrConfidence: matchingConfig.thresholds?.lowOcrConfidence ?? existingConfig.thresholds.lowOcrConfidence,
         strongNonNumberEvidence: matchingConfig.thresholds?.strongNonNumberEvidence ?? existingConfig.thresholds.strongNonNumberEvidence,
+        faceMatchThreshold: matchingConfig.thresholds?.faceMatchThreshold ?? existingConfig.thresholds.faceMatchThreshold,
         faceTrustThreshold: matchingConfig.thresholds?.faceTrustThreshold ?? existingConfig.thresholds.faceTrustThreshold
       },
       multiEvidenceBonus: matchingConfig.multiEvidenceBonus ?? existingConfig.multiEvidenceBonus,

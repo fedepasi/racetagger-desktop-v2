@@ -426,14 +426,22 @@ export class FaceRecognitionProcessor {
    */
   matchEmbeddingsDetailed(
     embeddings: Array<{ faceIndex: number; embedding: number[] }>,
-    context: FaceContext = 'auto'
+    context: FaceContext = 'auto',
+    /** Per-category override of the cosine MATCH threshold
+     *  (matching_config.thresholds.faceMatchThreshold). Ignored in legacy
+     *  euclidean mode where score semantics are inverted. */
+    matchThresholdOverride?: number
   ): { matches: PersonMatch[]; outcomes: FaceMatchOutcome[] } {
     if (this.personDescriptors.size === 0) return { matches: [], outcomes: [] };
 
     const useCosine = this.isCosineSimilarityMode();
-    const config = useCosine
+    const baseConfig = useCosine
       ? COSINE_CONTEXT_CONFIG[context]
       : EUCLIDEAN_CONTEXT_CONFIG[context];
+    const config =
+      useCosine && typeof matchThresholdOverride === 'number' && matchThresholdOverride > 0 && matchThresholdOverride <= 1
+        ? { ...baseConfig, matchThreshold: matchThresholdOverride }
+        : baseConfig;
 
     const matches: PersonMatch[] = [];
     const outcomes: FaceMatchOutcome[] = [];
