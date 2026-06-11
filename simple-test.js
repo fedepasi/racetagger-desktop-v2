@@ -61,7 +61,7 @@ async function testStandaloneExecution() {
     const settings = {
       execution_id: executionId,
       user_id: '3b915e07-ac38-4041-9d1a-d8b6b17eb613',
-      ai_model: 'gemini-2.5-flash-preview-04-17',
+      ai_model: 'gemini-3.5-flash',
       sport_category: 'motorsport',
       update_exif: true,
       save_preview_images: false,

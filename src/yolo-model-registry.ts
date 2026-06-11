@@ -4,7 +4,8 @@
  * Centralized registry for YOLO segmentation models.
  * Maps model IDs to configurations including class names and paths.
  *
- * Supports both legacy YOLOv8 COCO models and custom YOLOv11 models.
+ * Supports legacy YOLOv8 COCO models, custom YOLOv11 models,
+ * and YOLO26 end2end models (NMS built into the model).
  */
 
 // ==================== COCO Classes (Legacy YOLOv8) ====================
@@ -35,11 +36,23 @@ export const YOLOV11_DETECTOR_V1_CLASSES: string[] = [
   'vehicle',        // 5 - Cars, motorcycles, karts, etc.
 ];
 
+// ==================== YOLO26 Classes (v2 - 7 classes) ====================
+
+export const YOLO26_DETECTOR_V1_CLASSES: string[] = [
+  'Cyclist',        // 0 - Cyclists on bicycles
+  'bib-number',     // 1 - Running/cycling bib numbers
+  'helmet',         // 2 - Motorcycle/racing helmets
+  'rider',          // 3 - Motorcycle/bicycle riders
+  'runner',         // 4 - Running athletes
+  'soccer-player',  // 5 - Soccer players
+  'vehicle',        // 6 - Cars, motorcycles, karts, etc.
+];
+
 // ==================== Model Configuration Interface ====================
 
 export interface YoloModelConfig {
   modelId: string;
-  modelType: 'yolov8-seg' | 'yolov11-seg';
+  modelType: 'yolov8-seg' | 'yolov11-seg' | 'yolo26-seg';
   version: string;
   description: string;
   storagePath: string;                    // Path relative to models/ directory
@@ -51,6 +64,7 @@ export interface YoloModelConfig {
   protoSize: number;                      // Mask prototype resolution (typically 160)
   sizeBytes: number;                      // Approximate file size
   isCustom: boolean;                      // Custom trained vs pretrained
+  outputFormat: 'raw' | 'end2end';       // raw = [batch, channels, anchors], end2end = [batch, detections, features] (NMS built-in)
 }
 
 // ==================== Model Registry ====================
@@ -71,6 +85,7 @@ export const YOLO_MODEL_REGISTRY: Record<string, YoloModelConfig> = {
     protoSize: 160,
     sizeBytes: 14_000_000,  // ~14MB
     isCustom: false,
+    outputFormat: 'raw',
   },
 
   'yolov8s-seg': {
@@ -87,6 +102,7 @@ export const YOLO_MODEL_REGISTRY: Record<string, YoloModelConfig> = {
     protoSize: 160,
     sizeBytes: 45_000_000,  // ~45MB
     isCustom: false,
+    outputFormat: 'raw',
   },
 
   // Custom YOLOv11 Sports Detector
@@ -104,6 +120,25 @@ export const YOLO_MODEL_REGISTRY: Record<string, YoloModelConfig> = {
     protoSize: 160,
     sizeBytes: 40_000_000,  // ~40MB
     isCustom: true,
+    outputFormat: 'raw',
+  },
+
+  // YOLO26 Sports Detector (end2end with built-in NMS)
+  'yolo26-detector-v1': {
+    modelId: 'yolo26-detector-v1',
+    modelType: 'yolo26-seg',
+    version: '1.0',
+    description: 'YOLO26s Sports Detector - Custom 7 classes (end2end)',
+    storagePath: 'detector/yolo26s-seg-v1.onnx',
+    supabasePath: 'detector/yolo26s-seg-v1.onnx',
+    inputSize: [640, 640],
+    classes: YOLO26_DETECTOR_V1_CLASSES,
+    numClasses: 7,
+    numMaskCoeffs: 32,
+    protoSize: 160,
+    sizeBytes: 42_000_000,  // ~40MB
+    isCustom: true,
+    outputFormat: 'end2end',
   },
 };
 
@@ -159,7 +194,7 @@ export function getAvailableModels(): string[] {
  * Get the default model ID
  */
 export function getDefaultModelId(): string {
-  return 'yolov11-detector-v1';
+  return 'yolo26-detector-v1';
 }
 
 /**
@@ -209,6 +244,22 @@ export function getRelevantClassesForCategory(
       'altro': ['vehicle', 'rider', 'runner', 'soccer-player'],
     };
     const classNames = customMapping[categoryCode] || ['vehicle', 'rider', 'runner'];
+    return classNamesToIds(modelId, classNames);
+  }
+
+  // For YOLO26 models (same class semantics, adds Cyclist)
+  if (modelId === 'yolo26-detector-v1') {
+    const customMapping: Record<string, string[]> = {
+      'motorsport': ['vehicle'],
+      'motorsport_v2': ['vehicle'],
+      'motocross': ['rider', 'helmet'],
+      'running': ['runner', 'bib-number'],
+      'cycling': ['Cyclist', 'rider', 'bib-number'],
+      'rally': ['vehicle'],
+      'endurance-wec': ['vehicle'],
+      'altro': ['vehicle', 'rider', 'runner', 'Cyclist', 'soccer-player'],
+    };
+    const classNames = customMapping[categoryCode] || ['vehicle', 'rider', 'runner', 'Cyclist'];
     return classNamesToIds(modelId, classNames);
   }
 

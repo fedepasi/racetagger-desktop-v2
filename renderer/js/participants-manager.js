@@ -7,6 +7,266 @@ var currentPreset = null;
 var participantsData = [];
 var isEditingPreset = false;
 var customFolders = []; // Array of {name, path?} objects for custom folders
+var seriesSponsorIgnore = []; // ACC-01 (Gruppe C): series-wide sponsor names to ignore in matching
+
+// =====================================================================
+// BUG-02 — immediate per-row persist of participant edits.
+// "Save & Next" / "Save Changes" used to only touch participantsData in
+// memory; nothing reached the DB until the preset-level "Save Preset", so a
+// crash or a stray Escape mid-session lost every edit. The state below backs a
+// FIFO, single-in-flight persist queue that writes each edited row to Supabase
+// in the background without ever blocking the keyboard-driven editor flow.
+// =====================================================================
+var participantPersistQueue = [];          // FIFO of participant OBJECT references awaiting persist
+var participantPersistInFlight = null;     // Promise of the row currently being written, or null
+var participantPersistDraining = false;    // Guards against two concurrent drain loops
+var participantPersistKeyCounter = 0;      // Monotonic source of __persistKey (see below)
+var presetEditorReadOnly = false;          // Mirror of the #preset-editor-modal .preset-read-only state
+var presetHasUnpersistedChanges = false;   // True when in-memory state isn't yet on the preset (close-guard)
+
+// =====================================================================
+// Preset Save Progress Overlay
+// Unified UI for save progress + success/error feedback. Replaces the
+// previous loading silence and the system success/error toasts for
+// preset-participants saves.
+// =====================================================================
+var __presetSaveOverlay = {
+  el: null,
+  unsubscribe: null,
+  autoCloseTimer: null,
+  active: false,
+  expectedPresetId: null,
+};
+
+function __ensurePresetSaveOverlay() {
+  if (__presetSaveOverlay.el) return __presetSaveOverlay.el;
+
+  var overlay = document.createElement('div');
+  overlay.className = 'preset-save-overlay';
+  overlay.id = 'preset-save-overlay';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-live', 'polite');
+  overlay.innerHTML = [
+    '<div class="preset-save-card">',
+    '  <div class="preset-save-icon" data-role="icon">',
+    '    <div class="spinner-ring"></div>',
+    '  </div>',
+    '  <div class="preset-save-title" data-role="title">Saving participants…</div>',
+    '  <div class="preset-save-message" data-role="message">Preparing data…</div>',
+    '  <div class="preset-save-progress-track">',
+    '    <div class="preset-save-progress-fill" data-role="bar"></div>',
+    '  </div>',
+    '  <div class="preset-save-percent" data-role="percent">0%</div>',
+    '  <div class="preset-save-actions hidden" data-role="actions">',
+    '    <button type="button" data-role="dismiss">Close</button>',
+    '  </div>',
+    '</div>'
+  ].join('');
+
+  document.body.appendChild(overlay);
+
+  overlay.querySelector('[data-role="dismiss"]').addEventListener('click', function () {
+    hidePresetSaveOverlay();
+  });
+
+  __presetSaveOverlay.el = overlay;
+  return overlay;
+}
+
+function showPresetSaveOverlay(opts) {
+  opts = opts || {};
+  var overlay = __ensurePresetSaveOverlay();
+
+  if (__presetSaveOverlay.autoCloseTimer) {
+    clearTimeout(__presetSaveOverlay.autoCloseTimer);
+    __presetSaveOverlay.autoCloseTimer = null;
+  }
+
+  // Reset to running state
+  var icon = overlay.querySelector('[data-role="icon"]');
+  icon.innerHTML = '<div class="spinner-ring"></div>';
+
+  var bar = overlay.querySelector('[data-role="bar"]');
+  bar.classList.remove('success', 'error');
+  bar.style.width = '4%';
+
+  overlay.querySelector('[data-role="title"]').textContent = opts.title || 'Saving participants…';
+  overlay.querySelector('[data-role="message"]').textContent = opts.message || 'Preparing data…';
+  overlay.querySelector('[data-role="percent"]').textContent = '0%';
+  overlay.querySelector('[data-role="actions"]').classList.add('hidden');
+
+  overlay.classList.add('visible');
+  __presetSaveOverlay.active = true;
+  __presetSaveOverlay.expectedPresetId = opts.presetId || null;
+
+  // Subscribe to backend progress events (only once per show)
+  if (__presetSaveOverlay.unsubscribe) {
+    try { __presetSaveOverlay.unsubscribe(); } catch (e) { /* ignore */ }
+    __presetSaveOverlay.unsubscribe = null;
+  }
+  if (window.api && typeof window.api.receive === 'function') {
+    __presetSaveOverlay.unsubscribe = window.api.receive('preset-save-progress', function (payload) {
+      if (!__presetSaveOverlay.active) return;
+      if (__presetSaveOverlay.expectedPresetId &&
+          payload && payload.presetId &&
+          payload.presetId !== __presetSaveOverlay.expectedPresetId) {
+        return; // ignore events from another concurrent save
+      }
+      updatePresetSaveOverlay(payload);
+    });
+  }
+}
+
+function updatePresetSaveOverlay(payload) {
+  var overlay = __presetSaveOverlay.el;
+  if (!overlay) return;
+  if (!payload) return;
+
+  var bar = overlay.querySelector('[data-role="bar"]');
+  var pctEl = overlay.querySelector('[data-role="percent"]');
+  var msgEl = overlay.querySelector('[data-role="message"]');
+
+  var pct = Math.max(0, Math.min(100, Number(payload.percent) || 0));
+  bar.style.width = pct + '%';
+  pctEl.textContent = Math.round(pct) + '%';
+  if (payload.message) msgEl.textContent = payload.message;
+  if (payload.title) {
+    var titleEl = overlay.querySelector('[data-role="title"]');
+    if (titleEl) titleEl.textContent = payload.title;
+  }
+}
+
+/**
+ * Switch the overlay to a renderer-driven phase. Stops listening to backend
+ * progress events (so a leftover "complete 100%" from phase 1 cannot override
+ * phase 2 updates) and resets the bar to the given starting state.
+ */
+function setPresetSavePhase(opts) {
+  opts = opts || {};
+  if (__presetSaveOverlay.unsubscribe) {
+    try { __presetSaveOverlay.unsubscribe(); } catch (e) { /* ignore */ }
+    __presetSaveOverlay.unsubscribe = null;
+  }
+  updatePresetSaveOverlay({
+    percent: typeof opts.percent === 'number' ? opts.percent : 0,
+    message: opts.message,
+    title: opts.title
+  });
+}
+
+function showPresetSaveSuccess(message, autoCloseMs) {
+  var overlay = __ensurePresetSaveOverlay();
+  __presetSaveOverlay.active = true;
+
+  var icon = overlay.querySelector('[data-role="icon"]');
+  icon.innerHTML = '<div class="check-mark">✓</div>';
+
+  overlay.querySelector('[data-role="title"]').textContent = 'Saved successfully';
+  overlay.querySelector('[data-role="message"]').textContent = message || 'Participants saved.';
+  overlay.querySelector('[data-role="percent"]').textContent = '100%';
+
+  var bar = overlay.querySelector('[data-role="bar"]');
+  bar.classList.remove('error');
+  bar.classList.add('success');
+
+  overlay.querySelector('[data-role="actions"]').classList.add('hidden');
+  overlay.classList.add('visible');
+
+  if (__presetSaveOverlay.autoCloseTimer) clearTimeout(__presetSaveOverlay.autoCloseTimer);
+  var delay = typeof autoCloseMs === 'number' ? autoCloseMs : 1400;
+  __presetSaveOverlay.autoCloseTimer = setTimeout(hidePresetSaveOverlay, delay);
+}
+
+function showPresetSaveError(message) {
+  var overlay = __ensurePresetSaveOverlay();
+  __presetSaveOverlay.active = true;
+
+  var icon = overlay.querySelector('[data-role="icon"]');
+  icon.innerHTML = '<div class="error-mark">!</div>';
+
+  overlay.querySelector('[data-role="title"]').textContent = 'Save failed';
+  overlay.querySelector('[data-role="message"]').textContent = message || 'Could not save participants.';
+
+  var bar = overlay.querySelector('[data-role="bar"]');
+  bar.classList.remove('success');
+  bar.classList.add('error');
+
+  overlay.querySelector('[data-role="actions"]').classList.remove('hidden');
+  overlay.classList.add('visible');
+  // No auto-close on error: user must dismiss explicitly.
+  if (__presetSaveOverlay.autoCloseTimer) {
+    clearTimeout(__presetSaveOverlay.autoCloseTimer);
+    __presetSaveOverlay.autoCloseTimer = null;
+  }
+}
+
+function hidePresetSaveOverlay() {
+  if (__presetSaveOverlay.autoCloseTimer) {
+    clearTimeout(__presetSaveOverlay.autoCloseTimer);
+    __presetSaveOverlay.autoCloseTimer = null;
+  }
+  if (__presetSaveOverlay.unsubscribe) {
+    try { __presetSaveOverlay.unsubscribe(); } catch (e) { /* ignore */ }
+    __presetSaveOverlay.unsubscribe = null;
+  }
+  __presetSaveOverlay.active = false;
+  __presetSaveOverlay.expectedPresetId = null;
+  if (__presetSaveOverlay.el) {
+    __presetSaveOverlay.el.classList.remove('visible');
+  }
+}
+
+// 1.2.0 — chip-based folder editor for the per-participant edit modal.
+// Each entry: { name: string, path?: string }. Replaces the legacy
+// folder_1/2/3 dropdowns. The modal works on a fresh COPY (so the user
+// can cancel without mutating the underlying participant) and the values
+// are pushed back into the participant on save.
+var editingParticipantFolders = [];
+
+// 1.2.0 — controls where the existing folder-name-modal commits its
+// result. 'preset' = legacy behavior (push into the global customFolders
+// array of the preset). 'participant' = push into editingParticipantFolders
+// (the chip editor of the participant being edited). The modal HTML is
+// the same in both cases, only the dispatch in confirmAddFolder differs.
+var addFolderContext = 'preset';
+var deliveryClientsCache = []; // Cached list of clients (projects) for "Delivery to" dropdown
+var deliveryFeatureEnabled = false; // Feature gate for delivery_enabled
+var faceRecFeatureEnabled = false; // Feature gate for face_recognition_enabled
+var faceStatusCache = {}; // participantId → { totalDrivers, driversWithPhotos }
+
+/**
+ * Detect if an error is a network connectivity issue and return a user-friendly message.
+ * @param {Error|string} error - The error to check
+ * @returns {string} User-friendly error message
+ */
+function getErrorMessage(error) {
+  const msg = error?.message || String(error) || '';
+  if (msg.includes('fetch failed') || msg.includes('ECONNREFUSED') || msg.includes('ETIMEDOUT') || msg.includes('NetworkError') || msg.includes('network')) {
+    return 'Network connection error. Please check your internet connection and try again.';
+  }
+  return msg;
+}
+
+/**
+ * Safely extract folder name from any folder entry format.
+ * Handles: string, {name: string}, {name: {name: string}}, or any unexpected format.
+ * @param {*} folder - Folder entry (string or object)
+ * @returns {string} Folder name as a plain string
+ */
+function getFolderDisplayName(folder) {
+  if (typeof folder === 'string') return folder;
+  if (folder && typeof folder === 'object') {
+    let name = folder.name;
+    // Handle double-nested objects (e.g., {name: {name: "actual"}})
+    while (name && typeof name === 'object' && name.name !== undefined) {
+      name = name.name;
+    }
+    if (typeof name === 'string' && name.length > 0) return name;
+    // Fallback: try folder_name or any string property
+    if (typeof folder.folder_name === 'string') return folder.folder_name;
+  }
+  return String(folder || 'Unknown Folder');
+}
 var editingRowIndex = -1; // -1 = new participant, >=0 = editing existing
 var currentSortColumn = 0; // Colonna corrente di ordinamento (0 = numero)
 var currentSortDirection = 'asc'; // Direzione: 'asc' o 'desc'
@@ -53,13 +313,26 @@ async function initParticipantsManager() {
     presetFaceManager.initialize();
   }
 
-  // Initialize driver face manager if available
+  // Initialize driver face manager if available (await to load face_recognition_enabled flag from DB)
   if (typeof driverFaceManagerMulti !== 'undefined' && driverFaceManagerMulti.initialize) {
-    driverFaceManagerMulti.initialize();
+    await driverFaceManagerMulti.initialize();
   }
 
   // Load sport categories for dropdown
   await loadSportCategoriesForDropdown();
+
+  // Load delivery feature status and clients (non-blocking)
+  loadDeliveryClientsIfEnabled();
+
+  // Sync face recognition flag from driver-face-manager (loaded in driverFaceManagerMulti.initialize())
+  faceRecFeatureEnabled = (typeof FACE_RECOGNITION_ENABLED !== 'undefined') ? FACE_RECOGNITION_ENABLED : false;
+  if (faceRecFeatureEnabled) {
+    const thFace = document.getElementById('th-face-status');
+    if (thFace) thFace.style.display = '';
+  }
+
+  // Initialize face recognition survey for non-enabled users (non-blocking)
+  initFaceRecSurvey();
 
   // Load existing presets
   await loadParticipantPresets();
@@ -100,6 +373,212 @@ function populateSportCategoryDropdown(selectedCategoryId = null) {
       option.selected = true;
     }
     dropdown.appendChild(option);
+  });
+}
+
+/**
+ * Load delivery clients if the delivery feature is enabled.
+ * Non-blocking — if the feature is off, the "Delivery to" field stays hidden.
+ */
+async function loadDeliveryClientsIfEnabled() {
+  try {
+    const planLimits = await window.api.invoke('delivery-get-plan-limits');
+    if (!planLimits.success || !planLimits.data) return;
+
+    deliveryFeatureEnabled = planLimits.data.delivery_enabled === true;
+
+    if (!deliveryFeatureEnabled) {
+      console.log('[Participants] Delivery feature not enabled, hiding "Delivery to" field');
+      return;
+    }
+
+    // Load clients (projects) for the dropdown
+    const projectsResult = await window.api.invoke('delivery-get-projects');
+    if (projectsResult.success && projectsResult.data) {
+      deliveryClientsCache = projectsResult.data;
+      console.log('[Participants] Loaded', deliveryClientsCache.length, 'delivery clients');
+    }
+
+    // Show the "Delivery to" field in the edit modal
+    const deliveryGroup = document.getElementById('delivery-to-group');
+    if (deliveryGroup) deliveryGroup.style.display = '';
+  } catch (error) {
+    console.warn('[Participants] Could not load delivery clients:', error.message || error);
+  }
+}
+
+/**
+ * Load face recognition status for the current preset (non-blocking).
+ * Shows the "Face" column header and populates faceStatusCache.
+ * Called after preset participants are loaded into the table.
+ */
+async function loadFaceStatusIfEnabled() {
+  // Check if face recognition is enabled (reuse the same plan limits call)
+  try {
+    const planLimits = await window.api.invoke('delivery-get-plan-limits');
+    if (!planLimits.success || !planLimits.data) return;
+
+    faceRecFeatureEnabled = planLimits.data.face_recognition_enabled === true;
+
+    if (!faceRecFeatureEnabled || !currentPreset?.id) return;
+
+    // Show the Face column header
+    const thFace = document.getElementById('th-face-status');
+    if (thFace) thFace.style.display = '';
+
+    // Load face photo status for all participants in this preset
+    const result = await window.api.invoke('preset-face-status-batch', currentPreset.id);
+    if (result.success && result.data) {
+      faceStatusCache = result.data;
+      console.log('[Participants] Face status loaded for', Object.keys(faceStatusCache).length, 'participants');
+
+      // Update existing rows with face status dots
+      updateFaceStatusDots();
+    }
+  } catch (error) {
+    console.warn('[Participants] Could not load face status:', error.message || error);
+  }
+}
+
+/**
+ * Update face status dots in all participant rows.
+ * Called after faceStatusCache is populated.
+ */
+function updateFaceStatusDots() {
+  const rows = document.querySelectorAll('#participants-tbody tr');
+  rows.forEach(row => {
+    const dot = row.querySelector('.face-status-dot');
+    if (!dot) return;
+    const participantId = dot.getAttribute('data-participant-id');
+    if (!participantId) return;
+
+    const status = faceStatusCache[participantId];
+    dot.className = 'face-status-dot ' + getFaceStatusClass(status);
+    dot.title = getFaceStatusTitle(status);
+  });
+}
+
+/**
+ * Get CSS class for face status dot
+ */
+function getFaceStatusClass(status) {
+  if (!status || status.totalDrivers === 0) return 'status-grey';
+  if (status.driversWithPhotos === 0) return 'status-grey';
+  if (status.driversWithPhotos >= status.totalDrivers) return 'status-green';
+  return 'status-yellow';
+}
+
+/**
+ * Get tooltip text for face status dot
+ */
+function getFaceStatusTitle(status) {
+  if (!status || status.totalDrivers === 0) return 'No drivers configured';
+  if (status.driversWithPhotos === 0) return 'No face photos uploaded';
+  if (status.driversWithPhotos >= status.totalDrivers) return `All ${status.totalDrivers} driver(s) have face photos`;
+  return `${status.driversWithPhotos} of ${status.totalDrivers} driver(s) have face photos`;
+}
+
+// ==================== FACE RECOGNITION INTEREST SURVEY ====================
+
+/**
+ * Show or hide the face recognition survey based on feature status.
+ * For non-enabled users: show survey. For enabled users: hide it.
+ */
+async function initFaceRecSurvey() {
+  const surveyDiv = document.getElementById('face-rec-survey');
+  if (!surveyDiv) return;
+
+  // Only show for users who DON'T have face recognition enabled
+  if (faceRecFeatureEnabled) {
+    surveyDiv.style.display = 'none';
+    return;
+  }
+
+  surveyDiv.style.display = 'block';
+
+  // Check if already submitted
+  try {
+    const result = await window.api.invoke('face-rec-check-survey');
+    if (result.success && result.submitted) {
+      document.getElementById('face-rec-survey-form').style.display = 'none';
+      document.getElementById('face-rec-survey-submitted').style.display = 'block';
+    }
+  } catch (e) {
+    console.warn('[Participants] Could not check face rec survey status:', e);
+  }
+}
+
+/**
+ * Submit face recognition interest survey
+ */
+async function submitFaceRecSurvey() {
+  var interests = {
+    podium: document.getElementById('face-interest-podium').checked,
+    helmet_off: document.getElementById('face-interest-helmet-off').checked,
+    multi_driver: document.getElementById('face-interest-multi-driver').checked,
+    running_cycling: document.getElementById('face-interest-running-cycling').checked,
+  };
+  var comment = document.getElementById('face-rec-comment').value.trim() || null;
+
+  var hasAny = Object.values(interests).some(function(v) { return v; });
+  if (!hasAny && !comment) {
+    alert('Please select at least one option or leave a comment.');
+    return;
+  }
+
+  var btn = document.getElementById('btn-face-rec-survey');
+  btn.disabled = true;
+  btn.textContent = 'Submitting...';
+
+  try {
+    var result = await window.api.invoke('face-rec-submit-survey', {
+      responses: { interests: interests },
+      comment: comment
+    });
+
+    if (result.success) {
+      document.getElementById('face-rec-survey-form').style.display = 'none';
+      document.getElementById('face-rec-survey-submitted').style.display = 'block';
+    } else {
+      btn.disabled = false;
+      btn.textContent = 'Submit Feedback';
+      alert('Failed to submit: ' + (result.error || 'Unknown error'));
+    }
+  } catch (e) {
+    console.error('[Participants] Survey submission error:', e);
+    btn.disabled = false;
+    btn.textContent = 'Submit Feedback';
+  }
+}
+
+/**
+ * Populate the "Delivery to" dropdown with cached clients
+ * @param {string|null} selectedClientId - Client ID to pre-select
+ */
+function populateDeliveryToDropdown(selectedClientId = null) {
+  const select = document.getElementById('edit-delivery-to');
+  if (!select) return;
+
+  // Keep first option (no delivery)
+  select.innerHTML = '<option value="">— No delivery —</option>';
+
+  if (!deliveryFeatureEnabled || deliveryClientsCache.length === 0) return;
+
+  // Flat list of clients (sorted alphabetically by name)
+  const sorted = [...deliveryClientsCache].sort((a, b) => {
+    const nameA = (a.client_name || a.name || '').toLowerCase();
+    const nameB = (b.client_name || b.name || '').toLowerCase();
+    return nameA.localeCompare(nameB);
+  });
+
+  sorted.forEach(client => {
+    const option = document.createElement('option');
+    option.value = client.id;
+    const typeIcons = { team: '🏎️', sponsor: '💰', organizer: '🏟️', media: '📷', other: '📋' };
+    const icon = typeIcons[client.client_type] || '📋';
+    option.textContent = `${icon} ${client.client_name || client.name}`;
+    if (selectedClientId && client.id === selectedClientId) option.selected = true;
+    select.appendChild(option);
   });
 }
 
@@ -162,13 +641,63 @@ function setupEventListeners() {
  */
 const KEYWORDS = [
   { keyword: '{number}', description: 'Race number' },
-  { keyword: '{name}', description: 'Driver name' },
+  { keyword: '{name}', description: 'Person name' },
   { keyword: '{team}', description: 'Team name' },
+  { keyword: '{car_model}', description: 'Car/vehicle model' },
+  { keyword: '{nationality}', description: 'Nationality' },
   { keyword: '{category}', description: 'Category' },
   { keyword: '{tag}', description: 'Custom tag' }
 ];
 
 let selectedKeywordIndex = -1;
+
+// ============================================================================
+// Template Placeholder Utilities
+// ============================================================================
+
+/** Valid placeholders recognized in IPTC templates */
+const VALID_PLACEHOLDERS = ['{name}', '{surname}', '{number}', '{team}', '{car_model}', '{nationality}', '{category}', '{tag}', '{persons}', '{event}', '{date}'];
+
+/**
+ * Renders a template string as HTML with valid placeholders highlighted
+ * using the same purple code style as the info banner.
+ * Plain text is escaped; only valid {placeholder} tokens get styled.
+ */
+function renderTemplateWithHighlights(template) {
+  if (!template) return '';
+
+  const regex = /(\{[a-z_]+\})/g;
+  let html = '';
+  let lastIndex = 0;
+  let match;
+
+  while ((match = regex.exec(template)) !== null) {
+    if (match.index > lastIndex) {
+      html += escapeHtmlForTemplate(template.slice(lastIndex, match.index));
+    }
+    const token = match[1];
+    if (VALID_PLACEHOLDERS.includes(token)) {
+      html += `<span class="placeholder-token">${escapeHtmlForTemplate(token)}</span>`;
+    } else {
+      html += escapeHtmlForTemplate(token);
+    }
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < template.length) {
+    html += escapeHtmlForTemplate(template.slice(lastIndex));
+  }
+
+  return html;
+}
+
+function escapeHtmlForTemplate(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Stub for backward compatibility — no longer wraps inputs
+function initTemplateHighlights() {
+  // Previews are now handled entirely by updateCaptionPreview / updatePersonPreview
+}
 
 /**
  * Setup keyword autocomplete for folder name input
@@ -427,6 +956,9 @@ function displayParticipantPresets(presets) {
     });
     userSection.appendChild(userGrid);
     container.appendChild(userSection);
+
+    // Validate folder paths asynchronously for user presets
+    validatePresetFolderPaths(userPresets);
   } else if (officialPresets.length > 0) {
     // Show message about creating first preset if only official presets exist
     const userSection = document.createElement('div');
@@ -448,18 +980,22 @@ function createPresetCard(preset) {
   const card = document.createElement('div');
   const isOfficial = preset.is_official === true;
   card.className = `preset-card${isOfficial ? ' official-preset-card' : ''}`;
+  card.setAttribute('data-preset-id', preset.id);
 
   // Generate different actions based on whether preset is official or user-owned
   let actionsHtml;
   if (isOfficial) {
-    // Official presets: only allow duplicate and view (no edit/delete)
+    // Official presets: view (read-only) and duplicate (no edit/delete)
     actionsHtml = `
+      <button class="btn btn-sm btn-secondary" onclick="viewOfficialPreset('${preset.id}')" title="View participants">
+        <span class="btn-icon">👁️</span> View
+      </button>
       <button class="btn btn-sm btn-primary" onclick="duplicateOfficialPreset('${preset.id}')" title="Duplicate to My Presets">
         <span class="btn-icon">📋</span> Duplicate
       </button>
     `;
   } else {
-    // User presets: full edit/delete/export capabilities
+    // User presets: full edit/delete/export/duplicate capabilities
     actionsHtml = `
       <div class="export-dropdown" data-preset-id="${preset.id}">
         <button class="btn btn-sm btn-secondary dropdown-toggle" title="Export preset">
@@ -482,6 +1018,9 @@ function createPresetCard(preset) {
           </button>
         </div>
       </div>
+      <button class="btn btn-sm btn-secondary" onclick="duplicatePreset('${preset.id}')" title="Duplicate">
+        <span class="btn-icon">📋</span>
+      </button>
       <button class="btn btn-sm btn-secondary" onclick="editPreset('${preset.id}')" title="Edit">
         <span class="btn-icon">✏️</span>
       </button>
@@ -496,9 +1035,6 @@ function createPresetCard(preset) {
       <div class="preset-title">
         ${isOfficial ? '<span class="official-badge" title="Official RT Preset">RT</span>' : ''}
         ${escapeHtml(preset.name)}
-      </div>
-      <div class="preset-actions">
-        ${actionsHtml}
       </div>
     </div>
     <div class="preset-info">
@@ -517,7 +1053,7 @@ function createPresetCard(preset) {
       ` : ''}
     </div>
     <div class="preset-actions-bottom">
-      <!-- Use in Analysis button removed - preset selection handled in Analysis tab -->
+      ${actionsHtml}
     </div>
   `;
 
@@ -602,13 +1138,33 @@ function showEmptyPresetsState() {
 function createNewPreset() {
   currentPreset = null;
   isEditingPreset = false;
+  resetParticipantPersistState(); // BUG-02 — fresh editing session
   participantsData = [];
   customFolders = [];
+
+  // ACC-01 (Gruppe C) — reset the series-sponsor ignore list for a fresh preset
+  seriesSponsorIgnore = [];
+  renderSeriesSponsorChips();
+  const seriesSponsorInputNew = document.getElementById('series-sponsor-input');
+  if (seriesSponsorInputNew) {
+    seriesSponsorInputNew.value = '';
+    seriesSponsorInputNew.disabled = false;
+  }
 
   // Reset form
   document.getElementById('preset-name').value = '';
   document.getElementById('preset-description').value = '';
   document.getElementById('preset-editor-title').textContent = 'New Participant Preset';
+
+  // Issue #104 — preset-scope driver filter default OFF
+  const allowExternalEl = document.getElementById('preset-allow-external-persons');
+  if (allowExternalEl) {
+    allowExternalEl.checked = false;
+    allowExternalEl.disabled = false;
+  }
+
+  // (1.2.0 — the additive-default-folder flag has been moved to a
+  // per-participant toggle inside the participant edit modal.)
 
   // Populate sport category dropdown (no selection)
   populateSportCategoryDropdown(null);
@@ -620,15 +1176,363 @@ function createNewPreset() {
   clearParticipantsTable();
   addParticipantRow(); // Add one empty row
 
+  // Mount the shared IPTC form markup (UX-04, Option B), clear it, then prefill
+  // from the account-level default template. Ordering is load-bearing:
+  // ensureIptcFormMarkup() must finish BEFORE clearIptcForm()/prefill — values
+  // set on missing elements are silently lost. Runs async so the modal opens
+  // immediately; the IPTC section (collapsed by default) fills in right after.
+  (async () => {
+    const iptcBody = document.getElementById('iptc-section-body');
+    if (typeof ensureIptcFormMarkup === 'function') {
+      await ensureIptcFormMarkup(iptcBody);
+    }
+    if (typeof clearIptcForm === 'function') {
+      clearIptcForm();
+    }
+    if (typeof prefillIptcFromDefaults === 'function') {
+      prefillIptcFromDefaults();
+    }
+  })();
+
+  // V1: open the editable form for new presets (user has nothing to read yet),
+  // and refresh the summary strip with empty values.
+  const headerRow = document.getElementById('preset-header-row');
+  const editBtn = document.getElementById('preset-edit-details-btn');
+  const editLabel = document.getElementById('preset-edit-details-label');
+  if (headerRow) headerRow.removeAttribute('hidden');
+  if (editBtn) {
+    editBtn.setAttribute('aria-expanded', 'true');
+    editBtn.classList.add('is-active');
+  }
+  if (editLabel) editLabel.textContent = 'Hide details';
+  updatePresetSummaryStrip();
+
   // Show modal
   const modal = document.getElementById('preset-editor-modal');
   modal.classList.add('show');
 }
 
 /**
- * Add a custom folder - Opens modal for input
+ * Add a custom folder to the GLOBAL preset list - opens the
+ * folder-name-modal. Legacy entry point used by the "Personalize your
+ * Folder Organization" section.
  */
 function addCustomFolder() {
+  addFolderContext = 'preset';
+  openAddFolderModal();
+}
+
+/**
+ * 1.2.0 — Add a custom folder to the CURRENT PARTICIPANT being edited.
+ *
+ * Opens #participant-folder-modal, a dedicated modal (NOT the global
+ * #folder-name-modal) that:
+ *   - lists folders already used elsewhere in the preset, clickable to
+ *     assign instantly without retyping the name
+ *   - has a name+path form to create a new folder, with auto-fill of
+ *     the name from the basename of the picked path
+ *
+ * Why a separate modal: the global one lives behind the participant
+ * edit modal in stacking order, so opening it from inside the
+ * participant flow ended up invisible. This one has its own z-index
+ * (set on the .modal element in HTML) so it stacks correctly.
+ */
+function addParticipantFolder() {
+  openAddParticipantFolderModal();
+}
+
+/**
+ * Open the dedicated participant Add Folder modal. Renders the
+ * "existing folders" picker with the current set of folders used
+ * elsewhere in the preset.
+ */
+function openAddParticipantFolderModal() {
+  // Reset form fields
+  const nameInput = document.getElementById('participant-folder-name-input');
+  const pathInput = document.getElementById('participant-folder-path-input');
+  const searchInput = document.getElementById('participant-folder-search');
+  if (nameInput) nameInput.value = '';
+  if (pathInput) pathInput.value = '';
+  if (searchInput) searchInput.value = '';
+
+  // Render the existing-folders picker (unfiltered)
+  renderParticipantFolderExistingList('');
+
+  // Wire the live-filter input. Use a fresh handler each time the modal
+  // opens to avoid leaks. Removing first guards against multiple binds
+  // if the user opens/closes the modal repeatedly.
+  if (searchInput) {
+    searchInput.removeEventListener('input', _onParticipantFolderSearchInput);
+    searchInput.addEventListener('input', _onParticipantFolderSearchInput);
+  }
+
+  // Show modal
+  const modal = document.getElementById('participant-folder-modal');
+  if (modal) modal.classList.add('show');
+
+  // Focus the search input first — this is where the user is most
+  // likely to start typing if they're looking for an existing folder.
+  setTimeout(() => {
+    if (searchInput) searchInput.focus();
+  }, 100);
+}
+
+/** Throttled input handler for the search bar — re-renders the picker
+ *  with the typed query on every keystroke. */
+function _onParticipantFolderSearchInput(e) {
+  renderParticipantFolderExistingList(e.target.value || '');
+}
+
+/** Copy the search query into the Folder Name input below and focus
+ *  it, so the user can immediately tweak / pick a path / submit. */
+function copySearchToCreateName() {
+  const searchInput = document.getElementById('participant-folder-search');
+  const nameInput = document.getElementById('participant-folder-name-input');
+  if (!searchInput || !nameInput) return;
+  const q = (searchInput.value || '').trim();
+  if (!q) return;
+  nameInput.value = q;
+  nameInput.focus();
+  nameInput.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+/**
+ * Close the dedicated participant Add Folder modal.
+ */
+function closeParticipantFolderModal() {
+  const modal = document.getElementById('participant-folder-modal');
+  if (modal) modal.classList.remove('show');
+  const nameInput = document.getElementById('participant-folder-name-input');
+  const pathInput = document.getElementById('participant-folder-path-input');
+  if (nameInput) nameInput.value = '';
+  if (pathInput) pathInput.value = '';
+}
+
+/**
+ * Render the list of folders already in use elsewhere in this preset.
+ * Sources (in priority order):
+ *   1. preset.custom_folders (legacy global list)
+ *   2. every other participant's folders[]
+ *   3. fallback to legacy folder_1/2/3 slots from non-normalized rows
+ *
+ * Folders the current participant already has are shown disabled so
+ * the user doesn't add duplicates.
+ *
+ * @param {string} [filterQuery] Live-filter substring (case-insensitive,
+ *   matches against name and path). Empty/missing = no filtering.
+ */
+function renderParticipantFolderExistingList(filterQuery) {
+  const list = document.getElementById('participant-folder-existing-list');
+  if (!list) return;
+  list.innerHTML = '';
+  const query = (filterQuery || '').trim().toLowerCase();
+
+  // Build a deduplicated map: lower-cased name → { name, path? }
+  const seen = new Map();
+  const upsert = (name, path) => {
+    const trimmed = (name || '').trim();
+    if (!trimmed) return;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) {
+      // Prefer the version that has a path, if any.
+      const existing = seen.get(key);
+      if (!existing.path && path) existing.path = path;
+      return;
+    }
+    seen.set(key, { name: trimmed, path: (path || '').trim() || undefined });
+  };
+
+  // Source 1: preset-level legacy custom_folders array.
+  const presetFolders = currentPreset?.custom_folders || [];
+  for (const f of presetFolders) {
+    if (typeof f === 'string') upsert(f);
+    else if (f && typeof f === 'object') upsert(f.name, f.path);
+  }
+  // Source 2: every participant's normalized folders[] (the canonical store).
+  for (const p of (participantsData || [])) {
+    if (Array.isArray(p?.folders)) {
+      for (const f of p.folders) upsert(f?.name, f?.path);
+    }
+    // Source 3: legacy slots fallback (un-normalized rows).
+    upsert(p?.folder_1, p?.folder_1_path);
+    upsert(p?.folder_2, p?.folder_2_path);
+    upsert(p?.folder_3, p?.folder_3_path);
+  }
+
+  // Set of folders already on the participant being edited (so we
+  // can disable them in the picker).
+  const alreadyAdded = new Set(
+    editingParticipantFolders.map(f => (f.name || '').trim().toLowerCase())
+  );
+
+  // Apply live filter (case-insensitive, matches name OR path).
+  // Pass-through when the query is empty.
+  let visible = Array.from(seen.values());
+  if (query) {
+    visible = visible.filter(f => {
+      const hay = (f.name + ' ' + (f.path || '')).toLowerCase();
+      return hay.includes(query);
+    });
+  }
+
+  // Build cards.
+  const sorted = visible
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+
+  // Update the "no matches" hint visibility. Shown only when the user
+  // typed something AND nothing matched in the universe of existing
+  // folders. Hidden when the universe is empty (the list shows its own
+  // empty-state message in that case).
+  const noMatch = document.getElementById('participant-folder-no-match');
+  if (noMatch) {
+    if (query && sorted.length === 0 && seen.size > 0) {
+      const span = noMatch.querySelector('span');
+      if (span) span.textContent = `No matches for "${filterQuery.trim()}".`;
+      noMatch.style.display = '';
+    } else {
+      noMatch.style.display = 'none';
+    }
+  }
+
+  for (const f of sorted) {
+    const card = document.createElement('div');
+    card.className = 'participant-folder-existing-item';
+    const isDup = alreadyAdded.has(f.name.toLowerCase());
+    if (isDup) card.classList.add('is-already-added');
+
+    const icon = document.createElement('span');
+    icon.className = 'folder-icon';
+    icon.textContent = '📁';
+    card.appendChild(icon);
+
+    const name = document.createElement('span');
+    name.className = 'folder-name';
+    name.textContent = f.name;
+    card.appendChild(name);
+
+    if (f.path) {
+      const pathSpan = document.createElement('span');
+      pathSpan.className = 'folder-path';
+      pathSpan.textContent = f.path;
+      card.appendChild(pathSpan);
+    }
+
+    if (isDup) {
+      const badge = document.createElement('span');
+      badge.className = 'added-badge';
+      badge.textContent = 'Already added';
+      card.appendChild(badge);
+    } else {
+      card.addEventListener('click', () => {
+        editingParticipantFolders.push({
+          name: f.name,
+          ...(f.path ? { path: f.path } : {})
+        });
+        renderEditFolderChips();
+        closeParticipantFolderModal();
+      });
+    }
+
+    list.appendChild(card);
+  }
+}
+
+/**
+ * Browse for a folder path inside the participant Add-Folder modal.
+ * Auto-fills the Name field from the chosen folder's basename when the
+ * Name field is still empty.
+ */
+async function browseParticipantFolderPath() {
+  const result = await window.api.invoke('dialog-show-open', {
+    properties: ['openDirectory', 'createDirectory'],
+    title: 'Select Destination Folder'
+  });
+  if (!(result && result.filePaths && result.filePaths.length > 0)) return;
+  const chosenPath = result.filePaths[0];
+  const pathInput = document.getElementById('participant-folder-path-input');
+  if (pathInput) pathInput.value = chosenPath;
+
+  const nameInput = document.getElementById('participant-folder-name-input');
+  if (nameInput && !nameInput.value.trim()) {
+    const segments = chosenPath.split(/[\\/]/).filter(s => s.length > 0);
+    const basename = segments.length > 0 ? segments[segments.length - 1] : '';
+    if (basename) nameInput.value = basename;
+  }
+}
+
+function clearParticipantFolderPath() {
+  const pathInput = document.getElementById('participant-folder-path-input');
+  if (pathInput) pathInput.value = '';
+}
+
+/**
+ * Confirm the "Create new" form of the participant Add Folder modal.
+ * Pushes onto editingParticipantFolders, re-renders chips, closes modal.
+ *
+ * 1.2.0 uniqueness rule — a folder name must be unique within the
+ * preset. If a folder with that name already exists anywhere (preset
+ * legacy list or another participant), creation is blocked and the
+ * user is pointed to the "Pick from existing folders" list above.
+ */
+function confirmAddParticipantFolder() {
+  const nameInput = document.getElementById('participant-folder-name-input');
+  const pathInput = document.getElementById('participant-folder-path-input');
+  const folderName = (nameInput?.value || '').trim();
+  const folderPath = (pathInput?.value || '').trim();
+
+  if (!folderName) {
+    alert('Please enter a folder name (or pick one from the existing list above).');
+    if (nameInput) nameInput.focus();
+    return;
+  }
+
+  // Per-participant duplicate (the chip is already on this participant).
+  const dupOnThisParticipant = editingParticipantFolders.some(
+    f => f.name && f.name.toLowerCase() === folderName.toLowerCase()
+  );
+  if (dupOnThisParticipant) {
+    alert('This participant already has a folder with this name.');
+    if (nameInput) nameInput.focus();
+    return;
+  }
+
+  // Per-preset duplicate (same name on a different participant or in
+  // the preset-global list). The user should pick from existing
+  // instead of creating a duplicate, otherwise we'd end up with two
+  // distinct entries that happen to share a display name.
+  if (folderNameExistsInPreset(folderName)) {
+    alert(
+      `A folder named "${folderName}" already exists elsewhere in this preset.\n\n` +
+      `Use the "Pick from existing folders" list above to add it to this participant, ` +
+      `or pick a different name.`
+    );
+    if (nameInput) nameInput.focus();
+    return;
+  }
+
+  const folderObj = { name: folderName };
+  if (folderPath) folderObj.path = folderPath;
+  editingParticipantFolders.push(folderObj);
+  renderEditFolderChips();
+
+  // Keep the shared pool in sync. Without this, a folder created from
+  // inside the per-participant Edit modal stays attached to the single
+  // participant and is invisible to the multi-assign side panel — see
+  // `promoteFolderToPool` for the full rationale.
+  if (typeof promoteFolderToPool === 'function') {
+    promoteFolderToPool(folderObj).catch(err => {
+      console.error('[ParticipantFolder] pool promotion failed:', err);
+    });
+  }
+
+  closeParticipantFolderModal();
+}
+
+/**
+ * Shared modal opener — clears inputs, shows the modal, refocuses input.
+ * The dispatch on save is decided by `addFolderContext` in confirmAddFolder.
+ */
+function openAddFolderModal() {
   // Clear previous input
   document.getElementById('folder-name-input').value = '';
   const pathInput = document.getElementById('folder-path-input');
@@ -662,7 +1566,40 @@ function closeFolderNameModal() {
 }
 
 /**
- * Confirm and add folder
+ * 1.2.0 — Check whether a folder name is already in use ANYWHERE in
+ * the current preset (preset-global list + every participant's folders[]
+ * + legacy folder_1/2/3 slots). Case-insensitive. Used to enforce the
+ * "one preset = one namespace of folders" rule on add and rename.
+ *
+ * Two presets can coexist with a folder of the same name (the check
+ * only looks at the in-memory state of the currently-edited preset).
+ */
+function folderNameExistsInPreset(folderName) {
+  const target = (folderName || '').trim().toLowerCase();
+  if (!target) return false;
+
+  // Preset-global legacy list
+  if (customFolders.some(f => getFolderDisplayName(f).toLowerCase() === target)) return true;
+
+  // Every participant's folders[] and legacy slots
+  for (const p of (participantsData || [])) {
+    if (Array.isArray(p?.folders)) {
+      for (const f of p.folders) {
+        if (f?.name && f.name.trim().toLowerCase() === target) return true;
+      }
+    }
+    if ((p?.folder_1 || '').trim().toLowerCase() === target) return true;
+    if ((p?.folder_2 || '').trim().toLowerCase() === target) return true;
+    if ((p?.folder_3 || '').trim().toLowerCase() === target) return true;
+  }
+
+  return false;
+}
+
+/**
+ * Confirm and add folder. Dispatches based on `addFolderContext` set
+ * by addCustomFolder() (preset-level) or addParticipantFolder()
+ * (participant-level — see editingParticipantFolders).
  */
 function confirmAddFolder() {
   const folderNameInput = document.getElementById('folder-name-input');
@@ -674,25 +1611,60 @@ function confirmAddFolder() {
     return;
   }
 
-  // Check for duplicates
-  if (customFolders.some(f => (typeof f === 'string' ? f : f.name) === folderName)) {
-    alert('A folder with this name already exists');
-    folderNameInput.focus();
-    return;
-  }
-
   // Read optional path
   const pathInput = document.getElementById('folder-path-input');
   const folderPath = pathInput ? pathInput.value.trim() : '';
 
-  // Add folder as object
+  if (addFolderContext === 'participant') {
+    // 1.2.0 — commit to the participant being edited, not the global list.
+    // Uniqueness is enforced PER PRESET (not per participant): a folder
+    // name that already exists anywhere in the preset must not be
+    // re-created here. The user should instead pick it from the
+    // "Pick from existing folders" list at the top of the modal.
+    if (folderNameExistsInPreset(folderName)) {
+      alert(
+        `A folder named "${folderName}" already exists in this preset.\n\n` +
+        `Use the "Pick from existing folders" list above to add it to this participant, ` +
+        `or pick a different name.`
+      );
+      folderNameInput.focus();
+      return;
+    }
+    const folderObj = { name: folderName };
+    if (folderPath) folderObj.path = folderPath;
+    editingParticipantFolders.push(folderObj);
+    renderEditFolderChips();
+
+    // Mirror into the shared pool so the multi-assign side panel and the
+    // Custom Folders section see this folder immediately — see
+    // `promoteFolderToPool` for the rationale.
+    if (typeof promoteFolderToPool === 'function') {
+      promoteFolderToPool(folderObj).catch(err => {
+        console.error('[ParticipantFolder] pool promotion failed:', err);
+      });
+    }
+
+    closeFolderNameModal();
+    // Reset context so the next direct invocation defaults to preset.
+    addFolderContext = 'preset';
+    return;
+  }
+
+  // Preset-level flow. Same uniqueness rule applies: the folder must
+  // not already exist anywhere in the preset.
+  if (folderNameExistsInPreset(folderName)) {
+    alert(
+      `A folder named "${folderName}" already exists in this preset ` +
+      `(either here or on a participant). Pick a different name.`
+    );
+    folderNameInput.focus();
+    return;
+  }
   const folderObj = { name: folderName };
   if (folderPath) folderObj.path = folderPath;
   customFolders.push(folderObj);
   renderCustomFolders();
   updateFolderSelects();
-
-  // Close modal
   closeFolderNameModal();
 }
 
@@ -840,6 +1812,21 @@ async function openParticipantEditModal(rowIndex = -1) {
   const title = rowIndex === -1 ? 'Add Participant' : 'Edit Participant';
   document.getElementById('participant-edit-title').textContent = title;
 
+  // "Save & Next" / "Save & Previous" are only meaningful when editing
+  // an existing row — they walk the participant list one step at a
+  // time after persisting the current row. In "Add Participant" mode
+  // (rowIndex === -1) both stay hidden.
+  const saveNextBtn = document.getElementById('save-and-next-btn');
+  if (saveNextBtn) {
+    saveNextBtn.style.display = rowIndex >= 0 ? '' : 'none';
+  }
+  const savePrevBtn = document.getElementById('save-and-prev-btn');
+  if (savePrevBtn) {
+    savePrevBtn.style.display = rowIndex >= 0 ? '' : 'none';
+  }
+  updateSaveAndNextAvailability(rowIndex);
+  updateSaveAndPreviousAvailability(rowIndex);
+
   // Get current user ID for face photos
   let currentUserId = null;
   try {
@@ -863,9 +1850,13 @@ async function openParticipantEditModal(rowIndex = -1) {
     document.getElementById('edit-numero').value = participant.numero || '';
     document.getElementById('edit-categoria').value = participant.categoria || '';
     document.getElementById('edit-squadra').value = participant.squadra || '';
+    document.getElementById('edit-car-model').value = participant.car_model || '';
     document.getElementById('edit-plate-number').value = participant.plate_number || '';
     document.getElementById('edit-sponsor').value = participant.sponsor || '';
     document.getElementById('edit-metatag').value = participant.metatag || '';
+
+    // Populate "Delivery to" dropdown (feature-gated)
+    populateDeliveryToDropdown(participant.delivery_to_client_id || null);
 
     // Populate drivers tag input
     // Use driver records from database if available, otherwise fallback to nome field
@@ -888,11 +1879,42 @@ async function openParticipantEditModal(rowIndex = -1) {
       console.log('[Participants] No driver records in DB, using nome field fallback');
     }
 
-    // Populate folder selects
+    // Populate hidden legacy dropdowns (kept for any code paths still reading them).
     populateFolderSelects();
     document.getElementById('edit-folder-1').value = participant.folder_1 || '';
     document.getElementById('edit-folder-2').value = participant.folder_2 || '';
     document.getElementById('edit-folder-3').value = participant.folder_3 || '';
+
+    // 1.2.0 — initialize the chip-based folder editor with a defensive
+    // deep copy so cancel doesn't mutate the source participant. Reads
+    // from `folders[]` (canonical, populated by normalizeParticipantPresetFolders
+    // upstream) with a fallback to the legacy slots for the rare case
+    // where this modal is opened on an unnormalized object.
+    if (Array.isArray(participant.folders) && participant.folders.length > 0) {
+      editingParticipantFolders = participant.folders
+        .filter(f => f && typeof f.name === 'string' && f.name.trim())
+        .map(f => ({ name: f.name.trim(), path: f.path?.trim() || undefined }));
+    } else {
+      editingParticipantFolders = [];
+      if (participant.folder_1?.trim()) {
+        editingParticipantFolders.push({ name: participant.folder_1.trim(), path: participant.folder_1_path?.trim() || undefined });
+      }
+      if (participant.folder_2?.trim()) {
+        editingParticipantFolders.push({ name: participant.folder_2.trim(), path: participant.folder_2_path?.trim() || undefined });
+      }
+      if (participant.folder_3?.trim()) {
+        editingParticipantFolders.push({ name: participant.folder_3.trim(), path: participant.folder_3_path?.trim() || undefined });
+      }
+    }
+    renderEditFolderChips();
+
+    // 1.2.0 per-participant additive-default toggle. Default true when
+    // the field is missing (legacy participants pre-flag, or new ones
+    // before they're persisted), matching the DB column default.
+    const includeDefaultElEdit = document.getElementById('edit-include-default-folder');
+    if (includeDefaultElEdit) {
+      includeDefaultElEdit.checked = participant.include_default_folder !== false;
+    }
 
     // Load driver face panels (replaces old presetFaceManager)
     if (typeof driverFaceManagerMulti !== 'undefined' && currentPreset) {
@@ -921,9 +1943,13 @@ async function openParticipantEditModal(rowIndex = -1) {
     document.getElementById('edit-numero').value = '';
     document.getElementById('edit-categoria').value = '';
     document.getElementById('edit-squadra').value = '';
+    document.getElementById('edit-car-model').value = '';
     document.getElementById('edit-plate-number').value = '';
     document.getElementById('edit-sponsor').value = '';
     document.getElementById('edit-metatag').value = '';
+
+    // Populate "Delivery to" dropdown (no selection for new participant)
+    populateDeliveryToDropdown(null);
 
     // Clear drivers tags
     clearDriversTags();
@@ -932,6 +1958,16 @@ async function openParticipantEditModal(rowIndex = -1) {
     document.getElementById('edit-folder-1').value = '';
     document.getElementById('edit-folder-2').value = '';
     document.getElementById('edit-folder-3').value = '';
+
+    // 1.2.0 — reset the chip editor for a brand-new participant.
+    editingParticipantFolders = [];
+    renderEditFolderChips();
+    // Default the per-participant additive-default toggle to checked for
+    // new participants — this matches what most users want out of the box.
+    const includeDefaultElNew = document.getElementById('edit-include-default-folder');
+    if (includeDefaultElNew) {
+      includeDefaultElNew.checked = true;
+    }
 
     // Show driver face panels for new participants
     if (typeof driverFaceManagerMulti !== 'undefined' && currentPreset) {
@@ -977,8 +2013,13 @@ function populateFolderSelects() {
     if (!select) return;
 
     select.innerHTML = `<option value="">Folder ${index + 1}: None</option>`;
-    customFolders.forEach(folder => {
-      const folderName = typeof folder === 'string' ? folder : folder.name;
+    const sortedFolders = [...customFolders].sort((a, b) => {
+      const nameA = getFolderDisplayName(a).toLowerCase();
+      const nameB = getFolderDisplayName(b).toLowerCase();
+      return nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
+    });
+    sortedFolders.forEach(folder => {
+      const folderName = getFolderDisplayName(folder);
       const folderPath = typeof folder === 'string' ? '' : (folder.path || '');
       const option = document.createElement('option');
       option.value = folderName;
@@ -989,8 +2030,208 @@ function populateFolderSelects() {
 }
 
 /**
+ * BUG-02 — single source of truth for the per-participant DB payload.
+ *
+ * Used by BOTH savePreset (bulk) and the per-row persist queue so the two
+ * mappings can NEVER drift. Mirrors what the DB layer
+ * (savePresetParticipantsSupabase → applyDualWriteFolders) expects: canonical
+ * folders[] drives the legacy folder_1/2/3(+_path) dual-write, so we only
+ * forward the legacy slots when folders[] is absent.
+ */
+function buildParticipantSavePayload(p) {
+  const hasNewFolders = Array.isArray(p.folders);
+  return {
+    id: p.id || undefined, // ✅ Include ID for UPSERT logic
+    numero: p.numero || '',
+    nome: getDriverNamesFromParticipant(p).join(', ') || p.nome || '',
+    categoria: p.categoria || '',
+    squadra: p.squadra || '',
+    plate_number: p.plate_number || '',
+    sponsor: p.sponsor || '',
+    metatag: p.metatag || '',
+
+    // 1.2.0 canonical folder array — drives the dual-write at the DB layer.
+    folders: hasNewFolders ? p.folders : undefined,
+    // 1.2.0 per-participant additive-default flag. Default true when missing.
+    include_default_folder: p.include_default_folder !== false,
+
+    // Legacy slots: only forward when folders[] is absent (i.e. the user hasn't
+    // touched the new chip editor yet). When folders[] IS present, the DB layer
+    // derives these from it via applyDualWriteFolders.
+    folder_1: hasNewFolders ? undefined : (p.folder_1 || ''),
+    folder_2: hasNewFolders ? undefined : (p.folder_2 || ''),
+    folder_3: hasNewFolders ? undefined : (p.folder_3 || ''),
+    folder_1_path: hasNewFolders ? undefined : (getFolderPath(p.folder_1) || p.folder_1_path || ''),
+    folder_2_path: hasNewFolders ? undefined : (getFolderPath(p.folder_2) || p.folder_2_path || ''),
+    folder_3_path: hasNewFolders ? undefined : (getFolderPath(p.folder_3) || p.folder_3_path || ''),
+
+    delivery_to_client_id: p.delivery_to_client_id || null,
+
+    // Soft-disable flag (manual Active toggle or BUG-03 entry-list re-import).
+    // undefined is treated as active.
+    is_active: p.is_active !== false
+  };
+}
+
+/**
+ * BUG-02 — true when two participant objects would persist identically.
+ * Compares the full save payload (which encodes driver names via `nome` and all
+ * folder/field state) MINUS the id. Conservative by design: any doubt returns
+ * false, so the worst case is a redundant write, never a lost edit.
+ */
+function participantPersistedFieldsEqual(a, b) {
+  try {
+    const pa = buildParticipantSavePayload(a);
+    const pb = buildParticipantSavePayload(b);
+    delete pa.id;
+    delete pb.id;
+    return JSON.stringify(pa) === JSON.stringify(pb);
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * BUG-02 — read-only guard for the persist hook. Mirrors the
+ * `.preset-read-only` class that setPresetEditorReadOnly() toggles; the module
+ * boolean is the cheap canonical read.
+ */
+function isPresetEditorReadOnly() {
+  return presetEditorReadOnly === true;
+}
+
+/**
+ * BUG-02 — enqueue an async, non-blocking persist of ONE participant row.
+ * Pushes the object REFERENCE (saveParticipantEdit replaces objects on edit, so
+ * identity is the dedup key). Never blocks the caller — the editor stays
+ * instant; the write happens in the background drain loop.
+ */
+function enqueueParticipantPersist(participantObj) {
+  if (!participantObj) return;
+  if (participantPersistQueue.indexOf(participantObj) !== -1) return; // already queued
+  participantPersistQueue.push(participantObj);
+  if (!participantPersistDraining) {
+    // Fire-and-forget; drainParticipantPersistQueue guards re-entrancy itself.
+    drainParticipantPersistQueue();
+  }
+}
+
+/**
+ * BUG-02 — FIFO drain, single task in flight at a time.
+ * Skip-if-detached at dequeue: an object no longer identity-present in
+ * participantsData was superseded by a newer edit (a newer task sits behind it)
+ * or the editor was closed — either way its write is stale, skip it.
+ */
+async function drainParticipantPersistQueue() {
+  if (participantPersistDraining) return;
+  participantPersistDraining = true;
+  try {
+    while (participantPersistQueue.length > 0) {
+      const obj = participantPersistQueue.shift();
+      // Skip-if-detached: preset closed, row removed, or this exact object was
+      // replaced by a newer edit (the newer object is queued behind us).
+      if (!currentPreset || !currentPreset.id) continue;
+      if (!Array.isArray(participantsData) || participantsData.indexOf(obj) === -1) continue;
+      participantPersistInFlight = persistSingleParticipant(obj);
+      try {
+        await participantPersistInFlight;
+      } finally {
+        participantPersistInFlight = null;
+      }
+    }
+  } finally {
+    participantPersistDraining = false;
+  }
+}
+
+/**
+ * BUG-02 — persist one participant row, then sync its driver names.
+ *
+ * The returned-id write-back is the critical invariant: a newly-created row's
+ * DB id MUST land on the in-memory object before any later savePreset, or the
+ * bulk merge double-creates the row (and its delete-diff can delete the row we
+ * just inserted). We also propagate that id to any object in participantsData
+ * sharing the same __persistKey — i.e. a re-edit that superseded this object
+ * while its insert was in flight — so that re-edit becomes a harmless UPSERT
+ * instead of a second INSERT (duplicate-insert race).
+ *
+ * On success the preset_participant_drivers snapshot is reattached so
+ * savePreset's BUG-01 driver-sync loop skips this row. On ANY failure the
+ * snapshot is left absent (Save Preset is the documented retry path) and the
+ * preset is marked dirty so the close-guard warns.
+ */
+async function persistSingleParticipant(obj) {
+  try {
+    // If a prior in-flight insert for this same logical row already completed
+    // and propagated its id onto us, this resolves to an UPSERT.
+    const payload = buildParticipantSavePayload(obj);
+    const result = await window.api.invoke('supabase-upsert-preset-participant', {
+      presetId: currentPreset.id,
+      participant: payload
+    });
+    if (!result || !result.success) {
+      throw new Error((result && result.error) || 'Upsert failed');
+    }
+
+    const newId = result.data && result.data.id;
+    if (newId) {
+      obj.id = newId;
+      // Propagate to a superseding re-edit that's still waiting in the queue.
+      if (obj.__persistKey) {
+        participantsData.forEach(p => {
+          if (p !== obj && !p.id && p.__persistKey === obj.__persistKey) {
+            p.id = newId;
+          }
+        });
+      }
+    }
+
+    // Sync driver names into preset_participant_drivers (mirrors savePreset's
+    // BUG-01 loop). driverMeta is carried only when present (CSV/PDF merge).
+    const driverNames = (Array.isArray(obj.drivers) && obj.drivers.length > 0 && typeof obj.drivers[0] === 'string')
+      ? obj.drivers
+      : getDriverNamesFromParticipant(obj);
+    if (obj.id && driverNames.length > 0) {
+      const syncResult = await window.api.invoke('preset-driver-sync', {
+        participantId: obj.id,
+        driverNames: driverNames,
+        ...(Array.isArray(obj.driverMeta) ? { driverMeta: obj.driverMeta } : {})
+      });
+      if (syncResult && syncResult.success && Array.isArray(syncResult.drivers)) {
+        // Reattach the snapshot so savePreset's BUG-01 loop treats this row as
+        // already-current and skips the (now redundant) re-sync.
+        obj.preset_participant_drivers = syncResult.drivers;
+      }
+    }
+  } catch (err) {
+    console.warn('[Participants] Per-row persist failed (kept in session):', err);
+    presetHasUnpersistedChanges = true;
+    if (typeof showNotification === 'function') {
+      showNotification(
+        `Couldn't save #${obj.numero || '?'} — kept in this session. Save Preset will retry.`,
+        'warning'
+      );
+    }
+    // Leave the driver snapshot absent — Save Preset IS the retry path.
+  }
+}
+
+/**
+ * BUG-02 — reset the per-row persist state when a (different) preset is loaded
+ * into the editor. The fresh participantsData replaces every object reference,
+ * so any still-queued/in-flight task is skip-if-detached against the new array;
+ * we additionally drop the pending queue and clear the dirty flag so the new
+ * session starts clean.
+ */
+function resetParticipantPersistState() {
+  participantPersistQueue.length = 0;
+  presetHasUnpersistedChanges = false;
+}
+
+/**
  * Save participant edit
  * @param {boolean} closeAfterSave - Whether to close modal after save (default: true)
+ * @returns {Promise<boolean>} true on success, false if validation aborted the save
  */
 async function saveParticipantEdit(closeAfterSave = true) {
   const numero = document.getElementById('edit-numero').value.trim();
@@ -1001,13 +2242,17 @@ async function saveParticipantEdit(closeAfterSave = true) {
   // Validation: at least number OR driver name must be present
   // This allows Team Principal, VIP, mechanics without race numbers
   if (!numero && driversArray.length === 0) {
-    alert('Please enter a race number or at least one driver name.\n\nTeam Principal, VIP and mechanics can be added without a number if a name is provided.');
+    alert('Please enter a race number or at least one person name.\n\nTeam Principal, VIP and mechanics can be added without a number if a name is provided.');
     document.getElementById('edit-numero').focus();
-    return;
+    return false;
   }
 
   // Comma-separated for nome field (legacy compatibility)
   const nome = driversArray.join(', ');
+
+  // Get delivery_to_client_id if feature is enabled
+  const deliveryToSelect = document.getElementById('edit-delivery-to');
+  const deliveryToClientId = (deliveryFeatureEnabled && deliveryToSelect && deliveryToSelect.value) ? deliveryToSelect.value : null;
 
   const participant = {
     numero,
@@ -1015,12 +2260,33 @@ async function saveParticipantEdit(closeAfterSave = true) {
     drivers: driversArray, // Array of driver names for preset_participant_drivers
     categoria: document.getElementById('edit-categoria').value.trim(),
     squadra: document.getElementById('edit-squadra').value.trim(),
+    car_model: document.getElementById('edit-car-model').value.trim(),
     plate_number: document.getElementById('edit-plate-number').value.trim().toUpperCase(),
     sponsor: document.getElementById('edit-sponsor').value.trim(),
     metatag: document.getElementById('edit-metatag').value.trim(),
-    folder_1: document.getElementById('edit-folder-1').value,
-    folder_2: document.getElementById('edit-folder-2').value,
-    folder_3: document.getElementById('edit-folder-3').value
+    // 1.2.0 — canonical folders[] from the chip editor. The DB layer
+    // (savePresetParticipantsSupabase) dual-writes the first three into
+    // folder_1/2/3 + folder_*_path automatically, so we don't set those
+    // fields here. Empty array is fine.
+    folders: editingParticipantFolders.map(f => ({
+      name: f.name,
+      ...(f.path ? { path: f.path } : {})
+    })),
+    // 1.2.0 — per-participant additive-default flag. Default true when
+    // the checkbox is missing from the DOM (defensive).
+    include_default_folder: (() => {
+      const chk = document.getElementById('edit-include-default-folder');
+      return chk ? !!chk.checked : true;
+    })(),
+    // Keep these explicitly cleared so the dual-write at the DB layer is
+    // the only source of truth for the legacy slots.
+    folder_1: null,
+    folder_2: null,
+    folder_3: null,
+    folder_1_path: null,
+    folder_2_path: null,
+    folder_3_path: null,
+    delivery_to_client_id: deliveryToClientId
   };
 
   // Salva il numero per lo scroll successivo
@@ -1032,18 +2298,37 @@ async function saveParticipantEdit(closeAfterSave = true) {
   // Check if this is a new participant (no existing ID)
   const isNewParticipant = editingRowIndex === -1 || !participantsData[editingRowIndex]?.id;
 
+  // BUG-02 — capture the pre-replacement object so we can (a) detect an
+  // unchanged row (skip the persist + carry its driver snapshot forward) and
+  // (b) carry the __persistKey across the replacement (links a re-edit to its
+  // still-in-flight insert so the returned id propagates and we never double-
+  // create the row).
+  const previousParticipant = editingRowIndex >= 0 ? participantsData[editingRowIndex] : null;
+  let savedObjectRef;
+
   if (editingRowIndex === -1) {
     // Add new participant
+    participant.__persistKey = ++participantPersistKeyCounter;
     participantsData.push(participant);
     editingRowIndex = participantsData.length - 1; // Update index to new position
+    savedObjectRef = participant;
   } else {
     // Update existing participant - preserve ID if exists
     const existingId = participantsData[editingRowIndex]?.id;
-    participantsData[editingRowIndex] = { ...participant, id: existingId };
+    const replacement = { ...participant, id: existingId };
+    replacement.__persistKey = previousParticipant?.__persistKey || (++participantPersistKeyCounter);
+    participantsData[editingRowIndex] = replacement;
+    savedObjectRef = replacement;
   }
 
   // Refresh table display
   loadParticipantsIntoTable(participantsData);
+
+  // 1.2.0 — keep the global "Personalize your Folder Organization"
+  // section in sync with the chip area. A new folder created inside
+  // the participant modal must show up immediately in the unified
+  // preset-level view.
+  renderCustomFolders();
 
   // Ri-applica l'ordinamento salvato
   if (sortState) {
@@ -1053,11 +2338,36 @@ async function saveParticipantEdit(closeAfterSave = true) {
   // Scorri al pilota modificato dopo un breve delay per permettere il re-render
   setTimeout(() => scrollToParticipant(participantNumero), 150);
 
+  // BUG-02 — persist this row to the DB immediately (async, non-blocking).
+  // Gated on an existing preset id (a brand-new, not-yet-created preset has
+  // nothing to upsert into) and a writable (non read-only) editor. This single
+  // hook covers Save Changes / Save & Next / Save & Previous uniformly.
+  if (currentPreset?.id && !isPresetEditorReadOnly()) {
+    // Skip-if-unchanged: a pure review walk (open → Save & Next without editing)
+    // must cost 0 round-trips. When the persisted fields are identical, carry
+    // the previous driver-rows snapshot across the replacement so savePreset's
+    // BUG-01 loop also skips re-syncing this untouched row.
+    const unchanged = !!previousParticipant
+      && !!previousParticipant.id
+      && participantPersistedFieldsEqual(previousParticipant, savedObjectRef);
+    if (unchanged) {
+      if (Array.isArray(previousParticipant.preset_participant_drivers)) {
+        savedObjectRef.preset_participant_drivers = previousParticipant.preset_participant_drivers;
+      }
+    } else {
+      enqueueParticipantPersist(savedObjectRef);
+    }
+  } else if (currentPreset && !currentPreset.id) {
+    // Brand-new preset not yet created → nothing to upsert into. Keep in memory;
+    // Save Preset creates the preset and all rows. Mark dirty for the close-guard.
+    presetHasUnpersistedChanges = true;
+  }
+
   if (closeAfterSave) {
     closeParticipantEditModal();
   } else {
     // Update save button to show saved state
-    const saveBtn = document.querySelector('#participant-edit-modal .btn-primary');
+    const saveBtn = document.getElementById('save-changes-btn');
     if (saveBtn) {
       const originalText = saveBtn.innerHTML;
       saveBtn.innerHTML = '✓ Saved';
@@ -1068,6 +2378,8 @@ async function saveParticipantEdit(closeAfterSave = true) {
       }, 1500);
     }
   }
+
+  return true;
 }
 
 /**
@@ -1083,6 +2395,14 @@ async function saveParticipantAndStay() {
   }
 
   try {
+    // BUG-02 — same drain as savePreset: await any in-flight per-row write so its
+    // id write-back lands before this full save, and drop the pending queue (this
+    // bulk save covers every row). Defensive: the face flow is disabled app-wide.
+    participantPersistQueue.length = 0;
+    if (participantPersistInFlight) {
+      try { await participantPersistInFlight; } catch (_) { /* failure already toasted */ }
+    }
+
     // Get current user ID for face photos
     let currentUserId = null;
     const sessionResult = await window.api.invoke('auth-get-session');
@@ -1102,11 +2422,17 @@ async function saveParticipantAndStay() {
       folder_1: p.folder_1 || '',
       folder_2: p.folder_2 || '',
       folder_3: p.folder_3 || '',
-      folder_1_path: p.folder_1_path || getFolderPath(p.folder_1),
-      folder_2_path: p.folder_2_path || getFolderPath(p.folder_2),
-      folder_3_path: p.folder_3_path || getFolderPath(p.folder_3),
+      folder_1_path: getFolderPath(p.folder_1) || p.folder_1_path || '',
+      folder_2_path: getFolderPath(p.folder_2) || p.folder_2_path || '',
+      folder_3_path: getFolderPath(p.folder_3) || p.folder_3_path || '',
       sort_order: index
     }));
+
+    showPresetSaveOverlay({
+      presetId: currentPreset.id,
+      title: 'Saving participant…',
+      message: 'Preparing data…'
+    });
 
     const saveResponse = await window.api.invoke('supabase-save-preset-participants', {
       presetId: currentPreset.id,
@@ -1144,43 +2470,186 @@ async function saveParticipantAndStay() {
             await driverFaceManagerMulti.waitForSync();
             console.log('[Participants] ✅ Driver sync complete, IDs ready for photo upload');
           }
-
-          showNotification('Participant saved! You can now add face photos.', 'success');
         } else if (typeof presetFaceManager !== 'undefined') {
           // Fallback to old face manager if driver manager not available
           await presetFaceManager.loadPhotos(savedParticipant.id, currentPreset.id, currentUserId, isOfficial);
-          showNotification('Participant saved! You can now add face photos.', 'success');
         }
       }
     }
 
-    // Refresh table with new IDs
+    // Refresh table with new IDs, preserving sort
+    const sortState = getCurrentSortState();
     loadParticipantsIntoTable(participantsData);
+    if (sortState) {
+      applySortState(sortState);
+    }
+
+    showPresetSaveSuccess('Participant saved. You can now add face photos.');
 
   } catch (error) {
     console.error('[Participants] Error saving participant for face photos:', error);
-    showNotification('Error saving: ' + error.message, 'error');
+    showPresetSaveError(getErrorMessage(error));
   }
 }
 
 /**
- * Get current sort state from table headers
- * @returns {Object|null} Sort state with columnIndex and direction
+ * BUG-02 fix — walk to the next/previous row that is actually VISIBLE,
+ * skipping rows hidden by the visibility filter (display:none). Plain
+ * nextElementSibling/previousElementSibling stops on (or steps into) hidden
+ * rows, which made "Save & Next" hit a phantom "Reached the last participant"
+ * long before the real end when any filter/search was active.
+ */
+function nextVisibleRow(row) {
+  let r = row?.nextElementSibling;
+  while (r && r.style && r.style.display === 'none') r = r.nextElementSibling;
+  return r || null;
+}
+function previousVisibleRow(row) {
+  let r = row?.previousElementSibling;
+  while (r && r.style && r.style.display === 'none') r = r.previousElementSibling;
+  return r || null;
+}
+
+/**
+ * Save participant and open the next one in the table's current visible order.
+ * Uses the next VISIBLE row so sort/filter state is respected.
+ * Closes the modal with a notification when the saved row is the last one.
+ */
+async function saveParticipantEditAndNext() {
+  const saved = await saveParticipantEdit(false);
+  if (!saved) return;
+
+  const currentRow = document.querySelector(
+    `#participants-tbody tr[data-original-index="${editingRowIndex}"]`
+  );
+  const nextRow = nextVisibleRow(currentRow);
+  const nextIndexAttr = nextRow?.getAttribute('data-original-index');
+  const nextIndex = nextIndexAttr !== null && nextIndexAttr !== undefined
+    ? parseInt(nextIndexAttr, 10)
+    : NaN;
+
+  if (Number.isFinite(nextIndex) && participantsData[nextIndex]) {
+    await openParticipantEditModal(nextIndex);
+  } else {
+    closeParticipantEditModal();
+    if (typeof showNotification === 'function') {
+      showNotification('Reached the last participant', 'info');
+    }
+  }
+}
+
+window.saveParticipantEditAndNext = saveParticipantEditAndNext;
+
+/**
+ * Mirror of saveParticipantEditAndNext that walks BACKWARDS through the
+ * table's currently visible order. Uses DOM previousElementSibling so
+ * sort/filter state is respected — never relies on participantsData
+ * indexing because that's the import order, not what the user sees.
+ * Closes the modal with an informational toast when the saved row is
+ * the first one.
+ */
+async function saveParticipantEditAndPrevious() {
+  const saved = await saveParticipantEdit(false);
+  if (!saved) return;
+
+  const currentRow = document.querySelector(
+    `#participants-tbody tr[data-original-index="${editingRowIndex}"]`
+  );
+  const prevRow = previousVisibleRow(currentRow);
+  const prevIndexAttr = prevRow?.getAttribute('data-original-index');
+  const prevIndex = prevIndexAttr !== null && prevIndexAttr !== undefined
+    ? parseInt(prevIndexAttr, 10)
+    : NaN;
+
+  if (Number.isFinite(prevIndex) && participantsData[prevIndex]) {
+    await openParticipantEditModal(prevIndex);
+  } else {
+    closeParticipantEditModal();
+    if (typeof showNotification === 'function') {
+      showNotification('Reached the first participant', 'info');
+    }
+  }
+}
+
+window.saveParticipantEditAndPrevious = saveParticipantEditAndPrevious;
+
+/**
+ * Toggle the "Save & Next" button's enabled state based on whether
+ * the given row has a visible successor in the table.
+ */
+function updateSaveAndNextAvailability(rowIndex) {
+  const btn = document.getElementById('save-and-next-btn');
+  if (!btn) return;
+  if (rowIndex < 0) {
+    btn.disabled = false;
+    btn.title = '';
+    return;
+  }
+  const currentRow = document.querySelector(
+    `#participants-tbody tr[data-original-index="${rowIndex}"]`
+  );
+  const hasNext = !!nextVisibleRow(currentRow);
+  btn.disabled = !hasNext;
+  btn.title = hasNext ? '' : 'No more participants below';
+}
+
+/**
+ * Toggle the "Save & Previous" button's enabled state based on whether
+ * the given row has a visible predecessor in the table. Mirror of
+ * updateSaveAndNextAvailability above — kept as a separate function so
+ * each button has a single source of truth for its disabled/title
+ * state (no accidental coupling if one of the two flows is changed
+ * later).
+ */
+function updateSaveAndPreviousAvailability(rowIndex) {
+  const btn = document.getElementById('save-and-prev-btn');
+  if (!btn) return;
+  if (rowIndex < 0) {
+    btn.disabled = false;
+    btn.title = '';
+    return;
+  }
+  const currentRow = document.querySelector(
+    `#participants-tbody tr[data-original-index="${rowIndex}"]`
+  );
+  const hasPrev = !!previousVisibleRow(currentRow);
+  btn.disabled = !hasPrev;
+  btn.title = hasPrev ? '' : 'No participants above';
+}
+
+/**
+ * Get current sort state from table headers.
+ * Checks both custom classes (asc/desc) and sortable.js classes (dir-u/dir-d).
+ * @returns {Object} Sort state with columnIndex and direction
  */
 function getCurrentSortState() {
-  const sortedHeader = document.querySelector('#participants-table th.asc, #participants-table th.desc');
-  if (sortedHeader) {
+  // Check sortable.js classes first (set by user clicking headers)
+  const sortableHeader = document.querySelector('#participants-table th.dir-u, #participants-table th.dir-d');
+  if (sortableHeader) {
     return {
-      columnIndex: sortedHeader.cellIndex,
-      direction: sortedHeader.classList.contains('asc') ? 'asc' : 'desc'
+      columnIndex: sortableHeader.cellIndex,
+      direction: sortableHeader.classList.contains('dir-u') ? 'asc' : 'desc'
     };
   }
-  // Default: ordina per numero (prima colonna) in ordine crescente
-  return { columnIndex: 0, direction: 'asc' };
+  // Then check custom classes (set by applySortState)
+  const customHeader = document.querySelector('#participants-table th.asc, #participants-table th.desc');
+  if (customHeader) {
+    return {
+      columnIndex: customHeader.cellIndex,
+      direction: customHeader.classList.contains('asc') ? 'asc' : 'desc'
+    };
+  }
+  // Default: ordina per numero in ordine crescente.
+  // BUG-02 fix — la colonna 0 è la checkbox di selezione (no-sort), la 1 è
+  // "Active": la colonna "Num" è la 2. Prima il default 0 ri-ordinava per
+  // stato di selezione ad ogni salvataggio, rimescolando le righe.
+  return { columnIndex: 2, direction: 'asc' };
 }
 
 /**
- * Apply saved sort state to table
+ * Apply saved sort state to table.
+ * Sets both sortable.js classes (dir-u/dir-d) and custom classes (asc/desc)
+ * so that both systems stay in sync.
  * @param {Object} state - Sort state with columnIndex and direction
  */
 function applySortState(state) {
@@ -1193,9 +2662,9 @@ function applySortState(state) {
   const header = headers[state.columnIndex];
   if (!header) return;
 
-  // Prima rimuovi le classi di ordinamento da tutti gli header
+  // Rimuovi tutte le classi di ordinamento da tutti gli header
   headers.forEach(h => {
-    h.classList.remove('asc', 'desc');
+    h.classList.remove('asc', 'desc', 'dir-u', 'dir-d');
   });
 
   // Ordina i dati manualmente
@@ -1230,9 +2699,55 @@ function applySortState(state) {
   // Ricostruisci il tbody con le righe ordinate
   rows.forEach(row => tbody.appendChild(row));
 
-  // Aggiungi la classe di ordinamento all'header
-  header.classList.add(state.direction);
+  // Aggiungi le classi di ordinamento (entrambi i formati)
+  header.classList.add(state.direction); // asc/desc per il nostro codice
+  header.classList.add(state.direction === 'asc' ? 'dir-u' : 'dir-d'); // dir-u/dir-d per sortable.js
 }
+
+/**
+ * Save sort preference to localStorage for the current preset.
+ * Uses preset ID as key so each preset remembers its own sort order.
+ */
+function saveSortPreference() {
+  if (!currentPreset?.id) return;
+  const state = getCurrentSortState();
+  try {
+    localStorage.setItem(`preset-sort-${currentPreset.id}`, JSON.stringify(state));
+  } catch (e) {
+    // Silently ignore storage errors
+  }
+}
+
+/**
+ * Load sort preference from localStorage for a given preset.
+ * @param {string} presetId - The preset ID
+ * @returns {Object} Sort state with columnIndex and direction (defaults to col 2 = Num, asc)
+ */
+function loadSortPreference(presetId) {
+  try {
+    const saved = localStorage.getItem(`preset-sort-${presetId}`);
+    if (saved) {
+      const state = JSON.parse(saved);
+      if (typeof state.columnIndex === 'number' && (state.direction === 'asc' || state.direction === 'desc')) {
+        return state;
+      }
+    }
+  } catch (e) {
+    // Silently ignore parse errors
+  }
+  // No saved preference (e.g. the very first open): default to Num (col 2)
+  // ascending. col 0 = selection checkbox, col 1 = Active.
+  return { columnIndex: 2, direction: 'asc' };
+}
+
+// Listen for sortable.js header clicks to persist sort preference.
+// Uses event delegation so it works with dynamically loaded pages.
+document.addEventListener('click', function(e) {
+  const th = e.target.closest('#participants-table th');
+  if (!th || th.classList.contains('no-sort')) return;
+  // sortable.js runs synchronously on the same click, so defer to next tick
+  setTimeout(saveSortPreference, 0);
+});
 
 /**
  * Scroll to a participant row and highlight it
@@ -1259,36 +2774,128 @@ function scrollToParticipant(numero) {
 }
 
 /**
- * Remove a custom folder
+ * 1.2.0 — Count how many participants currently reference a folder
+ * by name (case-insensitive). Looks at both folders[] and the legacy
+ * folder_1/2/3 slots. Used to surface "this affects N participants"
+ * confirmations on rename / remove.
  */
-function removeCustomFolder(folderName) {
-  const index = customFolders.findIndex(f => (typeof f === 'string' ? f : f.name) === folderName);
-  if (index > -1) {
-    customFolders.splice(index, 1);
-    renderCustomFolders();
-    updateFolderSelects();
+function countParticipantsUsingFolder(folderName) {
+  const target = (folderName || '').trim().toLowerCase();
+  if (!target) return 0;
+  let count = 0;
+  for (const p of (participantsData || [])) {
+    let matched = false;
+    if (Array.isArray(p?.folders)) {
+      for (const f of p.folders) {
+        if (f?.name && f.name.trim().toLowerCase() === target) { matched = true; break; }
+      }
+    }
+    if (!matched) {
+      if ((p?.folder_1 || '').trim().toLowerCase() === target) matched = true;
+      else if ((p?.folder_2 || '').trim().toLowerCase() === target) matched = true;
+      else if ((p?.folder_3 || '').trim().toLowerCase() === target) matched = true;
+    }
+    if (matched) count++;
   }
+  return count;
 }
 
 /**
- * Edit a custom folder name
+ * Remove a folder from EVERYWHERE — preset-global list AND every
+ * participant's folders[] AND legacy folder_1/2/3 slots. Asks for
+ * confirmation when participants are affected so the user knows the
+ * blast radius.
  */
-let editingFolderIndex = -1;
+function removeCustomFolder(folderName) {
+  const target = (folderName || '').trim();
+  if (!target) return;
+  const targetLower = target.toLowerCase();
 
-function editCustomFolder(index) {
-  if (index < 0 || index >= customFolders.length) {
-    return;
+  const usageCount = countParticipantsUsingFolder(target);
+  if (usageCount > 0) {
+    const ok = confirm(
+      `Remove "${target}"?\n\n` +
+      `This folder is used by ${usageCount} participant${usageCount === 1 ? '' : 's'}. ` +
+      `Removing it here will also remove it from each of them.`
+    );
+    if (!ok) return;
   }
 
-  editingFolderIndex = index;
-  const folder = customFolders[index];
-  const oldFolderName = typeof folder === 'string' ? folder : folder.name;
-  const oldFolderPath = typeof folder === 'string' ? '' : (folder.path || '');
+  // 1. Remove from preset-global legacy list (if present).
+  const idx = customFolders.findIndex(f => getFolderDisplayName(f).toLowerCase() === targetLower);
+  if (idx > -1) customFolders.splice(idx, 1);
+
+  // 2. Remove from every participant's folders[] and legacy slots.
+  participantsData.forEach(p => {
+    if (Array.isArray(p?.folders)) {
+      p.folders = p.folders.filter(f => !f?.name || f.name.trim().toLowerCase() !== targetLower);
+    }
+    if ((p?.folder_1 || '').trim().toLowerCase() === targetLower) {
+      p.folder_1 = ''; p.folder_1_path = '';
+    }
+    if ((p?.folder_2 || '').trim().toLowerCase() === targetLower) {
+      p.folder_2 = ''; p.folder_2_path = '';
+    }
+    if ((p?.folder_3 || '').trim().toLowerCase() === targetLower) {
+      p.folder_3 = ''; p.folder_3_path = '';
+    }
+  });
+
+  renderCustomFolders();
+  updateFolderSelects();
+  loadParticipantsIntoTable(participantsData);
+  if (openSidePanel?.kind === 'assign') renderAssignSidePanel();
+}
+
+/**
+ * 1.2.0 — Edit a folder by NAME (not by index). The folder may exist
+ * only at preset-level, only on participants, or both — this function
+ * doesn't care: it pre-fills the modal with the current name+path,
+ * and saveEditedFolderName() propagates the change everywhere.
+ */
+let editingFolderOriginalName = null;
+
+function editCustomFolder(folderNameOrLegacyIndex) {
+  // Backward-compatibility: some chip onclick handlers still pass an
+  // index into customFolders. Resolve to a name first.
+  let oldFolderName, oldFolderPath;
+  if (typeof folderNameOrLegacyIndex === 'number') {
+    const idx = folderNameOrLegacyIndex;
+    if (idx < 0 || idx >= customFolders.length) return;
+    const folder = customFolders[idx];
+    oldFolderName = getFolderDisplayName(folder);
+    oldFolderPath = typeof folder === 'string' ? '' : (folder.path || '');
+  } else {
+    oldFolderName = (folderNameOrLegacyIndex || '').trim();
+    if (!oldFolderName) return;
+    // Try to find the canonical {name, path} from any source.
+    const targetLower = oldFolderName.toLowerCase();
+    const fromPreset = customFolders.find(f => getFolderDisplayName(f).toLowerCase() === targetLower);
+    if (fromPreset && typeof fromPreset === 'object') {
+      oldFolderPath = fromPreset.path || '';
+    } else {
+      // Look in participants for a path on this folder name.
+      oldFolderPath = '';
+      outer:
+      for (const p of (participantsData || [])) {
+        if (Array.isArray(p?.folders)) {
+          for (const f of p.folders) {
+            if (f?.name && f.name.trim().toLowerCase() === targetLower && f.path) {
+              oldFolderPath = f.path;
+              break outer;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  editingFolderOriginalName = oldFolderName;
 
   // Open modal and populate with current name and path
   document.getElementById('edit-folder-name-input').value = oldFolderName;
   const pathInput = document.getElementById('edit-folder-path-input');
-  if (pathInput) pathInput.value = oldFolderPath;
+  if (pathInput) pathInput.value = oldFolderPath || '';
   document.getElementById('edit-folder-modal').classList.add('show');
 
   // Focus on input
@@ -1301,7 +2908,7 @@ function editCustomFolder(index) {
 
 function closeEditFolderModal() {
   document.getElementById('edit-folder-modal').classList.remove('show');
-  editingFolderIndex = -1;
+  editingFolderOriginalName = null;
 }
 
 /**
@@ -1326,8 +2933,26 @@ async function browseFolderPath() {
     title: 'Select Destination Folder'
   });
   if (result && result.filePaths && result.filePaths.length > 0) {
+    const chosenPath = result.filePaths[0];
     const pathInput = document.getElementById('folder-path-input');
-    if (pathInput) pathInput.value = result.filePaths[0];
+    if (pathInput) pathInput.value = chosenPath;
+
+    // 1.2.0 — auto-fill the name field with the basename of the chosen
+    // folder when the user hasn't typed anything yet. Saves them from
+    // having to repeat the same string twice.
+    const nameInput = document.getElementById('folder-name-input');
+    if (nameInput && !nameInput.value.trim()) {
+      // Take the last non-empty segment from the path. Works for both
+      // POSIX (/foo/bar) and Windows-style (C:\foo\bar) separators.
+      const segments = chosenPath.split(/[\\/]/).filter(s => s.length > 0);
+      const basename = segments.length > 0 ? segments[segments.length - 1] : '';
+      if (basename) nameInput.value = basename;
+    }
+
+    // Also save to localStorage for this device.
+    if (nameInput && nameInput.value.trim() && currentPreset && currentPreset.id) {
+      updateLocalFolderPath(currentPreset.id, nameInput.value.trim(), chosenPath);
+    }
   }
 }
 
@@ -1350,6 +2975,11 @@ async function browseEditFolderPath() {
   if (result && result.filePaths && result.filePaths.length > 0) {
     const pathInput = document.getElementById('edit-folder-path-input');
     if (pathInput) pathInput.value = result.filePaths[0];
+    // Also save to localStorage for this device
+    const nameInput = document.getElementById('edit-folder-name-input');
+    if (nameInput && nameInput.value.trim() && currentPreset && currentPreset.id) {
+      updateLocalFolderPath(currentPreset.id, nameInput.value.trim(), result.filePaths[0]);
+    }
   }
 }
 
@@ -1366,112 +2996,621 @@ function clearEditFolderPath() {
  */
 function getFolderPath(folderName) {
   if (!folderName) return '';
-  const folder = customFolders.find(f => (typeof f === 'string' ? f : f.name) === folderName);
+  // Priority: localStorage (per-device) > customFolders array (from DB)
+  if (currentPreset && currentPreset.id) {
+    const localPaths = getLocalFolderPaths(currentPreset.id);
+    if (localPaths[folderName]) return localPaths[folderName];
+  }
+  const folder = customFolders.find(f => (getFolderDisplayName(f)) === folderName);
   if (!folder || typeof folder === 'string') return '';
   return folder.path || '';
 }
 
+// ==================== LOCAL FOLDER PATHS (per-device) ====================
+
+/**
+ * Get folder paths from localStorage for a given preset.
+ * Returns object: { folderName: absolutePath, ... }
+ */
+function getLocalFolderPaths(presetId) {
+  if (!presetId) return {};
+  try {
+    const stored = localStorage.getItem(`racetagger-folder-paths-${presetId}`);
+    return stored ? JSON.parse(stored) : {};
+  } catch (e) {
+    console.warn('[Participants] Error reading local folder paths:', e);
+    return {};
+  }
+}
+
+/**
+ * Save folder paths to localStorage for a given preset.
+ */
+function setLocalFolderPaths(presetId, pathsObj) {
+  if (!presetId) return;
+  try {
+    localStorage.setItem(`racetagger-folder-paths-${presetId}`, JSON.stringify(pathsObj));
+  } catch (e) {
+    console.warn('[Participants] Error saving local folder paths:', e);
+  }
+}
+
+/**
+ * Update a single folder path in localStorage for a given preset.
+ */
+function updateLocalFolderPath(presetId, folderName, folderPath) {
+  if (!presetId || !folderName) return;
+  const paths = getLocalFolderPaths(presetId);
+  if (folderPath) {
+    paths[folderName] = folderPath;
+  } else {
+    delete paths[folderName];
+  }
+  setLocalFolderPaths(presetId, paths);
+}
+
+// ==================== FOLDER PATH VALIDATION ====================
+
+/**
+ * Validate folder paths for preset cards. Adds warning badges to cards with invalid paths.
+ */
+async function validatePresetFolderPaths(presets) {
+  for (const preset of presets) {
+    const folders = preset.custom_folders || [];
+    if (folders.length === 0) continue;
+
+    // Collect all folder paths (localStorage priority, then DB) while keeping
+    // a reverse map so we can show the folder NAME (not just the path) in the
+    // warning banner — users want to know "which folders" are broken, not have
+    // to read through full paths.
+    const localPaths = getLocalFolderPaths(preset.id);
+    const pathToName = new Map();
+    const pathsToCheck = [];
+    for (const f of folders) {
+      const name = (typeof f === 'object' && f !== null) ? (f.name || f) : f;
+      const dbPath = (typeof f === 'object' && f !== null) ? (f.path || '') : '';
+      const resolvedPath = localPaths[name] || dbPath;
+      if (resolvedPath) {
+        pathsToCheck.push(resolvedPath);
+        if (!pathToName.has(resolvedPath)) pathToName.set(resolvedPath, name);
+      }
+    }
+
+    if (pathsToCheck.length === 0) continue;
+
+    try {
+      const result = await window.api.invoke('validate-preset-folder-paths', { paths: pathsToCheck });
+      if (result.success && result.data && !result.data.valid) {
+        const invalidFolders = (result.data.invalidPaths || []).map(p => ({
+          name: pathToName.get(p) || '',
+          path: p
+        }));
+        markPresetCardInvalid(preset.id, invalidFolders);
+      }
+    } catch (e) {
+      console.warn('[Participants] Error validating folder paths for preset', preset.id, e);
+    }
+  }
+}
+
+/**
+ * HTML-escape a string for safe injection into innerHTML. Folder names and
+ * filesystem paths can in principle contain `<`, `&`, quotes, etc.
+ */
+function escapePresetWarningText(value) {
+  if (value == null) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Add a warning badge to a preset card with invalid folder paths.
+ * @param {string} presetId
+ * @param {Array<{name: string, path: string}>} invalidFolders
+ */
+function markPresetCardInvalid(presetId, invalidFolders) {
+  const card = document.querySelector(`.preset-card[data-preset-id="${presetId}"]`);
+  if (!card) return;
+
+  // Backwards-compat: accept the legacy `string[]` shape too.
+  const folders = Array.isArray(invalidFolders)
+    ? invalidFolders.map(item => typeof item === 'string' ? { name: '', path: item } : item)
+    : [];
+  if (folders.length === 0) return;
+
+  card.classList.add('preset-paths-warning');
+
+  // Add warning banner below preset info
+  const existing = card.querySelector('.preset-path-warning');
+  if (existing) existing.remove();
+
+  const count = folders.length;
+  // Inline summary: show folder names so the user can spot the broken ones
+  // at a glance. Cap at 3 to keep the card compact; the rest live in the
+  // expandable details panel.
+  const INLINE_LIMIT = 3;
+  const named = folders.map(f => (f.name || f.path || '').trim()).filter(Boolean);
+  const namedHead = named.slice(0, INLINE_LIMIT);
+  const namedRest = named.length - namedHead.length;
+  const inlineNames = namedHead.length > 0
+    ? namedHead.map(n => `<span class="preset-path-warning__chip">${escapePresetWarningText(n)}</span>`).join(' ')
+      + (namedRest > 0 ? ` <span class="preset-path-warning__chip preset-path-warning__chip--more">+${namedRest} more</span>` : '')
+    : '';
+
+  const detailsItems = folders.map(f => {
+    const safeName = escapePresetWarningText(f.name || '');
+    return `
+    <li class="preset-path-warning__item">
+      <div class="preset-path-warning__item-info">
+        <span class="preset-path-warning__name">${escapePresetWarningText(f.name || '(unnamed folder)')}</span>
+        <code class="preset-path-warning__path">${escapePresetWarningText(f.path || '')}</code>
+      </div>
+      ${f.name ? `<button type="button" class="preset-path-warning__locate" data-folder-name="${safeName}" title="Pick the folder's current location on this device">
+        <span aria-hidden="true">&#128194;</span> Locate&hellip;
+      </button>` : ''}
+    </li>
+  `;
+  }).join('');
+
+  const warning = document.createElement('div');
+  warning.className = 'preset-path-warning';
+  warning.innerHTML = `
+    <div class="preset-path-warning__head">
+      <span class="warning-icon" aria-hidden="true">&#9888;</span>
+      <span class="preset-path-warning__summary">
+        <strong>${count} folder path${count > 1 ? 's' : ''} not found on this device${inlineNames ? ':' : ''}</strong>
+        ${inlineNames}
+      </span>
+      <button type="button" class="preset-path-warning__toggle" aria-expanded="false" title="Show full paths">
+        <span class="preset-path-warning__toggle-icon" aria-hidden="true">&#9662;</span>
+        <span class="preset-path-warning__toggle-text">Details</span>
+      </button>
+    </div>
+    <ul class="preset-path-warning__details" hidden>${detailsItems}</ul>
+  `;
+
+  // Toggle the details panel. Stop propagation so clicks here don't trigger
+  // any "open preset" handler attached higher up on the card.
+  const toggleBtn = warning.querySelector('.preset-path-warning__toggle');
+  const detailsPanel = warning.querySelector('.preset-path-warning__details');
+  if (toggleBtn && detailsPanel) {
+    toggleBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const expanded = toggleBtn.getAttribute('aria-expanded') === 'true';
+      toggleBtn.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+      detailsPanel.hidden = expanded;
+      const icon = toggleBtn.querySelector('.preset-path-warning__toggle-icon');
+      if (icon) icon.innerHTML = expanded ? '&#9662;' : '&#9652;';
+    });
+  }
+
+  // Inline "Locate…" action: opens the OS folder picker and stores the
+  // chosen path as a device-specific override (via updateLocalFolderPath,
+  // same mechanism the Edit Folder modal uses). After a successful pick we
+  // re-render the warning with the remaining unresolved folders so the user
+  // gets immediate visual confirmation. The DB-stored path is left untouched
+  // — that one might still be correct on another machine.
+  warning.querySelectorAll('.preset-path-warning__locate').forEach((btn) => {
+    btn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      const folderName = btn.dataset.folderName || '';
+      if (!folderName) return;
+      btn.disabled = true;
+      try {
+        const result = await window.api.invoke('dialog-show-open', {
+          properties: ['openDirectory'],
+          title: `Locate folder "${folderName}"`
+        });
+        const newPath = result && result.filePaths && result.filePaths[0];
+        if (!newPath) return; // user cancelled
+        updateLocalFolderPath(presetId, folderName, newPath);
+        // If we're currently editing this very preset, refresh the chips so
+        // the path badge updates without a full reload.
+        if (typeof currentPreset === 'object' && currentPreset && currentPreset.id === presetId
+          && typeof renderCustomFolders === 'function') {
+          try { renderCustomFolders(); } catch (_) { /* non-fatal */ }
+        }
+        // Re-render warning with remaining unresolved folders. Toggle keeps
+        // its open/closed state on every re-render? — no, we always start
+        // collapsed; that's fine, the resolved one is gone.
+        const remaining = folders.filter(f => (f.name || '') !== folderName);
+        if (remaining.length === 0) {
+          card.classList.remove('preset-paths-warning');
+          warning.remove();
+        } else {
+          markPresetCardInvalid(presetId, remaining);
+        }
+      } catch (e) {
+        console.warn('[Participants] Locate folder failed:', e);
+        if (typeof showNotification === 'function') {
+          showNotification(`Could not relocate "${folderName}": ${e && e.message ? e.message : e}`, 'error');
+        }
+      } finally {
+        // Button may already be detached (re-render); guard the access.
+        try { btn.disabled = false; } catch (_) { /* element detached */ }
+      }
+    });
+  });
+
+  // Tooltip fallback: native `title` keeps working for keyboard users and
+  // copy-paste from screen readers when the panel is collapsed.
+  warning.title = folders
+    .map(f => f.name ? `${f.name} — ${f.path}` : f.path)
+    .join('\n');
+
+  // Insert after preset-info section
+  const presetInfo = card.querySelector('.preset-info') || card.querySelector('.preset-actions');
+  if (presetInfo) {
+    presetInfo.parentNode.insertBefore(warning, presetInfo.nextSibling);
+  } else {
+    card.appendChild(warning);
+  }
+}
+
+/**
+ * 1.2.0 — Save the edited folder. Identified by `editingFolderOriginalName`
+ * (set by editCustomFolder), the change propagates to:
+ *   - the preset-global customFolders list (if the entry was there)
+ *   - every participant's folders[] that referenced the old name
+ *   - every participant's legacy folder_1/2/3 slots that still hold it
+ *
+ * Asks for confirmation if the rename would affect more than zero
+ * participants, so the user is aware of the blast radius. A merge case
+ * is rejected explicitly: if the new name collides with another
+ * existing folder (case-insensitive), we stop and tell the user — they
+ * should instead remove the duplicate first.
+ */
 function saveEditedFolderName() {
-  if (editingFolderIndex < 0 || editingFolderIndex >= customFolders.length) {
+  const oldFolderName = (editingFolderOriginalName || '').trim();
+  if (!oldFolderName) {
+    closeEditFolderModal();
     return;
   }
 
   const newFolderName = document.getElementById('edit-folder-name-input').value.trim();
-
   if (!newFolderName) {
     alert('Folder name cannot be empty!');
     document.getElementById('edit-folder-name-input').focus();
     return;
   }
 
-  const oldFolder = customFolders[editingFolderIndex];
-  const oldFolderName = typeof oldFolder === 'string' ? oldFolder : oldFolder.name;
+  const oldLower = oldFolderName.toLowerCase();
+  const newLower = newFolderName.toLowerCase();
+  const isRename = oldLower !== newLower;
 
-  // Check if the new name already exists (and it's not the same folder)
-  if (customFolders.some(f => (typeof f === 'string' ? f : f.name) === newFolderName) && newFolderName !== oldFolderName) {
-    alert('A folder with this name already exists!');
-    document.getElementById('edit-folder-name-input').focus();
-    return;
+  // Reject collisions with another folder (rename case only). We don't
+  // attempt a silent merge — that would lose the path of one of the two.
+  if (isRename) {
+    const collisionInPreset = customFolders.some(
+      f => getFolderDisplayName(f).toLowerCase() === newLower
+    );
+    const collisionInParticipants = (participantsData || []).some(p => {
+      if (Array.isArray(p?.folders) && p.folders.some(f => f?.name && f.name.trim().toLowerCase() === newLower)) return true;
+      if ((p?.folder_1 || '').trim().toLowerCase() === newLower) return true;
+      if ((p?.folder_2 || '').trim().toLowerCase() === newLower) return true;
+      if ((p?.folder_3 || '').trim().toLowerCase() === newLower) return true;
+      return false;
+    });
+    if (collisionInPreset || collisionInParticipants) {
+      alert(
+        `A folder named "${newFolderName}" already exists in this preset. ` +
+        `Pick a different name, or remove the duplicate first if you want to merge them.`
+      );
+      document.getElementById('edit-folder-name-input').focus();
+      return;
+    }
   }
 
   // Read optional path
   const pathInput = document.getElementById('edit-folder-path-input');
   const newFolderPath = pathInput ? pathInput.value.trim() : '';
 
-  // Update folder as object
+  // Confirm if the change touches participants. Skip the prompt if
+  // nothing is going to change semantically (same name, same path).
+  const usageCount = countParticipantsUsingFolder(oldFolderName);
+  const pathChanged = (() => {
+    // Compare with current path stored on the preset-global entry, if any.
+    const presetEntry = customFolders.find(f => getFolderDisplayName(f).toLowerCase() === oldLower);
+    const oldPath = (presetEntry && typeof presetEntry === 'object') ? (presetEntry.path || '') : '';
+    return oldPath !== newFolderPath;
+  })();
+  if (usageCount > 0 && (isRename || pathChanged)) {
+    const verb = isRename ? `Renaming "${oldFolderName}" to "${newFolderName}"` : `Updating the path of "${oldFolderName}"`;
+    const ok = confirm(
+      `${verb} will update ${usageCount} participant${usageCount === 1 ? '' : 's'} that ` +
+      `currently use${usageCount === 1 ? 's' : ''} this folder. Proceed?`
+    );
+    if (!ok) return;
+  }
+
   const updatedFolder = { name: newFolderName };
   if (newFolderPath) updatedFolder.path = newFolderPath;
-  customFolders[editingFolderIndex] = updatedFolder;
 
-  // Update all participants that have this folder assigned
-  participantsData.forEach(participant => {
-    if (participant.folder_1 === oldFolderName) {
-      participant.folder_1 = newFolderName;
+  // 1. Preset-global list: replace existing entry (if any), or insert.
+  const presetIdx = customFolders.findIndex(
+    f => getFolderDisplayName(f).toLowerCase() === oldLower
+  );
+  if (presetIdx > -1) {
+    customFolders[presetIdx] = updatedFolder;
+  }
+  // (We don't auto-insert into customFolders for participant-only
+  //  folders. The merged view in renderCustomFolders shows them either
+  //  way, and saving the preset persists them via participants.folders[].)
+
+  // 2. Every participant: rewrite folders[] entries that match, and
+  //    rewrite legacy slots so 1.1.4 dual-write stays in sync.
+  participantsData.forEach(p => {
+    if (Array.isArray(p?.folders)) {
+      p.folders = p.folders.map(f => {
+        if (f?.name && f.name.trim().toLowerCase() === oldLower) {
+          return { name: newFolderName, ...(newFolderPath ? { path: newFolderPath } : {}) };
+        }
+        return f;
+      });
     }
-    if (participant.folder_2 === oldFolderName) {
-      participant.folder_2 = newFolderName;
+    if ((p?.folder_1 || '').trim().toLowerCase() === oldLower) {
+      p.folder_1 = newFolderName;
+      p.folder_1_path = newFolderPath;
     }
-    if (participant.folder_3 === oldFolderName) {
-      participant.folder_3 = newFolderName;
+    if ((p?.folder_2 || '').trim().toLowerCase() === oldLower) {
+      p.folder_2 = newFolderName;
+      p.folder_2_path = newFolderPath;
+    }
+    if ((p?.folder_3 || '').trim().toLowerCase() === oldLower) {
+      p.folder_3 = newFolderName;
+      p.folder_3_path = newFolderPath;
     }
   });
 
-  // Re-render everything
+  // Re-render everything, preserving sort
+  const sortState = getCurrentSortState();
   renderCustomFolders();
   updateFolderSelects();
   loadParticipantsIntoTable(participantsData);
+  if (sortState) {
+    applySortState(sortState);
+  }
+  if (openSidePanel?.kind === 'assign') renderAssignSidePanel();
 
   // Close modal
   closeEditFolderModal();
 }
 
 /**
- * Render custom folders list
+ * 1.2.0 — Collect every distinct folder used in this preset, merging:
+ *   1. customFolders (legacy global preset list)
+ *   2. each participant's folders[]
+ *   3. legacy folder_1/2/3 slots from un-normalized participant rows
+ *
+ * Returns an array of:
+ *   { name, path?, sourceIndex, source: 'preset'|'participant',
+ *     usageCount }
+ * sorted by name. Duplicate names (case-insensitive) collapse into one
+ * entry; if a folder appears both as a preset-global and as a
+ * participant assignment, source is 'preset' (so the user keeps the
+ * direct edit/remove controls). usageCount counts how many participants
+ * currently reference the folder.
+ */
+function collectAllPresetFolders() {
+  const lower = (s) => (s || '').toLowerCase();
+  const map = new Map(); // lowercased name → entry
+
+  // 1. Preset-global list (legacy). Keep the index so editCustomFolder
+  // can still resolve the right slot when clicked.
+  customFolders.forEach((f, idx) => {
+    const name = getFolderDisplayName(f);
+    if (!name) return;
+    const path = typeof f === 'object' && f !== null ? (f.path || '') : '';
+    map.set(lower(name), {
+      name,
+      path,
+      source: 'preset',
+      sourceIndex: idx,
+      usageCount: 0,
+    });
+  });
+
+  // 2 + 3. Walk every participant's folders[] and legacy slots.
+  (participantsData || []).forEach(p => {
+    const seenForThisParticipant = new Set();
+
+    const upsert = (rawName, rawPath) => {
+      const name = (rawName || '').trim();
+      if (!name) return;
+      const key = lower(name);
+      // Each participant counts once per distinct folder, even if it
+      // appears in both folders[] and a legacy slot (defensive against
+      // un-migrated rows that still have folder_1 + folders[]).
+      if (seenForThisParticipant.has(key)) return;
+      seenForThisParticipant.add(key);
+
+      const path = (rawPath || '').trim() || '';
+      const existing = map.get(key);
+      if (existing) {
+        existing.usageCount += 1;
+        // Inherit a path if the preset-global entry didn't have one.
+        if (!existing.path && path) existing.path = path;
+      } else {
+        map.set(key, {
+          name,
+          path,
+          source: 'participant',
+          sourceIndex: -1,
+          usageCount: 1,
+        });
+      }
+    };
+
+    if (Array.isArray(p?.folders)) {
+      for (const f of p.folders) {
+        if (f && typeof f === 'object') upsert(f.name, f.path);
+      }
+    }
+    upsert(p?.folder_1, p?.folder_1_path);
+    upsert(p?.folder_2, p?.folder_2_path);
+    upsert(p?.folder_3, p?.folder_3_path);
+  });
+
+  return Array.from(map.values()).sort((a, b) =>
+    a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+  );
+}
+
+/**
+ * Render custom folders list. 1.2.0 — shows the unified view: folders
+ * declared at preset level (legacy customFolders) PLUS folders
+ * referenced by any participant's chip area. Preset-level entries keep
+ * the inline edit/remove controls; participant-derived entries are
+ * read-only here and show a "In use by N" badge — to remove them the
+ * user opens the participant and removes the chip.
  */
 function renderCustomFolders() {
   const foldersList = document.getElementById('custom-folders-list');
   const emptyMessage = document.getElementById('empty-folders-message');
 
-  if (customFolders.length === 0) {
-    if (emptyMessage) {
-      emptyMessage.style.display = 'block';
-    }
-    // Clear folder chips
+  // Clear existing chips first so we can rebuild from scratch each call.
+  if (foldersList) {
     const existingChips = foldersList.querySelectorAll('.folder-chip');
     existingChips.forEach(chip => chip.remove());
+  }
+
+  const all = collectAllPresetFolders();
+
+  if (all.length === 0) {
+    if (emptyMessage) emptyMessage.style.display = 'block';
     return;
   }
+  if (emptyMessage) emptyMessage.style.display = 'none';
 
-  if (emptyMessage) {
-    emptyMessage.style.display = 'none';
-  }
-
-  // Clear existing chips
-  const existingChips = foldersList.querySelectorAll('.folder-chip');
-  existingChips.forEach(chip => chip.remove());
-
-  // Add folder chips
-  customFolders.forEach((folder, index) => {
-    const folderName = typeof folder === 'string' ? folder : folder.name;
-    const folderPath = typeof folder === 'string' ? '' : (folder.path || '');
+  // Render each merged entry.
+  all.forEach(entry => {
+    const folderPath = entry.path;
     const chip = document.createElement('div');
     chip.className = 'folder-chip';
     const pathHtml = folderPath
       ? `<span class="folder-chip-path" title="${escapeHtml(folderPath)}">${escapeHtml(shortenPath(folderPath))}</span>`
       : '';
+    const usageBadge = entry.usageCount > 0
+      ? `<span class="folder-chip-usage" title="Used by ${entry.usageCount} participant(s)">${entry.usageCount} 🏎️</span>`
+      : '';
+    // 1.2.0 — every folder is editable/removable from here, regardless
+    // of where it was originally created. editCustomFolder() and
+    // removeCustomFolder() are by-name and propagate across every
+    // participant that references the folder, so the user can manage
+    // the whole preset's folder catalog from this single section.
+    const actionsHtml = `
+      <button type="button" class="folder-chip-edit" onclick="editCustomFolder('${escapeHtml(entry.name)}')" title="Edit folder name and path">✏️</button>
+      <button type="button" class="folder-chip-remove" onclick="removeCustomFolder('${escapeHtml(entry.name)}')" title="Remove folder from preset and every participant">×</button>
+    `;
     chip.innerHTML = `
       <div class="folder-chip-info">
-        <span class="folder-chip-name">📁 ${escapeHtml(folderName)}</span>
+        <span class="folder-chip-name">📁 ${escapeHtml(entry.name)}</span>
         ${pathHtml}
       </div>
-      <button type="button" class="folder-chip-edit" onclick="editCustomFolder(${index})" title="Edit folder">
-        ✏️
-      </button>
-      <button type="button" class="folder-chip-remove" onclick="removeCustomFolder('${escapeHtml(folderName)}')" title="Remove folder">
-        ×
-      </button>
+      ${usageBadge}
+      ${actionsHtml}
     `;
     foldersList.appendChild(chip);
+  });
+}
+
+// =====================================================================
+// ACC-01 (Gruppe C) — "Series sponsors to ignore" chip input
+// Per-preset list of series-wide sponsor brands (Michelin, Rolex …) that the
+// SmartMatcher excludes from SPONSOR evidence. Mirrors the folder-chip visuals.
+// =====================================================================
+
+var SERIES_SPONSOR_MAX_ENTRIES = 50;
+var SERIES_SPONSOR_MAX_LEN = 60;
+
+/**
+ * Render the current seriesSponsorIgnore list as removable chips. Removal is
+ * by index to avoid quoting issues with names containing apostrophes/quotes.
+ */
+function renderSeriesSponsorChips() {
+  const container = document.getElementById('series-sponsor-chips');
+  if (!container) return;
+  container.innerHTML = '';
+  seriesSponsorIgnore.forEach((name, idx) => {
+    const chip = document.createElement('div');
+    chip.className = 'sponsor-chip';
+    chip.innerHTML = `
+      <span class="sponsor-chip-name">${escapeHtml(name)}</span>
+      <button type="button" class="sponsor-chip-remove" onclick="removeSeriesSponsorAt(${idx})" title="Remove sponsor">×</button>
+    `;
+    container.appendChild(chip);
+  });
+  ensureSeriesSponsorInputBound();
+}
+
+/**
+ * Add one or more sponsor names from a raw string. Splits on commas (so a
+ * pasted "Michelin, Rolex" becomes two chips), trims, drops empties, caps each
+ * entry at 60 chars, dedupes case-insensitively, and caps the list at 50.
+ */
+function addSeriesSponsorsFromText(text) {
+  if (!text) return;
+  let added = false;
+  String(text).split(',').forEach(part => {
+    const name = part.trim().slice(0, SERIES_SPONSOR_MAX_LEN).trim();
+    if (!name) return;
+    if (seriesSponsorIgnore.length >= SERIES_SPONSOR_MAX_ENTRIES) return;
+    const exists = seriesSponsorIgnore.some(s => s.toLowerCase() === name.toLowerCase());
+    if (!exists) {
+      seriesSponsorIgnore.push(name);
+      added = true;
+    }
+  });
+  if (added) renderSeriesSponsorChips();
+}
+
+/**
+ * Remove the chip at the given index.
+ */
+function removeSeriesSponsorAt(idx) {
+  if (idx >= 0 && idx < seriesSponsorIgnore.length) {
+    seriesSponsorIgnore.splice(idx, 1);
+    renderSeriesSponsorChips();
+  }
+}
+
+/**
+ * Bind the input's Enter / comma / paste / blur behavior once. Disabled inputs
+ * (official read-only view) receive no keyboard/focus events, so this is inert
+ * there even though the listeners are attached.
+ */
+function ensureSeriesSponsorInputBound() {
+  const input = document.getElementById('series-sponsor-input');
+  if (!input || input.dataset.sponsorBound === '1') return;
+  input.dataset.sponsorBound = '1';
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault();
+      addSeriesSponsorsFromText(input.value);
+      input.value = '';
+    }
+  });
+
+  input.addEventListener('paste', (e) => {
+    const text = (e.clipboardData || window.clipboardData)?.getData('text') || '';
+    if (text.indexOf(',') !== -1) {
+      e.preventDefault();
+      addSeriesSponsorsFromText(text);
+      input.value = '';
+    }
+  });
+
+  // Commit a typed-but-not-entered value on blur so it isn't silently lost on save.
+  input.addEventListener('blur', () => {
+    if (input.value.trim()) {
+      addSeriesSponsorsFromText(input.value);
+      input.value = '';
+    }
   });
 }
 
@@ -1500,7 +3639,7 @@ function updateFolderSelects() {
       // Rebuild options
       select.innerHTML = '<option value="">-- None --</option>';
       customFolders.forEach(folder => {
-        const folderName = typeof folder === 'string' ? folder : folder.name;
+        const folderName = getFolderDisplayName(folder);
         const folderPath = typeof folder === 'string' ? '' : (folder.path || '');
         const option = document.createElement('option');
         option.value = folderName;
@@ -1527,24 +3666,99 @@ async function editPreset(presetId) {
 
     currentPreset = response.data;
     isEditingPreset = true;
-    participantsData = currentPreset.participants || [];
+    resetParticipantPersistState(); // BUG-02 — fresh editing session
+    // Base order is always race-number ascending. The DB returns participants in
+    // insertion/sort_order, so the FIRST open (before any saved sort exists)
+    // could otherwise show them unsorted. Sorting the DATA here makes the base
+    // render number-ordered regardless of async re-renders (e.g. face-status)
+    // or sortable.js timing; a saved column sort is still applied on top by
+    // applySortState(loadSortPreference(...)) below.
+    participantsData = sortParticipantsByNumber(currentPreset.participants || []);
 
-    // Load custom folders from preset (normalize old string entries to objects)
-    customFolders = (currentPreset.custom_folders || []).map(f =>
-      typeof f === 'string' ? { name: f } : f
-    );
+    // Load custom folders from preset (normalize all entries to {name, path?} objects)
+    // Merge with localStorage paths (per-device), giving localStorage priority
+    const localPaths = getLocalFolderPaths(currentPreset.id);
+    customFolders = (currentPreset.custom_folders || []).map(f => {
+      const name = getFolderDisplayName(f);
+      const dbPath = (typeof f === 'object' && f !== null) ? (f.path || '') : '';
+      const resolvedPath = localPaths[name] || dbPath;
+      const obj = { name };
+      if (resolvedPath) obj.path = resolvedPath;
+      return obj;
+    });
     renderCustomFolders();
+
+    // Heal historical drift: presets edited before pool-promotion existed
+    // may have folders sitting on individual participants but not in the
+    // shared `custom_folders` pool. Walk the participants once on open and
+    // lift any orphan folder into the pool so the multi-assign side panel,
+    // the Custom Folders section, and every other consumer see the same
+    // canonical list. Fire-and-forget — the UI stays usable while the
+    // backfill round-trips to Supabase.
+    if (typeof backfillParticipantFoldersIntoPool === 'function') {
+      backfillParticipantFoldersIntoPool().catch(err => {
+        console.error('[FolderPool] backfill on editPreset failed:', err);
+      });
+    }
 
     // Fill form with preset data
     document.getElementById('preset-name').value = currentPreset.name || '';
     document.getElementById('preset-description').value = currentPreset.description || '';
     document.getElementById('preset-editor-title').textContent = 'Edit Participant Preset';
 
+    // Issue #104 — preset-scope driver filter (opt-in, editable)
+    const allowExternalElEdit = document.getElementById('preset-allow-external-persons');
+    if (allowExternalElEdit) {
+      allowExternalElEdit.checked = currentPreset.allow_external_person_recognition === true;
+      allowExternalElEdit.disabled = false;
+    }
+
+    // ACC-01 (Gruppe C) — load the series-sponsor ignore list (editable)
+    seriesSponsorIgnore = Array.isArray(currentPreset.series_sponsor_ignore)
+      ? [...currentPreset.series_sponsor_ignore]
+      : [];
+    renderSeriesSponsorChips();
+    const seriesSponsorInputEdit = document.getElementById('series-sponsor-input');
+    if (seriesSponsorInputEdit) {
+      seriesSponsorInputEdit.value = '';
+      seriesSponsorInputEdit.disabled = false;
+    }
+
+    // (1.2.0 — the additive-default-folder flag is now per-participant,
+    // loaded from `participant.include_default_folder` inside the edit
+    // modal — see openParticipantEditModal.)
+
     // Populate sport category dropdown with current preset's category
     populateSportCategoryDropdown(currentPreset.category_id);
 
     // Load participants into table
     loadParticipantsIntoTable(participantsData);
+
+    // Apply saved sort preference (or default: number ascending)
+    applySortState(loadSortPreference(currentPreset.id));
+
+    // Load IPTC metadata into form (if preset-iptc-editor.js is loaded).
+    // UX-04, Option B: mount the shared IPTC form markup FIRST — ordering is
+    // load-bearing, values set on missing elements are silently lost.
+    if (typeof ensureIptcFormMarkup === 'function') {
+      await ensureIptcFormMarkup(document.getElementById('iptc-section-body'));
+    }
+    if (typeof loadIptcDataIntoForm === 'function') {
+      loadIptcDataIntoForm(currentPreset.iptc_metadata || null);
+    }
+
+    // V1: collapse the editable form by default (user reads the strip first),
+    // and populate the summary strip from the loaded preset.
+    const headerRow = document.getElementById('preset-header-row');
+    const editBtn = document.getElementById('preset-edit-details-btn');
+    const editLabel = document.getElementById('preset-edit-details-label');
+    if (headerRow) headerRow.setAttribute('hidden', '');
+    if (editBtn) {
+      editBtn.setAttribute('aria-expanded', 'false');
+      editBtn.classList.remove('is-active');
+    }
+    if (editLabel) editLabel.textContent = 'Edit details';
+    updatePresetSummaryStrip();
 
     // Show modal
     const modal = document.getElementById('preset-editor-modal');
@@ -1561,14 +3775,175 @@ async function editPreset(presetId) {
 }
 
 /**
- * Duplicate an official preset to create a personal copy
+ * View an official preset in read-only mode.
+ * The modal shows participants but disables editing.
+ * The Save button becomes "Duplicate & Customize".
+ */
+async function viewOfficialPreset(presetId) {
+  try {
+    const response = await window.api.invoke('supabase-get-participant-preset-by-id', presetId);
+    if (!response.success || !response.data) {
+      showNotification('Error loading preset: ' + (response.error || 'Unknown error'), 'error');
+      return;
+    }
+
+    currentPreset = response.data;
+    isEditingPreset = false;
+    resetParticipantPersistState(); // BUG-02 — fresh (read-only) session
+    participantsData = currentPreset.participants || [];
+
+    // Load custom folders, merge with localStorage paths (per-device)
+    const localPaths = getLocalFolderPaths(currentPreset.id);
+    customFolders = (currentPreset.custom_folders || []).map(f => {
+      const name = getFolderDisplayName(f);
+      const dbPath = (typeof f === 'object' && f !== null) ? (f.path || '') : '';
+      const resolvedPath = localPaths[name] || dbPath;
+      const obj = { name };
+      if (resolvedPath) obj.path = resolvedPath;
+      return obj;
+    });
+    renderCustomFolders();
+
+    // Fill form with preset data
+    document.getElementById('preset-name').value = currentPreset.name || '';
+    document.getElementById('preset-description').value = currentPreset.description || '';
+    document.getElementById('preset-editor-title').textContent = 'Official Preset (Read Only)';
+
+    // Issue #104 — preset-scope driver filter (read-only in official view)
+    const allowExternalElView = document.getElementById('preset-allow-external-persons');
+    if (allowExternalElView) {
+      allowExternalElView.checked = currentPreset.allow_external_person_recognition === true;
+      allowExternalElView.disabled = true;
+    }
+
+    // ACC-01 (Gruppe C) — load the series-sponsor ignore list (read-only view)
+    seriesSponsorIgnore = Array.isArray(currentPreset.series_sponsor_ignore)
+      ? [...currentPreset.series_sponsor_ignore]
+      : [];
+    renderSeriesSponsorChips();
+    const seriesSponsorInputView = document.getElementById('series-sponsor-input');
+    if (seriesSponsorInputView) {
+      seriesSponsorInputView.value = '';
+      seriesSponsorInputView.disabled = true;
+    }
+
+    // Populate sport category dropdown
+    populateSportCategoryDropdown(currentPreset.category_id);
+
+    // Load participants into table
+    loadParticipantsIntoTable(participantsData);
+
+    // Apply saved sort preference (or default: number ascending)
+    applySortState(loadSortPreference(currentPreset.id));
+
+    // Apply read-only state to the modal
+    setPresetEditorReadOnly(true);
+
+    // Change Save button to "Duplicate & Customize"
+    const saveBtn = document.getElementById('save-preset-btn');
+    saveBtn.innerHTML = '<span class="btn-icon">📋</span>Duplicate & Customize';
+    saveBtn.setAttribute('onclick', `duplicateAndEditOfficialPreset('${presetId}')`);
+
+    // V1: collapse the editable form by default (read-only view) and populate
+    // the summary strip from the loaded preset.
+    const headerRowOff = document.getElementById('preset-header-row');
+    const editBtnOff = document.getElementById('preset-edit-details-btn');
+    const editLabelOff = document.getElementById('preset-edit-details-label');
+    if (headerRowOff) headerRowOff.setAttribute('hidden', '');
+    if (editBtnOff) {
+      editBtnOff.setAttribute('aria-expanded', 'false');
+      editBtnOff.classList.remove('is-active');
+    }
+    if (editLabelOff) editLabelOff.textContent = 'View details';
+    updatePresetSummaryStrip();
+
+    // Show modal
+    const modal = document.getElementById('preset-editor-modal');
+    if (!modal) {
+      console.error('[Participants] Modal element not found in DOM');
+      return;
+    }
+    modal.classList.add('show');
+
+  } catch (error) {
+    console.error('[Participants] Error viewing official preset:', error);
+    showNotification('Error loading preset', 'error');
+  }
+}
+
+/**
+ * Toggle read-only state on the preset editor modal.
+ * Disables form inputs, hides add/delete buttons, etc.
+ */
+function setPresetEditorReadOnly(readOnly) {
+  // BUG-02 — keep the module mirror in sync so the per-row persist hook can
+  // cheaply skip official/read-only presets without a DOM read.
+  presetEditorReadOnly = !!readOnly;
+
+  const modal = document.getElementById('preset-editor-modal');
+  if (!modal) return;
+
+  // Disable/enable form fields
+  // ACC-01: include the series-sponsor input so it's locked in the read-only
+  // (official preset) view alongside name/description/category.
+  const fields = ['preset-name', 'preset-description', 'preset-sport-category', 'series-sponsor-input'];
+  fields.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = readOnly;
+  });
+
+  // Toggle read-only class on modal for CSS-based hiding
+  if (readOnly) {
+    modal.classList.add('preset-read-only');
+  } else {
+    modal.classList.remove('preset-read-only');
+  }
+}
+
+/**
+ * Duplicate any preset and immediately open it for editing.
+ */
+async function duplicateAndEditOfficialPreset(presetId) {
+  try {
+    showNotification('Duplicating preset...', 'info');
+
+    const response = await window.api.invoke('supabase-duplicate-official-preset', presetId);
+
+    if (response.success && response.data) {
+      // Close the read-only view (force: read-only views never carry unsaved
+      // changes, and this is a programmatic close mid-duplicate-flow).
+      closePresetEditor(true);
+
+      showNotification(`Created "${response.data.name}" - opening for editing...`, 'success');
+
+      // Refresh list and open the new copy for editing
+      await loadParticipantPresets();
+      await editPreset(response.data.id);
+    } else {
+      showNotification('Error duplicating preset: ' + (response.error || 'Unknown error'), 'error');
+    }
+  } catch (error) {
+    console.error('[Participants] Error duplicating official preset:', error);
+    showNotification('Error duplicating preset', 'error');
+  }
+}
+
+/**
+ * Duplicate any preset (official or user-owned) to create a personal copy
  */
 async function duplicateOfficialPreset(presetId) {
+  return duplicatePreset(presetId);
+}
+
+/**
+ * Duplicate any preset to create a personal copy
+ */
+async function duplicatePreset(presetId) {
   try {
     // Show confirmation
     const confirmed = await showConfirmDialog(
-      'Duplicate Official Preset',
-      'This will create a personal copy of this official preset that you can customize. Continue?'
+      'Duplicate Preset',
+      'This will create a personal copy of this preset that you can customize. Continue?'
     );
 
     if (!confirmed) return;
@@ -1585,7 +3960,7 @@ async function duplicateOfficialPreset(presetId) {
       showNotification('Error duplicating preset: ' + (response.error || 'Unknown error'), 'error');
     }
   } catch (error) {
-    console.error('[Participants] Error duplicating official preset:', error);
+    console.error('[Participants] Error duplicating preset:', error);
     showNotification('Error duplicating preset', 'error');
   }
 }
@@ -1629,7 +4004,20 @@ async function exportPresetJSON(presetId) {
 
     const preset = response.data;
 
-    // Fetch driver data for all participants
+    // Fetch driver data for all participants.
+    //
+    // The canonical source is the `preset_participant_drivers` table, but it
+    // is only populated for participants that have been opened/saved through
+    // the editor. PDF-imported presets land their multi-driver lineup in the
+    // legacy `nome` column (comma-separated) and never get individual driver
+    // rows until the user manually edits each row.
+    //
+    // Without the fallback below, exporting such a preset emits drivers only
+    // for the few participants that have been edited — for the rest, the
+    // top-level `drivers[]` array is empty and a round-trip silently loses
+    // drivers 2/3/4 even though the names are visible in the UI grid.
+    //
+    // See driver-helpers.js + PLAN_BULK_FOLDER_ASSIGN.md (PR1) for context.
     const allDrivers = [];
     for (const p of preset.participants || []) {
       const driversResult = await window.api.invoke('preset-get-drivers-for-participant', p.id);
@@ -1640,11 +4028,30 @@ async function exportPresetJSON(presetId) {
             participant_numero: p.numero,
             driver_name: d.driver_name,
             driver_metatag: d.driver_metatag,
+            driver_nationality: d.driver_nationality || '',
             driver_order: d.driver_order
           });
         });
+      } else if (p.nome && window.driverHelpers && window.driverHelpers.synthesizeDriversFromNome) {
+        // Legacy fallback: synthesize driver records by splitting `nome` on
+        // commas. Records get fresh UUIDs because they don't exist in the DB
+        // yet — on re-import, importJsonPreset will create them under these
+        // IDs. driver_metatag/nationality default to null/'' (PDF imports
+        // never have these for non-edited participants).
+        const synth = window.driverHelpers.synthesizeDriversFromNome(p.nome, p.numero);
+        for (const d of synth) {
+          allDrivers.push(d);
+        }
       }
     }
+
+    // Build a lookup: participant numero → nationality from first driver
+    const nationalityByNumero = {};
+    allDrivers.forEach(d => {
+      if (d.driver_nationality && !nationalityByNumero[d.participant_numero]) {
+        nationalityByNumero[d.participant_numero] = d.driver_nationality;
+      }
+    });
 
     // Prepare export data with English field names
     const exportData = {
@@ -1656,6 +4063,8 @@ async function exportPresetJSON(presetId) {
         team: p.squadra,
         category: p.categoria,
         plate_number: p.plate_number,
+        car_model: p.car_model || '',
+        nationality: nationalityByNumero[p.numero] || '',
         sponsors: p.sponsor,
         metatag: p.metatag,
         folder_1: p.folder_1,
@@ -1665,10 +4074,10 @@ async function exportPresetJSON(presetId) {
         folder_2_path: p.folder_2_path,
         folder_3_path: p.folder_3_path
       })),
-      drivers: allDrivers,  // NEW: Complete driver data with IDs
+      drivers: allDrivers,  // Complete driver data with IDs
       custom_folders: preset.custom_folders || [],
       exported_at: new Date().toISOString(),
-      version: '2.1'  // Bump version to indicate folder path support
+      version: '2.2'  // Bump: car_model, nationality, driver_nationality support
     };
 
     // Convert to JSON
@@ -1742,7 +4151,7 @@ async function exportPresetCSV(presetId) {
     };
 
     // CSV Header (English column names + hidden driver preservation columns)
-    const csvHeader = 'Number,Driver,Team,Category,Plate_Number,Sponsors,Metatag,Folder_1,Folder_2,Folder_3,Folder_1_Path,Folder_2_Path,Folder_3_Path,_Driver_IDs,_Driver_Metatags';
+    const csvHeader = 'Number,Driver,Team,Category,Plate_Number,Car_Model,Nationality,Sponsors,Metatag,Folder_1,Folder_2,Folder_3,Folder_1_Path,Folder_2_Path,Folder_3_Path,_Driver_IDs,_Driver_Metatags,_Driver_Nationalities';
 
     // Convert participants to CSV rows (fetch drivers for each participant)
     const csvRows = await Promise.all(participants.map(async (p) => {
@@ -1753,6 +4162,10 @@ async function exportPresetCSV(presetId) {
       // Build pipe-separated driver metadata
       const driverIds = drivers.map(d => d.id).join('|');
       const driverMetatags = drivers.map(d => d.driver_metatag || '').join('|');
+      const driverNationalities = drivers.map(d => d.driver_nationality || '').join('|');
+
+      // Nationality: use first driver's nationality
+      const primaryNationality = drivers.length > 0 ? (drivers[0].driver_nationality || '') : '';
 
       return [
         escapeCSV(p.numero || ''),
@@ -1760,6 +4173,8 @@ async function exportPresetCSV(presetId) {
         escapeCSV(p.squadra || ''),
         escapeCSV(p.categoria || ''),
         escapeCSV(p.plate_number || ''),
+        escapeCSV(p.car_model || ''),
+        escapeCSV(primaryNationality),
         escapeCSV(p.sponsor || ''),
         escapeCSV(p.metatag || ''),
         escapeCSV(p.folder_1 || ''),
@@ -1769,7 +4184,8 @@ async function exportPresetCSV(presetId) {
         escapeCSV(p.folder_2_path || ''),
         escapeCSV(p.folder_3_path || ''),
         escapeCSV(driverIds),
-        escapeCSV(driverMetatags)
+        escapeCSV(driverMetatags),
+        escapeCSV(driverNationalities)
       ].join(',');
     }));
 
@@ -1844,6 +4260,8 @@ function loadParticipantsIntoTable(participants) {
   clearParticipantsTable();
 
   if (!participants || participants.length === 0) {
+    // v1.1.4 — still refresh the counter so it hides itself on empty presets.
+    updateActiveParticipantsSummary();
     return; // Empty table
   }
 
@@ -1853,6 +4271,33 @@ function loadParticipantsIntoTable(participants) {
   participantsData.forEach((participant, index) => {
     addParticipantRow(participant, index);
   });
+
+  // Load face status indicators (non-blocking, will update dots when ready)
+  if (faceRecFeatureEnabled && currentPreset?.id) {
+    loadFaceStatusIfEnabled();
+  }
+
+  // v1.1.4 — refresh the "X/Y active" counter whenever the table rerenders.
+  updateActiveParticipantsSummary();
+
+  // PR3v2 — every full-table render is a chance for the selection set to
+  // drift out of sync with what's actually on screen (e.g. participants
+  // deleted on another tab). Drop selected IDs that no longer correspond
+  // to a row, then resync the bulk-action bar against the surviving set.
+  if (typeof selectedParticipantIds !== 'undefined') {
+    const liveIds = new Set(participantsData.map(p => p.id).filter(Boolean));
+    for (const id of Array.from(selectedParticipantIds)) {
+      if (!liveIds.has(id)) selectedParticipantIds.delete(id);
+    }
+    if (typeof updateBulkActionBar === 'function') {
+      updateBulkActionBar();
+    }
+    // Re-apply the visibility filter so search/team/folder choices survive
+    // a re-render. Without this, sortable.js shuffles can re-show hidden rows.
+    if (typeof applyVisibilityFilter === 'function') {
+      applyVisibilityFilter();
+    }
+  }
 
   // Note: Initial sort is handled by sortable.js with the 'asc' class on the table
   // The table will automatically sort by the first column (Num) in ascending order
@@ -1903,31 +4348,312 @@ function addParticipantRow(participant, rowIndex) {
     `<span class="plate-badge">${escapeHtml(plateNumber)}</span>` :
     '<span class="text-muted">-</span>';
 
+  // Create delivery-to badge (feature-gated)
+  let deliveryTd = '';
+  if (deliveryFeatureEnabled) {
+    const clientId = participant?.delivery_to_client_id;
+    const client = clientId ? deliveryClientsCache.find(c => c.id === clientId) : null;
+    const deliveryDisplay = client
+      ? `<span class="delivery-badge">${escapeHtml(client.client_name || client.name)}</span>`
+      : '<span class="text-muted">-</span>';
+    deliveryTd = `<td data-sort="${client ? escapeHtml(client.client_name || client.name) : ''}">${deliveryDisplay}</td>`;
+
+    // Show the column header
+    const thDelivery = document.getElementById('th-delivery-to');
+    if (thDelivery) thDelivery.style.display = '';
+  }
+
+  // Create face status indicator (feature-gated)
+  let faceTd = '';
+  if (faceRecFeatureEnabled) {
+    const participantId = participant?.id || '';
+    const status = faceStatusCache[participantId];
+    const statusClass = getFaceStatusClass(status);
+    const statusTitle = getFaceStatusTitle(status);
+    faceTd = `<td class="text-center"><span class="face-status-dot ${statusClass}" data-participant-id="${participantId}" title="${statusTitle}"></span></td>`;
+  }
+
   // Store original index as data attribute for stable indexing during sorting
   row.setAttribute('data-original-index', rowIndex);
 
+  // v1.1.4 — soft-disable toggle. `is_active` undefined is treated as TRUE
+  // (migration gives DEFAULT TRUE, so this is just a safety net).
+  const isActive = participant?.is_active !== false;
+  const participantIdAttr = escapeHtml(participant?.id || '');
+  const isOfficial = currentPreset?.is_official === true;
+  const isPublic = currentPreset?.is_public === true && !currentPreset?.user_id;
+  const isReadOnly = isOfficial || isPublic;
+  const toggleDisabledAttr = (isReadOnly || !participant?.id) ? 'disabled' : '';
+  const toggleTitle = isReadOnly
+    ? 'Official or public preset: duplicate it to customize'
+    : (isActive ? 'Disable from AI matching (you can re-enable at any time)' : 'Re-enable for AI matching');
+  const toggleTd = `
+    <td class="text-center no-sort" data-sort="${isActive ? '1' : '0'}">
+      <label class="active-toggle" title="${toggleTitle}">
+        <input type="checkbox" class="active-toggle-input"
+               ${isActive ? 'checked' : ''}
+               ${toggleDisabledAttr}
+               data-participant-id="${participantIdAttr}"
+               onchange="onParticipantActiveToggle(this)">
+        <span class="active-toggle-slider"></span>
+      </label>
+    </td>`;
+
+  // Mark row inactive (CSS greys out + strikes through). Applied as class so
+  // all cells can be styled in one rule.
+  if (!isActive) row.classList.add('participant-row-inactive');
+
+  // PR3v2 — selection checkbox cell, V1 styling.
+  const selectionDisabled = !participant?.id || isReadOnly;
+  const selectionChecked = participant?.id && selectedParticipantIds.has(participant.id);
+  if (selectionChecked) row.classList.add('row-selected-v1');
+  // PR3v2 — zebra rows. Apply only on odd rendered indexes; rowIndex here is
+  // the source data index, but visual zebra works fine off it because the
+  // table renders in source order before sortable.js shuffles. After a sort
+  // the zebra may interleave — acceptable; we re-stripe on every load.
+  if (rowIndex % 2 === 1) row.classList.add('zebra-alt');
+
+  const selectTd = `
+    <td class="row-select-td-v1 no-sort" data-sort="${selectionChecked ? '1' : '0'}">
+      <input type="checkbox" class="row-select-input-v1"
+             data-participant-id="${participantIdAttr}"
+             ${selectionChecked ? 'checked' : ''}
+             ${selectionDisabled ? 'disabled' : ''}
+             onchange="onParticipantSelectChange(this)"
+             aria-label="Select participant ${numero}">
+    </td>`;
+
+  // PR3v2 — inline folders cell with V1 chips. Each assigned folder is a
+  // removable pill (×). Empty state is a dashed "+ assign" pill that opens
+  // the assign side panel scoped to just this row.
+  const foldersForRow = getParticipantFoldersList(participant);
+  const foldersDisplay = `<div class="folder-chip-cell">${
+    foldersForRow.map(f => `
+      <span class="folder-chip" title="${escapeHtml(f.path || f.name)}">${escapeHtml(f.name)}<button type="button" class="folder-chip-remove" onclick="onRemoveFolderFromRowChip(this, '${escapeAttr(participant.id || '')}', '${escapeAttr(f.name)}')" aria-label="Remove ${escapeHtml(f.name)} from this participant">×</button></span>
+    `).join('') +
+    `<span class="folder-chip folder-chip-add" onclick="openAssignPanelForRow('${escapeAttr(participant.id || '')}')" title="Assign a folder to this participant">+ assign</span>`
+  }</div>`;
+  const foldersSortKey = foldersForRow.map(f => f.name).join(',');
+
   // Add data-sort attributes for proper sorting by sortable.js
   row.innerHTML = `
-    <td data-sort="${numero}"><strong>${numero}</strong></td>
+    ${selectTd}
+    ${toggleTd}
+    <td data-sort="${numero}"><span class="num-plate-v1">${numero}</span></td>
     <td data-sort="${nome}">${nome}</td>
     <td data-sort="${categoria}">${categoryDisplay}</td>
     <td data-sort="${squadra}">${squadra || '<span class="text-muted">-</span>'}</td>
     <td data-sort="${plateNumber}">${plateDisplay}</td>
-    <td class="no-sort">
-      <button class="btn btn-sm btn-secondary" onclick="duplicateParticipantFromRow(this)" title="Duplicate participant">
-        <span class="btn-icon">📋</span>
-      </button>
-      <button class="btn btn-sm btn-secondary" onclick="openParticipantEditModalFromRow(this)" title="Edit participant">
-        <span class="btn-icon">✏️</span>
-      </button>
-      <button class="btn btn-sm btn-danger" onclick="removeParticipantFromRow(this)" title="Delete participant">
-        <span class="btn-icon">🗑️</span>
-      </button>
+    ${deliveryTd}
+    ${faceTd}
+    <td class="no-sort folders-td" data-sort="${escapeHtml(foldersSortKey)}">${foldersDisplay}</td>
+    <td class="no-sort row-actions-td-v1">
+      <div class="row-actions-v1">
+        <button type="button" class="btn-icon-v1" onclick="duplicateParticipantFromRow(this)" title="Duplicate participant" aria-label="Duplicate">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M21 19V5a2 2 0 00-2-2H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2zM8.5 13.5l2.5 3 3.5-4.5 4.5 6H5l3.5-4.5z"/></svg>
+        </button>
+        <button type="button" class="btn-icon-v1 btn-icon-v1-amber" onclick="openParticipantEditModalFromRow(this)" title="Edit participant" aria-label="Edit">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 000-1.42l-2.34-2.33a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+        </button>
+        <button type="button" class="btn-icon-v1 btn-icon-v1-red" onclick="removeParticipantFromRow(this)" title="Delete participant" aria-label="Delete">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 19a2 2 0 002 2h8a2 2 0 002-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+        </button>
+      </div>
     </td>
   `;
 
   tbody.appendChild(row);
 }
+
+// ================================================================
+// v1.1.4 — Preset Participant Toggle (soft-disable)
+// ----------------------------------------------------------------
+// These handlers drive the "Active" column in the participants table
+// plus the "X/Y active" counter and the "Reset all" action.
+//
+// Architecture: optimistic UI. Flip the checkbox + CSS class first,
+// then call IPC. On failure, revert the UI and surface a toast.
+// ================================================================
+
+/**
+ * Handler bound to each row's Active toggle. Calls the IPC, updates the
+ * in-memory participant, toggles the inactive CSS class, and refreshes
+ * the counter.
+ */
+async function onParticipantActiveToggle(inputEl) {
+  if (!inputEl) return;
+  const participantId = inputEl.getAttribute('data-participant-id');
+  if (!participantId) {
+    // Participant was just added in the UI and hasn't been saved — revert.
+    inputEl.checked = !inputEl.checked;
+    showNotification('Save the participant first, then you can disable it.', 'warning');
+    return;
+  }
+  const newState = !!inputEl.checked;
+  const row = inputEl.closest('tr');
+
+  // Optimistic UI
+  inputEl.disabled = true;
+  if (newState) {
+    row?.classList.remove('participant-row-inactive');
+  } else {
+    row?.classList.add('participant-row-inactive');
+  }
+
+  try {
+    const res = await window.api.invoke('preset:toggleParticipantActive', {
+      participantId,
+      isActive: newState
+    });
+    if (!res || !res.success) {
+      throw new Error(res?.error || 'Update error');
+    }
+
+    // Update in-memory model so a subsequent sort/rerender is consistent.
+    const idx = Array.isArray(participantsData)
+      ? participantsData.findIndex(p => p?.id === participantId)
+      : -1;
+    if (idx >= 0) participantsData[idx].is_active = newState;
+
+    updateActiveParticipantsSummary();
+
+    // Let face-status dots update (disabled faces no longer count).
+    if (faceRecFeatureEnabled && currentPreset?.id) {
+      loadFaceStatusIfEnabled();
+    }
+  } catch (err) {
+    // Revert UI on failure
+    inputEl.checked = !newState;
+    if (!newState) {
+      row?.classList.remove('participant-row-inactive');
+    } else {
+      row?.classList.add('participant-row-inactive');
+    }
+    console.error('[PresetToggle] toggle failed:', err);
+    showNotification(
+      `Update failed: ${getErrorMessage(err)}`,
+      'error'
+    );
+    // Fire-and-forget telemetry: auto-create a GitHub issue for this failure.
+    try {
+      window.api.invoke('report-renderer-error', {
+        errorType: 'renderer_action',
+        severity: 'recoverable',
+        errorMessage: `participant-toggle-active failed: ${getErrorMessage(err)}`,
+        errorStack: err && err.stack ? String(err.stack) : undefined,
+        batchPhase: 'participants:toggleActive',
+        presetName: currentPreset?.name
+      }).catch(() => { /* telemetry never blocks UX */ });
+    } catch (_) { /* never throw from telemetry path */ }
+  } finally {
+    inputEl.disabled = false;
+  }
+}
+
+/**
+ * Update the "X / Y active" counter in the editor header and show/hide
+ * the "Reset all" link depending on whether any participant or
+ * driver is disabled.
+ */
+function updateActiveParticipantsSummary() {
+  // Keep the V1 summary strip in sync regardless of whether the legacy summary
+  // pill exists on the page.
+  if (typeof updatePresetSummaryStrip === 'function') {
+    updatePresetSummaryStrip();
+  }
+
+  const summary = document.getElementById('active-participants-summary');
+  if (!summary) return;
+
+  const total = Array.isArray(participantsData) ? participantsData.length : 0;
+  if (total === 0) {
+    summary.style.display = 'none';
+    return;
+  }
+
+  let activeParticipants = 0;
+  let inactiveDrivers = 0;
+  let totalDrivers = 0;
+
+  for (const p of participantsData) {
+    if (p?.is_active !== false) activeParticipants += 1;
+    const drivers = Array.isArray(p?.preset_participant_drivers) ? p.preset_participant_drivers : [];
+    for (const d of drivers) {
+      totalDrivers += 1;
+      if (d?.is_active === false) inactiveDrivers += 1;
+    }
+  }
+
+  const inactiveParticipants = total - activeParticipants;
+  const anyDisabled = inactiveParticipants > 0 || inactiveDrivers > 0;
+
+  const text = document.getElementById('active-count-text');
+  if (text) {
+    if (totalDrivers > 0) {
+      text.textContent = `${activeParticipants} / ${total} active · ${totalDrivers - inactiveDrivers}/${totalDrivers} drivers`;
+    } else {
+      text.textContent = `${activeParticipants} / ${total} active`;
+    }
+  }
+
+  const pill = document.getElementById('active-count-pill');
+  if (pill) pill.classList.toggle('has-disabled', anyDisabled);
+
+  const resetBtn = document.getElementById('reset-active-btn');
+  if (resetBtn) {
+    // Hide for read-only (official/public) presets.
+    const isOfficial = currentPreset?.is_official === true;
+    const isPublic = currentPreset?.is_public === true && !currentPreset?.user_id;
+    const isReadOnly = isOfficial || isPublic;
+    resetBtn.style.display = (anyDisabled && !isReadOnly) ? '' : 'none';
+  }
+
+  summary.style.display = '';
+}
+
+/**
+ * "Reset all" — reset every participant and driver back to is_active=true.
+ * Two-step confirmation protects against accidental clicks.
+ */
+async function confirmResetActiveStates() {
+  if (!currentPreset?.id) return;
+  const ok = window.confirm(
+    'Are you sure you want to re-enable all disabled participants and drivers?\n\nThis action is reversible: you can disable them again individually at any time.'
+  );
+  if (!ok) return;
+
+  try {
+    const res = await window.api.invoke('preset:resetActiveStates', { presetId: currentPreset.id });
+    if (!res || !res.success) {
+      throw new Error(res?.error || 'Reset failed');
+    }
+    const { participantsReset = 0, driversReset = 0 } = res.data || {};
+
+    // Update in-memory state and re-render the table
+    if (Array.isArray(participantsData)) {
+      for (const p of participantsData) {
+        if (p) p.is_active = true;
+        const drivers = Array.isArray(p?.preset_participant_drivers) ? p.preset_participant_drivers : [];
+        for (const d of drivers) {
+          if (d) d.is_active = true;
+        }
+      }
+    }
+    loadParticipantsIntoTable(participantsData);
+    updateActiveParticipantsSummary();
+    showNotification(
+      `Re-enabled: ${participantsReset} participants, ${driversReset} drivers`,
+      'success'
+    );
+  } catch (err) {
+    console.error('[PresetToggle] reset failed:', err);
+    showNotification(`Reset failed: ${getErrorMessage(err)}`, 'error');
+  }
+}
+
+// Expose to window for inline HTML onclick handlers
+window.onParticipantActiveToggle = onParticipantActiveToggle;
+window.confirmResetActiveStates = confirmResetActiveStates;
 
 /**
  * Open edit modal from row button (gets index from data attribute)
@@ -1983,7 +4709,8 @@ function duplicateParticipant(rowIndex) {
     metatag: originalParticipant.metatag || '',
     folder_1: originalParticipant.folder_1 || '',
     folder_2: originalParticipant.folder_2 || '',
-    folder_3: originalParticipant.folder_3 || ''
+    folder_3: originalParticipant.folder_3 || '',
+    delivery_to_client_id: originalParticipant.delivery_to_client_id || null
   };
 
   // Add the duplicated participant to the array
@@ -2021,8 +4748,14 @@ function duplicateParticipant(rowIndex) {
  */
 function removeParticipant(rowIndex) {
   if (confirm('Remove this participant?')) {
+    const sortState = getCurrentSortState();
     participantsData.splice(rowIndex, 1);
     loadParticipantsIntoTable(participantsData);
+    if (sortState) {
+      applySortState(sortState);
+    }
+    // BUG-02 — a removal only reaches the DB via Save Preset's delete-diff.
+    presetHasUnpersistedChanges = true;
   }
 }
 
@@ -2043,6 +4776,8 @@ function clearAllParticipants() {
     if (confirmed) {
       participantsData = [];
       clearParticipantsTable();
+      // BUG-02 — clearing only commits via Save Preset's delete-diff.
+      presetHasUnpersistedChanges = true;
     }
   }
 }
@@ -2055,6 +4790,16 @@ async function savePreset() {
     const presetName = document.getElementById('preset-name').value.trim();
     const presetDescription = document.getElementById('preset-description').value.trim();
     const sportCategoryId = document.getElementById('preset-sport-category')?.value || null;
+    // Issue #104 — preset-scope driver filter flag
+    const allowExternalPersons = document.getElementById('preset-allow-external-persons')?.checked === true;
+
+    // ACC-01 (Gruppe C) — flush any text typed into the series-sponsor input but
+    // not yet committed (Enter/blur), so a last-typed value isn't lost on save.
+    const seriesSponsorInputSave = document.getElementById('series-sponsor-input');
+    if (seriesSponsorInputSave && !seriesSponsorInputSave.disabled && seriesSponsorInputSave.value.trim()) {
+      addSeriesSponsorsFromText(seriesSponsorInputSave.value);
+      seriesSponsorInputSave.value = '';
+    }
 
     // Validation
     if (!presetName) {
@@ -2063,30 +4808,23 @@ async function savePreset() {
       return;
     }
 
-    if (!sportCategoryId) {
-      showNotification('Please select a sport category', 'error');
-      document.getElementById('preset-sport-category').focus();
-      return;
+    // Sport category is optional - no validation needed
+
+    // BUG-02 — coordinate with the per-row persist queue BEFORE building the
+    // bulk payload. Clearing the pending FIFO alone is NOT enough: an in-flight
+    // insert for a new row completing mid-bulk-save would create a duplicate the
+    // delete-diff can miss. Awaiting the in-flight task means its returned-id
+    // write-back lands first, turning the bulk path into a harmless UPSERT.
+    participantPersistQueue.length = 0;
+    if (participantPersistInFlight) {
+      try { await participantPersistInFlight; } catch (_) { /* failure already toasted */ }
     }
 
-    // Use participants data from memory (already updated via modal)
-    // ⚠️ CRITICAL FIX: Include ID to enable UPSERT (UPDATE existing instead of INSERT new)
-    const participants = participantsData.map(p => ({
-      id: p.id || undefined, // ✅ Include ID for UPSERT logic
-      numero: p.numero || '',
-      nome: getDriverNamesFromParticipant(p).join(', ') || p.nome || '',
-      categoria: p.categoria || '',
-      squadra: p.squadra || '',
-      plate_number: p.plate_number || '',
-      sponsor: p.sponsor || '',
-      metatag: p.metatag || '',
-      folder_1: p.folder_1 || '',
-      folder_2: p.folder_2 || '',
-      folder_3: p.folder_3 || '',
-      folder_1_path: p.folder_1_path || getFolderPath(p.folder_1),
-      folder_2_path: p.folder_2_path || getFolderPath(p.folder_2),
-      folder_3_path: p.folder_3_path || getFolderPath(p.folder_3)
-    }));
+    // Use participants data from memory (already updated via modal).
+    // buildParticipantSavePayload is the SINGLE source of truth shared with the
+    // per-row persist path so the two mappings can never drift (folders[]
+    // dual-write, id-for-UPSERT, is_active, etc. all live there).
+    const participants = participantsData.map(p => buildParticipantSavePayload(p));
 
     // Disable save button during operation
     const saveBtn = document.getElementById('save-preset-btn');
@@ -2103,7 +4841,11 @@ async function savePreset() {
         name: presetName,
         description: presetDescription,
         category_id: sportCategoryId,
-        custom_folders: customFolders
+        custom_folders: customFolders,
+        // Issue #104 — preset-scope driver filter flag
+        allow_external_person_recognition: allowExternalPersons,
+        // ACC-01 (Gruppe C) — series-wide sponsors to ignore in matching
+        series_sponsor_ignore: seriesSponsorIgnore,
       };
 
       const updateResponse = await window.api.invoke('supabase-update-participant-preset', {
@@ -2120,7 +4862,11 @@ async function savePreset() {
         name: presetName,
         description: presetDescription,
         category_id: sportCategoryId,
-        custom_folders: customFolders
+        custom_folders: customFolders,
+        // Issue #104 — preset-scope driver filter flag
+        allow_external_person_recognition: allowExternalPersons,
+        // ACC-01 (Gruppe C) — series-wide sponsors to ignore in matching
+        series_sponsor_ignore: seriesSponsorIgnore,
       };
 
       const createResponse = await window.api.invoke('supabase-create-participant-preset', presetData);
@@ -2131,8 +4877,25 @@ async function savePreset() {
       presetId = createResponse.data.id;
     }
 
+    // Save folder paths to localStorage for this device
+    const localPathsToSave = {};
+    customFolders.forEach(f => {
+      const name = getFolderDisplayName(f);
+      const folderPath = (typeof f === 'object' && f !== null) ? (f.path || '') : '';
+      if (name && folderPath) {
+        localPathsToSave[name] = folderPath;
+      }
+    });
+    setLocalFolderPaths(presetId, localPathsToSave);
+
     // Save participants
     if (participants.length > 0) {
+      showPresetSaveOverlay({
+        presetId: presetId,
+        title: isEditingPreset ? 'Updating preset…' : 'Creating preset…',
+        message: `Saving ${participants.length} participants…`
+      });
+
       const saveResponse = await window.api.invoke('supabase-save-preset-participants', {
         presetId: presetId,
         participants: participants
@@ -2141,19 +4904,116 @@ async function savePreset() {
       if (!saveResponse.success) {
         throw new Error(saveResponse.error || 'Failed to save participants');
       }
+
+      // BUG-01 fix — persist edited driver names into preset_participant_drivers.
+      // The upsert above only writes preset_participants.nome, but the UI reads
+      // driver names from preset_participant_drivers with precedence
+      // (getDriverNamesFromParticipant), so edited full names were shadowed by
+      // the stale abbreviated rows on reload. We sync only participants edited or
+      // added this session — those lost their preset_participant_drivers snapshot
+      // in saveParticipantEdit — so untouched rows incur no round-trips.
+      //
+      // supabase-save-preset-participants returns a freshly RELOADED preset (DB
+      // order, NOT input order), so we resolve IDs by identity, never by index:
+      // existing rows already carry p.id; new rows are matched by numero, but
+      // only when that numero is unambiguous in the saved set (so we can never
+      // sync driver names onto the wrong row).
+      const savedParticipants = saveResponse.participants || saveResponse.data || [];
+      const savedByNumero = new Map();
+      savedParticipants.forEach(sp => {
+        const key = String(sp?.numero ?? '');
+        if (!savedByNumero.has(key)) savedByNumero.set(key, []);
+        savedByNumero.get(key).push(sp);
+      });
+
+      const driverSyncTargets = [];
+      participantsData.forEach((p) => {
+        const hadRowsSnapshot = Array.isArray(p.preset_participant_drivers)
+          && p.preset_participant_drivers.length > 0;
+        if (hadRowsSnapshot) return; // not touched this session — DB rows already current
+        let participantId = p.id;
+        if (!participantId) {
+          const matches = savedByNumero.get(String(p.numero ?? '')) || [];
+          if (matches.length === 1) participantId = matches[0].id;
+        }
+        if (!participantId) return; // unresolved/ambiguous new row — skip (no worse than before)
+        const driverNames = (Array.isArray(p.drivers) && p.drivers.length > 0)
+          ? p.drivers
+          : getDriverNamesFromParticipant(p);
+        if (driverNames.length === 0) return; // number-only entry, nothing to sync
+        driverSyncTargets.push({
+          participantId,
+          driverNames,
+          // Carry nationality/metatag (from a CSV/PDF entry-list merge) into the
+          // driver records. Absent for plain modal edits — handler ignores it.
+          ...(Array.isArray(p.driverMeta) ? { driverMeta: p.driverMeta } : {})
+        });
+      });
+
+      if (driverSyncTargets.length > 0) {
+        setPresetSavePhase({
+          title: 'Saving driver names…',
+          message: `0 / ${driverSyncTargets.length}`,
+          percent: 0
+        });
+        for (let i = 0; i < driverSyncTargets.length; i++) {
+          try {
+            await window.api.invoke('preset-driver-sync', driverSyncTargets[i]);
+          } catch (err) {
+            console.warn('[Participants] Driver name sync failed (non-critical):', err);
+          }
+          updatePresetSaveOverlay({
+            percent: Math.round(((i + 1) / driverSyncTargets.length) * 100),
+            message: `${i + 1} / ${driverSyncTargets.length}`
+          });
+        }
+      }
     }
 
-    showNotification(
-      isEditingPreset ? 'Preset updated successfully!' : 'Preset created successfully!',
-      'success'
-    );
+    // Save IPTC metadata (if preset-iptc-editor.js is loaded)
+    if (typeof saveIptcMetadata === 'function') {
+      await saveIptcMetadata(presetId);
+    }
 
-    closePresetEditor();
+    // Sync delivery rules from preset (non-blocking, fire-and-forget)
+    if (deliveryFeatureEnabled && participants.some(p => p.delivery_to_client_id)) {
+      window.api.invoke('delivery-sync-rules-from-preset', presetId)
+        .then(result => {
+          if (result.success && result.data) {
+            const { created, updated, deleted } = result.data;
+            if (created > 0 || updated > 0 || deleted > 0) {
+              console.log(`[Participants] Delivery rules synced: +${created} ~${updated} -${deleted}`);
+            }
+          }
+        })
+        .catch(err => console.warn('[Participants] Delivery rule sync failed (non-critical):', err));
+    }
+
+    if (participants.length > 0) {
+      showPresetSaveSuccess(
+        isEditingPreset ? 'Preset updated successfully.' : 'Preset created successfully.'
+      );
+    } else {
+      // No participants — fall back to system notification (overlay never opened).
+      showNotification(
+        isEditingPreset ? 'Preset updated successfully!' : 'Preset created successfully!',
+        'success'
+      );
+    }
+
+    // BUG-02 — everything in memory is now on the preset; force-close past the
+    // unsaved-changes guard (this IS the save).
+    presetHasUnpersistedChanges = false;
+    closePresetEditor(true);
     await loadParticipantPresets(); // Refresh list
 
   } catch (error) {
     console.error('[Participants] Error saving preset:', error);
-    showNotification('Error saving preset: ' + error.message, 'error');
+    if (__presetSaveOverlay.active) {
+      showPresetSaveError(getErrorMessage(error));
+    } else {
+      showNotification('Error saving preset: ' + getErrorMessage(error), 'error');
+    }
   } finally {
     // Re-enable save button
     const saveBtn = document.getElementById('save-preset-btn');
@@ -2214,14 +5074,48 @@ function collectParticipantsFromTable() {
 }
 
 /**
- * Close preset editor modal
+ * Close preset editor modal.
+ *
+ * BUG-02 — when there are changes not yet on the preset (a pending/failed per-row
+ * persist, an unreviewed CSV/PDF merge, a removal, or a brand-new preset that
+ * was never saved), warn before discarding. This finally defuses the silent-wipe
+ * vector: the X button, Cancel, a global Escape, and a modal-backdrop click all
+ * route here (the last two via closeAllModals) and now inherit the guard.
+ * Programmatic callers that legitimately discard in-memory state (savePreset
+ * success, duplicateAndEditOfficialPreset) pass force = true to skip it.
+ *
+ * @param {boolean} force - skip the unsaved-changes confirm (default false)
  */
-function closePresetEditor() {
+function closePresetEditor(force = false) {
+  const dirty = presetHasUnpersistedChanges
+    || participantPersistQueue.length > 0
+    || !!participantPersistInFlight;
+  if (dirty && !force) {
+    const ok = confirm("You have changes that aren't saved to this preset yet. Close and discard them?");
+    if (!ok) return; // abort the close — keep the editor open with its state intact
+  }
+
   const modal = document.getElementById('preset-editor-modal');
   modal.classList.remove('show');
   currentPreset = null;
   isEditingPreset = false;
   participantsData = [];
+
+  // BUG-02 — drop any queued per-row persists and clear dirty state. An
+  // already in-flight write is harmless: its target object is now detached from
+  // participantsData, so its id write-back lands on a discarded object.
+  participantPersistQueue.length = 0;
+  presetHasUnpersistedChanges = false;
+
+  // Reset read-only state
+  setPresetEditorReadOnly(false);
+
+  // Reset Save button to default
+  const saveBtn = document.getElementById('save-preset-btn');
+  if (saveBtn) {
+    saveBtn.innerHTML = '<span class="btn-icon">💾</span>Save Preset';
+    saveBtn.setAttribute('onclick', 'savePreset()');
+  }
 }
 
 /**
@@ -2232,6 +5126,30 @@ function openCsvImportModal() {
   document.getElementById('csv-file-input').value = '';
   document.getElementById('csv-preview').style.display = 'none';
   document.getElementById('import-csv-btn').disabled = true;
+  // Clear any data from a previous (un-imported) session so a stale file can
+  // never be merged/created by accident — a fresh file selection repopulates it.
+  window.csvImportData = null;
+
+  // BUG-03 — when opened from INSIDE an open preset editor, switch to MERGE mode:
+  // add/update participants in the current preset (keyed on race number) instead
+  // of creating a separate, disconnected preset. The dashboard button (no editor
+  // open) keeps the original "create new preset" behavior.
+  const mergeMode = !!(isEditingPreset && currentPreset);
+  window.csvImportMergeMode = mergeMode;
+
+  const nameInput = document.getElementById('csv-preset-name');
+  const nameGroup = nameInput ? nameInput.closest('.form-group') : null;
+  const title = document.querySelector('#csv-import-modal .modal-header h2');
+  const importBtn = document.getElementById('import-csv-btn');
+  if (nameGroup) nameGroup.style.display = mergeMode ? 'none' : '';
+  if (title) title.textContent = mergeMode
+    ? 'Add participants to current preset'
+    : 'Import Participants from CSV';
+  if (importBtn) importBtn.innerHTML = mergeMode
+    ? '<span class="btn-icon">➕</span>Add to preset'
+    : '<span class="btn-icon">📥</span>Import';
+  const missingGroup = document.getElementById('csv-missing-action-group');
+  if (missingGroup) missingGroup.style.display = mergeMode ? '' : 'none';
 
   const modal = document.getElementById('csv-import-modal');
   modal.classList.add('show');
@@ -2383,20 +5301,229 @@ async function checkForDangerousImport(csvData, presetName) {
 }
 
 /**
+ * Map a parsed CSV row to participant fields, mirroring the column aliases used
+ * by the backend importer (database-service.ts importParticipantsFromCSVSupabase)
+ * so a CSV that works for "create new preset" also works for "add to preset".
+ */
+function mapCsvRowToParticipantFields(row) {
+  const pick = (...keys) => {
+    for (const k of keys) {
+      if (row[k] !== undefined && String(row[k]).trim() !== '') return String(row[k]).trim();
+    }
+    return '';
+  };
+  const splitPipe = (...keys) => {
+    const v = pick(...keys);
+    return v ? v.split('|').map(s => s.trim()) : [];
+  };
+  // Folder columns → canonical folders[] (only used when ADDING a new car),
+  // carrying the device-local path too when the CSV provides it.
+  const folders = [];
+  [['folder_1', 'Folder_1'], ['folder_2', 'Folder_2'], ['folder_3', 'Folder_3']].forEach((keys, i) => {
+    const name = pick(...keys);
+    if (name) {
+      const path = pick(`folder_${i + 1}_path`, `Folder_${i + 1}_Path`);
+      folders.push(path ? { name, path } : { name });
+    }
+  });
+  return {
+    numero: pick('numero', 'Number', 'number', 'race_number', 'bib', 'Bib'),
+    nome: pick('nome', 'Driver', 'driver', 'Person', 'person', 'Name', 'name'),
+    categoria: pick('categoria', 'Category', 'category', 'class', 'Class'),
+    squadra: pick('squadra', 'team', 'Team'),
+    sponsor: pick('sponsor', 'Sponsors', 'sponsors'),
+    metatag: pick('metatag', 'Metatag'),
+    plate_number: pick('plate_number', 'Plate_Number', 'plate', 'Plate'),
+    car_model: pick('car_model', 'Car_Model'),
+    // Per-driver metadata for the entry-list merge (carried into driver records).
+    nationality: pick('nationality', 'Nationality'),
+    driverNationalities: splitPipe('_Driver_Nationalities', '_driver_nationalities'),
+    driverMetatags: splitPipe('_Driver_Metatags', '_driver_metatags'),
+    folders,
+  };
+}
+
+/**
+ * Build per-driver metadata (nationality + metatag) aligned by index with the
+ * driver names. A participant-level nationality falls to the PRIMARY driver when
+ * no per-driver list is provided (mirrors the PDF create-new behavior).
+ */
+function buildDriverMeta(driverNames, f) {
+  return driverNames.map((_, i) => ({
+    nationality: (f.driverNationalities && f.driverNationalities[i])
+      || (i === 0 ? (f.nationality || '') : '')
+      || '',
+    metatag: (f.driverMetatags && f.driverMetatags[i]) || ''
+  }));
+}
+
+/**
+ * BUG-03 — shared merge engine for CSV and PDF entry-list imports into the
+ * currently open preset (instead of creating a separate one). `mappedRows` is an
+ * array of normalized field objects:
+ *   { numero, nome, categoria, squadra, sponsor, metatag, plate_number, car_model }
+ * Race number is the unique key within a preset (one number = one crew), so we
+ * match by numero: an existing number is UPDATED (only non-empty fields refresh
+ * it — id/folders/face data are preserved), a missing number is ADDED. A driver
+ * may race in multiple crews, so driver names are never deduped across
+ * participants. Caller persists via the normal "Save Preset" button (which also
+ * syncs driver names — BUG-01).
+ *
+ * `missingAction` decides what happens to participants ALREADY in the preset
+ * that this import did NOT mention (round-to-round entry-list changes):
+ *   'deactivate' (default) → set is_active=false (kept, with their photos)
+ *   'remove'               → drop from the preset (deleted on Save)
+ *   'keep'                 → leave untouched
+ * Only pre-existing rows (with an id) and a real number are affected; rows added
+ * earlier this session are never deactivated/removed.
+ * @returns {{added:number, updated:number, deactivated:number, removed:number}}
+ */
+function mergeMappedRowsIntoCurrentPreset(mappedRows, missingAction = 'deactivate') {
+  if (!Array.isArray(participantsData)) participantsData = [];
+  let added = 0, updated = 0, deactivated = 0, removed = 0;
+
+  // In the "sync to entry list" modes (deactivate/remove), a car that IS in the
+  // new list is racing this round → re-activate it (so a crew that returns after
+  // skipping a round comes back on). 'keep' is a gentle merge that never changes
+  // activation state.
+  const reactivateMatched = missingAction === 'deactivate' || missingAction === 'remove';
+
+  // numero → index in participantsData (only non-empty numbers are addressable).
+  const indexByNumero = new Map();
+  participantsData.forEach((p, i) => {
+    const key = String(p.numero ?? '').trim();
+    if (key) indexByNumero.set(key, i);
+  });
+
+  const importedNumeros = new Set();
+
+  (mappedRows || []).forEach(f => {
+    const numero = String(f.numero ?? '').trim();
+    const driverNames = f.nome ? f.nome.split(',').map(s => s.trim()).filter(Boolean) : [];
+    if (numero) importedNumeros.add(numero);
+
+    const existingIdx = numero ? indexByNumero.get(numero) : undefined;
+    if (existingIdx !== undefined) {
+      // UPDATE existing car — refresh only the fields the import provides, so
+      // empty cells never wipe data the user already has.
+      const merged = { ...participantsData[existingIdx] };
+      if (reactivateMatched) merged.is_active = true; // present in the list → racing again
+      if (f.nome) {
+        merged.nome = f.nome;
+        merged.drivers = driverNames;
+        merged.driverMeta = buildDriverMeta(driverNames, f); // nationality/metatag per driver
+        // Drop the stale driver-rows snapshot so the Save Preset driver sync
+        // (BUG-01) rewrites preset_participant_drivers with the new names + meta.
+        delete merged.preset_participant_drivers;
+      }
+      if (f.categoria) merged.categoria = f.categoria;
+      if (f.squadra) merged.squadra = f.squadra;
+      if (f.sponsor) merged.sponsor = f.sponsor;
+      if (f.metatag) merged.metatag = f.metatag;
+      if (f.plate_number) merged.plate_number = f.plate_number;
+      if (f.car_model) merged.car_model = f.car_model;
+      participantsData[existingIdx] = merged;
+      updated++;
+    } else {
+      // ADD new car (or a name-only entry with no number). Skip fully-empty rows.
+      if (!numero && driverNames.length === 0) return;
+      participantsData.push({
+        numero,
+        nome: f.nome || '',
+        drivers: driverNames,
+        driverMeta: buildDriverMeta(driverNames, f), // nationality/metatag per driver
+        categoria: f.categoria || '',
+        squadra: f.squadra || '',
+        sponsor: f.sponsor || '',
+        metatag: f.metatag || '',
+        plate_number: f.plate_number || '',
+        car_model: f.car_model || '',
+        folders: (Array.isArray(f.folders) && f.folders.length) ? f.folders : [],
+        include_default_folder: true
+      });
+      if (numero) indexByNumero.set(numero, participantsData.length - 1);
+      added++;
+    }
+  });
+
+  // Handle participants no longer in the entry list. Only pre-existing rows
+  // (have an id) with a real number that this import didn't mention.
+  if (missingAction === 'deactivate' || missingAction === 'remove') {
+    const survivors = [];
+    participantsData.forEach(p => {
+      const numero = String(p.numero ?? '').trim();
+      const missing = !!p.id && numero && !importedNumeros.has(numero);
+      if (missing && missingAction === 'remove') { removed++; return; } // drop → deleted on Save
+      if (missing && missingAction === 'deactivate') { p.is_active = false; deactivated++; }
+      survivors.push(p);
+    });
+    participantsData = survivors;
+  }
+
+  // Re-render the table, preserving the current sort + side panel.
+  const sortState = (typeof getCurrentSortState === 'function') ? getCurrentSortState() : null;
+  loadParticipantsIntoTable(participantsData);
+  if (sortState && typeof applySortState === 'function') applySortState(sortState);
+  if (typeof renderCustomFolders === 'function') renderCustomFolders();
+
+  // BUG-02 — a merge mutates the roster purely in memory; its "remove"/
+  // "deactivate" results are committed ONLY by Save Preset's delete-diff behind
+  // the review gate. Mark dirty so the close-guard warns before discarding.
+  if (added || updated || deactivated || removed) {
+    presetHasUnpersistedChanges = true;
+  }
+
+  return { added, updated, deactivated, removed };
+}
+
+/**
+ * BUG-03 — map CSV rows then merge into the current preset (see
+ * mergeMappedRowsIntoCurrentPreset).
+ */
+function mergeCsvIntoCurrentPreset(csvData, missingAction = 'deactivate') {
+  const mapped = (csvData || []).map(mapCsvRowToParticipantFields);
+  return mergeMappedRowsIntoCurrentPreset(mapped, missingAction);
+}
+
+/**
+ * Build the post-merge toast (shared by CSV and PDF merge paths).
+ */
+function mergeResultMessage(r) {
+  const parts = [`Added ${r.added}`, `updated ${r.updated}`];
+  if (r.deactivated) parts.push(`deactivated ${r.deactivated}`);
+  if (r.removed) parts.push(`removed ${r.removed}`);
+  return `${parts.join(' · ')}. Click "Save Preset" to persist.`;
+}
+
+/**
  * Import CSV preset
  */
 async function importCsvPreset() {
   try {
+    if (!window.csvImportData || window.csvImportData.length === 0) {
+      showNotification('No CSV data to import', 'error');
+      return;
+    }
+
+    // BUG-03 — merge into the currently open preset (add/update by race number)
+    // instead of creating a new one. The user reviews the merged table, then
+    // clicks "Save Preset" to persist.
+    if (window.csvImportMergeMode) {
+      // Merge is synchronous (no network round-trip), so no spinner is needed.
+      // The finally block + the next openCsvImportModal() reset the button.
+      const missingAction = document.getElementById('csv-missing-action')?.value || 'deactivate';
+      const r = mergeCsvIntoCurrentPreset(window.csvImportData, missingAction);
+      window.csvImportData = null; // prevent accidental re-merge of stale data
+      closeCsvImportModal();
+      showNotification(mergeResultMessage(r), 'success');
+      return;
+    }
+
     const presetName = document.getElementById('csv-preset-name').value.trim();
 
     if (!presetName) {
       showNotification('Please enter a preset name', 'error');
       document.getElementById('csv-preset-name').focus();
-      return;
-    }
-
-    if (!window.csvImportData || window.csvImportData.length === 0) {
-      showNotification('No CSV data to import', 'error');
       return;
     }
 
@@ -2559,7 +5686,7 @@ async function previewJsonFile() {
     document.getElementById('json-preview-participants-count').textContent = presetData.participants.length;
 
     const folders = presetData.custom_folders && presetData.custom_folders.length > 0
-      ? presetData.custom_folders.join(', ')
+      ? presetData.custom_folders.map(f => getFolderDisplayName(f)).join(', ')
       : 'None';
     document.getElementById('json-preview-folders').textContent = folders;
 
@@ -2597,11 +5724,15 @@ async function importJsonPreset() {
       categoria: p.category || p.categoria || '',
       squadra: p.team || p.squadra || '',
       plate_number: p.plate_number || '',
+      car_model: p.car_model || '',
       sponsor: p.sponsors || p.sponsor || '',
       metatag: p.metatag || '',
       folder_1: p.folder_1 || '',
       folder_2: p.folder_2 || '',
-      folder_3: p.folder_3 || ''
+      folder_3: p.folder_3 || '',
+      folder_1_path: p.folder_1_path || '',
+      folder_2_path: p.folder_2_path || '',
+      folder_3_path: p.folder_3_path || ''
     }));
 
     // Create preset with Supabase
@@ -2620,6 +5751,12 @@ async function importJsonPreset() {
     // Save participants
     let savedParticipants = [];
     if (participants.length > 0) {
+      showPresetSaveOverlay({
+        presetId: presetId,
+        title: 'Importing preset…',
+        message: `Saving ${participants.length} participants…`
+      });
+
       const saveResponse = await window.api.invoke('supabase-save-preset-participants', {
         presetId: presetId,
         participants: participants
@@ -2645,41 +5782,72 @@ async function importJsonPreset() {
         driversByParticipant[d.participant_numero].push(d);
       });
 
-      // Create driver records for each participant
-      for (const savedP of savedParticipants) {
-        const driversForP = driversByParticipant[savedP.numero] || [];
-        if (driversForP.length > 0) {
-          const batchResult = await window.api.invoke('preset-create-drivers-batch', {
-            participantId: savedP.id,
-            drivers: driversForP.map(d => ({
-              id: d.id,  // Preserve original ID
-              driver_name: d.driver_name,
-              driver_metatag: d.driver_metatag,
-              driver_order: d.driver_order
-            }))
-          });
+      // Phase 2: renderer-driven progress while we create driver records.
+      // Only iterate over participants that actually have drivers in the JSON.
+      const participantsWithDrivers = savedParticipants.filter(
+        savedP => (driversByParticipant[savedP.numero] || []).length > 0
+      );
 
-          if (!batchResult.success) {
-            console.error(`[Participants] Failed to create drivers for #${savedP.numero}:`, batchResult.error);
-          } else {
-            console.log(`[Participants] Created ${batchResult.count} drivers for #${savedP.numero}`);
-          }
-        }
+      if (participantsWithDrivers.length > 0) {
+        setPresetSavePhase({
+          title: 'Creating driver records…',
+          message: `0 / ${participantsWithDrivers.length}`,
+          percent: 0
+        });
       }
 
-      showNotification(
-        `Successfully imported preset "${presetData.name}" with ${participants.length} participants and ${presetData.drivers.length} drivers!`,
-        'success'
-      );
+      for (let i = 0; i < participantsWithDrivers.length; i++) {
+        const savedP = participantsWithDrivers[i];
+        const driversForP = driversByParticipant[savedP.numero];
+
+        const batchResult = await window.api.invoke('preset-create-drivers-batch', {
+          participantId: savedP.id,
+          drivers: driversForP.map(d => ({
+            id: d.id,  // Preserve original ID
+            driver_name: d.driver_name,
+            driver_metatag: d.driver_metatag,
+            driver_nationality: d.driver_nationality || null,
+            driver_order: d.driver_order
+          }))
+        });
+
+        if (!batchResult.success) {
+          console.error(`[Participants] Failed to create drivers for #${savedP.numero}:`, batchResult.error);
+        } else {
+          console.log(`[Participants] Created ${batchResult.count} drivers for #${savedP.numero}`);
+        }
+
+        const done = i + 1;
+        updatePresetSaveOverlay({
+          percent: Math.round((done / participantsWithDrivers.length) * 100),
+          message: `${done} / ${participantsWithDrivers.length}`
+        });
+      }
+
+      const successMsg = `Imported "${presetData.name}" with ${participants.length} participants and ${presetData.drivers.length} drivers.`;
+      if (__presetSaveOverlay.active) {
+        showPresetSaveSuccess(successMsg);
+      } else {
+        showNotification(successMsg, 'success');
+      }
     } else {
-      showNotification(`Successfully imported preset "${presetData.name}" with ${participants.length} participants!`, 'success');
+      const successMsg = `Imported "${presetData.name}" with ${participants.length} participants.`;
+      if (__presetSaveOverlay.active) {
+        showPresetSaveSuccess(successMsg);
+      } else {
+        showNotification(successMsg, 'success');
+      }
     }
 
     closeJsonImportModal();
     await loadParticipantPresets(); // Refresh list
 
   } catch (error) {
-    showNotification('Error importing JSON: ' + error.message, 'error');
+    if (__presetSaveOverlay.active) {
+      showPresetSaveError(error.message || 'Failed to import preset.');
+    } else {
+      showNotification('Error importing JSON: ' + error.message, 'error');
+    }
   } finally {
     // Re-enable import button
     const importBtn = document.getElementById('import-json-btn');
@@ -2773,36 +5941,68 @@ function parseCSV(csvText) {
   const lines = csvText.split('\n').map(line => line.trim()).filter(line => line.length > 0);
   if (lines.length === 0) return [];
 
-  // Parse headers
   const headers = parseCSVLine(lines[0]);
   const data = [];
 
-  // Field mapping from English to database field names
+  // Canonical lowercase -> db field. Case/whitespace insensitive on lookup.
+  // Synonyms cover common CSV exports from other tools and event timing systems.
   const fieldMapping = {
-    'Number': 'numero',
-    'Driver': 'nome',
-    'Team': 'squadra',
-    'Category': 'categoria',
-    'Plate_Number': 'plate_number',
-    'Sponsors': 'sponsor',
-    'Metatag': 'metatag',
-    'Folder_1': 'folder_1',
-    'Folder_2': 'folder_2',
-    'Folder_3': 'folder_3',
-    'Folder_1_Path': 'folder_1_path',
-    'Folder_2_Path': 'folder_2_path',
-    'Folder_3_Path': 'folder_3_path'
+    'number': 'numero',
+    'numero': 'numero',
+    'race_number': 'numero',
+    'bib': 'numero',
+    'bib_number': 'numero',
+    'person': 'nome',
+    'driver': 'nome',
+    'name': 'nome',
+    'nome': 'nome',
+    'team': 'squadra',
+    'squadra': 'squadra',
+    'category': 'categoria',
+    'categoria': 'categoria',
+    'class': 'categoria',
+    'plate_number': 'plate_number',
+    'plate': 'plate_number',
+    'car_model': 'car_model',
+    'nationality': 'nationality',
+    'sponsors': 'sponsor',
+    'sponsor': 'sponsor',
+    'metatag': 'metatag',
+    'folder_1': 'folder_1',
+    'folder_2': 'folder_2',
+    'folder_3': 'folder_3',
+    'folder_1_path': 'folder_1_path',
+    'folder_2_path': 'folder_2_path',
+    'folder_3_path': 'folder_3_path'
   };
+
+  const normalizeHeader = (h) => h.toLowerCase().trim().replace(/\s+/g, '_');
 
   for (let i = 1; i < lines.length; i++) {
     const values = parseCSVLine(lines[i]);
     if (values.length === headers.length) {
       const row = {};
       headers.forEach((header, index) => {
-        const dbField = fieldMapping[header] || header.toLowerCase();
+        const normalized = normalizeHeader(header);
+        const dbField = fieldMapping[normalized] || normalized;
         row[dbField] = values[index] || '';
       });
       data.push(row);
+    }
+  }
+
+  // Fail-fast guard: if no row got a race number, the CSV headers didn't map
+  // to anything the matcher recognizes. Surface the failure here instead of
+  // silently producing a preset where SmartMatcher can never find a match.
+  if (data.length > 0) {
+    const rowsWithNumero = data.filter(r => r.numero && String(r.numero).trim() !== '').length;
+    if (rowsWithNumero === 0) {
+      const headerList = headers.join(', ');
+      throw new Error(
+        `CSV import failed: 0 of ${data.length} rows have a race number after parsing. ` +
+        `Found headers: [${headerList}]. ` +
+        `Expected at least one of: "Number", "number", "race_number", "Bib", or "numero".`
+      );
     }
   }
 
@@ -2862,11 +6062,47 @@ function formatDate(dateString) {
 }
 
 /**
- * Show notification (placeholder - should use existing notification system)
+ * Show a non-blocking toast notification (replaces the old blocking alert()).
+ * BUG-02 fix — the alert() forced an "OK" click that interrupted the
+ * Save & Next flow; a toast is dismissible, auto-expires and never blocks.
  */
 function showNotification(message, type = 'info') {
-  // TODO: Integrate with existing notification system
-  alert(`${type.toUpperCase()}: ${message}`);
+  try {
+    let container = document.getElementById('pm-toast-container');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'pm-toast-container';
+      container.style.cssText =
+        'position:fixed;top:18px;right:18px;z-index:100000;display:flex;' +
+        'flex-direction:column;gap:8px;pointer-events:none;';
+      document.body.appendChild(container);
+    }
+    // Brand functional colors (brand-manual §3.2/§3.4): #1a9ee0 / #10b981 / #f59e0b / #ef4444
+    const accents = { success: '#10b981', error: '#ef4444', warning: '#f59e0b', info: '#1a9ee0' };
+    const toast = document.createElement('div');
+    toast.setAttribute('role', 'status');
+    toast.style.cssText =
+      'pointer-events:auto;min-width:220px;max-width:360px;padding:12px 14px;' +
+      'border-radius:8px;background:#1a2236;color:#f1f4fa;font-size:13px;' +
+      'line-height:1.4;box-shadow:0 12px 32px rgba(0,0,0,0.35);' +
+      `border-left:3px solid ${accents[type] || accents.info};` +
+      'opacity:0;transform:translateX(8px);transition:opacity 150ms ease, transform 150ms ease;';
+    toast.textContent = message;
+    container.appendChild(toast);
+    requestAnimationFrame(() => {
+      toast.style.opacity = '1';
+      toast.style.transform = 'translateX(0)';
+    });
+    const remove = () => {
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateX(8px)';
+      setTimeout(() => toast.remove(), 200);
+    };
+    toast.addEventListener('click', remove);
+    setTimeout(remove, type === 'error' ? 6000 : 3500);
+  } catch (e) {
+    console.warn('[Participants] showNotification:', type, message);
+  }
 }
 
 /**
@@ -3121,7 +6357,7 @@ const PDF_PROCESSING_MESSAGES = [
   "🔍 Scanning for race numbers...",
   "📊 Analyzing entry list structure...",
   "🏁 Checking starting grid positions...",
-  "👀 Looking for driver names...",
+  "👀 Looking for names...",
   "🏆 Identifying competitors...",
   "📋 Reading team information...",
   "⚡ Processing at full throttle...",
@@ -3292,6 +6528,9 @@ function fileToBase64(file) {
  * Open PDF import modal
  */
 function openPdfImportModal() {
+  // BUG-03 — when opened from inside an open preset editor, merge into the
+  // current preset (add/update by race number) instead of creating a new one.
+  window.pdfImportMergeMode = !!(isEditingPreset && currentPreset);
   const modal = document.getElementById('pdf-import-modal');
   if (modal) {
     modal.classList.add('show');
@@ -3507,6 +6746,17 @@ function showPdfPreviewState(data) {
   if (importCountEl) {
     importCountEl.textContent = data.participants.length;
   }
+
+  // BUG-03 (PDF) — in merge mode hide the preset-name, show the missing-action
+  // chooser, and relabel the import button to "Add / update … in preset".
+  const pdfMerge = !!window.pdfImportMergeMode;
+  const nameGroupP = document.getElementById('pdf-preset-name-group');
+  if (nameGroupP) nameGroupP.style.display = pdfMerge ? 'none' : '';
+  const missingGroupP = document.getElementById('pdf-missing-action-group');
+  if (missingGroupP) missingGroupP.style.display = pdfMerge ? '' : 'none';
+  if (pdfMerge && importBtn) {
+    importBtn.innerHTML = `<span class="btn-icon">➕</span>Add / update ${data.participants.length} in preset`;
+  }
 }
 
 /**
@@ -3566,6 +6816,34 @@ async function importPdfPreset() {
     return;
   }
 
+  // BUG-03 (PDF) — merge into the currently open preset instead of creating a
+  // new one. Carries race number, driver names, team, category, sponsors and
+  // car model; the user reviews then clicks "Save Preset". (Driver nationality
+  // from the PDF is only applied on the create-new path, not on merge.)
+  if (window.pdfImportMergeMode) {
+    const missingAction = document.getElementById('pdf-missing-action')?.value || 'deactivate';
+    const mapped = pdfImportData.participants.map(p => ({
+      numero: p.numero || '',
+      nome: p.nome || '',
+      categoria: p.categoria || '',
+      squadra: p.squadra || '',
+      sponsor: Array.isArray(p.sponsors) ? p.sponsors.join(', ') : (p.sponsor || ''),
+      metatag: '',
+      plate_number: '',
+      car_model: p.car_model || '',
+      // Nationality is participant-level in the PDF data → primary driver (same
+      // as the create-new path). Per-driver lists are honored if the parser
+      // ever provides them.
+      nationality: p.nationality || '',
+      driverNationalities: Array.isArray(p.driver_nationalities) ? p.driver_nationalities : [],
+      driverMetatags: []
+    }));
+    const r = mergeMappedRowsIntoCurrentPreset(mapped, missingAction);
+    closePdfImportModal();
+    showNotification(mergeResultMessage(r), 'success');
+    return;
+  }
+
   const presetName = document.getElementById('pdf-preset-name')?.value?.trim();
   if (!presetName) {
     showNotification('Please enter a preset name', 'error');
@@ -3589,6 +6867,7 @@ async function importPdfPreset() {
       nome: p.nome || '', // Comma-separated driver names
       categoria: p.categoria || '',
       squadra: p.squadra || '',
+      car_model: p.car_model || '',
       sponsor: Array.isArray(p.sponsors) ? p.sponsors.join(', ') : (p.sponsor || ''),
       metatag: '',
       plate_number: '',
@@ -3596,6 +6875,14 @@ async function importPdfPreset() {
       folder_2: '',
       folder_3: ''
     }));
+
+    // Build nationality lookup from PDF data for driver records
+    const pdfNationalityByNumero = {};
+    pdfImportData.participants.forEach(p => {
+      if (p.nationality) {
+        pdfNationalityByNumero[p.numero] = p.nationality;
+      }
+    });
 
     // Create preset
     const createResponse = await window.api.invoke('supabase-create-participant-preset', {
@@ -3613,6 +6900,12 @@ async function importPdfPreset() {
     const presetId = createResponse.data.id;
 
     // Save participants
+    showPresetSaveOverlay({
+      presetId: presetId,
+      title: 'Importing from PDF…',
+      message: `Saving ${participants.length} participants…`
+    });
+
     const saveResponse = await window.api.invoke('supabase-save-preset-participants', {
       presetId: presetId,
       participants: participants
@@ -3624,35 +6917,73 @@ async function importPdfPreset() {
 
     const savedParticipants = saveResponse.participants || [];
 
-    // NEW: Auto-create driver records for multi-driver vehicles
-    let driversCreated = 0;
-    for (const savedP of savedParticipants) {
-      if (savedP.nome && savedP.nome.includes(',')) {
-        // Multi-driver detected
-        const driverNames = savedP.nome.split(',').map(s => s.trim()).filter(Boolean);
-
-        if (driverNames.length > 1) {
-          console.log(`[PDF Import] Creating ${driverNames.length} drivers for #${savedP.numero}`);
-
-          const syncResult = await window.api.invoke('preset-driver-sync', {
-            participantId: savedP.id,
-            driverNames: driverNames
-          });
-
-          if (syncResult.success) {
-            driversCreated += syncResult.created || 0;
-          }
-        }
-      }
+    // Phase 2: Create driver records. This phase is renderer-driven (one IPC
+    // call per participant) and can take several seconds for large lists,
+    // so we switch the overlay to a dedicated progress phase.
+    if (savedParticipants.length > 0) {
+      setPresetSavePhase({
+        title: 'Creating driver records…',
+        message: `0 / ${savedParticipants.length}`,
+        percent: 0
+      });
     }
 
-    if (driversCreated > 0) {
-      showNotification(
-        `Successfully imported ${participants.length} participants from PDF with ${driversCreated} driver records created!`,
-        'success'
-      );
+    let driversCreated = 0;
+    for (let i = 0; i < savedParticipants.length; i++) {
+      const savedP = savedParticipants[i];
+      const driverNames = savedP.nome ? savedP.nome.split(',').map(s => s.trim()).filter(Boolean) : [];
+      const nationality = pdfNationalityByNumero[savedP.numero] || '';
+
+      if (driverNames.length > 1) {
+        // Multi-driver detected
+        console.log(`[PDF Import] Creating ${driverNames.length} drivers for #${savedP.numero}`);
+
+        const syncResult = await window.api.invoke('preset-driver-sync', {
+          participantId: savedP.id,
+          driverNames: driverNames
+        });
+
+        if (syncResult.success) {
+          driversCreated += syncResult.created || 0;
+
+          // Propagate nationality to the first driver record
+          if (nationality && syncResult.drivers && syncResult.drivers.length > 0) {
+            await window.api.invoke('preset-driver-update', {
+              driverId: syncResult.drivers[0].id,
+              driverNationality: nationality
+            });
+          }
+        }
+      } else if (driverNames.length === 1 && nationality) {
+        // Single driver with nationality - create driver record to preserve nationality
+        const batchResult = await window.api.invoke('preset-create-drivers-batch', {
+          participantId: savedP.id,
+          drivers: [{
+            driver_name: driverNames[0],
+            driver_nationality: nationality,
+            driver_order: 0
+          }]
+        });
+
+        if (batchResult.success) {
+          driversCreated += batchResult.count || 0;
+        }
+      }
+
+      const done = i + 1;
+      updatePresetSaveOverlay({
+        percent: Math.round((done / savedParticipants.length) * 100),
+        message: `${done} / ${savedParticipants.length}`
+      });
+    }
+
+    const successMsg = driversCreated > 0
+      ? `Imported ${participants.length} participants from PDF with ${driversCreated} driver records.`
+      : `Imported ${participants.length} participants from PDF.`;
+    if (__presetSaveOverlay.active) {
+      showPresetSaveSuccess(successMsg);
     } else {
-      showNotification(`Successfully imported ${participants.length} participants from PDF!`, 'success');
+      showNotification(successMsg, 'success');
     }
 
     closePdfImportModal();
@@ -3660,7 +6991,11 @@ async function importPdfPreset() {
 
   } catch (error) {
     console.error('[Participants] PDF import error:', error);
-    showNotification('Error importing PDF: ' + error.message, 'error');
+    if (__presetSaveOverlay.active) {
+      showPresetSaveError(error.message || 'Failed to import PDF.');
+    } else {
+      showNotification('Error importing PDF: ' + error.message, 'error');
+    }
 
     // Re-enable button
     if (importBtn) {
@@ -3670,11 +7005,1444 @@ async function importPdfPreset() {
   }
 }
 
+// ================================================================
+// PR3v2 — V1 design: bulk folder UI + auto-rule editor
+// ----------------------------------------------------------------
+// Filter row → sticky bulk action bar → table → two slide-in side
+// panels (assign + auto-rule). Rules are in-memory; persistence on
+// the participant_presets row ships in PR4. Reuses the IPC handler
+// from PR2 (`supabase-bulk-assign-folders`). Each pill click in the
+// assign panel fires one IPC call. "Apply all rules" groups
+// participants by target folder and fires one IPC per group.
+//
+// Dependencies: currentPreset, participantsData, escapeHtml,
+// showNotification, getDriverNamesFromParticipant, loadPresetForEditing.
+// ================================================================
+
+const selectedParticipantIds = new Set();
+let bulkSearchQuery = '';
+let bulkTeamFilter = 'All';
+let bulkFolderFilter = 'Any';
+let openSidePanel = null;       // null | { kind, scope, ids? }
+let assignMode = 'append';
+let assignFilter = '';
+// Tri-state of the "Also export to default folder" checkbox in the Assign
+// side panel. Recomputed every time the panel is rendered from the
+// currently-selected participants:
+//   'on'    → every selected participant has include_default_folder=true
+//   'off'   → every selected participant has include_default_folder=false
+//   'mixed' → selection contains both. UI shows an indeterminate checkbox.
+// When the user clicks the checkbox we collapse 'mixed' to 'on', otherwise
+// we flip on↔off, and fire the bulk IPC. This stays in sync with the rows.
+let assignIncludeDefaultState = 'on';
+// V1 design: inline "+ New folder" form embedded in the Assign side panel.
+// When `open`, the form is expanded with two inputs (name + optional path).
+// On submit we add to customFolders, persist via supabase-update-participant-preset,
+// and — if there's a selection — auto-assign the new folder via bulk-assign.
+let inlineCreateFolder = { open: false, name: '', path: '' };
+let folderRules = [];           // in-memory; persistence in PR4
+
+// ---- Helpers ----------------------------------------------------
+
+function getParticipantFoldersList(participant) {
+  if (!participant) return [];
+  if (Array.isArray(participant.folders) && participant.folders.length > 0) {
+    return participant.folders.filter(f => f && typeof f.name === 'string' && f.name.trim() !== '');
+  }
+  const out = [];
+  for (let i = 1; i <= 3; i++) {
+    const name = participant['folder_' + i];
+    const path = participant['folder_' + i + '_path'];
+    if (name && typeof name === 'string' && name.trim() !== '') {
+      out.push({ name: name.trim(), ...(path ? { path } : {}) });
+    }
+  }
+  return out;
+}
+
+function getFolderPoolSorted() {
+  const raw = (currentPreset && Array.isArray(currentPreset.custom_folders))
+    ? currentPreset.custom_folders : [];
+  const normalised = raw
+    .map(f => {
+      if (!f) return null;
+      if (typeof f === 'string') {
+        const name = f.trim();
+        return name ? { name } : null;
+      }
+      if (typeof f === 'object' && typeof f.name === 'string') {
+        const name = f.name.trim();
+        if (!name) return null;
+        return f.path ? { name, path: f.path } : { name };
+      }
+      return null;
+    })
+    .filter(Boolean);
+  normalised.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  return normalised;
+}
+
+// ─── Shared folder pool — promote/backfill helpers ──────────────────────────
+//
+// Background: the multi-assign side panel reads its list of available folders
+// from `currentPreset.custom_folders` (via `getFolderPoolSorted`). But two
+// older code paths — `confirmAddParticipantFolder` and `confirmAddFolder` with
+// `addFolderContext === 'participant'` — used to push the new folder only into
+// `editingParticipantFolders` (the per-participant chip editor), so the folder
+// ended up attached to a single participant without ever entering the pool.
+// Result: a folder created from the per-participant Edit modal didn't show up
+// in the side panel when the user later tried to assign the same folder to
+// other participants.
+//
+// `promoteFolderToPool` keeps the pool in sync whenever a folder is created
+// from any code path. `backfillParticipantFoldersIntoPool` is the one-shot
+// migration that walks existing participants on preset load and lifts any
+// orphan folders into the pool, so historical data (e.g. "Genesis" attached
+// only to participant #17) gets fixed automatically the next time the preset
+// is opened for editing.
+
+/**
+ * Push a single folder into the shared pool. Idempotent on the name
+ * (case-insensitive). If the pool entry exists but lacks a path and the
+ * incoming folder has one, the path is backfilled on the existing entry.
+ * Persists to Supabase in the background; failures are logged but never
+ * surfaced to the user because the folder is already attached on the chip
+ * and the next preset save (or another pool-write) will re-sync.
+ */
+async function promoteFolderToPool(folder) {
+  if (!folder || typeof folder.name !== 'string') return;
+  const trimmed = folder.name.trim();
+  if (!trimmed) return;
+  const key = trimmed.toLowerCase();
+
+  let mutated = false;
+
+  // Local mirror (`customFolders`) lookup.
+  const existingLocal = customFolders.find(
+    f => (f && f.name ? f.name.trim().toLowerCase() : '') === key
+  );
+  if (existingLocal) {
+    if (!existingLocal.path && folder.path) {
+      existingLocal.path = folder.path;
+      mutated = true;
+    }
+  } else {
+    const obj = { name: trimmed };
+    if (folder.path) obj.path = folder.path;
+    customFolders.push(obj);
+    mutated = true;
+  }
+
+  // Preset-level pool (`currentPreset.custom_folders`) — same idempotent
+  // logic. Both stores must stay aligned because `getFolderPoolSorted`
+  // reads the preset object directly.
+  if (currentPreset && typeof currentPreset === 'object') {
+    if (!Array.isArray(currentPreset.custom_folders)) {
+      currentPreset.custom_folders = [];
+    }
+    const findInPreset = () => currentPreset.custom_folders.find(f => {
+      if (!f) return false;
+      const n = typeof f === 'string' ? f : (typeof f === 'object' ? f.name : '');
+      return (n || '').trim().toLowerCase() === key;
+    });
+    const existingPreset = findInPreset();
+    if (existingPreset) {
+      if (typeof existingPreset === 'object' && !existingPreset.path && folder.path) {
+        existingPreset.path = folder.path;
+        mutated = true;
+      }
+    } else {
+      const obj = { name: trimmed };
+      if (folder.path) obj.path = folder.path;
+      currentPreset.custom_folders.push(obj);
+      mutated = true;
+    }
+  }
+
+  if (!mutated) return;
+
+  // Optimistic re-render of every consumer.
+  if (typeof renderCustomFolders === 'function') renderCustomFolders();
+  if (typeof updateFolderSelects === 'function') updateFolderSelects();
+  if (typeof renderAssignSidePanel === 'function') renderAssignSidePanel();
+
+  // Per-device path persistence (matches `submitInlineCreateFolder`).
+  if (folder.path && currentPreset?.id && typeof updateLocalFolderPath === 'function') {
+    updateLocalFolderPath(currentPreset.id, trimmed, folder.path);
+  }
+
+  // Persist to Supabase. Skip if the preset hasn't been saved yet — the
+  // preset save flow will write `custom_folders` at that point.
+  if (!currentPreset?.id) return;
+  try {
+    const resp = await window.api.invoke('supabase-update-participant-preset', {
+      presetId: currentPreset.id,
+      updateData: { custom_folders: customFolders }
+    });
+    if (!resp || !resp.success) {
+      throw new Error(resp?.error || 'Failed to persist folder pool update');
+    }
+  } catch (err) {
+    console.error('[FolderPool] promoteFolderToPool persistence failed:', err);
+  }
+}
+
+/**
+ * One-shot migration that runs on preset open. Scans every participant's
+ * `folders[]` (and legacy folder_1/2/3 slots) for folder names that aren't
+ * yet in `currentPreset.custom_folders`, and lifts them into the pool. This
+ * heals presets where folders were created via the per-participant Edit
+ * modal before the pool-promotion logic existed.
+ *
+ * Returns the count of folders backfilled. No-op when the pool is already
+ * a superset of every participant folder, or when the preset has no id.
+ */
+async function backfillParticipantFoldersIntoPool() {
+  if (!currentPreset?.id) {
+    console.log('[FolderPool] backfill skipped: preset has no id');
+    return 0;
+  }
+  if (!Array.isArray(participantsData) || participantsData.length === 0) {
+    console.log('[FolderPool] backfill skipped: no participants loaded');
+    return 0;
+  }
+
+  // Snapshot of pool names (case-insensitive) we already know about.
+  const poolNames = new Set(
+    customFolders
+      .map(f => (f && f.name ? f.name.trim().toLowerCase() : ''))
+      .filter(Boolean)
+  );
+
+  // Collect orphans, first occurrence wins for the path.
+  const orphans = new Map(); // key → { name, path? }
+  for (const p of participantsData) {
+    const folders = (typeof getParticipantFoldersList === 'function')
+      ? getParticipantFoldersList(p) : [];
+    for (const f of folders) {
+      const key = (f && f.name ? f.name.trim().toLowerCase() : '');
+      if (!key || poolNames.has(key) || orphans.has(key)) continue;
+      const obj = { name: f.name.trim() };
+      if (f.path) obj.path = f.path;
+      orphans.set(key, obj);
+    }
+  }
+
+  console.log(
+    `[FolderPool] backfill scan: ${participantsData.length} participants, ` +
+    `${poolNames.size} folder(s) already in pool, ${orphans.size} orphan(s) found`
+  );
+
+  if (orphans.size === 0) {
+    console.log('[FolderPool] backfill no-op: pool is already a superset of every participant folder');
+    return 0;
+  }
+
+  // Apply mutations locally first.
+  for (const obj of orphans.values()) {
+    customFolders.push(obj);
+    if (!Array.isArray(currentPreset.custom_folders)) {
+      currentPreset.custom_folders = [];
+    }
+    currentPreset.custom_folders.push({ ...obj });
+  }
+
+  if (typeof renderCustomFolders === 'function') renderCustomFolders();
+  if (typeof updateFolderSelects === 'function') updateFolderSelects();
+
+  // Persist. We deliberately don't toast on success — this is silent data
+  // healing, not a user-initiated action.
+  try {
+    const resp = await window.api.invoke('supabase-update-participant-preset', {
+      presetId: currentPreset.id,
+      updateData: { custom_folders: customFolders }
+    });
+    if (!resp || !resp.success) {
+      throw new Error(resp?.error || 'Failed to backfill folder pool');
+    }
+    console.log(
+      `[FolderPool] Backfilled ${orphans.size} orphan folder(s) into the pool: ` +
+      Array.from(orphans.values()).map(f => f.name).join(', ')
+    );
+    return orphans.size;
+  } catch (err) {
+    console.error('[FolderPool] backfill persistence failed:', err);
+    return 0;
+  }
+}
+
+function escapeAttr(str) {
+  if (typeof str !== 'string') return '';
+  return str.replace(/&/g, '&amp;').replace(/'/g, '&#39;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function ruleMatchesParticipant(participant, rule) {
+  if (!rule || !rule.value) return false;
+  let fieldVal = '';
+  if (rule.field === 'team') fieldVal = participant.squadra || '';
+  else if (rule.field === 'category') fieldVal = participant.categoria || '';
+  else if (rule.field === 'car') fieldVal = participant.car_model || '';
+  else return false;
+  const v = String(fieldVal).toLowerCase();
+  const q = rule.value.toLowerCase();
+  if (rule.op === 'contains') return v.includes(q);
+  if (rule.op === 'equals') return v === q;
+  if (rule.op === 'starts with') return v.startsWith(q);
+  return false;
+}
+
+function getVisibleParticipants() {
+  return (participantsData || []).filter(p => {
+    if (bulkSearchQuery) {
+      const q = bulkSearchQuery.toLowerCase();
+      const numStr = String(p.numero || '').toLowerCase();
+      const driverNames = (typeof getDriverNamesFromParticipant === 'function'
+        ? getDriverNamesFromParticipant(p) : []).join(' ').toLowerCase();
+      const team = (p.squadra || '').toLowerCase();
+      if (!numStr.includes(q) && !driverNames.includes(q) && !team.includes(q)) return false;
+    }
+    if (bulkTeamFilter !== 'All' && (p.squadra || '') !== bulkTeamFilter) return false;
+    const folderCount = getParticipantFoldersList(p).length;
+    if (bulkFolderFilter === 'Without folders' && folderCount > 0) return false;
+    if (bulkFolderFilter === 'With folders' && folderCount === 0) return false;
+    return true;
+  });
+}
+
+// ---- Selection handlers -----------------------------------------
+
+function onParticipantSelectChange(checkboxEl) {
+  if (!checkboxEl) return;
+  const id = checkboxEl.getAttribute('data-participant-id');
+  if (!id) return;
+  if (checkboxEl.checked) selectedParticipantIds.add(id);
+  else selectedParticipantIds.delete(id);
+  const row = checkboxEl.closest('tr');
+  if (row) row.classList.toggle('row-selected-v1', checkboxEl.checked);
+  updateBulkActionBar();
+}
+
+function onSelectAllParticipantsToggle(headerCheckbox) {
+  if (!headerCheckbox) return;
+  const tbody = document.getElementById('participants-tbody');
+  if (!tbody) return;
+  const rowBoxes = tbody.querySelectorAll('input.row-select-input-v1');
+  rowBoxes.forEach(cb => {
+    if (cb.disabled) return;
+    cb.checked = headerCheckbox.checked;
+    const id = cb.getAttribute('data-participant-id');
+    if (!id) return;
+    if (headerCheckbox.checked) selectedParticipantIds.add(id);
+    else selectedParticipantIds.delete(id);
+    const row = cb.closest('tr');
+    if (row) row.classList.toggle('row-selected-v1', headerCheckbox.checked);
+  });
+  updateBulkActionBar();
+}
+
+function bulkClearSelection() {
+  selectedParticipantIds.clear();
+  const tbody = document.getElementById('participants-tbody');
+  if (tbody) {
+    tbody.querySelectorAll('input.row-select-input-v1').forEach(cb => { cb.checked = false; });
+    tbody.querySelectorAll('tr.row-selected-v1').forEach(r => r.classList.remove('row-selected-v1'));
+  }
+  const headerBox = document.getElementById('select-all-participants');
+  if (headerBox) {
+    headerBox.checked = false;
+    headerBox.indeterminate = false;
+  }
+  updateBulkActionBar();
+}
+
+function updateBulkActionBar() {
+  const bar = document.getElementById('bulk-action-bar');
+  const badge = document.getElementById('bulk-selection-badge');
+  const numbersEl = document.getElementById('bulk-selection-numbers');
+  const count = selectedParticipantIds.size;
+  if (bar) bar.classList.toggle('is-hidden', count === 0);
+  if (badge) badge.textContent = String(count);
+  if (numbersEl) {
+    const ids = Array.from(selectedParticipantIds);
+    const idMap = new Map((participantsData || []).filter(p => p.id).map(p => [p.id, p]));
+    const numerosSorted = ids
+      .map(id => idMap.get(id)).filter(Boolean)
+      .map(p => p.numero).filter(n => n !== undefined && n !== null && n !== '')
+      .sort((a, b) => {
+        const na = parseInt(a, 10), nb = parseInt(b, 10);
+        if (!isNaN(na) && !isNaN(nb)) return na - nb;
+        return String(a).localeCompare(String(b));
+      });
+    const preview = numerosSorted.slice(0, 5).map(n => '#' + n).join(', ');
+    numbersEl.textContent = numerosSorted.length > 5
+      ? `· ${preview}, +${numerosSorted.length - 5} more`
+      : (preview ? `· ${preview}` : '');
+  }
+  const headerBox = document.getElementById('select-all-participants');
+  if (headerBox) {
+    const tbody = document.getElementById('participants-tbody');
+    const visibleSelectable = tbody
+      ? Array.from(tbody.querySelectorAll('tr')).filter(r => r.style.display !== 'none')
+        .map(r => r.querySelector('input.row-select-input-v1')).filter(cb => cb && !cb.disabled)
+      : [];
+    const visibleSelected = visibleSelectable.filter(cb =>
+      selectedParticipantIds.has(cb.getAttribute('data-participant-id'))
+    ).length;
+    headerBox.checked = visibleSelectable.length > 0 && visibleSelected === visibleSelectable.length;
+    headerBox.indeterminate = visibleSelected > 0 && visibleSelected < visibleSelectable.length;
+  }
+
+  // v1.1.5 — context-aware Activate / Deactivate buttons.
+  // `is_active === false` means inactive; undefined/true means active.
+  // Show "Activate" only when there's at least one inactive row in the
+  // selection, and "Deactivate" only when there's at least one active row.
+  // Mixed selection → both buttons visible.
+  const activateBtn = document.getElementById('bulk-activate-btn');
+  const deactivateBtn = document.getElementById('bulk-deactivate-btn');
+  if (activateBtn || deactivateBtn) {
+    const idMapForActive = new Map((participantsData || []).filter(p => p.id).map(p => [p.id, p]));
+    let hasActive = false;
+    let hasInactive = false;
+    for (const id of selectedParticipantIds) {
+      const p = idMapForActive.get(id);
+      if (!p) continue;
+      if (p.is_active === false) hasInactive = true;
+      else hasActive = true;
+      if (hasActive && hasInactive) break;
+    }
+    if (activateBtn) activateBtn.classList.toggle('is-hidden', !hasInactive);
+    if (deactivateBtn) deactivateBtn.classList.toggle('is-hidden', !hasActive);
+  }
+  if (openSidePanel && openSidePanel.kind === 'assign' && openSidePanel.scope === 'selection') {
+    openSidePanel.ids = Array.from(selectedParticipantIds);
+    renderAssignSidePanel();
+  }
+}
+
+// ---- Filter handlers --------------------------------------------
+
+function onBulkSearchChange(value) {
+  bulkSearchQuery = value || '';
+  applyVisibilityFilter();
+}
+
+function onTeamFilterToggle() {
+  const teams = Array.from(new Set((participantsData || []).map(p => p.squadra).filter(Boolean))).sort();
+  const opts = ['All', ...teams];
+  const i = opts.indexOf(bulkTeamFilter);
+  bulkTeamFilter = opts[(i + 1) % opts.length] || 'All';
+  const valueEl = document.getElementById('filter-team-value');
+  if (valueEl) valueEl.textContent = bulkTeamFilter;
+  applyVisibilityFilter();
+}
+
+function onFolderFilterToggle() {
+  const opts = ['Any', 'Without folders', 'With folders'];
+  const i = opts.indexOf(bulkFolderFilter);
+  bulkFolderFilter = opts[(i + 1) % opts.length] || 'Any';
+  const valueEl = document.getElementById('filter-folder-value');
+  if (valueEl) valueEl.textContent = bulkFolderFilter;
+  applyVisibilityFilter();
+}
+
+function applyVisibilityFilter() {
+  const tbody = document.getElementById('participants-tbody');
+  if (!tbody) return;
+  const visibleIds = new Set(getVisibleParticipants().map(p => p.id).filter(Boolean));
+  tbody.querySelectorAll('tr').forEach(row => {
+    const cb = row.querySelector('input.row-select-input-v1');
+    const id = cb ? cb.getAttribute('data-participant-id') : null;
+    row.style.display = (id && visibleIds.has(id)) ? '' : 'none';
+  });
+  updateBulkActionBar();
+}
+
+// ---- Inline chip removal ----------------------------------------
+
+async function onRemoveFolderFromRowChip(btnEl, participantId, folderName) {
+  if (!participantId || !folderName) return;
+  if (!currentPreset || !currentPreset.id) return;
+  const participant = (participantsData || []).find(p => p.id === participantId);
+  if (!participant) return;
+  const surviving = getParticipantFoldersList(participant)
+    .filter(f => f.name.toLowerCase() !== folderName.toLowerCase())
+    .map(f => f.name);
+  try {
+    btnEl.disabled = true;
+    const response = await window.api.invoke('supabase-bulk-assign-folders', {
+      presetId: currentPreset.id, participantIds: [participantId],
+      folderNames: surviving, mode: 'replace'
+    });
+    if (!response || !response.success) {
+      throw new Error(response?.error || 'Failed to remove folder');
+    }
+    await refreshCurrentPresetData();
+  } catch (err) {
+    console.error('[PR3v2] removeFolder failed:', err);
+    showNotification('Failed to remove folder: ' + (err.message || 'Unknown error'), 'error');
+  } finally {
+    btnEl.disabled = false;
+  }
+}
+
+// ---- Side panel: open / close -----------------------------------
+//
+// Invariant: at most ONE `.slide-panel` carries `.is-open` at any moment.
+// All open/close transitions go through `setOpenSidePanel(next)` — the
+// single point that mutates both `openSidePanel` state AND the DOM of
+// both asides atomically. Earlier iterations used per-panel show/hide
+// helpers plus ad-hoc cross-close calls inside each opener; a missed
+// cross-close left both `<aside>` elements with `.is-open` and both
+// panels visible simultaneously (Folder pool + Auto-rules side by
+// side). Centralising the mutation removes that failure mode.
+function setOpenSidePanel(next) {
+  openSidePanel = next;
+  const assignAside   = document.getElementById('assign-side-panel');
+  const autoRuleAside = document.getElementById('auto-rule-side-panel');
+  const wantAssign    = next && next.kind === 'assign';
+  const wantAutoRule  = next && next.kind === 'auto-rule';
+
+  if (wantAssign)   renderAssignSidePanel(); else if (assignAside)   assignAside.innerHTML = '';
+  if (wantAutoRule) renderAutoRulePanel();   else if (autoRuleAside) autoRuleAside.innerHTML = '';
+
+  if (assignAside) {
+    assignAside.classList.toggle('is-open', !!wantAssign);
+    assignAside.setAttribute('aria-hidden', wantAssign ? 'false' : 'true');
+  }
+  if (autoRuleAside) {
+    autoRuleAside.classList.toggle('is-open', !!wantAutoRule);
+    autoRuleAside.setAttribute('aria-hidden', wantAutoRule ? 'false' : 'true');
+  }
+}
+
+function openAssignPanelForSelected() {
+  if (selectedParticipantIds.size === 0) {
+    showNotification('Select at least one participant first.', 'warning');
+    return;
+  }
+  setOpenSidePanel({ kind: 'assign', scope: 'selection', ids: Array.from(selectedParticipantIds) });
+}
+
+function openAssignPanelForRow(participantId) {
+  if (!participantId) return;
+  setOpenSidePanel({ kind: 'assign', scope: 'single', ids: [participantId] });
+}
+
+// V1 design: filter-row "+ Add Folder" opens the same side panel with the
+// inline create form expanded. If a selection is active in the table, we
+// honor it — the new folder will be created AND auto-assigned to the
+// selected participants (with the panel header reading "N selected" instead
+// of "Folder pool"). Otherwise we open in pool-only mode.
+function openCreateFolderPanel() {
+  const selectedIds = Array.from(selectedParticipantIds || []);
+  inlineCreateFolder = { open: true, name: '', path: '' };
+  setOpenSidePanel(
+    selectedIds.length > 0
+      ? { kind: 'assign', scope: 'selection', ids: selectedIds }
+      : { kind: 'assign', scope: 'pool', ids: [] }
+  );
+  setTimeout(() => {
+    const el = document.getElementById('inline-create-folder-name');
+    // preventScroll: avoid the browser auto-scrolling an ancestor container
+    // (modal-body, .modal.show) to bring the input into view. That implicit
+    // scroll was a likely cause of the apparent layout shift unique to the
+    // "+ Add Folder" path — the "+ Auto-assign by rule" panel doesn't focus
+    // any input on open, which is why it didn't exhibit the same behavior.
+    if (el) el.focus({ preventScroll: true });
+  }, 50);
+}
+
+function closeAssignSidePanel() {
+  inlineCreateFolder = { open: false, name: '', path: '' };
+  if (openSidePanel?.kind === 'assign') setOpenSidePanel(null);
+}
+
+function openAutoRulePanel() {
+  setOpenSidePanel({ kind: 'auto-rule' });
+}
+
+function closeAutoRulePanel() {
+  if (openSidePanel?.kind === 'auto-rule') setOpenSidePanel(null);
+}
+
+// ---- Render: Assign side panel ----------------------------------
+
+function renderAssignSidePanel() {
+  const panel = document.getElementById('assign-side-panel');
+  if (!panel) return;
+  if (!openSidePanel || openSidePanel.kind !== 'assign') {
+    panel.innerHTML = '';
+    return;
+  }
+  const ids = openSidePanel.ids || [];
+  const rows = (participantsData || []).filter(p => p.id && ids.includes(p.id));
+  const pool = getFolderPoolSorted();
+  const visiblePool = pool.filter(f => f.name.toLowerCase().includes((assignFilter || '').toLowerCase()));
+
+  const folderCounts = new Map();
+  rows.forEach(r => {
+    getParticipantFoldersList(r).forEach(f => {
+      const key = f.name.toLowerCase();
+      folderCounts.set(key, (folderCounts.get(key) || 0) + 1);
+    });
+  });
+
+  const numerosSorted = rows.map(r => r.numero).filter(Boolean)
+    .sort((a, b) => {
+      const na = parseInt(a, 10), nb = parseInt(b, 10);
+      if (!isNaN(na) && !isNaN(nb)) return na - nb;
+      return String(a).localeCompare(String(b));
+    });
+  const previewNumeros = numerosSorted.slice(0, 6).map(n => '#' + n).join(', ');
+  const numbersHint = numerosSorted.length > 6
+    ? `${previewNumeros} +${numerosSorted.length - 6}` : previewNumeros;
+
+  // Tri-state recomputation for the "Also export to default folder"
+  // checkbox: drive `assignIncludeDefaultState` from the actual rows the
+  // user has selected. Undefined / null on a row is treated as `true`
+  // (matches the DB default and the rest of the codebase, see
+  // unified-export-handler.ts ~line 208).
+  if (rows.length === 0) {
+    assignIncludeDefaultState = 'on';
+  } else {
+    const hasOn = rows.some(r => r.include_default_folder !== false);
+    const hasOff = rows.some(r => r.include_default_folder === false);
+    assignIncludeDefaultState = hasOn && hasOff ? 'mixed' : (hasOff ? 'off' : 'on');
+  }
+
+  // V1: when invoked with an empty selection (e.g. from the filter row "+ Add
+  // Folder" button), we collapse the assign-specific affordances and show a
+  // pure folder-management view: just the pool + the inline create form.
+  const hasSelection = ids.length > 0;
+  const headerBadge = hasSelection
+    ? `<span style="width: 32px; height: 32px; border-radius: 8px; background: var(--v1-accent); color: white; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; flex-shrink: 0;">${ids.length}</span>`
+    : `<span style="width: 32px; height: 32px; border-radius: 8px; background: var(--v1-bg-elevated); color: #93c5fd; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; flex-shrink: 0;"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-8l-2-2z"/></svg></span>`;
+  const headerTitle = hasSelection
+    ? `${ids.length} selected`
+    : 'Folder pool';
+  const headerSub = hasSelection
+    ? escapeHtml(numbersHint || '—')
+    : `${pool.length} folder${pool.length === 1 ? '' : 's'} defined`;
+
+  panel.innerHTML = `
+    <div class="slide-panel-header">
+      ${headerBadge}
+      <div class="slide-panel-header-meta">
+        <div class="slide-panel-header-title">${headerTitle}</div>
+        <div class="slide-panel-header-sub">${headerSub}</div>
+      </div>
+      <button type="button" class="slide-panel-close" onclick="closeAssignSidePanel()" aria-label="Close panel">×</button>
+    </div>
+    <div class="slide-panel-body">
+      ${pool.length > 5 ? `<input type="text" placeholder="Filter folders…" value="${escapeHtml(assignFilter)}" oninput="onAssignFilterChange(this.value)" style="width: 100%; padding: 6px 10px; margin-bottom: 12px; border-radius: var(--v1-radius-sm); font-size: 13px;">` : ''}
+      <div class="assign-section-label">${hasSelection ? `Tap a folder to assign · ${visiblePool.length} available` : `Existing folders · ${visiblePool.length}${visiblePool.length > 0 ? ' — click ✏️ to rename or change path' : ''}`}</div>
+      <div class="assign-folder-grid${hasSelection ? '' : ' assign-folder-grid-pool'}">
+        ${pool.length === 0 ? `<div style="font-size: 12px; line-height: 1.55;">No folders defined yet. Use <strong>+ New folder</strong> below to create one${hasSelection ? ' — it will be auto-assigned to the selected participants' : ''}.</div>` : ''}
+        ${visiblePool.map(f => {
+          const count = folderCounts.get(f.name.toLowerCase()) || 0;
+          if (!hasSelection) {
+            // Pool mode (no participants selected): manageable pill with name,
+            // path, and edit/remove actions. Reuses editCustomFolder() and
+            // removeCustomFolder() which already propagate changes across
+            // every participant that references the folder.
+            const safeName = escapeAttr(f.name);
+            const pathDisplay = f.path
+              ? `<span class="pill-path" title="${escapeHtml(f.path)}">${escapeHtml(shortenPath(f.path))}</span>`
+              : `<span class="pill-path is-empty">no path</span>`;
+            const usageBadge = count > 0
+              ? `<span class="pill-usage" title="Used by ${count} participant${count === 1 ? '' : 's'}">${count} 🏎️</span>`
+              : '';
+            return `
+              <div class="assign-folder-pill is-manageable" data-folder-name="${escapeHtml(f.name)}">
+                <span class="pill-icon" aria-hidden="true">📁</span>
+                <span class="pill-name">${escapeHtml(f.name)}</span>
+                ${pathDisplay}
+                ${usageBadge}
+                <button type="button" class="pill-action" onclick="editCustomFolder('${safeName}')" aria-label="Edit folder ${escapeAttr(f.name)}" title="Edit folder name and path">✏️</button>
+                <button type="button" class="pill-action is-danger" onclick="removeCustomFolder('${safeName}')" aria-label="Remove folder ${escapeAttr(f.name)}" title="Remove folder from preset and every participant">×</button>
+              </div>
+            `;
+          }
+          const all = count === ids.length && ids.length > 0;
+          const some = count > 0 && count < ids.length;
+          const cls = ['assign-folder-pill'];
+          if (all) cls.push('has-all');
+          else if (some) cls.push('has-some');
+          const countLabel = count > 0 ? `<span class="count-fraction">${count}/${ids.length}</span>` : '';
+          const checkIcon = all ? '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>' : '';
+          return `<button type="button" class="${cls.join(' ')}" onclick="onAssignFolderClick('${escapeAttr(f.name)}')" title="${escapeHtml(f.path || f.name)}">${checkIcon}${escapeHtml(f.name)}${countLabel}</button>`;
+        }).join('')}
+      </div>
+
+      ${renderInlineCreateFolderBlock(hasSelection, ids.length)}
+
+      ${hasSelection ? `
+        <div class="assign-section-label">Mode</div>
+        <div class="assign-mode-block">
+          <label><input type="radio" name="assign-mode" ${assignMode === 'append' ? 'checked' : ''} onchange="onAssignModeChange('append')"><span><strong>Append</strong> <span style="color: var(--v1-text-muted);">— add to existing folders</span></span></label>
+          <label><input type="radio" name="assign-mode" ${assignMode === 'replace' ? 'checked' : ''} onchange="onAssignModeChange('replace')"><span><strong>Replace</strong> <span style="color: var(--v1-text-muted);">— overwrite existing</span></span></label>
+        </div>
+
+        <div class="assign-section-label" style="margin-top: 12px;">Default folder</div>
+        <div class="assign-mode-block">
+          <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
+            <input type="checkbox"
+                   id="assign-include-default-folder"
+                   ${assignIncludeDefaultState === 'on' ? 'checked' : ''}
+                   onchange="onAssignIncludeDefaultToggle(this)"
+                   style="margin-top: 3px; flex-shrink: 0;">
+            <span>
+              <strong>Also export to the default folder</strong>
+              <span style="color: var(--v1-text-muted); display: block; font-size: 11.5px; margin-top: 2px;">
+                ${assignIncludeDefaultState === 'mixed'
+                  ? 'Mixed across selection — clicking will set the same value for all.'
+                  : assignIncludeDefaultState === 'on'
+                    ? 'Each photo also lands in <code>{number}/</code> alongside the custom folders.'
+                    : 'Photos go ONLY to the custom folders configured for each participant.'}
+              </span>
+            </span>
+          </label>
+        </div>
+      ` : ''}
+    </div>
+    <div class="slide-panel-footer">
+      <button type="button" class="btn btn-sm" onclick="closeAssignSidePanel()">Done</button>
+    </div>
+  `;
+
+  // After re-render, restore focus to the inline create name input if the
+  // form is currently open, so typing isn't interrupted on every keystroke.
+  if (inlineCreateFolder.open) {
+    const nameInput = document.getElementById('inline-create-folder-name');
+    if (nameInput && document.activeElement?.id !== 'inline-create-folder-name') {
+      // Only refocus when the active element is NOT already this input,
+      // to avoid stealing focus when the user clicks Browse or the path field.
+      const wasFocused = document.activeElement?.tagName === 'BODY';
+      if (wasFocused) nameInput.focus();
+    }
+  }
+
+  // Apply the indeterminate visual state on the include-default checkbox
+  // ('checked' alone can't render the "mixed" tri-state — `indeterminate`
+  // is set imperatively after the DOM exists). Re-applied on every
+  // render so the visual stays in sync with `assignIncludeDefaultState`.
+  const incDefaultEl = document.getElementById('assign-include-default-folder');
+  if (incDefaultEl) {
+    incDefaultEl.indeterminate = (assignIncludeDefaultState === 'mixed');
+  }
+}
+
+// ─── V1 design: inline "+ New folder" form inside the Assign side panel ─────
+
+function renderInlineCreateFolderBlock(hasSelection, selectionCount) {
+  if (!inlineCreateFolder.open) {
+    return `
+      <button type="button" class="inline-create-folder-trigger" onclick="openInlineCreateFolder()">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5z"/></svg>
+        New folder${hasSelection ? ` <span class="inline-create-folder-hint">— auto-assigns to ${selectionCount}</span>` : ''}
+      </button>
+    `;
+  }
+  const safeName = escapeHtml(inlineCreateFolder.name || '');
+  const safePath = escapeHtml(inlineCreateFolder.path || '');
+  const submitDisabled = !inlineCreateFolder.name?.trim();
+  return `
+    <div class="inline-create-folder-form">
+      <div class="inline-create-folder-form-header">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-8l-2-2z"/></svg>
+        <span>New folder</span>
+        ${hasSelection ? `<span class="inline-create-folder-autobadge">auto-assign · ${selectionCount}</span>` : ''}
+        <div style="flex: 1;"></div>
+        <button type="button" class="inline-create-folder-cancel" onclick="closeInlineCreateFolder()" aria-label="Cancel">×</button>
+      </div>
+      <label class="inline-create-folder-label">Name</label>
+      <input type="text"
+             id="inline-create-folder-name"
+             class="inline-create-folder-input"
+             placeholder="e.g. AMG, Team Verstappen, Pro Drivers…"
+             value="${safeName}"
+             oninput="onInlineCreateFolderNameChange(this.value)"
+             onkeydown="onInlineCreateFolderKeyDown(event)"
+             autocomplete="off">
+      <label class="inline-create-folder-label" style="margin-top: 8px;">
+        Path <span style="font-weight: 500; color: var(--v1-text-faint); text-transform: none; letter-spacing: 0;">(optional)</span>
+      </label>
+      <div class="inline-create-folder-path-row">
+        <input type="text"
+               id="inline-create-folder-path"
+               class="inline-create-folder-input"
+               placeholder="Leave empty for default folder organization"
+               value="${safePath}"
+               oninput="onInlineCreateFolderPathChange(this.value)"
+               autocomplete="off">
+        <button type="button" class="inline-create-folder-browse" onclick="onInlineCreateFolderBrowse()" title="Browse for a directory">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-8l-2-2z"/></svg>
+        </button>
+      </div>
+      <div class="inline-create-folder-actions">
+        <button type="button" class="btn btn-sm" onclick="closeInlineCreateFolder()">Cancel</button>
+        <button type="button" class="btn btn-primary btn-sm" onclick="submitInlineCreateFolder()" ${submitDisabled ? 'disabled' : ''}>
+          ${hasSelection ? 'Create &amp; assign' : 'Create folder'}
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+function openInlineCreateFolder() {
+  inlineCreateFolder = { open: true, name: '', path: '' };
+  renderAssignSidePanel();
+  setTimeout(() => {
+    const el = document.getElementById('inline-create-folder-name');
+    if (el) el.focus();
+  }, 30);
+}
+
+function closeInlineCreateFolder() {
+  inlineCreateFolder = { open: false, name: '', path: '' };
+  renderAssignSidePanel();
+}
+
+function onInlineCreateFolderNameChange(value) {
+  inlineCreateFolder.name = value || '';
+  // Toggle the submit button's disabled state without a full re-render so we
+  // don't yank focus on every keystroke.
+  const btn = document.querySelector('.inline-create-folder-actions .btn-primary');
+  if (btn) btn.disabled = !inlineCreateFolder.name.trim();
+}
+
+function onInlineCreateFolderPathChange(value) {
+  inlineCreateFolder.path = value || '';
+}
+
+function onInlineCreateFolderKeyDown(e) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    submitInlineCreateFolder();
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    closeInlineCreateFolder();
+  }
+}
+
+async function onInlineCreateFolderBrowse() {
+  try {
+    const result = await window.api.invoke('dialog-show-open', {
+      properties: ['openDirectory', 'createDirectory'],
+      title: 'Select Destination Folder'
+    });
+    if (result && result.filePaths && result.filePaths.length > 0) {
+      const chosenPath = result.filePaths[0];
+      inlineCreateFolder.path = chosenPath;
+      // Auto-fill the name from the basename if the user hasn't typed one yet.
+      if (!inlineCreateFolder.name?.trim()) {
+        const segments = chosenPath.split(/[\\/]/).filter(s => s.length > 0);
+        const basename = segments.length > 0 ? segments[segments.length - 1] : '';
+        if (basename) inlineCreateFolder.name = basename;
+      }
+      renderAssignSidePanel();
+    }
+  } catch (err) {
+    console.error('[InlineCreateFolder] browse failed:', err);
+  }
+}
+
+async function submitInlineCreateFolder() {
+  const name = (inlineCreateFolder.name || '').trim();
+  const path = (inlineCreateFolder.path || '').trim();
+  if (!name) {
+    showNotification('Please enter a folder name.', 'warning');
+    return;
+  }
+  if (typeof folderNameExistsInPreset === 'function' && folderNameExistsInPreset(name)) {
+    showNotification(`A folder named "${name}" already exists in this preset.`, 'warning');
+    return;
+  }
+
+  // 1. Optimistic local update — push to BOTH `customFolders` (the pool view
+  //    used by Custom Folders + select dropdowns) AND `currentPreset.custom_folders`
+  //    (what `getFolderPoolSorted()` reads for the side panel's pill grid).
+  //    Earlier these two were out of sync: the local pool grew but the panel
+  //    kept rendering the stale list until a manual reload.
+  const folderObj = { name };
+  if (path) folderObj.path = path;
+  customFolders.push(folderObj);
+  if (currentPreset && typeof currentPreset === 'object') {
+    if (!Array.isArray(currentPreset.custom_folders)) currentPreset.custom_folders = [];
+    currentPreset.custom_folders.push({ ...folderObj });
+  }
+  if (typeof renderCustomFolders === 'function') renderCustomFolders();
+  if (typeof updateFolderSelects === 'function') updateFolderSelects();
+  // Refresh the side panel right away so the user sees the new pill before
+  // the Supabase round-trip completes.
+  renderAssignSidePanel();
+
+  // Persist localStorage path mapping (per-device) like the legacy modal does.
+  if (path && currentPreset?.id && typeof updateLocalFolderPath === 'function') {
+    updateLocalFolderPath(currentPreset.id, name, path);
+  }
+
+  const ids = openSidePanel?.kind === 'assign' && Array.isArray(openSidePanel.ids)
+    ? openSidePanel.ids
+    : [];
+
+  try {
+    // 2. Persist the updated custom_folders pool to Supabase.
+    //    Only do this if we're editing an existing preset — for a brand-new
+    //    preset (no id yet) the pool is local until the user clicks Save.
+    if (currentPreset?.id) {
+      const updateResp = await window.api.invoke('supabase-update-participant-preset', {
+        presetId: currentPreset.id,
+        updateData: { custom_folders: customFolders }
+      });
+      if (!updateResp || !updateResp.success) {
+        throw new Error(updateResp?.error || 'Failed to persist folder pool');
+      }
+    }
+
+    // 3. If there's a selection, auto-assign the new folder. Always append:
+    //    creating-and-replacing-with-a-brand-new-folder is rarely the intent.
+    if (currentPreset?.id && ids.length > 0) {
+      const assignResp = await window.api.invoke('supabase-bulk-assign-folders', {
+        presetId: currentPreset.id,
+        participantIds: ids,
+        folderNames: [name],
+        mode: 'append'
+      });
+      if (!assignResp || !assignResp.success) {
+        throw new Error(assignResp?.error || 'Folder created but assign failed');
+      }
+      const okCount = assignResp.data?.ok ?? ids.length;
+      showNotification(`Created "${name}" and assigned to ${okCount} participant${okCount === 1 ? '' : 's'}.`, 'success');
+    } else {
+      showNotification(`Created folder "${name}"${currentPreset?.id ? '' : ' (will be saved with the preset)'}.`, 'success');
+    }
+
+    // 4. Reload preset state so the table chips reflect the new assignments.
+    if (currentPreset?.id) {
+      await refreshCurrentPresetData();
+    }
+  } catch (err) {
+    console.error('[InlineCreateFolder] failed:', err);
+    showNotification('Folder creation failed: ' + (err.message || 'Unknown error'), 'error');
+  } finally {
+    // Reset the inline form regardless of outcome — the user can reopen it
+    // to retry, and the local customFolders push above is idempotent for a
+    // duplicate retry (folderNameExistsInPreset would block it).
+    inlineCreateFolder = { open: false, name: '', path: '' };
+    renderAssignSidePanel();
+  }
+}
+
+// V1 design: lightweight in-place refresh after a bulk mutation. Pulls the
+// freshest preset state from Supabase and re-renders the table + side panel
+// WITHOUT closing the modal, resetting scroll, or dropping selection state.
+//
+// Cowork's PR sprinkled `if (typeof loadPresetForEditing === 'function')`
+// guards across half a dozen call sites, but `loadPresetForEditing` was
+// never actually defined — so none of those calls did anything and the UI
+// silently went stale after every bulk operation. This is the missing
+// function those guards were waiting for.
+async function refreshCurrentPresetData() {
+  if (!currentPreset?.id) return;
+  try {
+    const response = await window.api.invoke('supabase-get-participant-preset-by-id', currentPreset.id);
+    if (!response?.success || !response.data) return;
+
+    currentPreset = response.data;
+    participantsData = currentPreset.participants || [];
+
+    // Re-sync the local custom_folders pool view (used by the Custom Folders
+    // section + getFolderPoolSorted reads currentPreset.custom_folders).
+    const localPaths = (typeof getLocalFolderPaths === 'function')
+      ? getLocalFolderPaths(currentPreset.id) : {};
+    customFolders = (currentPreset.custom_folders || []).map(f => {
+      const name = (typeof getFolderDisplayName === 'function')
+        ? getFolderDisplayName(f) : (f && f.name) || String(f || '');
+      const dbPath = (typeof f === 'object' && f !== null) ? (f.path || '') : '';
+      const resolvedPath = localPaths[name] || dbPath;
+      const obj = { name };
+      if (resolvedPath) obj.path = resolvedPath;
+      return obj;
+    });
+
+    if (typeof renderCustomFolders === 'function') renderCustomFolders();
+    if (typeof updateFolderSelects === 'function') updateFolderSelects();
+
+    // Snapshot the sort state BEFORE re-rendering — `loadParticipantsIntoTable`
+    // wipes the tbody and re-appends rows in source order, which loses the
+    // sortable.js shuffle. We restore the column + direction afterwards so
+    // the visible order doesn't jump after a folder assignment.
+    const sortState = (typeof getCurrentSortState === 'function')
+      ? getCurrentSortState()
+      : null;
+
+    // Re-render rows. addParticipantRow inside loadParticipantsIntoTable
+    // already prunes stale selectedParticipantIds and re-applies the
+    // visibility filter, so search/team/folder filters survive.
+    if (typeof loadParticipantsIntoTable === 'function') {
+      loadParticipantsIntoTable(participantsData);
+    }
+
+    // Re-apply the sort. Default fallback is the saved preference for this
+    // preset (or Num/col 2 ascending if none) — same as editPreset's path.
+    if (typeof applySortState === 'function') {
+      const stateToApply = sortState
+        || (typeof loadSortPreference === 'function' ? loadSortPreference(currentPreset.id) : null)
+        || { columnIndex: 2, direction: 'asc' };
+      applySortState(stateToApply);
+    }
+
+    // Refresh the side panel — folder pill counts depend on the updated
+    // participant.folders[] arrays we just received.
+    renderAssignSidePanel();
+
+    // Keep the V1 summary strip in sync (active count may have changed).
+    if (typeof updatePresetSummaryStrip === 'function') updatePresetSummaryStrip();
+  } catch (err) {
+    console.error('[refreshCurrentPresetData] failed:', err);
+  }
+}
+
+function onAssignFilterChange(value) { assignFilter = value || ''; renderAssignSidePanel(); }
+function onAssignModeChange(mode) { if (mode === 'append' || mode === 'replace') assignMode = mode; }
+
+/**
+ * Bulk-flip the per-participant `include_default_folder` flag on all
+ * currently-selected participants in one Supabase round-trip.
+ *
+ * Tri-state interaction:
+ *   - assignIncludeDefaultState === 'mixed' + click → set ALL to TRUE
+ *     (the user explicitly chose to unify the selection; turning ON is
+ *     the safer default because losing the per-participant `false` is
+ *     less destructive than losing custom routing).
+ *   - 'on'  + click → set ALL to FALSE
+ *   - 'off' + click → set ALL to TRUE
+ *
+ * On success we mutate `participantsData` in place so the table re-renders
+ * without a full Supabase refetch, then re-render the side panel so the
+ * checkbox state and the hint text reflect the new value.
+ */
+async function onAssignIncludeDefaultToggle(checkboxEl) {
+  if (!openSidePanel || openSidePanel.kind !== 'assign') return;
+  if (!currentPreset || !currentPreset.id) {
+    showNotification('No preset to apply default-folder flag to.', 'error');
+    if (checkboxEl) checkboxEl.checked = assignIncludeDefaultState === 'on';
+    return;
+  }
+  const ids = openSidePanel.ids || [];
+  if (ids.length === 0) return;
+
+  // Decide the new value. `checkboxEl.checked` already reflects the post-
+  // click state (because the browser flips it before firing onchange), so
+  // we trust it for plain on↔off and only override for the `mixed` → `on`
+  // collapse where checked === true is the desired outcome anyway.
+  const newValue = assignIncludeDefaultState === 'mixed' ? true : !!checkboxEl?.checked;
+
+  try {
+    const response = await window.api.invoke('preset:bulkSetIncludeDefaultFolder', {
+      presetId: currentPreset.id,
+      participantIds: ids,
+      includeDefaultFolder: newValue
+    });
+    if (!response || response.success === false) {
+      throw new Error(response?.error || 'Bulk update failed');
+    }
+    const updated = (response.data && typeof response.data.updated === 'number')
+      ? response.data.updated
+      : ids.length;
+
+    // In-place mirror: drop the round-trip refetch since we know exactly
+    // which rows changed. Also keeps any custom sort order intact.
+    const idSet = new Set(ids);
+    if (Array.isArray(participantsData)) {
+      for (const p of participantsData) {
+        if (p?.id && idSet.has(p.id)) p.include_default_folder = newValue;
+      }
+    }
+
+    showNotification(
+      newValue
+        ? `Enabled default folder on ${updated} participant${updated === 1 ? '' : 's'}.`
+        : `Disabled default folder on ${updated} participant${updated === 1 ? '' : 's'}.`,
+      'success'
+    );
+    renderAssignSidePanel();
+  } catch (err) {
+    console.error('[Assign] onAssignIncludeDefaultToggle failed:', err);
+    showNotification(
+      'Failed to update default-folder flag: ' + (err.message || 'Unknown error'),
+      'error'
+    );
+    // Roll back the visual state so the user sees the real DB value.
+    if (checkboxEl) {
+      checkboxEl.checked = assignIncludeDefaultState === 'on';
+      checkboxEl.indeterminate = assignIncludeDefaultState === 'mixed';
+    }
+  }
+}
+
+async function onAssignFolderClick(folderName) {
+  if (!openSidePanel || openSidePanel.kind !== 'assign') return;
+  if (!folderName) return;
+  if (!currentPreset || !currentPreset.id) {
+    showNotification('No preset to apply folders to.', 'error');
+    return;
+  }
+  const ids = openSidePanel.ids;
+  if (!ids || ids.length === 0) return;
+  try {
+    const response = await window.api.invoke('supabase-bulk-assign-folders', {
+      presetId: currentPreset.id, participantIds: ids,
+      folderNames: [folderName], mode: assignMode
+    });
+    if (!response || !response.success) throw new Error(response?.error || 'Bulk assign failed');
+    const data = response.data || { ok: 0, failed: [], unknownFolderNames: [] };
+    showNotification(
+      `${assignMode === 'replace' ? 'Replaced with' : 'Assigned'} "${folderName}" on ${data.ok} participant${data.ok === 1 ? '' : 's'}.`,
+      data.failed && data.failed.length > 0 ? 'warning' : 'success'
+    );
+    await refreshCurrentPresetData();
+    renderAssignSidePanel();
+  } catch (err) {
+    console.error('[PR3v2] onAssignFolderClick failed:', err);
+    showNotification('Failed to assign folder: ' + (err.message || 'Unknown error'), 'error');
+  }
+}
+
+// ---- Bulk: clear folders / set active ---------------------------
+
+async function bulkClearSelectedFolders() {
+  if (selectedParticipantIds.size === 0) return;
+  if (!currentPreset || !currentPreset.id) return;
+  const ids = Array.from(selectedParticipantIds);
+  try {
+    const response = await window.api.invoke('supabase-bulk-assign-folders', {
+      presetId: currentPreset.id, participantIds: ids,
+      folderNames: [], mode: 'replace'
+    });
+    if (!response || !response.success) throw new Error(response?.error || 'Failed to clear');
+    const data = response.data || { ok: 0 };
+    showNotification(`Cleared folders on ${data.ok} participant${data.ok === 1 ? '' : 's'}.`, 'success');
+    await refreshCurrentPresetData();
+  } catch (err) {
+    console.error('[PR3v2] bulkClearSelectedFolders failed:', err);
+    showNotification('Failed to clear folders: ' + (err.message || 'Unknown error'), 'error');
+  }
+}
+
+async function bulkSetSelectedActive(active) {
+  if (selectedParticipantIds.size === 0) return;
+  if (!currentPreset || !currentPreset.id) return;
+  const ids = Array.from(selectedParticipantIds);
+
+  // v1.1.5 — single bulk RPC instead of N sequential per-row calls.
+  // Old loop did 35 IPC trips × 1 Supabase HTTP each (~5–10s on 35 rows);
+  // `preset:bulkSetActive` does one UPDATE … WHERE id IN (…) (<500ms).
+  let okCount = 0;
+  try {
+    const response = await window.api.invoke('preset:bulkSetActive', {
+      presetId: currentPreset.id,
+      participantIds: ids,
+      isActive: !!active
+    });
+    if (!response || response.success === false) {
+      throw new Error(response?.error || 'Bulk update failed');
+    }
+    okCount = (response.data && typeof response.data.updated === 'number')
+      ? response.data.updated
+      : ids.length;
+  } catch (err) {
+    console.error('[PR3v2] bulkSetSelectedActive failed:', err);
+    showNotification(
+      `Failed to ${active ? 'activate' : 'deactivate'} participants: ${err.message || 'Unknown error'}`,
+      'error'
+    );
+    return;
+  }
+
+  // v1.1.5 — in-place DOM/model update instead of a full preset reload.
+  // The bulk RPC already invalidated the desktop cache (so the next genuine
+  // refresh hits Supabase), but for THIS interaction we know exactly which
+  // rows changed and can mirror the change locally — eliminating the
+  // CACHE MISS round-trip and keeping the table sort order intact.
+  const tbody = document.getElementById('participants-tbody');
+  const idSet = new Set(ids);
+  if (Array.isArray(participantsData)) {
+    for (const p of participantsData) {
+      if (p?.id && idSet.has(p.id)) p.is_active = !!active;
+    }
+  }
+  if (tbody) {
+    for (const id of ids) {
+      const cb = tbody.querySelector(
+        `input.active-toggle-input[data-participant-id="${CSS.escape(id)}"]`
+      );
+      if (!cb) continue;
+      cb.checked = !!active;
+      const row = cb.closest('tr');
+      if (row) row.classList.toggle('participant-row-inactive', !active);
+      // Keep the toggle cell's data-sort in sync so a click on the "Active"
+      // header after this still sorts correctly.
+      const cell = cb.closest('td');
+      if (cell) cell.setAttribute('data-sort', active ? '1' : '0');
+    }
+  }
+
+  // Refresh the visible counters (Active 28/29 strip + pill) and the
+  // bulk-action bar's Activate/Deactivate visibility now that is_active
+  // values changed.
+  if (typeof updateActiveParticipantsSummary === 'function') {
+    updateActiveParticipantsSummary();
+  }
+  updateBulkActionBar();
+
+  // Face-status dots depend on is_active (disabled faces don't count).
+  if (typeof faceRecFeatureEnabled !== 'undefined' && faceRecFeatureEnabled
+      && currentPreset?.id && typeof loadFaceStatusIfEnabled === 'function') {
+    loadFaceStatusIfEnabled();
+  }
+
+  showNotification(
+    `${active ? 'Activated' : 'Deactivated'} ${okCount} participant${okCount === 1 ? '' : 's'}.`,
+    okCount === ids.length ? 'success' : 'warning'
+  );
+}
+
+// ---- Render: Auto-rule side panel -------------------------------
+
+function renderAutoRulePanel() {
+  const panel = document.getElementById('auto-rule-side-panel');
+  if (!panel) return;
+  if (!openSidePanel || openSidePanel.kind !== 'auto-rule') {
+    panel.innerHTML = '';
+    return;
+  }
+  const pool = getFolderPoolSorted();
+  const enabledCount = folderRules.filter(r => r.enabled).length;
+  const ruleCards = folderRules.map((r, idx) => {
+    const matchCount = (participantsData || []).filter(p => ruleMatchesParticipant(p, r)).length;
+    const cls = ['rule-card'];
+    if (!r.enabled) cls.push('is-disabled');
+    return `
+      <div class="${cls.join(' ')}" data-rule-id="${r.id}">
+        <div class="rule-card-header">
+          <button type="button" class="rule-toggle ${r.enabled ? 'on' : ''}" onclick="onRuleToggle('${r.id}')" aria-label="Toggle rule"></button>
+          <span class="rule-card-title">Rule ${idx + 1}</span>
+          <span class="rule-match-count">matches ${matchCount}</span>
+          <span style="flex: 1;"></span>
+          <button type="button" class="slide-panel-close" onclick="onRuleDelete('${r.id}')" aria-label="Delete rule" title="Delete rule">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" style="opacity:0.7"><path d="M6 19a2 2 0 002 2h8a2 2 0 002-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+          </button>
+        </div>
+        <div class="rule-card-grid-2">
+          <select class="select" onchange="onRuleFieldChange('${r.id}', this.value)">
+            <option value="team" ${r.field === 'team' ? 'selected' : ''}>Team</option>
+            <option value="category" ${r.field === 'category' ? 'selected' : ''}>Category</option>
+            <option value="car" ${r.field === 'car' ? 'selected' : ''}>Car model</option>
+          </select>
+          <select class="select" onchange="onRuleOpChange('${r.id}', this.value)">
+            <option ${r.op === 'contains' ? 'selected' : ''}>contains</option>
+            <option ${r.op === 'equals' ? 'selected' : ''}>equals</option>
+            <option ${r.op === 'starts with' ? 'selected' : ''}>starts with</option>
+          </select>
+        </div>
+        <input class="input" type="text" placeholder="value…" value="${escapeAttr(r.value || '')}" oninput="onRuleValueChange('${r.id}', this.value)" style="margin-bottom: 6px;">
+        <div class="rule-card-target">
+          <span class="rule-card-target-label">→ folder =</span>
+          <select class="select" style="flex: 1;" onchange="onRuleFolderChange('${r.id}', this.value)">
+            ${pool.length === 0 ? '<option>(no folders defined)</option>' : pool.map(f =>
+              `<option value="${escapeAttr(f.name)}" ${r.folder === f.name ? 'selected' : ''}>${escapeHtml(f.name)}</option>`
+            ).join('')}
+          </select>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  panel.innerHTML = `
+    <div class="slide-panel-header">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="#f59e0b"><path d="M12 2l2.5 6.5L21 11l-6.5 2.5L12 20l-2.5-6.5L3 11l6.5-2.5L12 2z"/></svg>
+      <div class="slide-panel-header-meta">
+        <div class="slide-panel-header-title">Auto-rules</div>
+        <div class="slide-panel-header-sub">${enabledCount} active · in-memory only</div>
+      </div>
+      <button type="button" class="btn btn-sm" onclick="onRuleAdd()">+ Add rule</button>
+      <button type="button" class="slide-panel-close" onclick="closeAutoRulePanel()" aria-label="Close panel">×</button>
+    </div>
+    <div class="slide-panel-body">
+      ${folderRules.length === 0 ? '<div style="text-align: center; padding: 24px 12px; color: var(--v1-text-muted); font-size: 13px;">No rules defined yet. Click <strong>+ Add rule</strong> to start.</div>' : ruleCards}
+      <button type="button" class="rule-add-cta" onclick="onRuleAdd()">+ Add another rule</button>
+      <p style="font-size: 11px; color: var(--v1-text-muted); margin-top: 16px; line-height: 1.5;">Rules are in-memory only — they don't yet persist on the preset. Saving the preset will not save the rules. Persistence ships in the next release.</p>
+    </div>
+    <div class="slide-panel-footer">
+      <button type="button" class="btn btn-sm" onclick="closeAutoRulePanel()">Cancel</button>
+      <button type="button" class="btn btn-primary btn-sm" onclick="applyAllRules()" ${enabledCount === 0 ? 'disabled' : ''}>
+        Apply all rules
+      </button>
+    </div>
+  `;
+}
+
+// ---- Rule editor handlers ---------------------------------------
+
+function onRuleAdd() {
+  const pool = getFolderPoolSorted();
+  const id = 'r' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+  folderRules.push({
+    id, field: 'team', op: 'contains', value: '',
+    folder: pool.length > 0 ? pool[0].name : '', enabled: true
+  });
+  renderAutoRulePanel();
+}
+function onRuleToggle(ruleId) {
+  const r = folderRules.find(x => x.id === ruleId);
+  if (r) { r.enabled = !r.enabled; renderAutoRulePanel(); }
+}
+function onRuleDelete(ruleId) {
+  const idx = folderRules.findIndex(r => r.id === ruleId);
+  if (idx >= 0) { folderRules.splice(idx, 1); renderAutoRulePanel(); }
+}
+function onRuleFieldChange(ruleId, value) {
+  const r = folderRules.find(x => x.id === ruleId);
+  if (r) { r.field = value; renderAutoRulePanel(); }
+}
+function onRuleOpChange(ruleId, value) {
+  const r = folderRules.find(x => x.id === ruleId);
+  if (r) { r.op = value; renderAutoRulePanel(); }
+}
+function onRuleValueChange(ruleId, value) {
+  const r = folderRules.find(x => x.id === ruleId);
+  if (r) { r.value = value; renderAutoRulePanel(); }
+}
+function onRuleFolderChange(ruleId, value) {
+  const r = folderRules.find(x => x.id === ruleId);
+  if (r) { r.folder = value; renderAutoRulePanel(); }
+}
+
+// ---- Apply all rules --------------------------------------------
+
+async function applyAllRules() {
+  if (!currentPreset || !currentPreset.id) {
+    showNotification('No preset open.', 'error');
+    return;
+  }
+  const enabled = folderRules.filter(r => r.enabled);
+  if (enabled.length === 0) {
+    showNotification('No active rules to apply.', 'warning');
+    return;
+  }
+  const byFolder = new Map();
+  for (const rule of enabled) {
+    if (!rule.value || !rule.folder) continue;
+    for (const p of (participantsData || [])) {
+      if (!p.id) continue;
+      if (!ruleMatchesParticipant(p, rule)) continue;
+      const arr = byFolder.get(rule.folder) || [];
+      if (!arr.includes(p.id)) arr.push(p.id);
+      byFolder.set(rule.folder, arr);
+    }
+  }
+  if (byFolder.size === 0) {
+    showNotification('No participants matched any active rule.', 'warning');
+    return;
+  }
+  let totalAffected = 0, groupsFailed = 0;
+  const unknownFolders = new Set();
+  for (const [folder, ids] of byFolder.entries()) {
+    try {
+      const response = await window.api.invoke('supabase-bulk-assign-folders', {
+        presetId: currentPreset.id, participantIds: ids,
+        folderNames: [folder], mode: 'append'
+      });
+      if (!response || !response.success) { groupsFailed++; continue; }
+      const data = response.data || { ok: 0, unknownFolderNames: [] };
+      totalAffected += data.ok || 0;
+      (data.unknownFolderNames || []).forEach(n => unknownFolders.add(n));
+    } catch (e) { groupsFailed++; }
+  }
+  const messages = [`Applied ${enabled.length} rule${enabled.length === 1 ? '' : 's'} → ${totalAffected} folder assignment${totalAffected === 1 ? '' : 's'}.`];
+  if (groupsFailed > 0) messages.push(`${groupsFailed} rule group${groupsFailed === 1 ? '' : 's'} failed.`);
+  if (unknownFolders.size > 0) messages.push(`Unknown folders skipped: ${Array.from(unknownFolders).join(', ')}.`);
+  showNotification(messages.join(' '), groupsFailed > 0 || unknownFolders.size > 0 ? 'warning' : 'success');
+  await refreshCurrentPresetData();
+  renderAutoRulePanel();
+}
+
+// ─── V1 design: preset summary strip helpers ────────────────────────────────
+// The strip shows compact Preset / Sport / Active stats; the full editable
+// form is hidden under "Edit details". Both surfaces stay live — editing the
+// fields updates the strip, and reopening the editor on a different preset
+// resets both.
+
+function togglePresetDetails() {
+  const row = document.getElementById('preset-header-row');
+  const btn = document.getElementById('preset-edit-details-btn');
+  const label = document.getElementById('preset-edit-details-label');
+  if (!row || !btn) return;
+  const willOpen = row.hasAttribute('hidden');
+  if (willOpen) {
+    row.removeAttribute('hidden');
+    btn.setAttribute('aria-expanded', 'true');
+    btn.classList.add('is-active');
+    if (label) label.textContent = 'Hide details';
+  } else {
+    row.setAttribute('hidden', '');
+    btn.setAttribute('aria-expanded', 'false');
+    btn.classList.remove('is-active');
+    if (label) label.textContent = 'Edit details';
+  }
+}
+
+function updatePresetSummaryStrip() {
+  const nameEl = document.getElementById('preset-summary-name');
+  const sportEl = document.getElementById('preset-summary-sport');
+  const activeEl = document.getElementById('preset-summary-active');
+
+  if (nameEl) {
+    const nameInput = document.getElementById('preset-name');
+    const liveName = nameInput?.value?.trim();
+    const fallbackName = currentPreset?.name || '';
+    nameEl.textContent = liveName || fallbackName || '— New preset —';
+  }
+
+  if (sportEl) {
+    const sel = document.getElementById('preset-sport-category');
+    const opt = sel?.options?.[sel.selectedIndex];
+    const sportText = opt && opt.value ? (opt.textContent || '').trim() : '';
+    sportEl.textContent = sportText || '—';
+  }
+
+  if (activeEl) {
+    const total = Array.isArray(participantsData) ? participantsData.length : 0;
+    const active = Array.isArray(participantsData)
+      ? participantsData.filter(p => p?.is_active !== false).length
+      : 0;
+    activeEl.textContent = total === 0 ? '0 / 0' : `${active} / ${total}`;
+  }
+}
+
+// Wire up live updates: when the user types in the form, reflect into strip
+document.addEventListener('DOMContentLoaded', () => {
+  const wire = (id) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', updatePresetSummaryStrip);
+  };
+  wire('preset-name');
+  const sel = document.getElementById('preset-sport-category');
+  if (sel) sel.addEventListener('change', updatePresetSummaryStrip);
+});
+
 // Export functions for HTML onclick handlers immediately
+window.togglePresetDetails = togglePresetDetails;
+window.updatePresetSummaryStrip = updatePresetSummaryStrip;
 window.createNewPreset = createNewPreset;
 window.editPreset = editPreset;
 window.deletePreset = deletePreset;
 window.duplicateOfficialPreset = duplicateOfficialPreset;
+window.duplicatePreset = duplicatePreset;
+window.viewOfficialPreset = viewOfficialPreset;
+window.duplicateAndEditOfficialPreset = duplicateAndEditOfficialPreset;
 window.exportPresetJSON = exportPresetJSON;
 window.exportPresetCSV = exportPresetCSV;
 window.usePreset = usePreset;
@@ -3694,6 +8462,13 @@ window.importCsvPreset = importCsvPreset;
 window.navigateToParticipants = navigateToParticipants;
 window.downloadCsvTemplate = downloadCsvTemplate;
 window.addCustomFolder = addCustomFolder;
+window.addParticipantFolder = addParticipantFolder; // 1.2.0
+window.openAddParticipantFolderModal = openAddParticipantFolderModal; // 1.2.0
+window.closeParticipantFolderModal = closeParticipantFolderModal;     // 1.2.0
+window.confirmAddParticipantFolder = confirmAddParticipantFolder;     // 1.2.0
+window.browseParticipantFolderPath = browseParticipantFolderPath;     // 1.2.0
+window.clearParticipantFolderPath = clearParticipantFolderPath;       // 1.2.0
+window.copySearchToCreateName = copySearchToCreateName;               // 1.2.0
 window.removeCustomFolder = removeCustomFolder;
 window.closeFolderNameModal = closeFolderNameModal;
 window.confirmAddFolder = confirmAddFolder;
@@ -3714,6 +8489,42 @@ window.importPdfPreset = importPdfPreset;
 // Export utility functions for preset management
 window.getSelectedPreset = getSelectedPreset;
 window.clearSelectedPreset = clearSelectedPreset;
+
+// PR3v2 — V1 design: bulk folder UI + auto-rule editor
+window.onParticipantSelectChange = onParticipantSelectChange;
+window.onSelectAllParticipantsToggle = onSelectAllParticipantsToggle;
+window.bulkClearSelection = bulkClearSelection;
+window.bulkClearSelectedFolders = bulkClearSelectedFolders;
+window.bulkSetSelectedActive = bulkSetSelectedActive;
+window.onBulkSearchChange = onBulkSearchChange;
+window.onTeamFilterToggle = onTeamFilterToggle;
+window.onFolderFilterToggle = onFolderFilterToggle;
+window.openAssignPanelForSelected = openAssignPanelForSelected;
+window.openAssignPanelForRow = openAssignPanelForRow;
+window.openCreateFolderPanel = openCreateFolderPanel;
+window.closeAssignSidePanel = closeAssignSidePanel;
+window.openInlineCreateFolder = openInlineCreateFolder;
+window.closeInlineCreateFolder = closeInlineCreateFolder;
+window.onInlineCreateFolderNameChange = onInlineCreateFolderNameChange;
+window.onInlineCreateFolderPathChange = onInlineCreateFolderPathChange;
+window.onInlineCreateFolderKeyDown = onInlineCreateFolderKeyDown;
+window.onInlineCreateFolderBrowse = onInlineCreateFolderBrowse;
+window.submitInlineCreateFolder = submitInlineCreateFolder;
+window.openAutoRulePanel = openAutoRulePanel;
+window.closeAutoRulePanel = closeAutoRulePanel;
+window.onAssignFilterChange = onAssignFilterChange;
+window.onAssignModeChange = onAssignModeChange;
+window.onAssignFolderClick = onAssignFolderClick;
+window.onAssignIncludeDefaultToggle = onAssignIncludeDefaultToggle;
+window.onRemoveFolderFromRowChip = onRemoveFolderFromRowChip;
+window.onRuleAdd = onRuleAdd;
+window.onRuleToggle = onRuleToggle;
+window.onRuleDelete = onRuleDelete;
+window.onRuleFieldChange = onRuleFieldChange;
+window.onRuleOpChange = onRuleOpChange;
+window.onRuleValueChange = onRuleValueChange;
+window.onRuleFolderChange = onRuleFolderChange;
+window.applyAllRules = applyAllRules;
 
 // Initialize participants manager when DOM is ready
 document.addEventListener('DOMContentLoaded', function() {
@@ -3758,4 +8569,166 @@ document.addEventListener('DOMContentLoaded', function() {
   window.api.receive('csv-template-saved', (filePath) => {
     showNotification('CSV template saved successfully', 'success');
   });
+
+  // (Note: the "+ Add folder" click delegate is registered at module
+  // top-level, NOT inside this DOMContentLoaded callback — see the
+  // block right after this DOMContentLoaded handler closes. Otherwise
+  // it would never register if DOMContentLoaded had already fired by
+  // the time this script ran.)
 });
+
+// ----------------------------------------------------------------
+// 1.2.0 — chip-based folder editor (per participant) wiring.
+// The "+ Add folder" button opens the SAME folder-name-modal used by
+// the global "Personalize your Folder Organization" section. That
+// modal lets the user type a name AND optionally pick an absolute
+// path (handy when the folder physically exists on disk already and
+// the user wants to deliver into it). The dispatch is governed by
+// `addFolderContext` — see addParticipantFolder() / confirmAddFolder.
+//
+// Event-delegation registered at top-level (not gated on DOMContentLoaded):
+// `document.addEventListener('click', ...)` works regardless of whether
+// the DOM is ready, because the bubble path traverses elements that
+// don't need to exist yet. Putting the registration inside a
+// DOMContentLoaded callback would silently fail if the event had
+// already fired by the time the script ran (race condition on hot
+// reload or async script loading), which is the bug we ran into.
+// ----------------------------------------------------------------
+document.addEventListener('click', (e) => {
+  const target = e.target;
+  if (!target || !target.closest) return;
+  const addBtn = target.closest('#edit-folder-add-btn');
+  if (!addBtn) return;
+  e.preventDefault();
+  e.stopPropagation();
+  console.log('[Folders] + Add folder clicked → opening modal');
+  if (typeof addParticipantFolder === 'function') {
+    addParticipantFolder();
+  } else {
+    console.error('[Folders] addParticipantFolder is not defined');
+  }
+});
+
+// 1.2.0 — placeholder pills inside the participant Add Folder modal.
+// Click a pill ({number}, {name}, etc.) to insert it into the Folder
+// Name input at the current caret position. Mirrors the Photo Mechanic
+// / IPTC Pro template-shortcut pattern. Top-level delegate for the
+// same robustness reasons as the "+ Add folder" delegate above.
+document.addEventListener('click', (e) => {
+  const target = e.target;
+  if (!target || !target.closest) return;
+  const pill = target.closest(
+    '#participant-folder-modal .placeholder-pill[data-placeholder]'
+  );
+  if (!pill) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const placeholder = pill.getAttribute('data-placeholder');
+  if (!placeholder) return;
+
+  const nameInput = document.getElementById('participant-folder-name-input');
+  if (!nameInput) return;
+
+  // Insert at caret position; if no selection is set (input never
+  // focused), append to the end. Browsers preserve the focus through
+  // mousedown→click on the pill button only if we don't preventDefault
+  // mousedown, so we read the selection BEFORE refocusing.
+  const start = typeof nameInput.selectionStart === 'number' ? nameInput.selectionStart : nameInput.value.length;
+  const end = typeof nameInput.selectionEnd === 'number' ? nameInput.selectionEnd : start;
+  const before = nameInput.value.substring(0, start);
+  const after = nameInput.value.substring(end);
+  nameInput.value = before + placeholder + after;
+
+  // Move caret to just after the inserted placeholder, then refocus.
+  const caret = before.length + placeholder.length;
+  nameInput.focus();
+  try { nameInput.setSelectionRange(caret, caret); } catch (_) { /* some inputs don't support selection */ }
+});
+
+/**
+ * Render the chip list inside #edit-folder-chips-area, reading from
+ * `editingParticipantFolders` (the modal-local state). Each chip exposes
+ * a name, a 🔗 button (path picker), and a × button (remove).
+ */
+function renderEditFolderChips() {
+  const area = document.getElementById('edit-folder-chips-area');
+  if (!area) return;
+  area.innerHTML = '';
+
+  editingParticipantFolders.forEach((folder, index) => {
+    const chip = document.createElement('span');
+    chip.className = 'folder-chip';
+    chip.dataset.index = String(index);
+    if (folder.path) {
+      chip.title = folder.path;
+    }
+
+    const nameEl = document.createElement('span');
+    nameEl.className = 'folder-chip-name';
+    nameEl.textContent = folder.name;
+    chip.appendChild(nameEl);
+
+    if (folder.path) {
+      const pathEl = document.createElement('span');
+      pathEl.className = 'folder-chip-path';
+      pathEl.textContent = shortenPath ? shortenPath(folder.path) : folder.path;
+      chip.appendChild(pathEl);
+    }
+
+    // Pin/path-picker button (🔗). Highlights when a path is set.
+    const pinBtn = document.createElement('button');
+    pinBtn.type = 'button';
+    pinBtn.className = 'folder-chip-pin-btn';
+    pinBtn.textContent = '🔗';
+    pinBtn.dataset.hasPath = folder.path ? 'true' : 'false';
+    pinBtn.title = folder.path ? `Path: ${folder.path}` : 'Set absolute path';
+    pinBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      pickPathForEditingFolder(index);
+    });
+    chip.appendChild(pinBtn);
+
+    // Remove button.
+    const rmBtn = document.createElement('button');
+    rmBtn.type = 'button';
+    rmBtn.className = 'folder-chip-remove';
+    rmBtn.textContent = '×';
+    rmBtn.title = 'Remove this folder';
+    rmBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      editingParticipantFolders.splice(index, 1);
+      renderEditFolderChips();
+    });
+    chip.appendChild(rmBtn);
+
+    area.appendChild(chip);
+  });
+}
+
+/**
+ * Open the path picker dialog for the chip at the given index. Reuses
+ * the existing `select-organization-destination` IPC channel, which
+ * shows a native folder picker. A small confirm() lets the user clear
+ * the pinned path without re-picking.
+ */
+async function pickPathForEditingFolder(index) {
+  const folder = editingParticipantFolders[index];
+  if (!folder) return;
+  // If a path is already set, give the user the option to clear it
+  // (clearer than having to re-open and somehow cancel).
+  if (folder.path) {
+    const action = confirm(
+      `Folder "${folder.name}" is currently pinned to:\n${folder.path}\n\nClick OK to pick a different path, or Cancel to leave it as-is.\n\n` +
+      `(To remove the pin entirely, click Cancel and use the × on the chip, then re-add the folder without a path.)`
+    );
+    if (!action) return;
+  }
+  try {
+    const newPath = await window.api.invoke('select-organization-destination');
+    if (!newPath) return; // user cancelled the native dialog
+    folder.path = newPath;
+    renderEditFolderChips();
+  } catch (err) {
+    console.warn('[Folders] Path picker failed:', err);
+  }
+}

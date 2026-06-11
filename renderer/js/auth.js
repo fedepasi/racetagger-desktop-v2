@@ -72,12 +72,34 @@ function initializeAuth() {
   if (continueDemo) continueDemo.addEventListener('click', handleContinueWithoutLogin);
   if (backToLogin) backToLogin.addEventListener('click', () => switchAuthTab('login'));
 
+  // Forgot password link
+  const forgotPasswordLink = document.getElementById('forgot-password-link');
+  if (forgotPasswordLink) {
+    forgotPasswordLink.addEventListener('click', handleForgotPassword);
+  }
+
   // Sidebar logout button (in Settings section)
   const sidebarLogoutBtn = document.getElementById('sidebar-logout-btn');
   if (sidebarLogoutBtn) {
     sidebarLogoutBtn.addEventListener('click', (e) => {
       e.preventDefault();
       handleLogout();
+    });
+  }
+
+  // Registration form: Privacy Policy and Terms of Service links → open in browser
+  const registerPrivacyLink = document.getElementById('register-privacy-link');
+  const registerTermsLink = document.getElementById('register-terms-link');
+  if (registerPrivacyLink) {
+    registerPrivacyLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (window.api) window.api.send('open-external-url', 'https://www.racetagger.cloud/privacy-policy');
+    });
+  }
+  if (registerTermsLink) {
+    registerTermsLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (window.api) window.api.send('open-external-url', 'https://www.racetagger.cloud/terms-of-service');
     });
   }
 
@@ -97,6 +119,7 @@ function initializeAuth() {
     window.api.receive('token-used', handleTokenUsed);
     window.api.receive('auth-refresh-completed', handleAuthRefreshCompleted);
     window.api.receive('auth-session-expired', handleSessionExpired);
+    window.api.receive('password-reset-result', handlePasswordResetResult);
   }
 }
 
@@ -113,7 +136,7 @@ function handleSessionExpired() {
   handleAuthStatus(authState);
 
   // Show a user-friendly message
-  showAuthError('login', 'Sessione scaduta. Effettua nuovamente il login.');
+  showAuthError('login', 'Session expired. Please log in again.');
 }
 
 // Handle login form submission
@@ -270,12 +293,26 @@ function handleRegister(event) {
   const confirmPassword = document.getElementById('register-confirm-password').value;
   const referralCode = document.getElementById('register-referral-code').value.trim() || null;
 
+  // GDPR Art. 7: Validate consent checkboxes
+  const acceptPrivacy = document.getElementById('register-accept-privacy')?.checked;
+  const acceptTerms = document.getElementById('register-accept-terms')?.checked;
+
   // Clear previous messages
   showAuthError('register', '');
   hideAuthSuccess('register');
 
   if (!email || !password || !confirmPassword) {
     showAuthError('register', 'All fields are required');
+    return;
+  }
+
+  if (!acceptPrivacy) {
+    showAuthError('register', 'You must accept the Privacy Policy to create an account.');
+    return;
+  }
+
+  if (!acceptTerms) {
+    showAuthError('register', 'You must accept the Terms of Service to create an account.');
     return;
   }
 
@@ -298,9 +335,17 @@ function handleRegister(event) {
   submitBtn.textContent = 'Creating account...';
   submitBtn.disabled = true;
 
-  // Send register request to main process
+  // Send register request to main process (GDPR Art. 7: include consent proof)
   if (window.api) {
-    window.api.send('register', { email, password, referralCode });
+    window.api.send('register', {
+      email,
+      password,
+      referralCode,
+      acceptedPrivacyPolicy: true,
+      acceptedTermsOfService: true,
+      privacyPolicyVersion: '2026-03-27',
+      termsOfServiceVersion: '2026-03-27'
+    });
   }
 
   // Reset form state after timeout (in case of no response)
@@ -312,6 +357,27 @@ function handleRegister(event) {
 
 // Handle logout button click
 function handleLogout() {
+  // Full client-side cleanup BEFORE sending the IPC logout, so that:
+  // - racetagger-folder-paths-{presetId} (the cause of "wrong path on re-login")
+  // - racetagger-last-analysis-settings, racetagger-selected-preset
+  // - preset-sort-*, iptc-pro-defaults, resize-enabled, resize-preset
+  // - sport categories cache, currentExecutionId, totalResults
+  // are never carried into the next session.
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.clear();
+    }
+  } catch (e) {
+    console.warn('[Auth] localStorage.clear() failed on logout:', e);
+  }
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.clear();
+    }
+  } catch (e) {
+    console.warn('[Auth] sessionStorage.clear() failed on logout:', e);
+  }
+
   if (window.api) {
     window.api.send('logout');
   }
@@ -380,7 +446,98 @@ function handleLoginResult(result) {
       }
     }
   } else {
-    showAuthError('login', result.error || 'Errore durante il login');
+    // Check if this is an invalid credentials error — might be a user who registered
+    // from the download page and hasn't set their password yet
+    const errorMsg = result.error || 'Error during login';
+    const isInvalidCredentials = errorMsg.toLowerCase().includes('invalid login credentials') ||
+                                  errorMsg.toLowerCase().includes('invalid password') ||
+                                  errorMsg.toLowerCase().includes('wrong password');
+
+    if (isInvalidCredentials) {
+      showLoginPasswordHelp();
+    } else {
+      showAuthError('login', errorMsg);
+    }
+  }
+}
+
+// Show password setup help for users who haven't activated their account yet
+function showLoginPasswordHelp() {
+  const errorElement = document.getElementById('login-error');
+  if (errorElement) {
+    errorElement.innerHTML = `
+      <div style="text-align: left;">
+        <p style="margin: 0 0 6px 0;"><strong>Invalid credentials or account not yet activated.</strong></p>
+        <p style="margin: 0 0 6px 0; font-size: 13px;">
+          Check your inbox (and spam folder) for the activation email from RaceTagger, then click the link to set your password.
+        </p>
+        <a href="#" id="resend-password-setup" style="font-size: 12px; color: #667eea; text-decoration: underline; cursor: pointer;">
+          Reset password on racetagger.cloud
+        </a>
+      </div>
+    `;
+    errorElement.style.display = 'flex';
+    errorElement.className = 'error-message';
+
+    // Attach handler that opens the web-based reset page
+    const resendLink = document.getElementById('resend-password-setup');
+    if (resendLink) {
+      resendLink.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (window.api && window.api.invoke) {
+          window.api.invoke('open-external-url', 'https://www.racetagger.cloud/reset-password');
+        }
+      });
+    }
+  }
+}
+
+// Handle "Forgot your password?" click — opens the web reset page in the system browser
+function handleForgotPassword(e) {
+  e.preventDefault();
+
+  // Open the web-based reset password page in the default browser.
+  // The entire password recovery flow is handled on racetagger.cloud.
+  if (window.api && window.api.invoke) {
+    window.api.invoke('open-external-url', 'https://www.racetagger.cloud/reset-password');
+  }
+}
+
+// Handle password reset result
+function handlePasswordResetResult(result) {
+  const resendLink = document.getElementById('resend-password-setup');
+  const forgotLink = document.getElementById('forgot-password-link');
+  const forgotMessage = document.getElementById('forgot-password-message');
+
+  if (result.success) {
+    // Update inline resend link (from failed login flow)
+    if (resendLink) {
+      resendLink.textContent = '✓ Email sent! Check your inbox.';
+      resendLink.style.color = '#10b981';
+      resendLink.style.textDecoration = 'none';
+      resendLink.style.pointerEvents = 'none';
+    }
+    // Update forgot password link
+    if (forgotLink) {
+      forgotLink.textContent = 'Forgot your password?';
+      forgotLink.style.pointerEvents = 'auto';
+    }
+    // Show success message
+    if (forgotMessage) {
+      forgotMessage.textContent = 'Recovery email sent! Check your inbox (and spam folder).';
+      forgotMessage.style.display = 'flex';
+    }
+  } else {
+    if (resendLink) {
+      resendLink.textContent = 'Didn\'t receive it? Resend activation email';
+      resendLink.style.pointerEvents = 'auto';
+    }
+    if (forgotLink) {
+      forgotLink.textContent = 'Forgot your password?';
+      forgotLink.style.pointerEvents = 'auto';
+    }
+    if (forgotMessage) forgotMessage.style.display = 'none';
+    showAuthError('login', result.error || 'Failed to send email. Please try again.');
   }
 }
 
@@ -417,7 +574,7 @@ function handleRegisterResult(result) {
       switchAuthTab('login');
     }, 5000);
   } else {
-    showAuthError('register', result.error || 'Si è verificato un errore durante la registrazione');
+    showAuthError('register', result.error || 'An error occurred during registration');
   }
 }
 
@@ -489,7 +646,7 @@ function updateTokenBalance(tokenInfo) {
     existingRefreshBtn.classList.remove('spinning');
 
     // Show success feedback
-    showNotification('Saldo Token Aggiornato', 'Il tuo saldo token è stato aggiornato con successo.');
+    showNotification('Token Balance Updated', 'Your token balance has been updated successfully.');
   }
 }
 
@@ -597,7 +754,7 @@ function handleTokenRefresh() {
   if (window.api && authState.isAuthenticated) {
     window.api.send('force-token-refresh');
   } else if (!authState.isAuthenticated) {
-    showNotification('Aggiornamento Fallito', 'Effettua il login per aggiornare il saldo token.');
+    showNotification('Update Failed', 'Please log in to update your token balance.');
     // Reset button immediately if not authenticated
     if (refreshBtn) {
       refreshBtn.innerHTML = originalText;
@@ -610,7 +767,7 @@ function handleTokenRefresh() {
 // Handle auth error
 function handleAuthError(error) {
   console.error('Auth error:', error);
-  showNotification('Errore di autenticazione', error.message || 'Si è verificato un errore di autenticazione');
+  showNotification('Authentication Error', error.message || 'An authentication error occurred');
 }
 
 // Show auth error
@@ -765,6 +922,9 @@ function updateUIForAuthState() {
     // Load and setup training consent toggle
     loadTrainingConsentStatus();
 
+    // Show privacy consent dialog on first launch
+    showPrivacyConsentIfNeeded();
+
     // Gestisci la visibilità delle sezioni sidebar in base al ruolo utente
     updateSidebarVisibility();
   } else {
@@ -834,7 +994,7 @@ function checkTokenBalance(requiredTokens = 1, forceRefresh = false) {
   }
   
   if (authState.tokens.remaining < requiredTokens) {
-    showNotification('Token insufficienti', `Hai bisogno di almeno ${requiredTokens} token per completare questa operazione. Il tuo saldo attuale è di ${authState.tokens.remaining} token.`);
+    showNotification('Insufficient tokens', `You need at least ${requiredTokens} tokens to complete this operation. Your current balance is ${authState.tokens.remaining} tokens.`);
     return false;
   }
   
@@ -972,6 +1132,42 @@ window.recheckAuthStatus = recheckAuthStatus;
 // Training Consent Management
 // ============================================
 
+// Show privacy/terms consent dialog on first launch
+function showPrivacyConsentIfNeeded() {
+  const CONSENT_KEY = 'racetagger_privacy_consent_accepted';
+  if (localStorage.getItem(CONSENT_KEY)) return;
+
+  const modal = document.getElementById('privacy-consent-modal');
+  if (!modal) return;
+
+  modal.style.display = 'flex';
+
+  // External link handlers
+  const privacyLink = document.getElementById('consent-privacy-link');
+  if (privacyLink) {
+    privacyLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      window.api.send('open-external-url', 'https://www.racetagger.cloud/privacy-policy');
+    });
+  }
+  const termsLink = document.getElementById('consent-terms-link');
+  if (termsLink) {
+    termsLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      window.api.send('open-external-url', 'https://www.racetagger.cloud/terms-of-service');
+    });
+  }
+
+  // Accept button
+  const acceptBtn = document.getElementById('privacy-consent-accept');
+  if (acceptBtn) {
+    acceptBtn.addEventListener('click', () => {
+      localStorage.setItem(CONSENT_KEY, new Date().toISOString());
+      modal.style.display = 'none';
+    });
+  }
+}
+
 // Load and display training consent status
 // Note: The header toggle has been moved to Settings page.
 // This function now handles both the legacy header toggle (if exists) and settings toggle.
@@ -1031,19 +1227,19 @@ async function handleTrainingConsentChange(event) {
 
     if (result) {
       const message = newConsent
-        ? 'Grazie! Le tue immagini aiuteranno a migliorare il riconoscimento.'
-        : 'Consenso rimosso. Le tue future immagini non saranno usate per il training.';
-      showNotification('Preferenze aggiornate', message);
+        ? 'Thank you! Your images will help improve recognition accuracy.'
+        : 'Consent removed. Your future images will not be used for training.';
+      showNotification('Preferences Updated', message);
     } else {
       // Revert toggle if save failed
       event.target.checked = !newConsent;
-      showNotification('Errore', 'Impossibile salvare le preferenze. Riprova.');
+      showNotification('Error', 'Unable to save preferences. Please try again.');
     }
   } catch (error) {
     console.error('[Auth] Error saving training consent:', error);
     // Revert toggle on error
     event.target.checked = !newConsent;
-    showNotification('Errore', 'Impossibile salvare le preferenze. Riprova.');
+    showNotification('Error', 'Unable to save preferences. Please try again.');
   }
 }
 

@@ -19,6 +19,22 @@
     general: { label: 'General Feedback', icon: '?' },
   };
 
+  // Contextual messages shown below the tab bar, per type
+  const TYPE_CONTEXT = {
+    bug: {
+      message: 'To help us resolve this as quickly as possible, your report will automatically include system diagnostics — app version, OS details, and a snapshot of recent error logs. No personal data is ever shared.',
+      icon: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`,
+    },
+    feature: {
+      message: 'Describe the feature you have in mind and how it would fit into your workflow. The more context you share, the better we can evaluate and prioritise it.',
+      icon: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`,
+    },
+    general: {
+      message: 'Share any thoughts, impressions, or suggestions. Your perspective directly shapes how RaceTagger evolves.',
+      icon: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`,
+    },
+  };
+
   const TITLE_MAX = 200;
   const DESC_MAX = 5000;
 
@@ -55,6 +71,12 @@
         <div class="feedback-modal-body" id="feedback-body">
           <!-- Form State -->
           <div id="feedback-form-state">
+            <!-- Contextual info banner (updates per tab) -->
+            <div class="feedback-type-banner" id="feedback-type-banner">
+              <span class="feedback-type-banner-icon" id="feedback-type-banner-icon"></span>
+              <span class="feedback-type-banner-text" id="feedback-type-banner-text"></span>
+            </div>
+
             <div class="feedback-form-group">
               <label for="feedback-title">Title <span class="feedback-required">*</span></label>
               <input type="text" id="feedback-title" maxlength="${TITLE_MAX}" placeholder="Brief summary of your feedback" required>
@@ -171,6 +193,19 @@
     } else {
       titleInput.placeholder = 'Brief summary of your feedback';
       descInput.placeholder = 'Share your thoughts, suggestions, or comments...';
+    }
+
+    // Update the contextual info banner
+    var banner = document.getElementById('feedback-type-banner');
+    var bannerIcon = document.getElementById('feedback-type-banner-icon');
+    var bannerText = document.getElementById('feedback-type-banner-text');
+    if (!banner || !bannerIcon || !bannerText) return;
+
+    var ctx = TYPE_CONTEXT[currentType];
+    if (ctx) {
+      bannerIcon.innerHTML = ctx.icon;
+      bannerText.textContent = ctx.message;
+      banner.className = 'feedback-type-banner feedback-type-banner--' + currentType;
     }
   }
 
@@ -331,10 +366,10 @@
     if (fabWrapper) fabWrapper.style.display = 'none';
     updatePlaceholders();
 
-    // Check auth
+    // Check auth — uses auth-get-session (ipcMain.handle, invoke-compatible)
     try {
-      var authStatus = await window.api.invoke('check-auth-status');
-      if (!authStatus || !authStatus.isAuthenticated) {
+      var authStatus = await window.api.invoke('auth-get-session');
+      if (!authStatus || !authStatus.success) {
         document.getElementById('feedback-form-state').style.display = 'none';
         document.getElementById('feedback-auth-warning').style.display = 'block';
         document.getElementById('feedback-submit-btn').disabled = true;

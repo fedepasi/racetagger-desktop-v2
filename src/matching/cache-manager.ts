@@ -76,6 +76,7 @@ export class CacheManager {
   // L3 Cache: Supabase storage
   private supabase: any;
   private l3Enabled: boolean;
+  private _l3DisableWarned: boolean = false;
 
   // Configuration
   private config: {
@@ -506,22 +507,18 @@ export class CacheManager {
         });
 
       if (error) {
-        // Detailed error logging — Supabase errors often have code/details/hint beyond message
-        const errMsg = (error as any)?.message || 'unknown';
-        const errCode = (error as any)?.code || '';
-        const errDetails = (error as any)?.details || '';
-        const errHint = (error as any)?.hint || '';
-        console.error(`[L3Cache] Write error: ${errMsg} (code=${errCode}, details=${errDetails}, hint=${errHint})`);
-
-        // If table doesn't exist (42P01) or RLS blocks (42501), disable L3 to stop spam
-        if (errCode === '42P01' || errCode === '42501') {
-          console.warn(`[L3Cache] Disabling L3 cache due to persistent error: ${errCode}`);
+        // Log full error details and disable L3 to avoid repeated errors
+        const errInfo = `code=${(error as any)?.code} message=${(error as any)?.message} details=${(error as any)?.details} hint=${(error as any)?.hint} status=${(error as any)?.status || (error as any)?.statusCode}`;
+        console.error(`[L3Cache] Write failed for key "${key.substring(0, 40)}...": ${errInfo}`);
+        // Auto-disable L3 after first failure to avoid flooding logs
+        if (!this._l3DisableWarned) {
+          console.warn(`[L3Cache] ⚠️ Disabling L3 cache for this session due to persistent errors (table 'cache_entries' may not exist)`);
           this.l3Enabled = false;
+          this._l3DisableWarned = true;
         }
       }
     } catch (error) {
-      const errMsg = (error as any)?.message || JSON.stringify(error) || 'unknown exception';
-      console.error(`[L3Cache] Write exception: ${errMsg}`);
+      console.error('[L3Cache] Write exception:', (error as any)?.message || error);
     }
   }
 

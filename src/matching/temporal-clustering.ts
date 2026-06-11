@@ -6,13 +6,18 @@
  * and sequential photo analysis.
  */
 
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs/promises';
 import os from 'os';
+import { extractAfPoint, AfPointData } from './af-point-extractor';
 
-const execAsync = promisify(exec);
+// Use execFile (no shell) so paths with spaces work — the default macOS DMG
+// mount is `/Volumes/RaceTagger <version>-arm64/...`, and a shell would split
+// that space and fail to find exiftool (issues #146/#147). Args are passed as
+// an array, never interpolated into a command string.
+const execFileAsync = promisify(execFile);
 
 /**
  * Simple semaphore implementation to limit concurrent processes
@@ -60,6 +65,32 @@ export interface ImageTimestamp {
     subsecTimeOriginal?: string;
   };
   excludedReason?: string; // Why this image was excluded from clustering
+  // GPS & Camera metadata (for location tagging and photo context)
+  geoData?: {
+    latitude: number | null;   // WGS84 decimal degrees
+    longitude: number | null;  // WGS84 decimal degrees
+    altitude: number | null;   // meters above sea level
+    direction: number | null;  // compass heading of camera (0-360)
+  };
+  cameraData?: {
+    make: string | null;       // e.g. "Canon"
+    model: string | null;      // e.g. "Canon EOS R3"
+    lensModel: string | null;  // e.g. "EF 70-200mm f/2.8L IS III USM"
+    focalLength: number | null; // mm
+  };
+  // Additional EXIF exposure/shooting metadata for analytics and editorial workflow.
+  // Persisted to analysis_results columns; not used in matcher scoring.
+  exposureData?: {
+    exposureTime: number | null;    // seconds (e.g. 0.004 = 1/250s)
+    fNumber: number | null;         // aperture (e.g. 2.8)
+    iso: number | null;             // ISO sensitivity
+    orientation: number | null;     // EXIF Orientation 1-8 (1=normal, 6=90°CW, 8=90°CCW)
+    subjectDistance: number | null; // meters (NULL when not reported)
+    driveMode: string | null;       // raw drive-mode string ("Single", "Continuous High", ...)
+  };
+  // Normalized EXIF autofocus point (0-1 image coordinates) when available.
+  // Already rotated per Orientation to match the displayed image.
+  afData?: AfPointData | null;
 }
 
 export interface TemporalCluster {
@@ -100,28 +131,60 @@ export interface TemporalConfig {
   };
 }
 
+/**
+ * Resolved exiftool invocation for `execFile` (no shell).
+ * - `cmd` is the executable to run.
+ * - `prefixArgs` are args prepended before the tool flags. On Windows the
+ *   bundled exiftool is Strawberry Perl (`perl.exe`) driving `exiftool.pl`, so
+ *   prefixArgs carries the `.pl` script path. On macOS/Linux it's a single
+ *   native binary and prefixArgs is empty.
+ */
+interface ExiftoolInvocation {
+  cmd: string;
+  prefixArgs: string[];
+}
+
 export class TemporalClusterManager {
   private config: TemporalConfig;
-  private exiftoolPath: string;
+  private exiftool: ExiftoolInvocation;
   private clusters: Map<string, TemporalCluster[]> = new Map();
   private analysisLogger?: any; // Optional logger for detailed tracking
   private exiftoolSemaphore: SimpleSemaphore; // Limita i processi ExifTool concorrenti
   private batchProgressCallback?: (processed: number, total: number, currentBatch: number, totalBatches: number) => void;
 
   constructor(exiftoolPath?: string) {
-    this.exiftoolPath = exiftoolPath || this.getExiftoolPath();
+    // A caller-supplied path is treated as a single native binary (no perl
+    // wrapper). With no override we resolve the bundled tool per-platform.
+    this.exiftool = exiftoolPath
+      ? { cmd: exiftoolPath, prefixArgs: [] }
+      : this.resolveExiftool();
     this.config = this.getDefaultConfig();
     this.exiftoolSemaphore = new SimpleSemaphore(15); // Max 15 processi ExifTool concorrenti
   }
 
   /**
-   * Get the correct path for exiftool based on development/production environment and OS
+   * Resolve the exiftool invocation for `execFile` based on dev/prod and OS.
+   * Returns `{ cmd, prefixArgs }` instead of a shell string so the executable
+   * path can contain spaces (e.g. the default macOS DMG mount
+   * `/Volumes/RaceTagger 1.1.9-arm64/...`) without the shell splitting it.
    */
-  private getExiftoolPath(): string {
+  private resolveExiftool(): ExiftoolInvocation {
     const path = require('path');
 
     // Detect operating system
     const platform = process.platform; // 'win32', 'darwin', 'linux'
+
+    const build = (vendorDir: string): ExiftoolInvocation => {
+      // Windows: bundled exiftool is Strawberry Perl (perl.exe) + exiftool.pl;
+      // other platforms ship a single native exiftool binary.
+      if (platform === 'win32') {
+        return {
+          cmd: path.join(vendorDir, 'perl.exe'),
+          prefixArgs: [path.join(vendorDir, 'exiftool.pl')],
+        };
+      }
+      return { cmd: path.join(vendorDir, 'exiftool'), prefixArgs: [] };
+    };
 
     try {
       // Safely determine if we're in development mode
@@ -142,25 +205,11 @@ export class TemporalClusterManager {
         vendorDir = path.join(process.resourcesPath, 'app.asar.unpacked', 'vendor', platform);
       }
 
-      // Windows uses perl.exe + exiftool.pl, other platforms use exiftool directly
-      if (platform === 'win32') {
-        const perlExe = path.join(vendorDir, 'perl.exe');
-        const exiftoolPl = path.join(vendorDir, 'exiftool.pl');
-        return `"${perlExe}" "${exiftoolPl}"`;
-      } else {
-        return path.join(vendorDir, 'exiftool');
-      }
+      return build(vendorDir);
     } catch {
       // Fallback for standalone testing
       // __dirname is dist/src/matching/, so ../../../vendor reaches project root
-      const vendorDir = path.join(__dirname, '../../../vendor', platform);
-      if (platform === 'win32') {
-        const perlExe = path.join(vendorDir, 'perl.exe');
-        const exiftoolPl = path.join(vendorDir, 'exiftool.pl');
-        return `"${perlExe}" "${exiftoolPl}"`;
-      } else {
-        return path.join(vendorDir, 'exiftool');
-      }
+      return build(path.join(__dirname, '../../../vendor', platform));
     }
   }
 
@@ -308,7 +357,11 @@ export class TemporalClusterManager {
               fileName,
               timestamp: exifResult.timestamp,
               timestampSource: 'exif',
-              exifData: exifResult.exifData
+              exifData: exifResult.exifData,
+              geoData: exifResult.geoData,
+              cameraData: exifResult.cameraData,
+              exposureData: exifResult.exposureData,
+              afData: exifResult.afData ?? null
             });
           } else {
             // No valid DateTimeOriginal found - exclude from temporal clustering
@@ -399,8 +452,12 @@ export class TemporalClusterManager {
   private async extractExifTimestampsBatch(filePaths: string[]): Promise<Map<string, {
     timestamp: Date;
     exifData: any;
+    geoData?: { latitude: number | null; longitude: number | null; altitude: number | null; direction: number | null };
+    cameraData?: { make: string | null; model: string | null; lensModel: string | null; focalLength: number | null };
+    exposureData?: { exposureTime: number | null; fNumber: number | null; iso: number | null; orientation: number | null; subjectDistance: number | null; driveMode: string | null };
+    afData?: AfPointData | null;
   } | null>> {
-    const results = new Map<string, { timestamp: Date; exifData: any; } | null>();
+    const results = new Map<string, { timestamp: Date; exifData: any; geoData?: any; cameraData?: any; exposureData?: any; afData?: AfPointData | null } | null>();
 
     // Acquisisci il semaforo per limitare processi concorrenti
     await this.exiftoolSemaphore.acquire();
@@ -412,11 +469,39 @@ export class TemporalClusterManager {
       // Scrivi i percorsi dei file nel file temporaneo (uno per riga)
       await fs.writeFile(tmpFile, filePaths.join('\n'), 'utf-8');
 
-      // Usa il flag -@ di ExifTool per leggere i percorsi dal file
-      // Non quotare exiftoolPath perché potrebbe già contenere spazi gestiti internamente
-      const command = `${this.exiftoolPath} -DateTimeOriginal -CreateDate -ModifyDate -SubSecTimeOriginal -json -@ "${tmpFile}"`;
+      // Usa il flag -@ di ExifTool per leggere i percorsi dal file.
+      // Tags are passed as a real argv array to execFile (no shell), so neither
+      // the exiftool path nor the tmpFile path can be broken by spaces.
+      // Note: AF/Focus fields are camera-brand specific and are parsed by
+      // af-point-extractor.ts. We pass `-G1` to keep grouped tags (some bodies
+      // expose AF fields under MakerNotes:Canon/Nikon/etc. — `-G1` is omitted
+      // here intentionally so ExifTool flattens names; the parser handles all
+      // common keys regardless of group).
+      // Extended ExifTool tag set:
+      //   - timestamps + GPS + camera/lens (existing)
+      //   - exposure trio (shutter/aperture/ISO) for analytics & sharpness filters
+      //   - Orientation (for correct AF point rotation to displayed coords)
+      //   - SubjectDistance + DriveMode/ContinuousDrive/ShootingMode (drive mode is brand-specific)
+      //   - AF-related fields (existing)
+      const args = [
+        ...this.exiftool.prefixArgs,
+        '-DateTimeOriginal', '-CreateDate', '-ModifyDate', '-SubSecTimeOriginal',
+        '-GPSLatitude', '-GPSLongitude', '-GPSAltitude', '-GPSImgDirection',
+        '-Make', '-Model', '-LensModel', '-FocalLength',
+        '-ExposureTime', '-FNumber', '-ISO', '-Orientation', '-SubjectDistance',
+        '-DriveMode', '-ContinuousDrive', '-ShootingMode',
+        '-ImageWidth', '-ImageHeight', '-ExifImageWidth', '-ExifImageHeight',
+        '-RawImageFullWidth', '-RawImageFullHeight',
+        '-AFAreaXPositions', '-AFAreaYPositions', '-AFAreaWidths', '-AFAreaHeights',
+        '-AFImageWidth', '-AFImageHeight',
+        '-AFAreaXPosition', '-AFAreaYPosition', '-AFAreaWidth', '-AFAreaHeight',
+        '-PrimaryAFPoint', '-AFPointSelected', '-AFPointsInFocus', '-AFPointsUsed',
+        '-FocalPlaneAFPointsUsed', '-FocusPixel', '-FocusLocation', '-FocusPosition2',
+        '-AFMode', '-AFAreaMode', '-AFAreaSelectMethod', '-FocusMode',
+        '-n', '-json', '-@', tmpFile,
+      ];
 
-      const { stdout, stderr } = await execAsync(command, {
+      const { stdout, stderr } = await execFileAsync(this.exiftool.cmd, args, {
         maxBuffer: 50 * 1024 * 1024, // 50MB buffer per batch grandi
         timeout: 10000 // 10 secondi timeout
       });
@@ -469,6 +554,52 @@ export class TemporalClusterManager {
             }
 
             if (!isNaN(timestamp.getTime())) {
+              // Extract GPS data (with -n flag, values are already decimal numbers)
+              const geoData = {
+                latitude: typeof exifData.GPSLatitude === 'number' ? exifData.GPSLatitude : null,
+                longitude: typeof exifData.GPSLongitude === 'number' ? exifData.GPSLongitude : null,
+                altitude: typeof exifData.GPSAltitude === 'number' ? exifData.GPSAltitude : null,
+                direction: typeof exifData.GPSImgDirection === 'number' ? exifData.GPSImgDirection : null,
+              };
+
+              // Extract camera data
+              const cameraData = {
+                make: typeof exifData.Make === 'string' ? exifData.Make : null,
+                model: typeof exifData.Model === 'string' ? exifData.Model : null,
+                lensModel: typeof exifData.LensModel === 'string' ? exifData.LensModel : null,
+                focalLength: typeof exifData.FocalLength === 'number' ? exifData.FocalLength : null,
+              };
+
+              // Extract exposure / shooting metadata. DriveMode is brand-specific —
+              // we prefer ExifTool's normalized DriveMode, fall back to Canon's
+              // ContinuousDrive and Nikon's ShootingMode in that order.
+              const driveModeRaw =
+                (typeof exifData.DriveMode === 'string' && exifData.DriveMode) ||
+                (typeof exifData.ContinuousDrive === 'string' && exifData.ContinuousDrive) ||
+                (typeof exifData.ShootingMode === 'string' && exifData.ShootingMode) ||
+                null;
+              // SubjectDistance: some bodies use 0 or 65535 to mean "infinity" or "unknown".
+              // Treat those sentinel values as null so analytics don't see fake distances.
+              let subjectDistance: number | null = null;
+              if (typeof exifData.SubjectDistance === 'number') {
+                const d = exifData.SubjectDistance;
+                if (d > 0 && d < 10000) subjectDistance = d;
+              }
+              const exposureData = {
+                exposureTime: typeof exifData.ExposureTime === 'number' ? exifData.ExposureTime : null,
+                fNumber: typeof exifData.FNumber === 'number' ? exifData.FNumber : null,
+                iso: typeof exifData.ISO === 'number' ? exifData.ISO : null,
+                orientation: typeof exifData.Orientation === 'number' ? exifData.Orientation : null,
+                subjectDistance,
+                driveMode: driveModeRaw,
+              };
+
+              // Extract autofocus point (normalized 0-1) via multi-brand parser.
+              // The parser receives Orientation so it can rotate sensor-frame AF
+              // coords into displayed-image coords (correct for portrait shots).
+              // Returns null when EXIF lacks usable AF data, which is fine.
+              const afData = extractAfPoint(exifData);
+
               results.set(filePath, {
                 timestamp,
                 exifData: {
@@ -476,7 +607,11 @@ export class TemporalClusterManager {
                   createDate: exifData.CreateDate,
                   modifyDate: exifData.ModifyDate,
                   subsecTimeOriginal: exifData.SubSecTimeOriginal
-                }
+                },
+                geoData,
+                cameraData,
+                exposureData,
+                afData
               });
             } else {
               results.set(filePath, null);
@@ -519,9 +654,15 @@ export class TemporalClusterManager {
     await this.exiftoolSemaphore.acquire();
 
     try {
-      const command = `${this.exiftoolPath} -DateTimeOriginal -CreateDate -ModifyDate -SubSecTimeOriginal -json "${filePath}"`;
+      // execFile (no shell): exiftool path + filePath are argv entries, so
+      // spaces in either are safe (e.g. the macOS DMG mount path).
+      const args = [
+        ...this.exiftool.prefixArgs,
+        '-DateTimeOriginal', '-CreateDate', '-ModifyDate', '-SubSecTimeOriginal',
+        '-json', filePath,
+      ];
 
-      const { stdout, stderr } = await execAsync(command);
+      const { stdout, stderr } = await execFileAsync(this.exiftool.cmd, args);
 
       const jsonData = JSON.parse(stdout);
       if (!jsonData || jsonData.length === 0) {
@@ -784,6 +925,24 @@ export class TemporalClusterManager {
   getProximityBonus(sport: string = 'generic'): number {
     const config = this.config[sport as keyof TemporalConfig] || this.config.generic;
     return config.proximityBonus;
+  }
+
+  /**
+   * Get the cluster window (milliseconds) for the given sport, with fallback
+   * to the 'generic' default when the sport is unknown.
+   */
+  getClusterWindow(sport: string = 'generic'): number {
+    const config = this.config[sport as keyof TemporalConfig] || this.config.generic;
+    return config.clusterWindow;
+  }
+
+  /**
+   * Get the burst threshold (milliseconds) for the given sport, with fallback
+   * to the 'generic' default when the sport is unknown.
+   */
+  getBurstThreshold(sport: string = 'generic'): number {
+    const config = this.config[sport as keyof TemporalConfig] || this.config.generic;
+    return config.burstThreshold;
   }
 
   /**

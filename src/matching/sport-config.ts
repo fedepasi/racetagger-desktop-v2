@@ -21,6 +21,14 @@ export interface MatchingConfig {
     team: number;
     category: number;       // weight for category matches (GT3, F1, etc.)
     plateNumber: number;    // weight for license plate matches
+    // Visual DNA weights (Vehicle DNA / visual matching)
+    vehicleMake: number;    // weight for manufacturer match (Ferrari, Honda, Pinarello, etc.)
+    vehicleModel: number;   // weight for model match (296 GT3, Dogma F, etc.)
+    liveryColor: number;    // weight for primary livery/jersey color match
+    // Face recognition: identity-level signal. Weight is multiplied by the
+    // face-match confidence so a 0.95-confidence match is treated more like
+    // a confirmed identity than a 0.62-confidence one.
+    faceMatch: number;
   };
   thresholds: {
     minimumScore: number;        // Minimum score to accept a match
@@ -30,6 +38,11 @@ export interface MatchingConfig {
     strongNonNumberEvidence: number; // Threshold for strong non-number evidence
   };
   multiEvidenceBonus: number;    // Bonus multiplier for multiple evidence types
+  // AF-point scoring: when enabled and an AF point is available + reliable,
+  // candidates whose bounding box contains the focus point receive a
+  // multiplicative bonus on totalScore (score *= 1 + afPointBonus).
+  enableAfPointScoring: boolean;
+  afPointBonus: number;          // multiplicative factor 0-1 (e.g. 0.1 = +10%)
   sport: string;
   version: string;
 }
@@ -86,7 +99,11 @@ export class SportConfig {
             sponsor: category.matching_config.weights?.sponsor || 40,
             team: category.matching_config.weights?.team || 60,
             category: category.matching_config.weights?.category || 0,
-            plateNumber: category.matching_config.weights?.plateNumber || 0
+            plateNumber: category.matching_config.weights?.plateNumber || 0,
+            vehicleMake: category.matching_config.weights?.vehicleMake || 0,
+            vehicleModel: category.matching_config.weights?.vehicleModel || 0,
+            liveryColor: category.matching_config.weights?.liveryColor || 0,
+            faceMatch: category.matching_config.weights?.faceMatch || 120
           },
           thresholds: {
             minimumScore: category.matching_config.thresholds?.minimumScore || 50,
@@ -96,6 +113,8 @@ export class SportConfig {
             strongNonNumberEvidence: category.matching_config.thresholds?.strongNonNumberEvidence || 80
           },
           multiEvidenceBonus: category.matching_config.multiEvidenceBonus || 0.2,
+          enableAfPointScoring: category.matching_config.enableAfPointScoring === true,
+          afPointBonus: typeof category.matching_config.afPointBonus === 'number' ? category.matching_config.afPointBonus : 0.1,
           sport: category.code,
           version: '1.1.0-supabase'
         };
@@ -120,6 +139,10 @@ export class SportConfig {
       team?: number;
       category?: number;
       plateNumber?: number;
+      vehicleMake?: number;
+      vehicleModel?: number;
+      liveryColor?: number;
+      faceMatch?: number;
     };
     thresholds?: {
       minimumScore?: number;
@@ -129,6 +152,8 @@ export class SportConfig {
       strongNonNumberEvidence?: number;
     };
     multiEvidenceBonus?: number;
+    enableAfPointScoring?: boolean;
+    afPointBonus?: number;
   }): void {
     const existingConfig = this.getConfig(sportCode);
 
@@ -141,7 +166,11 @@ export class SportConfig {
         sponsor: matchingConfig.weights?.sponsor ?? existingConfig.weights.sponsor,
         team: matchingConfig.weights?.team ?? existingConfig.weights.team,
         category: matchingConfig.weights?.category ?? existingConfig.weights.category,
-        plateNumber: matchingConfig.weights?.plateNumber ?? existingConfig.weights.plateNumber
+        plateNumber: matchingConfig.weights?.plateNumber ?? existingConfig.weights.plateNumber,
+        vehicleMake: matchingConfig.weights?.vehicleMake ?? existingConfig.weights.vehicleMake,
+        vehicleModel: matchingConfig.weights?.vehicleModel ?? existingConfig.weights.vehicleModel,
+        liveryColor: matchingConfig.weights?.liveryColor ?? existingConfig.weights.liveryColor,
+        faceMatch: matchingConfig.weights?.faceMatch ?? existingConfig.weights.faceMatch
       },
       thresholds: {
         minimumScore: matchingConfig.thresholds?.minimumScore ?? existingConfig.thresholds.minimumScore,
@@ -151,6 +180,8 @@ export class SportConfig {
         strongNonNumberEvidence: matchingConfig.thresholds?.strongNonNumberEvidence ?? existingConfig.thresholds.strongNonNumberEvidence
       },
       multiEvidenceBonus: matchingConfig.multiEvidenceBonus ?? existingConfig.multiEvidenceBonus,
+      enableAfPointScoring: matchingConfig.enableAfPointScoring ?? existingConfig.enableAfPointScoring,
+      afPointBonus: matchingConfig.afPointBonus ?? existingConfig.afPointBonus,
       sport: sportCode,
       version: '1.1.0-supabase-updated'
     };
@@ -216,7 +247,11 @@ export class SportConfig {
         sponsor: 40,      // Medium importance - many sponsors visible
         team: 60,         // Medium-high importance - team names visible
         category: 0,      // Disabled by default (configured in Supabase)
-        plateNumber: 0    // Disabled by default (configured in Supabase)
+        plateNumber: 0,   // Disabled by default (configured in Supabase)
+        vehicleMake: 45,  // Significant - Ferrari vs Porsche is strong signal
+        vehicleModel: 35, // Good signal - 296 GT3 narrows candidates substantially
+        liveryColor: 50,  // Strong - liveries are unique in GT/endurance (most valuable visual cue)
+        faceMatch: 120    // Very strong - face match scaled by confidence (0-1)
       },
       thresholds: {
         minimumScore: 50,           // Require substantial evidence
@@ -226,6 +261,8 @@ export class SportConfig {
         strongNonNumberEvidence: 80  // Strong evidence needed to override number
       },
       multiEvidenceBonus: 0.2,      // 20% bonus for multiple evidence
+      enableAfPointScoring: false,
+      afPointBonus: 0.1,
       sport: 'motorsport',
       version: '1.0.0'
     });
@@ -239,7 +276,11 @@ export class SportConfig {
         sponsor: 20,      // Low importance - fewer visible sponsors
         team: 30,         // Low importance - team less important
         category: 0,      // Disabled by default (configured in Supabase)
-        plateNumber: 0    // Disabled (not applicable for running)
+        plateNumber: 0,   // Disabled (not applicable for running)
+        vehicleMake: 0,   // N/A for running
+        vehicleModel: 0,  // N/A for running
+        liveryColor: 35,  // Jersey/kit color can help identify team runners
+        faceMatch: 130    // Even higher for running — faces are typically clearly visible
       },
       thresholds: {
         minimumScore: 60,           // Higher threshold - numbers more reliable
@@ -249,6 +290,8 @@ export class SportConfig {
         strongNonNumberEvidence: 100 // Very strong evidence to override
       },
       multiEvidenceBonus: 0.15,     // Lower bonus - number dominates
+      enableAfPointScoring: false,
+      afPointBonus: 0.1,
       sport: 'running',
       version: '1.0.0'
     });
@@ -262,7 +305,11 @@ export class SportConfig {
         sponsor: 60,      // Higher importance - cycling has many sponsors
         team: 70,         // High importance - team jerseys prominent
         category: 0,      // Disabled by default (configured in Supabase)
-        plateNumber: 0    // Disabled (not applicable for cycling)
+        plateNumber: 0,   // Disabled (not applicable for cycling)
+        vehicleMake: 40,  // Bike brand is visible and distinctive (Pinarello, Trek, etc.)
+        vehicleModel: 25, // Bike model less distinguishable at distance
+        liveryColor: 55,  // Jersey/kit colors are THE primary visual identifier in cycling
+        faceMatch: 120
       },
       thresholds: {
         minimumScore: 55,
@@ -272,6 +319,8 @@ export class SportConfig {
         strongNonNumberEvidence: 85
       },
       multiEvidenceBonus: 0.25,     // Higher bonus - more evidence types
+      enableAfPointScoring: false,
+      afPointBonus: 0.1,
       sport: 'cycling',
       version: '1.0.0'
     });
@@ -285,7 +334,11 @@ export class SportConfig {
         sponsor: 50,      // Medium - gear sponsors visible
         team: 40,         // Lower - teams less prominent
         category: 0,      // Disabled by default (configured in Supabase)
-        plateNumber: 0    // Disabled by default (configured in Supabase)
+        plateNumber: 0,   // Disabled by default (configured in Supabase)
+        vehicleMake: 50,  // Bike brand very visible and distinctive (Honda red, KTM orange, etc.)
+        vehicleModel: 20, // Model harder to distinguish in muddy conditions
+        liveryColor: 45,  // Gear/helmet colors help, but mud can obscure
+        faceMatch: 100    // Lower — helmets/goggles often occlude faces
       },
       thresholds: {
         minimumScore: 50,
@@ -295,6 +348,8 @@ export class SportConfig {
         strongNonNumberEvidence: 70
       },
       multiEvidenceBonus: 0.3,      // Higher bonus - compensate for conditions
+      enableAfPointScoring: false,
+      afPointBonus: 0.1,
       sport: 'motocross',
       version: '1.0.0'
     });
@@ -308,7 +363,11 @@ export class SportConfig {
         sponsor: 40,      // Medium importance - sponsors visible but secondary
         team: 70,         // Higher importance - team identification crucial
         category: 0,      // Disabled by default (configured in Supabase)
-        plateNumber: 0    // Disabled by default (configured in Supabase)
+        plateNumber: 0,   // Disabled by default (configured in Supabase)
+        vehicleMake: 55,  // Car brand very visible in rally (Hyundai i20, Toyota GR Yaris)
+        vehicleModel: 40, // Model is quite distinctive in rally
+        liveryColor: 50,  // Liveries are distinct but can get dirty/muddy
+        faceMatch: 110    // Driver visible through windshield in service-park photos
       },
       thresholds: {
         minimumScore: 55,           // Higher threshold - more conservative matching
@@ -318,6 +377,8 @@ export class SportConfig {
         strongNonNumberEvidence: 90  // Very strong evidence needed to override number
       },
       multiEvidenceBonus: 0.25,     // Good bonus for name+number coherence
+      enableAfPointScoring: false,
+      afPointBonus: 0.1,
       sport: 'rally',
       version: '1.1.0-enhanced'
     });
@@ -331,7 +392,11 @@ export class SportConfig {
         sponsor: 35,
         team: 50,
         category: 0,      // Disabled by default (configured in Supabase)
-        plateNumber: 0    // Disabled by default (configured in Supabase)
+        plateNumber: 0,   // Disabled by default (configured in Supabase)
+        vehicleMake: 30,  // Generic: moderate weight
+        vehicleModel: 20, // Generic: lower weight
+        liveryColor: 30,  // Generic: moderate weight
+        faceMatch: 110
       },
       thresholds: {
         minimumScore: 45,
@@ -341,6 +406,8 @@ export class SportConfig {
         strongNonNumberEvidence: 75
       },
       multiEvidenceBonus: 0.2,
+      enableAfPointScoring: false,
+      afPointBonus: 0.1,
       sport: 'generic',
       version: '1.0.0'
     });
@@ -420,11 +487,15 @@ export class SportConfig {
     const profile = this.getProfile(sport);
     if (!profile) return true; // If no profile, accept any number
 
-    const num = parseInt(raceNumber, 10);
-    if (isNaN(num)) {
-      // Check if alphanumeric is allowed
+    // Use regex to detect alphanumeric before parseInt, which silently drops
+    // trailing letters and would bypass the allowsAlphanumeric check.
+    const isAlphanumeric = !/^[0-9]+$/.test(raceNumber);
+    if (isAlphanumeric) {
       return profile.characteristics.allowsAlphanumeric;
     }
+
+    const num = parseInt(raceNumber, 10);
+    if (isNaN(num)) return profile.characteristics.allowsAlphanumeric;
 
     // Check if within typical range
     const [min, max] = profile.characteristics.typicalNumberRange;

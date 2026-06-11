@@ -24,9 +24,31 @@ export interface AnalysisResult {
   confidence?: number;
   plateNumber?: string;        // License plate number detected by AI
   plateConfidence?: number;    // Confidence score for plate number (0.0-1.0)
+  // Vehicle DNA fields (V6 visual analysis from Gemini)
+  make?: string | null;        // Manufacturer (Ferrari, Honda, Pinarello, etc.)
+  model?: string | null;       // Model (296 GT3, CBR1000RR, Dogma F, etc.)
+  livery?: { primary: string; secondary: string[] } | string | null;  // Livery/jersey colors
   // Temporal context for proximity matching
   imageTimestamp?: ImageTimestamp;
   temporalNeighbors?: ImageTimestamp[];
+  // True when the photographer's EXIF AF point falls inside this candidate's bbox.
+  // Computed upstream in unified-image-processor before calling findMatches().
+  // When set, SmartMatcher applies a multiplicative scoring bonus to all
+  // candidates of this AnalysisResult (see config.afPointBonus / enableAfPointScoring).
+  containsAfPoint?: boolean;
+  // Face matches produced by face-recognition pipeline against the preset's
+  // reference face photos. Each entry identifies a driver/person with a
+  // similarity score in 0-1. SmartMatcher emits a FACE_MATCH evidence per
+  // entry and scores the participant when its driver list contains the matched
+  // person name (case-insensitive fuzzy match).
+  faceMatches?: Array<{
+    driverName: string;
+    confidence: number;
+    /** Optional: race number from the matched preset entry (face → driver → number link). */
+    raceNumber?: string | null;
+    /** Source of the reference photos: 'preset' (per-event) or 'global' (cross-event DB). */
+    source?: 'preset' | 'global';
+  }>;
 }
 
 export interface ParticipantDriver {
@@ -34,6 +56,11 @@ export interface ParticipantDriver {
   driver_name: string;
   driver_metatag?: string | null;
   driver_order: number;
+  // v1.1.4 — Preset Participant Toggle: when false this driver is soft-disabled
+  // and must be skipped by matching (face recognition, name matching). Loaded
+  // from preset_participant_drivers.is_active. Undefined is treated as TRUE for
+  // backward compatibility with payloads that predate the migration.
+  is_active?: boolean;
 }
 
 export interface Participant {
@@ -49,6 +76,28 @@ export interface Participant {
   category?: string;
   plate_number?: string; // License plate for car recognition
   metatag?: string;
+  // Vehicle DNA / Visual profile fields (from custom_fields.learned or direct DB fields)
+  // Applicable across sports: car make for motorsport, bike brand for cycling/motocross, etc.
+  make?: string | null;
+  model?: string | null;
+  livery?: { primary: string; secondary: string[] } | null;
+  jersey_colors?: string[] | null;  // For running/cycling: jersey/kit primary colors
+  custom_fields?: {
+    learned?: {
+      make?: string;
+      model?: string;
+      livery?: { primary: string; secondary: string[] };
+      jersey_colors?: string[];
+      [key: string]: any;
+    };
+    [key: string]: any;
+  };
+  // v1.1.4 — Preset Participant Toggle: when false the entire participant
+  // (car/crew) is soft-disabled. Upstream code (database-service.loadParticipants
+  // + edge-function preset-loader) MUST filter is_active !== false before
+  // handing the list to the matcher; this field is mirrored here for any
+  // defence-in-depth check or UI passthrough. Undefined treated as TRUE.
+  is_active?: boolean;
 }
 
 /**
@@ -59,6 +108,11 @@ export interface Participant {
 export function getParticipantDriverNames(participant: Participant): string[] {
   if (participant.preset_participant_drivers && participant.preset_participant_drivers.length > 0) {
     return participant.preset_participant_drivers
+      // v1.1.4 — Preset Participant Toggle: skip soft-disabled drivers so their
+      // names never enter the allowed-name set used by fast-track name match
+      // or by the filterDriversAgainstPreset safety net. `is_active === false`
+      // is the only truthy-negative; `undefined` or `true` both count as active.
+      .filter(d => d.is_active !== false)
       .sort((a, b) => a.driver_order - b.driver_order)
       .map(d => d.driver_name)
       .filter(Boolean);
@@ -79,6 +133,24 @@ export function getPrimaryDriverName(participant: Participant): string | undefin
   return names.length > 0 ? names[0] : undefined;
 }
 
+/**
+ * Normalize a race number for consistent comparison.
+ * Handles common format differences between ONNX-extracted numbers and preset data:
+ * - Trims whitespace
+ * - Removes common prefixes ("#7" → "7", "No.7" → "7")
+ * - Handles integer-to-string conversion
+ * NOTE: Leading zeros are PRESERVED because "04" and "4" can be different cars.
+ * Returns empty string for null/undefined/empty inputs.
+ */
+export function normalizeRaceNumber(value: string | number | null | undefined): string {
+  if (value === null || value === undefined) return '';
+  let str = String(value).trim();
+  if (!str) return '';
+  // Remove common prefixes: #, No., N., n°
+  str = str.replace(/^(#|No\.\s*|N\.\s*|n°\s*)/i, '');
+  return str;
+}
+
 export interface MatchCandidate {
   participant: Participant;
   score: number;
@@ -95,16 +167,24 @@ export interface MatchCandidate {
   ghostVehicleWarning?: boolean;
 }
 
+export type MatchStatus = 'matched' | 'needs_review' | 'no_match';
+
 export interface MatchResult {
   bestMatch: MatchCandidate | null;
   allCandidates: MatchCandidate[];
   multipleHighScores: boolean;
   resolvedByOverride: boolean;
+  /** Overall match status: 'matched' (clear winner), 'needs_review' (ambiguous, user should choose), 'no_match' */
+  matchStatus: MatchStatus;
   debugInfo: {
     totalEvidence: number;
     evidenceTypes: EvidenceType[];
     ocrCorrections: string[];
     processingTimeMs: number;
+    // Diagnostic fields for rejected/needs_review matches
+    belowMinimumScore?: boolean;
+    needsReviewThreshold?: number;
+    rejectedBestScore?: number;
   };
 }
 
@@ -134,6 +214,9 @@ export class SmartMatcher {
 
   // Current evidence context for advanced matching
   private currentAllEvidence: Evidence[] = [];
+  // Per-call face match context, set by findMatches() before iterating participants.
+  // Read in evaluateParticipant() to score the face_match evidence type.
+  private currentFaceMatches: NonNullable<AnalysisResult['faceMatches']> = [];
 
   // Temporal analysis cache - stores results for neighbor analysis
   private static temporalAnalysisCache: Map<string, {
@@ -158,6 +241,13 @@ export class SmartMatcher {
     driverOccurrences: Map<string, number>;
     teamOccurrences: Map<string, number>;
   } | null = null;
+
+  // ACC-01 (Gruppe C): per-preset list of series-wide sponsor brands (Michelin,
+  // Rolex, TotalEnergies …) that appear on every car / trackside banner. SPONSOR
+  // evidence matching one of these is dropped in findMatches() BEFORE any scoring,
+  // so it neither adds match bonuses nor fires the -30/-15 contradiction penalties.
+  // Stored normalized (see setSeriesSponsorIgnoreList). Empty = no filtering.
+  private seriesSponsorIgnore: string[] = [];
 
   constructor(sport: string = 'motorsport') {
     this.sport = sport;
@@ -186,6 +276,27 @@ export class SmartMatcher {
     if (this.temporalManager) {
       this.temporalManager.initializeFromSportCategories(sportCategories);
     }
+  }
+
+  /**
+   * ACC-01 (Gruppe C): set the per-preset list of series-wide sponsor brands to
+   * exclude from SPONSOR evidence. Entries are normalized (see
+   * normalizeSponsorValue) and empties dropped. Idempotent — safe to call on
+   * every worker before a batch; passing [] clears the filter (current behavior).
+   */
+  setSeriesSponsorIgnoreList(list: string[]): void {
+    if (!Array.isArray(list)) {
+      this.seriesSponsorIgnore = [];
+      return;
+    }
+    const normalized: string[] = [];
+    for (const entry of list) {
+      const norm = this.normalizeSponsorValue(String(entry ?? ''));
+      if (norm.length > 0 && !normalized.includes(norm)) {
+        normalized.push(norm);
+      }
+    }
+    this.seriesSponsorIgnore = normalized;
   }
 
   /**
@@ -317,6 +428,171 @@ export class SmartMatcher {
     if (!SmartMatcher.isActiveSession) {
       SmartMatcher.temporalAnalysisCache.clear();
     }
+  }
+
+  /**
+   * Query temporal analysis cache for neighbor results.
+   * Used by temporal backfill: when YOLO detects a vehicle but AI returns 0 results,
+   * we check if any temporal neighbor had a high-confidence match to suggest as needs_review.
+   */
+  static getTemporalNeighborResults(
+    neighborPaths: string[]
+  ): Array<{ participantNumber: string; confidence: number; timestamp: Date; fileName: string }> {
+    const results: Array<{ participantNumber: string; confidence: number; timestamp: Date; fileName: string }> = [];
+
+    for (const neighborPath of neighborPaths) {
+      const cacheKey = neighborPath.toLowerCase();
+      const cached = SmartMatcher.temporalAnalysisCache.get(cacheKey);
+      if (cached && cached.confidence >= 0.7) {
+        results.push({
+          participantNumber: cached.participantNumber,
+          confidence: cached.confidence,
+          timestamp: cached.timestamp,
+          fileName: cached.fileName
+        });
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Second-pass temporal re-scoring with MULTI_CONFIRM policy.
+   *
+   * Runs AFTER the parallel worker pool has finished processing every image, so
+   * the static temporalAnalysisCache is fully populated. Re-evaluates a single
+   * image's `vehicles[]` (raw_response.vehicles format) using its temporal
+   * neighbors from the cache and applies the bonus ONLY when at least
+   * `minConfirmations` neighbors carry the candidate's participantNumber.
+   *
+   * This avoids the race-condition lossage of the first pass, where the cache
+   * is half-populated when bonus is applied. Offline simulation on Gruppe C
+   * showed MULTI_CONFIRM has 10x lower flip-rate on HIGH records vs the naive
+   * single-confirmation variant.
+   *
+   * Returns:
+   *   - changed: true when the winner of at least one vehicle was flipped.
+   *     Caller is expected to update vehicle.raceNumber / participantMatch.entry
+   *     using the matching participant from the preset.
+   *   - bonusesApplied: per-vehicle/per-candidate list for logging/telemetry.
+   *
+   * This method does NOT mutate participants or call findMatches — it only
+   * adjusts scores within the candidate list of each vehicle.
+   */
+  static rescoreVehiclesWithTemporalMultiConfirm(
+    imagePath: string,
+    vehicles: any[],
+    options: {
+      clusterWindowMs: number;
+      proximityBonus: number;
+      burstThresholdMs: number;
+      minConfirmations?: number;
+      maxBonus?: number;
+      neighborConfidenceFloor?: number;
+    }
+  ): {
+    changed: boolean;
+    bonusesApplied: Array<{ vehicleIndex: number; candidateNumber: string; bonus: number; confirmations: number; isBurst: boolean }>;
+    flips: Array<{ vehicleIndex: number; from: string; to: string; oldScore: number; newScore: number }>;
+  } {
+    const minConfirmations = options.minConfirmations ?? 2;
+    const maxBonus = options.maxBonus ?? 60;
+    const confFloor = options.neighborConfidenceFloor ?? 0.8;
+
+    const ownKey = imagePath.toLowerCase();
+    const ownEntry = SmartMatcher.temporalAnalysisCache.get(ownKey);
+    const result = {
+      changed: false,
+      bonusesApplied: [] as Array<{ vehicleIndex: number; candidateNumber: string; bonus: number; confirmations: number; isBurst: boolean }>,
+      flips: [] as Array<{ vehicleIndex: number; from: string; to: string; oldScore: number; newScore: number }>,
+    };
+    if (!ownEntry || !ownEntry.timestamp) return result;
+
+    // Collect neighbors within window, excluding self.
+    // Cache size is bounded (FIFO 1000), so O(n) scan is fine.
+    const ownTs = ownEntry.timestamp.getTime();
+    const neighbors: Array<{ number: string; confidence: number; ts: Date }> = [];
+    for (const [key, entry] of SmartMatcher.temporalAnalysisCache.entries()) {
+      if (key === ownKey) continue;
+      if (!entry.timestamp) continue;
+      if (entry.confidence < confFloor) continue;
+      const diff = Math.abs(entry.timestamp.getTime() - ownTs);
+      if (diff <= options.clusterWindowMs) {
+        neighbors.push({ number: entry.participantNumber, confidence: entry.confidence, ts: entry.timestamp });
+      }
+    }
+    if (neighbors.length < minConfirmations) return result;
+
+    for (let vIdx = 0; vIdx < vehicles.length; vIdx++) {
+      const v = vehicles[vIdx];
+      const sm = v?.participantMatch?.smartMatch;
+      if (!sm || typeof sm.score !== 'number') continue;
+      const alts = Array.isArray(sm.alternativeCandidates) ? sm.alternativeCandidates : [];
+      const currentWinnerNumber = String(v?.participantMatch?.entry?.numero ?? v.raceNumber ?? '');
+      if (!currentWinnerNumber) continue;
+
+      // Build candidate map: number → score (winner included)
+      const scoreByCandidate = new Map<string, number>();
+      scoreByCandidate.set(currentWinnerNumber, sm.score);
+      for (const a of alts) {
+        if (!a?.participantNumber || typeof a.score !== 'number') continue;
+        const k = String(a.participantNumber);
+        const prev = scoreByCandidate.get(k);
+        scoreByCandidate.set(k, prev === undefined ? a.score : Math.max(prev, a.score));
+      }
+
+      // Apply MULTI_CONFIRM bonus per candidate
+      const adjustedScores = new Map<string, number>(scoreByCandidate);
+      for (const [candNum, candScore] of scoreByCandidate.entries()) {
+        const confirming = neighbors.filter((n) => n.number === candNum);
+        if (confirming.length < minConfirmations) continue;
+        const avgConf = confirming.reduce((s, n) => s + n.confidence, 0) / confirming.length;
+        const isBurst = confirming.some((n) => Math.abs(n.ts.getTime() - ownTs) <= options.burstThresholdMs);
+        const burstMul = isBurst ? 1.5 : 1.0;
+        const rawBonus = options.proximityBonus * confirming.length * avgConf * burstMul;
+        const bonus = Math.floor(Math.min(rawBonus, maxBonus));
+        if (bonus <= 0) continue;
+        adjustedScores.set(candNum, candScore + bonus);
+        result.bonusesApplied.push({
+          vehicleIndex: vIdx,
+          candidateNumber: candNum,
+          bonus,
+          confirmations: confirming.length,
+          isBurst,
+        });
+      }
+
+      // Find new winner
+      let newWinnerNumber = currentWinnerNumber;
+      let newWinnerScore = adjustedScores.get(currentWinnerNumber) ?? sm.score;
+      for (const [n, s] of adjustedScores.entries()) {
+        if (s > newWinnerScore) {
+          newWinnerNumber = n;
+          newWinnerScore = s;
+        }
+      }
+      if (newWinnerNumber !== currentWinnerNumber) {
+        result.changed = true;
+        result.flips.push({
+          vehicleIndex: vIdx,
+          from: currentWinnerNumber,
+          to: newWinnerNumber,
+          oldScore: sm.score,
+          newScore: newWinnerScore,
+        });
+      } else {
+        // Persist the updated score even when winner stays (useful for analytics
+        // and to expose temporal-reinforced confidence to downstream consumers).
+        const newSelfScore = adjustedScores.get(currentWinnerNumber);
+        if (newSelfScore !== undefined && newSelfScore > sm.score) {
+          const delta = newSelfScore - sm.score;
+          sm.score = newSelfScore;
+          if (!Array.isArray(sm.reasoning)) sm.reasoning = [];
+          sm.reasoning.push(`Temporal second-pass bonus (MULTI_CONFIRM): +${delta} pts confirmed winner`);
+        }
+      }
+    }
+    return result;
   }
 
   /**
@@ -497,6 +773,48 @@ export class SmartMatcher {
   }
 
   /**
+   * ACC-01: match-time normalization for sponsor values, applied to BOTH the
+   * ignore-list entries (in the setter) and detected sponsor values (in
+   * isIgnoredSponsor): NFD diacritic strip → lowercase → collapse internal
+   * whitespace → trim.
+   */
+  private normalizeSponsorValue(value: string): string {
+    return String(value)
+      .normalize('NFD')
+      .replace(/\p{Diacritic}/gu, '') // strip combining diacritical marks
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  /**
+   * ACC-01 (Gruppe C): is this detected sponsor value one of the preset's
+   * series-wide brands to ignore? Uses the SAME three tiers as the contradiction
+   * check (evaluateAllSponsors Step 3) so a fuzzy-detected variant can't slip the
+   * filter yet still fire a -15 penalty:
+   *   (a) exact normalized equality
+   *   (b) bidirectional substring, ≥3-char guard on the shorter string
+   *   (c) isFuzzySponsorMatch (abbreviations + Levenshtein)
+   * Ignore-list entries are already normalized by setSeriesSponsorIgnoreList.
+   */
+  private isIgnoredSponsor(value: string): boolean {
+    if (this.seriesSponsorIgnore.length === 0) return false;
+    const normValue = this.normalizeSponsorValue(value);
+    if (normValue.length === 0) return false;
+
+    for (const entry of this.seriesSponsorIgnore) {
+      // (a) exact normalized equality
+      if (normValue === entry) return true;
+      // (b) bidirectional substring with a ≥3-char guard on the shorter string
+      const shorterLen = Math.min(normValue.length, entry.length);
+      if (shorterLen >= 3 && (normValue.includes(entry) || entry.includes(normValue))) return true;
+      // (c) fuzzy match — tier parity with the contradiction check
+      if (this.isFuzzySponsorMatch(normValue, entry)) return true;
+    }
+    return false;
+  }
+
+  /**
    * Check if a participant has a specific driver name in their driver list
    * Used for coherence validation when applying uniqueness boost
    */
@@ -633,6 +951,19 @@ export class SmartMatcher {
   ): Promise<MatchResult> {
     const startTime = Date.now();
 
+    // v1.1.4 — Preset Participant Toggle (defence-in-depth).
+    // Callers (database-service, preset-loader) already filter soft-disabled
+    // rows at the DB layer, but this matcher is the final gate before AI
+    // matching logic runs. Filter again here so a caller that forgot — or a
+    // cached list loaded before the toggle was flipped — cannot leak disabled
+    // participants into the candidate pool. Undefined is_active is treated as
+    // active for backward compatibility with legacy payloads.
+    const disabledCount = participants.filter(p => p.is_active === false).length;
+    if (disabledCount > 0) {
+      console.log(`[SmartMatcher] Filtering ${disabledCount} soft-disabled participants from candidate pool (defence-in-depth)`);
+      participants = participants.filter(p => p.is_active !== false);
+    }
+
     // Step -1: Analyze preset for uniqueness (cached for performance)
     this.analyzePresetUniqueness(participants);
 
@@ -651,6 +982,7 @@ export class SmartMatcher {
         allCandidates: [fastTrackMatch],
         multipleHighScores: false,
         resolvedByOverride: true, // This was resolved by fast-track name matching
+        matchStatus: 'matched' as MatchStatus, // Fast-track is always a clear match
         debugInfo: {
           totalEvidence: analysisResult.drivers?.length || 0,
           evidenceTypes: [EvidenceType.DRIVER_NAME],
@@ -660,8 +992,26 @@ export class SmartMatcher {
       };
     }
 
+    // Capture face match context for this call: evaluateParticipant() reads
+    // currentFaceMatches to score the FACE_MATCH evidence per participant.
+    // Empty array when face recognition wasn't run for this image.
+    this.currentFaceMatches = analysisResult.faceMatches ?? [];
+
     // Step 1: Collect all evidence from analysis result
-    const evidence = this.evidenceCollector.extractEvidence(analysisResult);
+    let evidence = this.evidenceCollector.extractEvidence(analysisResult);
+
+    // ACC-01 (Gruppe C): drop SPONSOR evidence matching the preset's series-wide
+    // ignore list BEFORE any scoring. One choke point covers every downstream
+    // consumer — evaluateSponsor bonuses + unique boost, the -30/-15 contradiction
+    // penalties, the no-number 1.5× sponsor boost, the sponsor→team cross-match,
+    // and the ghost-vehicle ratio. Empty list = no-op (byte-identical behavior).
+    if (this.seriesSponsorIgnore.length > 0) {
+      const ignored = evidence.filter(e => e.type === EvidenceType.SPONSOR && this.isIgnoredSponsor(e.value));
+      if (ignored.length > 0) {
+        evidence = evidence.filter(e => !(e.type === EvidenceType.SPONSOR && this.isIgnoredSponsor(e.value)));
+        console.log(`[SmartMatcher] Ignored ${ignored.length} series sponsor(s): [${ignored.map(e => e.value).join(', ')}]`);
+      }
+    }
 
     // Step 1.5: Check if the recognized race number exists in the participant database
     const raceNumberEvidence = evidence.find(e => e.type === EvidenceType.RACE_NUMBER);
@@ -670,10 +1020,16 @@ export class SmartMatcher {
     // This enables alternative matching via sponsor/team/name for photos without visible numbers
     const noNumberDetected = !raceNumberEvidence;
 
+    // DIAGNOSTIC: Log matching context on first call per batch for debugging
+    if (raceNumberEvidence) {
+      const sampleNumbers = participants.slice(0, 5).map(p => `"${p.numero || p.number || ''}"`).join(', ');
+      console.log(`[SmartMatcher] Matching raceNumber="${raceNumberEvidence.value}" (normalized="${normalizeRaceNumber(raceNumberEvidence.value)}") against ${participants.length} participants. Sample números: [${sampleNumbers}]`);
+    }
+
     const recognizedNumberExists = raceNumberEvidence &&
       participants.some(p => {
-        const participantNumber = String(p.numero || p.number || '');
-        const recognizedNumber = String(raceNumberEvidence.value);
+        const participantNumber = normalizeRaceNumber(p.numero || p.number);
+        const recognizedNumber = normalizeRaceNumber(raceNumberEvidence.value);
         return participantNumber === recognizedNumber;
       });
 
@@ -718,26 +1074,81 @@ export class SmartMatcher {
       await this.applyTemporalBonuses(candidates, analysisResult, vehicleIndex);
     }
 
+    // Step 4.5: Apply AF-point bonus when the EXIF focus point falls inside
+    // this crop's bbox. Bonus is multiplicative on totalScore so it scales with
+    // the quality of other evidence — see sport_categories.matching_config.
+    // Applied uniformly to all candidates of this AnalysisResult: the goal is
+    // to differentiate the principal subject *across crops*, not to change the
+    // winner *within* the crop.
+    if (
+      analysisResult.containsAfPoint === true &&
+      this.config.enableAfPointScoring === true &&
+      this.config.afPointBonus > 0 &&
+      candidates.length > 0
+    ) {
+      const factor = 1 + this.config.afPointBonus;
+      for (const c of candidates) {
+        const bonusPoints = c.score * this.config.afPointBonus;
+        c.score = c.score * factor;
+        c.reasoning.push(`AF-point bonus: ×${factor.toFixed(2)} (+${bonusPoints.toFixed(1)} pts — focus point inside bbox)`);
+      }
+    }
+
     // Step 5: Sort candidates by score (highest first)
     candidates.sort((a, b) => b.score - a.score);
 
     // Step 6: Apply intelligent resolution rules
     const resolvedResult = this.resolveMatches(candidates, correctedEvidence);
 
-    // Step 7: If restrictToPreset is true and we have no valid match, return empty result
+    // Step 7: If restrictToPreset is true and we have no valid match, check for needs_review threshold
+    // needsReviewThreshold: half of minimumScore — enough evidence to warrant human review
+    // but not enough for confident automatic matching
+    const needsReviewThreshold = this.config.thresholds.minimumScore * 0.5;
+
     if (restrictToPreset && (!resolvedResult.bestMatch || resolvedResult.bestMatch.score < this.config.thresholds.minimumScore)) {
       const processingTime = Date.now() - startTime;
 
+      // Check if the best candidate has enough evidence for needs_review
+      // (above needsReviewThreshold but below minimumScore)
+      // Use the top sorted candidate directly — resolvedResult.bestMatch may be null
+      // when resolveMatches nullifies it due to score < minimumScore
+      const topCandidate = candidates.length > 0 ? candidates[0] : null;
+
+      if (topCandidate && topCandidate.score >= needsReviewThreshold) {
+        console.log(`[SmartMatcher] Score ${topCandidate.score.toFixed(1)} below minimumScore (${this.config.thresholds.minimumScore}) ` +
+          `but above needsReviewThreshold (${needsReviewThreshold.toFixed(1)}) → needs_review`);
+
+        return {
+          bestMatch: topCandidate, // Use topCandidate (may differ from resolvedResult.bestMatch which could be null)
+          allCandidates: candidates,
+          multipleHighScores: true, // Force needs_review display
+          resolvedByOverride: false,
+          matchStatus: 'needs_review' as MatchStatus,
+          debugInfo: {
+            totalEvidence: evidence.length,
+            evidenceTypes: evidence.map(e => e.type),
+            ocrCorrections: this.ocrCorrector.getLastCorrections(),
+            processingTimeMs: processingTime,
+            belowMinimumScore: true,
+            needsReviewThreshold
+          }
+        };
+      }
+
+      // Score too low even for needs_review — still preserve candidates for diagnostics
       return {
         bestMatch: null,
         allCandidates: candidates,
         multipleHighScores: resolvedResult.multipleHighScores,
         resolvedByOverride: false,
+        matchStatus: 'no_match' as MatchStatus,
         debugInfo: {
           totalEvidence: evidence.length,
           evidenceTypes: evidence.map(e => e.type),
           ocrCorrections: this.ocrCorrector.getLastCorrections(),
-          processingTimeMs: processingTime
+          processingTimeMs: processingTime,
+          rejectedBestScore: resolvedResult.bestMatch?.score || 0,
+          needsReviewThreshold
         }
       };
     }
@@ -749,11 +1160,19 @@ export class SmartMatcher {
 
     const processingTime = Date.now() - startTime;
 
+    // Determine match status: needs_review when ambiguous (multiple high scores and not resolved by override)
+    const matchStatus: MatchStatus = !resolvedResult.bestMatch
+      ? 'no_match'
+      : (resolvedResult.multipleHighScores && !resolvedResult.resolvedByOverride)
+        ? 'needs_review'
+        : 'matched';
+
     return {
       bestMatch: resolvedResult.bestMatch,
       allCandidates: candidates,
       multipleHighScores: resolvedResult.multipleHighScores,
       resolvedByOverride: resolvedResult.resolvedByOverride,
+      matchStatus,
       debugInfo: {
         totalEvidence: evidence.length,
         evidenceTypes: evidence.map(e => e.type),
@@ -848,6 +1267,123 @@ export class SmartMatcher {
       }
     }
 
+    // CROSS-MATCHING: Gemini may misclassify team names as sponsors (in otherText) or vice versa.
+    // Try unmatched sponsors as team names, and unmatched team evidence as sponsors.
+    const matchedEvidenceValues = new Set(matchedEvidence.map(e => e.value.toLowerCase().trim()));
+
+    // 1. Sponsors that didn't match as sponsors → try as team name
+    for (const sEvidence of sponsorEvidence) {
+      if (matchedEvidenceValues.has(sEvidence.value.toLowerCase().trim())) continue; // Already matched
+      const teamMatch = this.evaluateTeam(participant, { ...sEvidence, type: EvidenceType.TEAM });
+      if (teamMatch.score > 0) {
+        const crossScore = teamMatch.score * 0.7; // Discount for cross-field match
+        const boostedCrossScore = noNumberDetected ? crossScore * noNumberBoostMultiplier : crossScore;
+        totalScore += boostedCrossScore;
+        matchedEvidence.push({ ...sEvidence, type: EvidenceType.TEAM, score: boostedCrossScore });
+        reasoning.push(`CROSS-MATCH: sponsor "${sEvidence.value}" matched as team → +${boostedCrossScore.toFixed(1)} pts (${teamMatch.reason})`);
+        matchedEvidenceValues.add(sEvidence.value.toLowerCase().trim());
+      }
+    }
+
+    // 2. Team evidence that didn't match as team → try as sponsor
+    const teamEvidence = nonSponsorEvidence.filter(e => e.type === EvidenceType.TEAM);
+    for (const tEvidence of teamEvidence) {
+      if (matchedEvidenceValues.has(tEvidence.value.toLowerCase().trim())) continue; // Already matched
+      // ACC-01 (Gruppe C): the SPONSOR-only filter in findMatches() never touches
+      // TEAM evidence, so a series brand Gemini misread as a team name could still
+      // earn a ×0.7 sponsor bonus here. Skip it. (Direct team matching via
+      // evaluateTeam stays untouched — a team genuinely named after a sponsor
+      // still matches normally as a team.)
+      if (this.isIgnoredSponsor(tEvidence.value)) continue;
+      const sponsorMatch = this.evaluateSponsor(participant, { ...tEvidence, type: EvidenceType.SPONSOR });
+      if (sponsorMatch.score > 0) {
+        const crossScore = sponsorMatch.score * 0.7; // Discount for cross-field match
+        const boostedCrossScore = noNumberDetected ? crossScore * noNumberBoostMultiplier : crossScore;
+        totalScore += boostedCrossScore;
+        matchedEvidence.push({ ...tEvidence, type: EvidenceType.SPONSOR, score: boostedCrossScore });
+        reasoning.push(`CROSS-MATCH: team "${tEvidence.value}" matched as sponsor → +${boostedCrossScore.toFixed(1)} pts (${sponsorMatch.reason})`);
+        matchedEvidenceValues.add(tEvidence.value.toLowerCase().trim());
+      }
+    }
+
+    // FACE MATCH evidence — identity-level signal from face-api.js matching
+    // against the preset's reference face photos. Scored as `weights.faceMatch
+    // * faceMatch.confidence` when the matched person name is one of this
+    // participant's drivers. Strongly counts toward multi-evidence bonus.
+    if (this.currentFaceMatches.length > 0) {
+      const faceWeight = this.config.weights.faceMatch || 0;
+      if (faceWeight > 0) {
+        const driverNames = getParticipantDriverNames(participant).map((n) => n.toLowerCase().trim());
+        let bestFaceScore = 0;
+        let bestFaceReason = '';
+        let bestFaceValue = '';
+
+        for (const fm of this.currentFaceMatches) {
+          if (!fm || typeof fm.confidence !== 'number' || !fm.driverName) continue;
+          const fmName = fm.driverName.toLowerCase().trim();
+
+          // 1) Exact driver-name match (strongest)
+          if (driverNames.includes(fmName)) {
+            const score = faceWeight * fm.confidence;
+            if (score > bestFaceScore) {
+              bestFaceScore = score;
+              bestFaceValue = fm.driverName;
+              bestFaceReason = `Face match (exact): "${fm.driverName}" conf=${fm.confidence.toFixed(2)} → +${score.toFixed(1)}`;
+            }
+            continue;
+          }
+
+          // 2) Partial / fuzzy match against any participant driver
+          for (const driverName of driverNames) {
+            if (fmName.includes(driverName) || driverName.includes(fmName)) {
+              const score = faceWeight * fm.confidence * 0.85;
+              if (score > bestFaceScore) {
+                bestFaceScore = score;
+                bestFaceValue = fm.driverName;
+                bestFaceReason = `Face match (partial): "${fm.driverName}" ↔ "${driverName}" conf=${fm.confidence.toFixed(2)} → +${score.toFixed(1)}`;
+              }
+              continue;
+            }
+            const sim = this.calculateJaroWinklerSimilarity(fmName, driverName);
+            if (sim >= this.config.thresholds.nameSimilarity) {
+              const score = faceWeight * fm.confidence * sim;
+              if (score > bestFaceScore) {
+                bestFaceScore = score;
+                bestFaceValue = fm.driverName;
+                bestFaceReason = `Face match (fuzzy ${(sim * 100).toFixed(0)}%): "${fm.driverName}" ↔ "${driverName}" conf=${fm.confidence.toFixed(2)} → +${score.toFixed(1)}`;
+              }
+            }
+          }
+
+          // 3) Race-number cross-check: face match carries a raceNumber and
+          // it matches this participant's number. Useful when the matched
+          // name has a typo but the linked preset row's number is right.
+          if (fm.raceNumber && (String(participant.numero) === String(fm.raceNumber) || String(participant.number) === String(fm.raceNumber))) {
+            const score = faceWeight * fm.confidence * 0.9;
+            if (score > bestFaceScore) {
+              bestFaceScore = score;
+              bestFaceValue = fm.driverName;
+              bestFaceReason = `Face match (race# link): "${fm.driverName}" → #${fm.raceNumber} conf=${fm.confidence.toFixed(2)} → +${score.toFixed(1)}`;
+            }
+          }
+        }
+
+        if (bestFaceScore > 0) {
+          totalScore += bestFaceScore;
+          matchedEvidence.push({
+            type: EvidenceType.FACE_MATCH,
+            value: bestFaceValue,
+            confidence: bestFaceScore / Math.max(faceWeight, 1),
+            source: 'face_recognition',
+            score: bestFaceScore,
+          });
+          reasoning.push(bestFaceReason);
+          // A face hit is always treated as unique evidence (identity-level).
+          hasUniqueEvidence = true;
+        }
+      }
+    }
+
     // Apply multi-evidence bonus
     if (matchedEvidence.length >= 2) {
       const bonus = totalScore * this.config.multiEvidenceBonus;
@@ -898,6 +1434,15 @@ export class SmartMatcher {
       case EvidenceType.PLATE_NUMBER:
         return this.evaluatePlateNumber(participant, evidence);
 
+      case EvidenceType.VEHICLE_MAKE:
+        return this.evaluateVehicleMake(participant, evidence);
+
+      case EvidenceType.VEHICLE_MODEL:
+        return this.evaluateVehicleModel(participant, evidence);
+
+      case EvidenceType.LIVERY_COLOR:
+        return this.evaluateLiveryColor(participant, evidence);
+
       default:
         return { score: 0, reason: 'Unknown evidence type' };
     }
@@ -911,14 +1456,17 @@ export class SmartMatcher {
     evidence: Evidence,
     allowFuzzyMatching: boolean = true
   ): { score: number; reason: string } {
-    const participantNumber = String(participant.numero || participant.number || '');
-    const evidenceNumber = String(evidence.value);
+    const rawParticipantNumber = String(participant.numero || participant.number || '');
+    const rawEvidenceNumber = String(evidence.value);
+    // Use normalized comparison to handle format differences (leading zeros, prefixes, whitespace)
+    const participantNumber = normalizeRaceNumber(rawParticipantNumber);
+    const evidenceNumber = normalizeRaceNumber(rawEvidenceNumber);
 
     if (!participantNumber || !evidenceNumber) {
       return { score: 0, reason: 'Missing number data' };
     }
 
-    // Exact match - highest score
+    // Exact match (after normalization) - highest score
     if (participantNumber === evidenceNumber) {
       const baseScore = this.config.weights.raceNumber;
       const confidenceAdjustment = (evidence.confidence || 1) * baseScore;
@@ -1521,6 +2069,314 @@ export class SmartMatcher {
     );
   }
 
+  // ==========================================
+  // VISUAL DNA MATCHING (Vehicle Make, Model, Livery/Jersey Color)
+  // ==========================================
+
+  /**
+   * Get participant's visual DNA fields, resolving from direct fields or custom_fields.learned
+   */
+  private getParticipantVisualDNA(participant: Participant): {
+    make?: string;
+    model?: string;
+    liveryPrimary?: string;
+    liverySecondary?: string[];
+  } {
+    // Priority: direct fields > custom_fields.learned
+    const make = participant.make
+      || participant.custom_fields?.learned?.make
+      || undefined;
+
+    const model = participant.model
+      || participant.custom_fields?.learned?.model
+      || undefined;
+
+    // Livery: from direct field, custom_fields.learned, or jersey_colors
+    let liveryPrimary: string | undefined;
+    let liverySecondary: string[] | undefined;
+
+    if (participant.livery) {
+      liveryPrimary = participant.livery.primary;
+      liverySecondary = participant.livery.secondary;
+    } else if (participant.custom_fields?.learned?.livery) {
+      liveryPrimary = participant.custom_fields.learned.livery.primary;
+      liverySecondary = participant.custom_fields.learned.livery.secondary;
+    } else if (participant.jersey_colors && participant.jersey_colors.length > 0) {
+      liveryPrimary = participant.jersey_colors[0];
+      liverySecondary = participant.jersey_colors.slice(1);
+    } else if (participant.custom_fields?.learned?.jersey_colors && participant.custom_fields.learned.jersey_colors.length > 0) {
+      liveryPrimary = participant.custom_fields.learned.jersey_colors[0];
+      liverySecondary = participant.custom_fields.learned.jersey_colors.slice(1);
+    }
+
+    return { make, model, liveryPrimary, liverySecondary };
+  }
+
+  /**
+   * Evaluate vehicle make evidence (Ferrari, Honda, Pinarello, etc.)
+   * Uses empty-aware evaluation with fuzzy matching for brand name variations
+   */
+  private evaluateVehicleMake(
+    participant: Participant,
+    evidence: Evidence
+  ): { score: number; reason: string } {
+    const visual = this.getParticipantVisualDNA(participant);
+    if (!visual.make) {
+      return { score: 0, reason: 'No make data in participant' };
+    }
+
+    const weight = this.config.weights.vehicleMake || 0;
+    if (weight === 0) {
+      return { score: 0, reason: 'vehicleMake weight is 0 (disabled)' };
+    }
+
+    const pMake = visual.make.toLowerCase().trim();
+    const eMake = String(evidence.value).toLowerCase().trim();
+
+    // Exact match
+    if (pMake === eMake) {
+      return {
+        score: weight,
+        reason: `Make EXACT: ${evidence.value} (+${weight} pts)`
+      };
+    }
+
+    // Partial/contains match (e.g., "Mercedes-AMG" contains "Mercedes")
+    if (pMake.includes(eMake) || eMake.includes(pMake)) {
+      const partialScore = weight * 0.85;
+      return {
+        score: partialScore,
+        reason: `Make PARTIAL: ${evidence.value} ≈ ${visual.make} (+${partialScore.toFixed(1)} pts)`
+      };
+    }
+
+    // Known aliases (common brand abbreviations/variations)
+    const makeAliases: { [key: string]: string[] } = {
+      'mercedes': ['mercedes-amg', 'merc', 'amg'],
+      'bmw': ['bmw motorsport', 'bmw m'],
+      'porsche': ['porsche motorsport'],
+      'ferrari': ['scuderia ferrari', 'ferrari af corse'],
+      'lamborghini': ['lambo', 'lamborghini squadra corse'],
+      'mclaren': ['mclaren racing'],
+      'honda': ['honda racing', 'hrc'],
+      'yamaha': ['yamaha racing', 'yamaha factory'],
+      'kawasaki': ['kawasaki racing', 'krt'],
+      'ducati': ['ducati corse', 'ducati racing'],
+      'ktm': ['ktm factory', 'ktm racing', 'red bull ktm'],
+      'husqvarna': ['husqvarna factory', 'husky'],
+      'specialized': ['s-works'],
+      'pinarello': ['pinarello dogma'],
+      'trek': ['trek-segafredo', 'trek factory'],
+    };
+
+    for (const [canonical, aliases] of Object.entries(makeAliases)) {
+      const allNames = [canonical, ...aliases];
+      const pMatch = allNames.some(a => pMake.includes(a) || a.includes(pMake));
+      const eMatch = allNames.some(a => eMake.includes(a) || a.includes(eMake));
+      if (pMatch && eMatch) {
+        const aliasScore = weight * 0.8;
+        return {
+          score: aliasScore,
+          reason: `Make ALIAS: ${evidence.value} ≈ ${visual.make} (+${aliasScore.toFixed(1)} pts)`
+        };
+      }
+    }
+
+    // Mismatch: different make is a moderate negative signal
+    // (not as strong as plate mismatch, since Gemini can misidentify brands)
+    return {
+      score: -10,
+      reason: `Make MISMATCH: ${evidence.value} ≠ ${visual.make} (-10 pts)`
+    };
+  }
+
+  /**
+   * Evaluate vehicle model evidence (296 GT3, CBR1000RR, Dogma F, etc.)
+   * More lenient than make matching since models are harder to identify visually
+   */
+  private evaluateVehicleModel(
+    participant: Participant,
+    evidence: Evidence
+  ): { score: number; reason: string } {
+    const visual = this.getParticipantVisualDNA(participant);
+    if (!visual.model) {
+      return { score: 0, reason: 'No model data in participant' };
+    }
+
+    const weight = this.config.weights.vehicleModel || 0;
+    if (weight === 0) {
+      return { score: 0, reason: 'vehicleModel weight is 0 (disabled)' };
+    }
+
+    const pModel = visual.model.toLowerCase().trim();
+    const eModel = String(evidence.value).toLowerCase().trim();
+
+    // Exact match
+    if (pModel === eModel) {
+      return {
+        score: weight,
+        reason: `Model EXACT: ${evidence.value} (+${weight} pts)`
+      };
+    }
+
+    // Partial match (e.g., "911 GT3 R" contains "911 GT3", or "Dogma F" ≈ "Dogma")
+    if (pModel.includes(eModel) || eModel.includes(pModel)) {
+      const partialScore = weight * 0.75;
+      return {
+        score: partialScore,
+        reason: `Model PARTIAL: ${evidence.value} ≈ ${visual.model} (+${partialScore.toFixed(1)} pts)`
+      };
+    }
+
+    // Fuzzy match: check if significant words overlap (e.g., "Huracan GT3 EVO2" vs "Huracan GT3")
+    const pWords = pModel.split(/[\s\-]+/).filter(w => w.length >= 2);
+    const eWords = eModel.split(/[\s\-]+/).filter(w => w.length >= 2);
+    const commonWords = pWords.filter(pw => eWords.some(ew => pw === ew || pw.includes(ew) || ew.includes(pw)));
+
+    if (commonWords.length >= 2 || (commonWords.length === 1 && Math.max(pWords.length, eWords.length) <= 2)) {
+      const overlapRatio = commonWords.length / Math.max(pWords.length, eWords.length);
+      const fuzzyScore = weight * overlapRatio * 0.7;
+      return {
+        score: fuzzyScore,
+        reason: `Model FUZZY: ${evidence.value} ≈ ${visual.model} (${commonWords.join('+')} overlap, +${fuzzyScore.toFixed(1)} pts)`
+      };
+    }
+
+    // No match (no penalty for model - too many variations and naming conventions)
+    return {
+      score: 0,
+      reason: `Model NO MATCH: ${evidence.value} ≠ ${visual.model}`
+    };
+  }
+
+  /**
+   * Evaluate livery/jersey color evidence
+   * Supports color matching with tolerance for naming variations and multilingual color names
+   */
+  private evaluateLiveryColor(
+    participant: Participant,
+    evidence: Evidence
+  ): { score: number; reason: string } {
+    const visual = this.getParticipantVisualDNA(participant);
+    if (!visual.liveryPrimary) {
+      return { score: 0, reason: 'No livery/color data in participant' };
+    }
+
+    const weight = this.config.weights.liveryColor || 0;
+    if (weight === 0) {
+      return { score: 0, reason: 'liveryColor weight is 0 (disabled)' };
+    }
+
+    const eColor = String(evidence.value).toLowerCase().trim();
+    const pPrimary = visual.liveryPrimary.toLowerCase().trim();
+
+    // Normalize colors to canonical form (handles IT/EN and common variations)
+    const normalizedEvidence = this.normalizeColor(eColor);
+    const normalizedParticipant = this.normalizeColor(pPrimary);
+
+    // Primary color exact match (after normalization)
+    if (normalizedEvidence === normalizedParticipant) {
+      return {
+        score: weight,
+        reason: `Color PRIMARY MATCH: ${evidence.value} = ${visual.liveryPrimary} (+${weight} pts)`
+      };
+    }
+
+    // Check secondary colors
+    if (visual.liverySecondary && visual.liverySecondary.length > 0) {
+      for (const secondary of visual.liverySecondary) {
+        const normalizedSecondary = this.normalizeColor(secondary.toLowerCase().trim());
+        if (normalizedEvidence === normalizedSecondary) {
+          const secondaryScore = weight * 0.5; // Secondary color match is worth half
+          return {
+            score: secondaryScore,
+            reason: `Color SECONDARY MATCH: ${evidence.value} = ${secondary} (+${secondaryScore.toFixed(1)} pts)`
+          };
+        }
+      }
+    }
+
+    // Color family match (e.g., "rosso" vs "rosso scuro", "blu" vs "azzurro")
+    if (this.isColorFamilyMatch(normalizedEvidence, normalizedParticipant)) {
+      const familyScore = weight * 0.6;
+      return {
+        score: familyScore,
+        reason: `Color FAMILY: ${evidence.value} ≈ ${visual.liveryPrimary} (+${familyScore.toFixed(1)} pts)`
+      };
+    }
+
+    // Color mismatch: moderate negative signal
+    // (a red car is clearly not a blue car, but Gemini color detection isn't perfect)
+    return {
+      score: -8,
+      reason: `Color MISMATCH: ${evidence.value} ≠ ${visual.liveryPrimary} (-8 pts)`
+    };
+  }
+
+  /**
+   * Normalize color names to canonical English form
+   * Handles Italian, English, and common variations
+   */
+  private normalizeColor(color: string): string {
+    const colorMap: { [key: string]: string } = {
+      // Italian → English canonical
+      'rosso': 'red', 'rossa': 'red',
+      'blu': 'blue',
+      'azzurro': 'light_blue', 'azzurra': 'light_blue', 'celeste': 'light_blue',
+      'verde': 'green',
+      'giallo': 'yellow', 'gialla': 'yellow',
+      'nero': 'black', 'nera': 'black',
+      'bianco': 'white', 'bianca': 'white',
+      'arancione': 'orange', 'arancio': 'orange',
+      'rosa': 'pink',
+      'viola': 'purple',
+      'grigio': 'gray', 'grigia': 'gray',
+      'argento': 'silver', 'argentato': 'silver',
+      'oro': 'gold', 'dorato': 'gold',
+      'marrone': 'brown',
+      // English variations
+      'grey': 'gray',
+      'cyan': 'light_blue', 'teal': 'light_blue',
+      'magenta': 'pink', 'fuchsia': 'pink',
+      'lime': 'green', 'chartreuse': 'green',
+      'navy': 'blue', 'dark blue': 'blue',
+      'crimson': 'red', 'scarlet': 'red', 'burgundy': 'red',
+      'amber': 'orange',
+    };
+
+    return colorMap[color] || color;
+  }
+
+  /**
+   * Check if two colors belong to the same color family
+   * (e.g., "red" and "dark red" are the same family)
+   */
+  private isColorFamilyMatch(color1: string, color2: string): boolean {
+    // If either contains the other, it's a family match
+    if (color1.includes(color2) || color2.includes(color1)) {
+      return true;
+    }
+
+    // Color families
+    const families: string[][] = [
+      ['red', 'dark_red', 'light_red', 'maroon'],
+      ['blue', 'dark_blue', 'light_blue', 'navy'],
+      ['green', 'dark_green', 'light_green', 'lime'],
+      ['yellow', 'gold', 'amber'],
+      ['orange', 'amber'],
+      ['gray', 'silver'],
+      ['pink', 'light_red'],
+    ];
+
+    for (const family of families) {
+      if (family.includes(color1) && family.includes(color2)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   /**
    * Resolve multiple matches using intelligent rules
    *
@@ -1920,6 +2776,17 @@ export class SmartMatcher {
    * Evaluate fuzzy matching for race numbers to handle OCR errors
    * Common OCR errors: 0↔O, 1↔l, 6↔G, 8↔B, 5↔S, digit transposition (45↔54)
    * Enhanced with driver name validation to prevent false corrections
+   *
+   * Issue #105 Point 3 — Confidence floor:
+   *   Previously, a single-character OCR confusion (e.g. "3" vs "8") could force a
+   *   non-preset detected number onto a preset participant at confidence as low as
+   *   ~0.75 — which then surfaced as a phantom folder during export. We now:
+   *     1) Require EXACT match for single-character race numbers (length ≤ 1) —
+   *        too short for a 1-char OCR confusion to be recoverable.
+   *     2) Require a tighter OCR similarity for 2-character numbers (≥ 0.95), since
+   *        a single-char confusion in a 2-char number still changes identity by 50%.
+   *     3) Apply a global MIN_FUZZY_CONFIDENCE floor on the final fuzzy confidence.
+   *        Anything below is considered too weak to override the preset restriction.
    */
   private evaluateFuzzyNumberMatch(
     participantNumber: string,
@@ -1928,6 +2795,12 @@ export class SmartMatcher {
     participant?: Participant,
     allEvidence?: Evidence[]
   ): { score: number; reason: string; confidence: number } {
+    // Issue #105 Point 3: minimum fuzzy-match confidence floor.
+    // Tuned to 0.85 — above most single-character OCR confusion scores
+    // (which land around 0.75–0.80) but below legitimate multi-char corrections
+    // with high character overlap (which typically score ≥ 0.90).
+    const MIN_FUZZY_CONFIDENCE = 0.85;
+
     // Check for driver name contradictions before applying fuzzy number matching
     if (participant && allEvidence) {
       const driverEvidence = allEvidence.filter(e => e.type === EvidenceType.DRIVER_NAME);
@@ -1951,6 +2824,18 @@ export class SmartMatcher {
       return { score: 0, reason: 'Length difference too large', confidence: 0 };
     }
 
+    // Issue #105 Point 3: single-char race numbers are too short for safe fuzzy
+    // matching — a single OCR character confusion (3↔8, 5↔S, 6↔G, 0↔O, 1↔l, etc.)
+    // completely changes the identity and silently forces a non-preset number onto
+    // a preset participant. Require EXACT match for 1-char numbers on either side.
+    if (participantNumber.length <= 1 || evidenceNumber.length <= 1) {
+      return {
+        score: 0,
+        reason: `Fuzzy match disabled for single-character numbers (participant="${participantNumber}", evidence="${evidenceNumber}")`,
+        confidence: 0
+      };
+    }
+
     // Calculate edit distance
     const editDistance = this.calculateLevenshteinDistance(participantNumber, evidenceNumber);
 
@@ -1962,7 +2847,13 @@ export class SmartMatcher {
     // Check for common OCR character confusions
     const ocrSimilarity = this.calculateOCRSimilarity(participantNumber, evidenceNumber);
 
-    if (ocrSimilarity > sportThreshold) {
+    // Issue #105 Point 3: tighter OCR similarity threshold for short (2-char) numbers
+    // where a single-char confusion still changes identity by 50%. A legitimate OCR
+    // error on a 2-char number should still produce ≥ 0.95 similarity.
+    const isShortNumber = participantNumber.length <= 2 || evidenceNumber.length <= 2;
+    const effectiveOcrThreshold = isShortNumber ? Math.max(sportThreshold, 0.95) : sportThreshold;
+
+    if (ocrSimilarity > effectiveOcrThreshold) {
       // Apply reduced score for fuzzy match
       let fuzzyWeight = 0.7; // 70% of exact match score
 
@@ -1984,11 +2875,23 @@ export class SmartMatcher {
       const baseScore = this.config.weights.raceNumber * fuzzyWeight;
       const confidenceAdjustment = confidence * baseScore;
       const finalScore = confidenceAdjustment * ocrSimilarity;
+      const finalConfidence = ocrSimilarity * confidence;
+
+      // Issue #105 Point 3: confidence floor. Reject fuzzy matches whose combined
+      // OCR-similarity × input-confidence product falls below MIN_FUZZY_CONFIDENCE.
+      // This filters out the "3"→#8 class of phantom matches seen in issue #105.
+      if (finalConfidence < MIN_FUZZY_CONFIDENCE) {
+        return {
+          score: 0,
+          reason: `Fuzzy number match rejected: confidence ${finalConfidence.toFixed(2)} below floor ${MIN_FUZZY_CONFIDENCE} (${evidenceNumber} → ${participantNumber}, OCR similarity ${(ocrSimilarity * 100).toFixed(1)}%, input conf ${(confidence * 100).toFixed(1)}%)`,
+          confidence: 0
+        };
+      }
 
       return {
         score: finalScore,
-        reason: `Fuzzy number match: ${evidenceNumber} → ${participantNumber} (OCR similarity: ${(ocrSimilarity * 100).toFixed(1)}%, edit distance: ${editDistance})`,
-        confidence: ocrSimilarity * confidence
+        reason: `Fuzzy number match: ${evidenceNumber} → ${participantNumber} (OCR similarity: ${(ocrSimilarity * 100).toFixed(1)}%, edit distance: ${editDistance}, confidence: ${(finalConfidence * 100).toFixed(1)}%)`,
+        confidence: finalConfidence
       };
     }
 
@@ -1996,11 +2899,23 @@ export class SmartMatcher {
     if (this.isDigitTransposition(participantNumber, evidenceNumber)) {
       const baseScore = this.config.weights.raceNumber * 0.6; // 60% of exact match score
       const confidenceAdjustment = confidence * baseScore;
+      const transpositionConfidence = 0.8 * confidence;
+
+      // Issue #105 Point 3: the confidence floor also applies to digit-transposition
+      // matches — 2-char transpositions with low input OCR confidence would otherwise
+      // force an unrelated preset number.
+      if (transpositionConfidence < MIN_FUZZY_CONFIDENCE) {
+        return {
+          score: 0,
+          reason: `Digit transposition rejected: confidence ${transpositionConfidence.toFixed(2)} below floor ${MIN_FUZZY_CONFIDENCE}`,
+          confidence: 0
+        };
+      }
 
       return {
         score: confidenceAdjustment,
-        reason: `Digit transposition detected: ${evidenceNumber} → ${participantNumber}`,
-        confidence: 0.8 * confidence
+        reason: `Digit transposition detected: ${evidenceNumber} → ${participantNumber} (confidence: ${(transpositionConfidence * 100).toFixed(1)}%)`,
+        confidence: transpositionConfidence
       };
     }
 

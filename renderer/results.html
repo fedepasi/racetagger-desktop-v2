@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="css/styles.css">
   <link rel="stylesheet" href="css/processing-status.css">
   <link rel="stylesheet" href="css/results-integrated.css">
+  <link rel="stylesheet" href="css/feedback-modal.css">
 </head>
 <body>
   <div class="results-page">
@@ -14,41 +15,45 @@
     <div class="results-header">
       <div class="results-header-top">
         <div class="results-title">
-          <div class="results-breadcrumb">
-            <span>🏠 Main</span>
-            <span>→</span>
-            <span>📊 Results</span>
-            <span id="execution-badge"></span>
-          </div>
           <h1 id="results-title">Analysis Complete!</h1>
           <p class="results-subtitle" id="results-subtitle">Loading execution data...</p>
           <div class="results-info-tags" id="results-info-tags"></div>
         </div>
 
         <div class="results-actions">
+          <button id="btn-deliver" class="btn-export" style="display: none;" title="Send photos to gallery and upload HD originals">
+            📦 Deliver
+          </button>
+          <button id="btn-unified-export" class="btn-export" style="display: none;" title="Export files with rename, organize, and IPTC metadata — or write IPTC to originals">
+            📤 Export & IPTC
+          </button>
           <button id="btn-done" class="btn-done">
             ✅ DONE!
           </button>
           <button id="btn-new-analysis" class="btn-new-analysis">
-            ✨ Start New Analysis
+            New Analysis
           </button>
         </div>
       </div>
 
       <div class="results-stats" id="results-stats">
-        <div class="results-stat-item">
+        <div class="results-stat-item" title="Show all images">
           <span class="results-stat-value" id="lv-total">0</span>
           <span class="results-stat-label">Total Images</span>
         </div>
-        <div class="results-stat-item results-stat-item--success">
+        <div class="results-stat-item results-stat-item--success" title="Filter: matched only">
           <span class="results-stat-value" id="lv-matched">0</span>
           <span class="results-stat-label">Matched</span>
         </div>
-        <div class="results-stat-item results-stat-item--warning">
+        <div class="results-stat-item results-stat-item--review" title="Filter: needs review">
+          <span class="results-stat-value" id="lv-needs-review">0</span>
+          <span class="results-stat-label">Needs Review</span>
+        </div>
+        <div class="results-stat-item results-stat-item--warning" title="Filter: no match">
           <span class="results-stat-value" id="lv-no-match">0</span>
           <span class="results-stat-label">No Match</span>
         </div>
-        <div class="results-stat-item results-stat-item--info">
+        <div class="results-stat-item results-stat-item--info" title="Filter: manually corrected">
           <span class="results-stat-value" id="lv-corrections">0</span>
           <span class="results-stat-label">Corrections</span>
         </div>
@@ -87,9 +92,99 @@
     </div>
   </div>
 
+  <!-- Unified Deliver Modal -->
+  <div id="modal-deliver" style="display: none; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); align-items: center; justify-content: center;">
+    <div style="background: var(--bg-medium, #1e1e2e); border: 1px solid var(--border-color, #333); border-radius: 12px; padding: 24px; width: 100%; max-width: 500px; margin: auto;">
+      <h3 style="color: var(--text-primary, #fff); margin: 0 0 6px; font-size: 18px;">📦 Deliver Photos</h3>
+      <p style="color: var(--text-muted, #888); font-size: 12px; margin: 0 0 20px;">Choose how to deliver the photos from this analysis.</p>
+
+      <!-- Section 1: Gallery -->
+      <div id="deliver-gallery-section" style="display: none;">
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+          <span style="font-size: 16px;">🖼️</span>
+          <span style="color: var(--text-primary, #fff); font-size: 14px; font-weight: 600;">Send to Gallery</span>
+        </div>
+
+        <!-- Mode selector: shown only when execution has project_id (preset bound to a client). -->
+        <div id="deliver-mode-selector" style="display: none; margin-bottom: 12px; padding: 10px 12px; background: rgba(34, 197, 94, 0.06); border: 1px solid rgba(34, 197, 94, 0.25); border-radius: 8px;">
+          <p id="deliver-preset-info" style="color: var(--text-muted, #888); font-size: 11px; margin: 0 0 10px;"></p>
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: var(--text-primary, #fff); margin-bottom: 6px;">
+            <input type="radio" name="deliver-mode" id="deliver-mode-preset" value="preset" checked style="cursor: pointer;">
+            <span>Apply preset delivery rules <span style="font-size: 11px; color: var(--text-muted, #888); font-weight: 400;">(recommended)</span></span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: var(--text-primary, #fff);">
+            <input type="radio" name="deliver-mode" id="deliver-mode-manual" value="manual" style="cursor: pointer;">
+            <span>Choose a single gallery manually <span style="font-size: 11px; color: var(--text-muted, #888); font-weight: 400;">(override)</span></span>
+          </label>
+        </div>
+
+        <p id="deliver-manual-help" style="color: var(--text-muted, #888); font-size: 11px; margin: 0 0 10px;">Preview images (already uploaded during analysis) will appear in the gallery immediately.</p>
+        <div id="deliver-manual-controls" style="display: flex; flex-direction: column; gap: 10px;">
+          <div>
+            <label style="display: block; color: var(--text-muted, #888); font-size: 12px; margin-bottom: 4px;">Select Gallery</label>
+            <select id="results-gallery-select" style="width: 100%; padding: 8px 12px; background: var(--bg-dark, #1a1a2e); border: 1px solid var(--border-color, #333); border-radius: 8px; color: var(--text-primary, #fff); font-size: 14px;">
+              <option value="">-- Select a gallery --</option>
+            </select>
+          </div>
+          <div>
+            <label style="display: block; color: var(--text-muted, #888); font-size: 12px; margin-bottom: 4px;">Or create a new gallery</label>
+            <div style="display: flex; gap: 8px;">
+              <input id="results-new-gallery-name" type="text" placeholder="Gallery name (e.g., IMSA Daytona 2026)" style="flex: 1; padding: 8px 12px; background: var(--bg-dark, #1a1a2e); border: 1px solid var(--border-color, #333); border-radius: 8px; color: var(--text-primary, #fff); font-size: 13px; outline: none;">
+              <button id="btn-results-create-gallery" style="padding: 8px 12px; background: transparent; border: 1px solid var(--border-color, #ccc); border-radius: 8px; color: inherit; cursor: pointer; font-size: 12px; white-space: nowrap;">+ Create</button>
+            </div>
+          </div>
+          <div id="results-gallery-info" style="display: none; padding: 10px; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 8px; font-size: 12px; color: var(--text-muted, #888);"></div>
+        </div>
+      </div>
+
+      <!-- Divider (shown only when both sections visible) -->
+      <div id="deliver-divider" style="display: none; border-top: 1px solid var(--border-color, #333); margin: 18px 0;"></div>
+
+      <!-- Section 2: HD Upload -->
+      <div id="deliver-hd-section" style="display: none;">
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+          <span style="font-size: 16px;">☁️</span>
+          <span style="color: var(--text-primary, #fff); font-size: 14px; font-weight: 600;">Upload HD Originals</span>
+          <label style="margin-left: auto; display: flex; align-items: center; gap: 6px; cursor: pointer;">
+            <input id="deliver-hd-toggle" type="checkbox" style="width: 16px; height: 16px; accent-color: #3b82f6; cursor: pointer;">
+          </label>
+        </div>
+        <p style="color: var(--text-muted, #888); font-size: 11px; margin: 0;">Upload full-resolution originals to cloud storage (Cloudflare R2). This enables HD viewing and downloads in the gallery. Runs in background — you can continue working.</p>
+      </div>
+
+      <!-- Actions -->
+      <div style="display: flex; gap: 8px; margin-top: 22px; justify-content: flex-end;">
+        <button id="btn-deliver-cancel" style="padding: 8px 16px; background: transparent; border: 1px solid var(--border-color, #ccc); border-radius: 8px; color: inherit; cursor: pointer; font-size: 13px;">Cancel</button>
+        <button id="btn-deliver-confirm" style="padding: 8px 16px; background: var(--accent-primary, #3b82f6); border: none; border-radius: 8px; color: white; cursor: pointer; font-size: 13px; font-weight: 600;">Deliver</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- R2 Upload Progress Banner -->
+  <div id="r2-upload-banner" style="display: none; position: fixed; bottom: 80px; right: 24px; z-index: 900; background: var(--bg-medium, #1e1e2e); border: 1px solid rgba(59, 130, 246, 0.4); border-radius: 12px; padding: 16px 20px; min-width: 280px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+      <span style="color: var(--text-primary, #fff); font-size: 13px; font-weight: 600;">☁️ Uploading HD Originals</span>
+      <button id="btn-r2-cancel" style="background: none; border: none; color: var(--text-muted, #888); cursor: pointer; font-size: 16px;">&times;</button>
+    </div>
+    <div style="background: var(--bg-dark, #1a1a2e); border-radius: 6px; height: 6px; overflow: hidden;">
+      <div id="r2-upload-progress-bar" style="height: 100%; background: linear-gradient(90deg, #3b82f6, #60a5fa); width: 0%; transition: width 0.3s;"></div>
+    </div>
+    <div id="r2-upload-status" style="color: var(--text-muted, #888); font-size: 11px; margin-top: 6px;">Preparing...</div>
+  </div>
+
+  <!-- IMPORTANT: user-action-logger.js MUST load before log-visualizer.js
+       and the results modals so they can call window.logUserAction()
+       during their own initialization. Mirrors the order used in
+       index.html. Without this include, every emit site on the
+       results page is a no-op (window.logUserAction is undefined). -->
+  <script src="js/user-action-logger.js"></script>
   <script src="js/gallery-zoom.js"></script>
   <script src="js/log-visualizer.js"></script>
+  <script src="js/learned-data-modal.js"></script>
   <script src="js/results-page.js"></script>
+  <script src="js/unified-export-iptc-modal.js"></script>
+  <script src="js/results-delivery.js"></script>
+  <script src="js/feedback-modal.js"></script>
 
   <script>
     // Wait for DOM to be ready before attaching event listeners
@@ -117,6 +212,19 @@
             }
           }
 
+          // Strategy G: Show learned data modal before leaving if data is available
+          if (window.learnedDataModal && window.learnedDataModal.aggregatedData && window.learnedDataModal.aggregatedData.size > 0) {
+            try {
+              const presetId = window.logVisualizer?.participantPresetData?.id;
+              const executionId = window.logVisualizer?.executionId;
+              if (presetId) {
+                await window.learnedDataModal.show(presetId, executionId);
+              }
+            } catch (e) {
+              console.warn('[Results] Learned data modal error (non-critical):', e);
+            }
+          }
+
           console.log('[Results] Navigating to home...');
           window.location.href = 'index.html';
         });
@@ -140,6 +248,19 @@
             }
           }
 
+          // Strategy G: Show learned data modal before leaving if data is available
+          if (window.learnedDataModal && window.learnedDataModal.aggregatedData && window.learnedDataModal.aggregatedData.size > 0) {
+            try {
+              const presetId = window.logVisualizer?.participantPresetData?.id;
+              const executionId = window.logVisualizer?.executionId;
+              if (presetId) {
+                await window.learnedDataModal.show(presetId, executionId);
+              }
+            } catch (e) {
+              console.warn('[Results] Learned data modal error (non-critical):', e);
+            }
+          }
+
           console.log('[Results] Navigating to analysis section...');
           // Use sessionStorage to tell index.html to open analysis tab
           sessionStorage.setItem('navigateToSection', 'analysis');
@@ -150,5 +271,22 @@
       console.log('[Results] Navigation buttons setup complete');
     });
   </script>
+
+  <!-- Support FAB — same system as index.html, no duplication -->
+  <div class="feedback-fab-wrapper" id="feedback-fab-wrapper">
+    <div class="feedback-fab-tooltip" id="feedback-fab-tooltip">
+      <span class="feedback-fab-tooltip-text">Report a bug, request a feature, or share your feedback — we're listening!</span>
+      <button class="feedback-fab-tooltip-close" id="feedback-fab-tooltip-close" aria-label="Close">&times;</button>
+    </div>
+    <button class="feedback-fab" id="feedback-fab" onclick="openFeedbackModal()" title="Support">
+      <svg class="feedback-fab-icon" viewBox="-1 -2 26 27" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 11h1a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H3a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1Z"/>
+        <path d="M21 11h-1a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h1a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1Z"/>
+        <path d="M2 11V9a10 10 0 0 1 20 0v2"/>
+        <path d="M18 18v1a2 2 0 0 1-2 2h-2"/>
+      </svg>
+      <span class="feedback-fab-label">Support</span>
+    </button>
+  </div>
 </body>
 </html>

@@ -14,6 +14,9 @@ class LogVisualizer {
     this.isGalleryOpen = false;
     this.zoomController = null;
     this.manualCorrections = new Map(); // Track manual corrections
+    // WF-01 — multi-select state for bulk actions in the results grid (by fileName).
+    this.selectedCardKeys = new Set();
+    this._lastSelectedIndex = null; // anchor for shift-click range selection
 
     // Auto-save properties
     this.autoSaveTimer = null;
@@ -34,10 +37,12 @@ class LogVisualizer {
     // Lazy loading with Intersection Observer
     this.imageObserver = null;
     this.preloadedImages = new Set(); // Track preloaded images
+    this.dataUrlCache = new Map(); // Cache IPC data URLs by fileName to survive DOM re-renders
 
     // Error handling and throttling
     this.loggedErrors = new Set(); // Track logged errors to prevent spam
     this.failedImages = new Set(); // Track failed images to avoid retrying
+    this.failedPaths = new Set(); // Track failed file paths to avoid repeated IPC calls
 
     // Auto-save functionality
     this.autoSaveTimer = null;
@@ -103,6 +108,83 @@ class LogVisualizer {
 
     // Calculate statistics
     this.updateStatistics();
+
+    // Strategy G: Check for learnable data after initial load
+    try {
+      this._checkLearnedDataAvailability();
+    } catch (e) {
+      // Non-critical
+    }
+
+    // Telemetry: RESULTS_PAGE_EXITED — fires once when the page is being
+    // unloaded (window close, refresh, navigation away, "Done" button
+    // that ultimately changes the URL). pagehide is preferred over
+    // beforeunload because it also fires for back/forward cache cases
+    // and is more reliable on Electron.
+    //
+    // We emit synchronously into the queue (window.api.invoke is the
+    // only async hop and the IPC layer queues it on the main process —
+    // even if the renderer process exits a moment later, the JSONL
+    // append usually completes because it's a tiny disk write). The
+    // direct DB insert may not complete in time, which is why the JSONL
+    // is the durable record; reconciliation can backfill missing rows.
+    //
+    // Guard: emit at most once per page lifetime. Multiple fires
+    // (e.g. visibilitychange→hidden THEN pagehide) would create
+    // duplicate exit rows, polluting funnel analyses.
+    this._exitEmitted = false;
+    const __emitExit = (exitMethod) => {
+      if (this._exitEmitted) return;
+      this._exitEmitted = true;
+      if (!window.logUserAction) return;
+      const sessionDurationMs = this._sessionStartedAt
+        ? Date.now() - this._sessionStartedAt
+        : null;
+      window.logUserAction('RESULTS_PAGE_EXITED', 'EXIT', {
+        exitMethod,                            // 'pagehide' | 'beforeunload' | 'manual'
+        sessionDurationMs,
+        correctionsUnsaved: !!this.hasUnsavedChanges,
+        correctionsCount: this.manualCorrections?.size ?? 0
+      });
+    };
+    // Both listeners — whichever fires first wins, the second is no-op.
+    window.addEventListener('pagehide', () => __emitExit('pagehide'));
+    window.addEventListener('beforeunload', () => __emitExit('beforeunload'));
+    // Stash the emitter on the instance so external "Done" buttons can
+    // call it deterministically without waiting for the unload event
+    // (this gives the IPC a few extra ms to complete).
+    this._emitExit = __emitExit;
+
+    // Telemetry: RESULTS_PAGE_LOADED. This is the boundary event that
+    // begins a new sessionId — see user-action-logger.js. Payload includes
+    // the headline counters so dashboards can correlate "users with X
+    // unmatched per N total" patterns to subsequent actions (write,
+    // export, delivery).
+    if (window.logUserAction) {
+      const matched = this.imageResults.filter(r =>
+        r && (r.csvMatch || (r.allMatchedParticipants && r.allMatchedParticipants.length > 0))
+      ).length;
+      const hasVisualTags = this.imageResults.some(r =>
+        r && (
+          (r.visualTags && Object.values(r.visualTags).some(arr => Array.isArray(arr) && arr.length > 0)) ||
+          (r.logEvent && r.logEvent.visualTags && Object.values(r.logEvent.visualTags).some(arr => Array.isArray(arr) && arr.length > 0))
+        )
+      );
+      const recognitionMethod = (this.logData || [])
+        .find(e => e && e.type === 'IMAGE_ANALYSIS' && e.recognitionMethod)?.recognitionMethod || null;
+      window.logUserAction('RESULTS_PAGE_LOADED', 'VIEW', {
+        resultCount: this.imageResults.length,
+        matchedCount: matched,
+        unmatchedCount: this.imageResults.length - matched,
+        hasVisualTags,
+        recognitionMethod,
+        wasAlreadyOrganized: !!this.wasAlreadyOrganized,
+        moveOrganizationCompleted: !!this.moveOrganizationCompleted
+      });
+      // Mark a fresh page-session start time so RESULTS_PAGE_EXITED can
+      // report sessionDurationMs without storing wall-clock anywhere else.
+      this._sessionStartedAt = Date.now();
+    }
 
     console.log('[LogVisualizer] Initialization complete');
   }
@@ -184,9 +266,57 @@ class LogVisualizer {
 
     // Apply MANUAL_CORRECTION events to enriched results
     if (manualCorrectionEvents.length > 0) {
-      console.log(`[LogVisualizer] Applying ${manualCorrectionEvents.length} manual corrections during enrichment`);
+      // BUGFIX (delete-then-readd): the JSONL can contain multiple
+      // MANUAL_CORRECTION events for the same (fileName, vehicleIndex)
+      // when the user deletes a vehicle and then immediately re-adds a
+      // corrected one (or vice-versa). Before this fix we applied them
+      // in stream order, and a leading `{deleted: true}` would
+      // splice() the vehicle out of `result.analysis` so the later
+      // `{raceNumber: …}` update found nothing to apply — the user
+      // saw the photo come back empty after a reload, even though
+      // image_corrections + analysis_results on Supabase had the
+      // corrected number (which is why the folder organizer still
+      // routed correctly).
+      //
+      // Fix: compact correction events to one-per-key by sorting on
+      // `timestamp` ASC and keeping the LAST event for each
+      // `${fileName}_${vehicleIndex}` pair. Net effect — the last
+      // edit the user made wins, which matches the in-memory state
+      // they saw while editing.
+      const sorted = [...manualCorrectionEvents].sort((a, b) => {
+        const ta = a?.timestamp ? Date.parse(a.timestamp) : 0;
+        const tb = b?.timestamp ? Date.parse(b.timestamp) : 0;
+        return ta - tb;
+      });
+      // Track which keys had >1 raw event so we can narrate which
+      // sequences got collapsed (helpful when investigating "preview
+      // shows empty but folder was right" reports — see the
+      // delete-then-readd bug for context).
+      const rawCountPerKey = new Map();
+      const compacted = new Map();
+      for (const evt of sorted) {
+        if (!evt || !evt.fileName || evt.vehicleIndex == null) continue;
+        const key = `${evt.fileName}_${evt.vehicleIndex}`;
+        rawCountPerKey.set(key, (rawCountPerKey.get(key) || 0) + 1);
+        compacted.set(key, evt);
+      }
+      const collapsedKeys = Array.from(rawCountPerKey.entries())
+        .filter(([, n]) => n > 1)
+        .map(([k, n]) => `${k} (${n}→1)`);
 
-      manualCorrectionEvents.forEach(correction => {
+      console.log(
+        `[LogVisualizer] Applying ${compacted.size} manual corrections during enrichment ` +
+        `(compacted from ${manualCorrectionEvents.length} raw events — last-write-wins per fileName_vehicleIndex)`
+      );
+      console.log(
+        `[Narrate] Enrichment compaction: ${manualCorrectionEvents.length} raw MANUAL_CORRECTION events ` +
+        `→ ${compacted.size} net (${collapsedKeys.length} key(s) collapsed by last-write-wins)` +
+        (collapsedKeys.length > 0
+          ? `. Collapsed: ${collapsedKeys.slice(0, 5).join(', ')}${collapsedKeys.length > 5 ? ', …' : ''}`
+          : '.')
+      );
+
+      compacted.forEach(correction => {
         const { fileName, vehicleIndex, changes } = correction;
 
         // Find the result for this correction
@@ -204,20 +334,46 @@ class LogVisualizer {
             result.analysis.splice(vehicleIndex, 1);
           }
         } else if (changes) {
-          // Handle update: modify vehicle properties
-          if (result.analysis && result.analysis[vehicleIndex]) {
-            console.log(`[LogVisualizer] Applying enrichment update: ${fileName} vehicle ${vehicleIndex}`, changes);
-
-            // Apply each field change
-            Object.entries(changes).forEach(([field, value]) => {
-              if (field !== 'deleted' && field !== 'deletedAt' && field !== 'originalData') {
-                result.analysis[vehicleIndex][field] = value;
-              }
-            });
-
-            // Set confidence to 100% for manually corrected vehicles
-            result.analysis[vehicleIndex].confidence = 1.0;
+          // Handle update: modify vehicle properties.
+          //
+          // Defensive: when a previous "delete" event for this same key
+          // has spliced the vehicle out (or it never existed because
+          // the user added a new one mid-session and the JSONL hasn't
+          // caught up), the compaction above keeps THIS update — but
+          // result.analysis[vehicleIndex] may still be missing. Create
+          // a stub so the field assignments below land somewhere
+          // sensible; without it the update was silently lost.
+          if (!result.analysis) result.analysis = [];
+          if (!result.analysis[vehicleIndex]) {
+            // Pad with empty placeholders up to and including
+            // vehicleIndex so the later writes don't create sparse
+            // holes in the array (downstream filters iterate by index).
+            while (result.analysis.length <= vehicleIndex) {
+              result.analysis.push({ raceNumber: '', team: '', drivers: [], confidence: 1.0 });
+            }
+            console.log(
+              `[LogVisualizer] Recreated vehicle slot ${vehicleIndex} for ${fileName} ` +
+              `before applying enrichment update (covers delete-then-readd sequence).`
+            );
           }
+
+          console.log(`[LogVisualizer] Applying enrichment update: ${fileName} vehicle ${vehicleIndex}`, changes);
+
+          // Apply each field change
+          Object.entries(changes).forEach(([field, value]) => {
+            if (field !== 'deleted' && field !== 'deletedAt' && field !== 'originalData' &&
+                field !== 'resolvedFromReview' && field !== 'chosenCandidate') {
+              result.analysis[vehicleIndex][field] = value;
+            }
+          });
+
+          // If this correction was a review resolution, mark the result accordingly
+          if (changes.resolvedFromReview) {
+            result._reviewResolved = true;
+          }
+
+          // Set confidence to 100% for manually corrected vehicles
+          result.analysis[vehicleIndex].confidence = 1.0;
         }
       });
     }
@@ -246,6 +402,9 @@ class LogVisualizer {
     this.renderResults();
     this.updateStatistics(); // Aggiorna le statistiche dopo il render
 
+    // Strategy G: Check for learnable data after render
+    try { this._checkLearnedDataAvailability(); } catch (e) { /* non-critical */ }
+
     console.log('[LogVisualizer] Dashboard rendered');
   }
 
@@ -266,6 +425,7 @@ class LogVisualizer {
             <select id="lv-filter-type" class="lv-filter-select">
               <option value="all">All Results</option>
               <option value="matched">Matched Only</option>
+              <option value="needs-review">⚠️ Needs Review</option>
               <option value="no-match">No Match Only</option>
               <option value="corrected">Manually Corrected</option>
               <option value="high-confidence">High Confidence (>90%)</option>
@@ -291,14 +451,14 @@ class LogVisualizer {
           ` : `
           <div class="lv-folder-org-header">
             <h4>📁 Organize Photos into Folders</h4>
-            <p>Review your results, make any corrections, then organize photos into folders</p>
+            <p>Automatically sort your analyzed photos into numbered folders — by car number, driver name, or custom structure</p>
           </div>
           <div class="lv-folder-org-content" id="lv-folder-org-content" style="display: none;">
             <!-- Folder organization configuration will be injected here -->
           </div>
           <div class="lv-folder-org-actions">
-            <button id="lv-toggle-folder-org" class="lv-action-btn lv-btn-secondary">
-              ⚙️ Configure Organization
+            <button id="lv-toggle-folder-org" class="lv-action-btn lv-btn-folder-org">
+              ⚙️ Configure & Organize
             </button>
             <button id="lv-start-organization" class="lv-action-btn lv-btn-primary" style="display: none;">
               🚀 Start Organization
@@ -310,6 +470,13 @@ class LogVisualizer {
 
         <!-- Results grid without virtual scrolling -->
         <div class="lv-results-container">
+          <!-- WF-01 — bulk multi-select toolbar (shown when ≥1 photo is selected) -->
+          <div class="lv-bulk-bar" id="lv-bulk-bar" style="display:none;align-items:center;gap:12px;padding:10px 14px;margin-bottom:10px;background:#1a2236;border:1px solid #2a3551;border-radius:8px;flex-wrap:wrap;">
+            <span id="lv-bulk-count" style="font-weight:600;color:#f1f4fa;">0 selected</span>
+            <button id="lv-bulk-nomatch" class="lv-action-btn" style="background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.45);color:#f1f4fa;">🚫 Mark 0 as No Match</button>
+            <button id="lv-bulk-clear" class="lv-action-btn lv-btn-secondary">Clear</button>
+            <span style="font-size:11px;color:#9aa5bd;">Ctrl/⌘-click to select · Shift-click for a range · originals are kept for training</span>
+          </div>
           <div class="lv-results-grid" id="lv-results">
             <!-- All items will be rendered here -->
           </div>
@@ -325,6 +492,9 @@ class LogVisualizer {
           </button>
           <button id="lv-save-all" class="lv-action-btn lv-btn-primary">
             💾 Save All Changes
+          </button>
+          <button id="lv-learned-data" class="lv-action-btn lv-btn-learned" style="display: none;" title="AI detected useful data to improve your preset">
+            ✨ <span id="lv-learned-data-count"></span> Improve Preset
           </button>
         </div>
       </div>
@@ -359,6 +529,15 @@ class LogVisualizer {
           <div class="lv-gallery-controls">
             <div class="lv-recognition-panel">
               <h4>Recognition Results</h4>
+              <!-- WF-02 — keyboard-correction shortcuts, communicated to the user -->
+              <div class="lv-kbd-hint" style="font-size:11px;color:#9aa5bd;margin:-2px 0 12px;line-height:1.8;">
+                <strong style="color:#f1f4fa;">Fast keys:</strong>
+                <span style="font-family:'JetBrains Mono',ui-monospace,monospace;">type a number</span> correct ·
+                <span style="font-family:'JetBrains Mono',ui-monospace,monospace;">Enter</span> confirm &amp; next ·
+                <span style="font-family:'JetBrains Mono',ui-monospace,monospace;">Space</span> edit ·
+                <span style="font-family:'JetBrains Mono',ui-monospace,monospace;">← →</span> skip ·
+                <span style="font-family:'JetBrains Mono',ui-monospace,monospace;">Esc</span> close
+              </div>
 
               <div class="lv-vehicles-container" id="lv-vehicles">
                 <!-- Vehicle recognition results will be populated here -->
@@ -404,6 +583,21 @@ class LogVisualizer {
         clearTimeout(this.searchDebounceTimer);
         this.searchDebounceTimer = setTimeout(() => {
           this.filterResults();
+          // Telemetry: SEARCH_QUERY_ENTERED. Privacy: only the LENGTH and
+          // the matchCount — never the query text (could contain plate
+          // numbers, names, sponsors).
+          if (window.logUserAction) {
+            const queryLength = (searchInput.value || '').length;
+            // Only emit when the user actually typed something — empty
+            // input fires the same listener as backspacing back to empty
+            // and we don't want to log "user typed nothing".
+            if (queryLength > 0) {
+              window.logUserAction('SEARCH_QUERY_ENTERED', 'VIEW', {
+                queryLength,
+                matchCount: this.filteredResults?.length ?? 0
+              });
+            }
+          }
         }, 300);
       });
     }
@@ -413,6 +607,15 @@ class LogVisualizer {
     if (filterSelect) {
       filterSelect.addEventListener('change', () => {
         this.filterResults();
+        // Telemetry: FILTER_CHANGED. Track which filter the user spent
+        // time on — the dominant ones inform UX priorities (if 80% of
+        // filter use is "needs-review", the default tab should be that).
+        if (window.logUserAction) {
+          window.logUserAction('FILTER_CHANGED', 'VIEW', {
+            filterType: filterSelect.value,
+            resultCountAfterFilter: this.filteredResults?.length ?? 0
+          });
+        }
       });
     }
 
@@ -423,8 +626,50 @@ class LogVisualizer {
         searchInput.value = '';
         filterSelect.value = 'all';
         this.filterResults();
+        if (window.logUserAction) {
+          window.logUserAction('FILTER_CHANGED', 'VIEW', {
+            filterType: 'all',
+            via: 'clear-filters'
+          });
+        }
       });
     }
+
+    // Stat items as filter shortcuts — click a counter to filter by that category
+    // Click the active counter again to reset to "All Results"
+    const statFilterMap = {
+      'lv-total': 'all',
+      'lv-matched': 'matched',
+      'lv-needs-review': 'needs-review',
+      'lv-no-match': 'no-match',
+      'lv-corrections': 'corrected'
+    };
+    Object.entries(statFilterMap).forEach(([elId, filterValue]) => {
+      const statEl = document.getElementById(elId);
+      const statItem = statEl?.closest('.results-stat-item');
+      if (statItem) {
+        statItem.style.cursor = 'pointer';
+        statItem.addEventListener('click', () => {
+          if (filterSelect) {
+            // Toggle: if already active, reset to "all"
+            const newValue = filterSelect.value === filterValue ? 'all' : filterValue;
+            filterSelect.value = newValue;
+            this.filterResults();
+            // Telemetry: STAT_ITEM_CLICKED. Tracked as a separate event
+            // (not just FILTER_CHANGED) so we can tell the difference
+            // between "user used the dropdown" and "user clicked the big
+            // counter card" — different UI affordances, same outcome.
+            if (window.logUserAction) {
+              window.logUserAction('STAT_ITEM_CLICKED', 'VIEW', {
+                statId: elId,
+                filterApplied: newValue,
+                toggleOff: newValue === 'all' && filterValue !== 'all'
+              });
+            }
+          }
+        });
+      }
+    });
 
     // Gallery navigation
     this.setupGalleryListeners();
@@ -479,27 +724,166 @@ class LogVisualizer {
     document.addEventListener('keydown', (e) => {
       if (!this.isGalleryOpen) return;
 
-      const isInputFocused = document.activeElement &&
-        ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
+      const active = document.activeElement;
+      const isInputFocused = active &&
+        ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName);
 
       if (!isInputFocused && this.zoomController && this.zoomController.handleKeyDown(e)) {
         e.preventDefault();
         return;
       }
 
+      // Digit handling — two distinct fast-paths:
+      //
+      // (a) Needs-review candidate picker:
+      //     1-9 → click the candidate at that rank;
+      //     0   → "None of these".
+      //   Simulates a click on the existing DOM element so resolveReview,
+      //   autoFillVehicleEditorFromCandidate and navigateToNextReview all run
+      //   exactly as in the mouse path. Active only when a review panel is
+      //   visible (i.e. ambiguous match for the current photo).
+      //
+      // (b) Type-to-edit Race Number (no review panel visible):
+      //     Auto-focus on entering an image was removed because it forced a
+      //     double-arrow press to navigate (select() left the value
+      //     highlighted, so the first ←/→ only deselected). The trade-off was
+      //     that typing a number became a two-step "click then type". This
+      //     fast-path restores the one-keystroke flow: when the gallery owns
+      //     the keyboard, typing a digit focuses the Race Number input,
+      //     replaces its value with that digit, and parks the caret at the
+      //     end so subsequent digits append naturally.
+      //
+      // Both branches are skipped if:
+      //   - an input/select/textarea is already focused (so typing "0" in
+      //     the Race Number field still types "0" instead of triggering "None");
+      //   - any modifier (Ctrl/Cmd/Alt) is held — leave browser shortcuts alone.
+      if (!isInputFocused && /^[0-9]$/.test(e.key) &&
+          !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const reviewPanelVisible = !!document.querySelector('.lv-review-panel, .lv-review-bar');
+        if (reviewPanelVisible) {
+          const num = parseInt(e.key, 10);
+          if (num === 0) {
+            const noneBtn = document.querySelector('[data-review-action="none"]');
+            if (noneBtn) {
+              e.preventDefault();
+              noneBtn.click();
+              return;
+            }
+          } else {
+            // querySelector returns the first match; both layouts (sidebar +
+            // horizontal bar) share the same data-candidate-index, and their
+            // click handlers update both, so picking the first is correct.
+            const candidateOption = document.querySelector(
+              `.lv-candidate-option[data-candidate-index="${num - 1}"]`
+            );
+            if (candidateOption) {
+              e.preventDefault();
+              candidateOption.click();
+              return;
+            }
+            // Digit pressed but no candidate at that position (e.g. "5" with
+            // only 3 candidates) → silently ignore so the user gets no
+            // accidental side-effect.
+          }
+        } else {
+          // (b) Type-to-edit: focus the first Race Number input and seed it
+          // with the digit the user just typed. Preserve change-tracking by
+          // dispatching an 'input' event so any listeners (auto-save, dirty
+          // flag, datalist) react as if the user typed normally.
+          const raceInput = document.querySelector('#lv-vehicles [data-field="raceNumber"]');
+          if (raceInput) {
+            e.preventDefault();
+            raceInput.value = e.key;
+            raceInput.focus();
+            // Caret at end so the user can keep typing (e.g. "3" then "4" → "34").
+            try { raceInput.setSelectionRange(raceInput.value.length, raceInput.value.length); } catch (_) {}
+            raceInput.dispatchEvent(new Event('input', { bubbles: true }));
+            return;
+          }
+        }
+      }
+
+      // Position-aware arrow navigation: when an input is focused, only
+      // intercept ← / → if the caret is at the edge (or the field is empty).
+      // This lets the user freely move the caret inside text while still
+      // allowing fast image navigation when there's nothing in the way.
+      const caretAtStart = (el) => {
+        if (!el) return false;
+        if (!el.value) return true;
+        return el.selectionStart === 0 && el.selectionEnd === 0;
+      };
+      const caretAtEnd = (el) => {
+        if (!el) return false;
+        const len = el.value ? el.value.length : 0;
+        if (len === 0) return true;
+        return el.selectionStart === len && el.selectionEnd === len;
+      };
+
       switch (e.key) {
         case 'Escape':
           if (isInputFocused) {
-            document.activeElement.blur();
+            active.blur();
           } else {
             this.closeGallery();
           }
           break;
+
         case 'ArrowLeft':
-          if (!isInputFocused) this.navigateGallery(-1);
+          if (!isInputFocused) {
+            this.navigateGallery(-1);
+          } else if (caretAtStart(active)) {
+            e.preventDefault();
+            this.navigateGallery(-1);
+          }
+          // otherwise: let the browser move the caret inside the text
           break;
+
         case 'ArrowRight':
-          if (!isInputFocused) this.navigateGallery(1);
+          if (!isInputFocused) {
+            this.navigateGallery(1);
+          } else if (caretAtEnd(active)) {
+            e.preventDefault();
+            this.navigateGallery(1);
+          }
+          // otherwise: let the browser move the caret inside the text
+          break;
+
+        case ' ':
+        case 'Spacebar': // legacy key name
+          // WF-02 — Space enters "edit number" mode: focus the Race Number field
+          // with the caret at the END (no select, so ←/→ keep navigating). Typing
+          // a digit while NOT focused already replaces the value (fast-path above);
+          // Space is for editing the existing value (backspace/append).
+          if (!isInputFocused) {
+            e.preventDefault(); // never let Space scroll the gallery (even on no-match photos)
+            const raceInput = document.querySelector('#lv-vehicles [data-field="raceNumber"]');
+            if (raceInput) {
+              raceInput.focus();
+              try { raceInput.setSelectionRange(raceInput.value.length, raceInput.value.length); } catch (_) {}
+            }
+          }
+          break;
+
+        case 'Enter':
+          // Shift+Enter goes back one image (handy if Enter advanced too eagerly).
+          // Plain Enter on the Race Number input is handled by its own listener
+          // in setupVehicleEditorEvents.
+          if (e.shiftKey && isInputFocused && active.dataset && active.dataset.field === 'raceNumber') {
+            e.preventDefault();
+            if (this.currentImageIndex > 0) {
+              this.navigateGallery(-1);
+            }
+          } else if (!isInputFocused) {
+            // WF-02 — keyboard-only correction: plain Enter while NO field is
+            // focused CONFIRMS the current detection (the shown race number) and
+            // advances to the next photo. Mirrors the in-field Enter so the user
+            // never needs the mouse. Works for matched AND no-match photos.
+            e.preventDefault(); // don't let Enter bubble to the browser (incl. empty no-match photos)
+            const raceInput = document.querySelector('#lv-vehicles [data-field="raceNumber"]');
+            if (raceInput) {
+              this._handleRaceNumberEnter(raceInput);
+            }
+          }
           break;
       }
     });
@@ -513,10 +897,23 @@ class LogVisualizer {
     const exportTagsBtn = document.getElementById('lv-export-tags');
     const saveAllBtn = document.getElementById('lv-save-all');
 
+    // WF-01 — bulk multi-select actions (results grid)
+    const bulkNoMatchBtn = document.getElementById('lv-bulk-nomatch');
+    const bulkClearBtn = document.getElementById('lv-bulk-clear');
+    if (bulkNoMatchBtn) bulkNoMatchBtn.addEventListener('click', () => this.bulkMarkSelectedNoMatch());
+    if (bulkClearBtn) bulkClearBtn.addEventListener('click', () => this.clearSelection());
+
     // Hide Save All button by default (show only when there are unsaved changes)
     if (saveAllBtn) {
       saveAllBtn.style.display = 'none';
       saveAllBtn.addEventListener('click', () => this.saveAllChanges());
+    }
+
+    // Strategy G: Learned data button (hidden until data is available)
+    const learnedBtn = document.getElementById('lv-learned-data');
+    if (learnedBtn) {
+      learnedBtn.style.display = 'none';
+      learnedBtn.addEventListener('click', () => this._openLearnedDataModal());
     }
 
     if (exportBtn) {
@@ -540,7 +937,7 @@ class LogVisualizer {
           // Hide configuration
           folderOrgContent.style.display = 'none';
           startOrganizationBtn.style.display = 'none';
-          toggleFolderOrgBtn.textContent = '⚙️ Configure Organization';
+          toggleFolderOrgBtn.textContent = '⚙️ Configure & Organize';
         } else {
           // Show configuration - inject folder organization UI
           this.injectFolderOrganizationUI();
@@ -652,6 +1049,40 @@ class LogVisualizer {
             </label>
           </div>
         </div>
+
+        <div class="config-section">
+          <h5>Rename Files:</h5>
+          <label class="radio-option" style="cursor: pointer;">
+            <input type="checkbox" id="post-rename-enabled">
+            <div class="radio-content">
+              <div class="radio-title">✏️ Rename files using a pattern</div>
+              <div class="form-text">Apply a custom filename pattern to organized files</div>
+            </div>
+          </label>
+          <div id="post-rename-options" style="display: none; margin-top: 10px;">
+            <div class="lv-rename-pattern-row">
+              <input type="text" id="post-rename-pattern" class="lv-rename-input"
+                     value="{number}_{name}_{team}-{seq:2}"
+                     placeholder="e.g. {number}_{name}_{team}-{seq:2}">
+            </div>
+            <div class="lv-rename-chips" id="post-rename-chips">
+              <span class="lv-rename-chip" data-placeholder="{number}">number</span>
+              <span class="lv-rename-chip" data-placeholder="{name}">name</span>
+              <span class="lv-rename-chip" data-placeholder="{surname}">surname</span>
+              <span class="lv-rename-chip" data-placeholder="{team}">team</span>
+              <span class="lv-rename-chip" data-placeholder="{car_model}">car_model</span>
+              <span class="lv-rename-chip" data-placeholder="{nationality}">nationality</span>
+              <span class="lv-rename-chip" data-placeholder="{event}">event</span>
+              <span class="lv-rename-chip" data-placeholder="{date}">date</span>
+              <span class="lv-rename-chip" data-placeholder="{seq:2}">seq</span>
+              <span class="lv-rename-chip" data-placeholder="{original}">original</span>
+            </div>
+            <div class="lv-rename-preview" id="post-rename-preview">
+              <span class="lv-rename-preview-label">Preview:</span>
+              <span class="lv-rename-preview-value" id="post-rename-preview-value">---</span>
+            </div>
+          </div>
+        </div>
       </div>
     `;
 
@@ -695,12 +1126,110 @@ class LogVisualizer {
         }
       });
     }
+
+    // Rename toggle - show/hide rename options
+    const renameToggle = document.getElementById('post-rename-enabled');
+    const renameOptions = document.getElementById('post-rename-options');
+    if (renameToggle && renameOptions) {
+      renameToggle.addEventListener('change', (e) => {
+        renameOptions.style.display = e.target.checked ? 'block' : 'none';
+        if (e.target.checked) {
+          this.updateRenamePreview();
+        }
+      });
+    }
+
+    // Rename pattern input - live preview
+    const renamePatternInput = document.getElementById('post-rename-pattern');
+    if (renamePatternInput) {
+      renamePatternInput.addEventListener('input', () => {
+        this.updateRenamePreview();
+      });
+    }
+
+    // Rename placeholder chips - click to insert
+    const chips = document.querySelectorAll('#post-rename-chips .lv-rename-chip');
+    chips.forEach(chip => {
+      chip.addEventListener('click', () => {
+        const placeholder = chip.getAttribute('data-placeholder');
+        if (renamePatternInput && placeholder) {
+          const start = renamePatternInput.selectionStart;
+          const end = renamePatternInput.selectionEnd;
+          const val = renamePatternInput.value;
+          renamePatternInput.value = val.substring(0, start) + placeholder + val.substring(end);
+          renamePatternInput.focus();
+          const newPos = start + placeholder.length;
+          renamePatternInput.setSelectionRange(newPos, newPos);
+          this.updateRenamePreview();
+        }
+      });
+    });
+
+    // Initial preview update
+    if (renameToggle && renameToggle.checked) {
+      this.updateRenamePreview();
+    }
+  }
+
+  /**
+   * Get a sample participant for rename preview
+   */
+  getRenameSampleParticipant() {
+    if (this.presetParticipants && this.presetParticipants.length > 0) {
+      const p = this.presetParticipants[0];
+      return {
+        name: p.nome || p.name || 'Driver',
+        surname: p.cognome || p.surname || '',
+        number: p.numero || p.number || '1',
+        team: p.team || p.scuderia || 'Team',
+        car_model: p.car_model || p.modello || '',
+        nationality: p.nationality || p.nazionalita || ''
+      };
+    }
+    return {
+      name: 'Pierre Gasly', surname: 'Gasly', number: '10',
+      team: 'Alpine', car_model: 'A524', nationality: 'FRA'
+    };
+  }
+
+  /**
+   * Update the rename pattern preview with sample data
+   */
+  updateRenamePreview() {
+    const patternInput = document.getElementById('post-rename-pattern');
+    const previewEl = document.getElementById('post-rename-preview-value');
+    if (!patternInput || !previewEl) return;
+
+    const pattern = patternInput.value || '';
+    if (!pattern) {
+      previewEl.textContent = '---';
+      return;
+    }
+
+    const sample = this.getRenameSampleParticipant();
+    let preview = pattern;
+    preview = preview.replace(/\{number\}/g, sample.number);
+    preview = preview.replace(/\{name\}/g, sample.name);
+    preview = preview.replace(/\{surname\}/g, sample.surname);
+    preview = preview.replace(/\{team\}/g, sample.team);
+    preview = preview.replace(/\{car_model\}/g, sample.car_model);
+    preview = preview.replace(/\{nationality\}/g, sample.nationality);
+    preview = preview.replace(/\{event\}/g, 'Monaco_GP_2025');
+    preview = preview.replace(/\{date\}/g, new Date().toISOString().slice(0, 10).replace(/-/g, ''));
+    preview = preview.replace(/\{seq:\d+\}/g, '01');
+    preview = preview.replace(/\{seq\}/g, '001');
+    preview = preview.replace(/\{original\}/g, 'IMG_4523');
+
+    previewEl.textContent = preview + '.jpg';
   }
 
   /**
    * Get post-organization configuration
    */
   getPostOrganizationConfig() {
+    const renameEnabled = document.getElementById('post-rename-enabled')?.checked || false;
+    const renamePattern = document.getElementById('post-rename-pattern')?.value || '';
+
     return {
       enabled: true,
       mode: document.querySelector('input[name="post-org-mode"]:checked')?.value || 'copy',
@@ -710,7 +1239,8 @@ class LogVisualizer {
       includeXmpFiles: true,
       destinationPath: document.querySelector('input[name="post-destination"]:checked')?.value === 'custom' ?
         document.getElementById('post-dest-path')?.value : undefined,
-      conflictStrategy: document.querySelector('input[name="post-conflict-strategy"]:checked')?.value || 'rename'
+      conflictStrategy: document.querySelector('input[name="post-conflict-strategy"]:checked')?.value || 'rename',
+      renamePattern: renameEnabled && renamePattern ? renamePattern : undefined
     };
   }
 
@@ -763,7 +1293,6 @@ class LogVisualizer {
    * Load image lazily using multi-level strategy
    */
   async loadImageLazily(imgElement, fileName) {
-    console.log(`[LogVisualizer] loadImageLazily called for ${fileName}`);
 
     // Skip if already marked as failed
     if (this.failedImages.has(fileName)) {
@@ -797,36 +1326,38 @@ class LogVisualizer {
         imgElement.style.opacity = '0.5';
       }
 
-      // Strategy 1: Try thumbnail first (high quality 280x280)
-      if (thumbPath) {
+      // Strategy 1: Try thumbnail first (high quality 280x280) — skip if already known to be missing
+      if (thumbPath && !this.failedPaths.has(thumbPath)) {
         try {
           await this.loadImageWithIPC(imgElement, thumbPath);
           this.preloadedImages.add(fileName);
           return;
         } catch (error) {
+          this.failedPaths.add(thumbPath);
           this.logImageError(fileName, error, 'thumbnail');
         }
       }
 
-      // Strategy 2: Try compressed (full quality fallback)
-      if (compressedPath) {
+      // Strategy 2: Try compressed (full quality fallback) — skip if already known to be missing
+      if (compressedPath && !this.failedPaths.has(compressedPath)) {
         try {
           await this.loadImageWithIPC(imgElement, compressedPath);
           this.preloadedImages.add(fileName);
           return;
         } catch (error) {
+          this.failedPaths.add(compressedPath);
           this.logImageError(fileName, error, 'compressed');
         }
       }
 
       // Strategy 3: Try micro-thumbnail as last resort (32x32 - pixelated)
-      if (microPath) {
+      if (microPath && !this.failedPaths.has(microPath)) {
         try {
           await this.loadImageWithIPC(imgElement, microPath);
           this.preloadedImages.add(fileName);
-          console.warn(`[LogVisualizer] Using micro-thumbnail for ${fileName} - quality will be low`);
           return;
         } catch (error) {
+          this.failedPaths.add(microPath);
           this.logImageError(fileName, error, 'micro-thumbnail');
         }
       }
@@ -895,40 +1426,35 @@ class LogVisualizer {
     this.loggedErrors.add(errorKey);
     this.failedImages.add(fileName);
 
-    // Log only once per fileName+context combination
-    console.warn(`[LogVisualizer] Failed to load image ${fileName}${context ? ` (${context})` : ''}:`, error.message);
-
-    // Clear error log after 30 seconds to allow retry logging
-    setTimeout(() => {
-      this.loggedErrors.delete(errorKey);
-    }, 30000);
+    // Log only once per fileName+context combination — use debug level to reduce noise
+    console.debug(`[LogVisualizer] Image fallback for ${fileName}${context ? ` (${context})` : ''}: ${error.message}`);
   }
 
   /**
    * Load image with IPC for local files or direct loading for URLs
    */
   async loadImageWithIPC(imgElement, src) {
-    console.log(`[LogVisualizer] Loading image with IPC support: ${src}`);
-
     // Check if this is a local file path
     const isLocalPath = src && src.startsWith('/') && !src.startsWith('http');
 
     if (isLocalPath) {
       // Use IPC for local file access
       try {
-        console.log(`[LogVisualizer] Using IPC for local image: ${src}`);
         const dataUrl = await window.api.invoke('get-local-image', src);
         if (dataUrl) {
           imgElement.src = dataUrl;
           imgElement.style.opacity = '1';
           imgElement.style.transition = 'opacity 0.3s ease';
-          console.log(`[LogVisualizer] Successfully loaded local image via IPC: ${src}`);
+          // Cache the data URL so it survives DOM re-renders (e.g. filter changes)
+          const fileName = imgElement.dataset?.fileName;
+          if (fileName) {
+            this.dataUrlCache.set(fileName, dataUrl);
+          }
           return;
         } else {
           throw new Error(`IPC returned null for local image: ${src}`);
         }
       } catch (error) {
-        console.warn(`[LogVisualizer] IPC failed for local image ${src}:`, error);
         throw new Error(`IPC failed for local image: ${src} - ${error.message}`);
       }
     } else {
@@ -947,6 +1473,11 @@ class LogVisualizer {
         imgElement.src = src;
         imgElement.style.opacity = '1';
         imgElement.style.transition = 'opacity 0.3s ease';
+        // Cache the URL so it survives DOM re-renders
+        const fileName = imgElement.dataset?.fileName;
+        if (fileName) {
+          this.dataUrlCache.set(fileName, src);
+        }
         resolve();
       };
       tempImg.onerror = () => {
@@ -996,6 +1527,69 @@ class LogVisualizer {
     // No action needed - all items are already rendered
   }
 
+  // ============================================================
+  // Result-classification predicates — single source of truth used by
+  // both the filter switch (filterResults) and updateStatistics().
+  //
+  // Issue #125: previously the filter case 'no-match' only matched
+  // results with empty `analysis`, while the counter computed noMatch
+  // by subtraction (total - matched - needsReview), so images where
+  // Gemini detected a vehicle but couldn't read a valid raceNumber
+  // were counted as no-match but hidden by the no-match filter.
+  // Centralising the predicates eliminates that drift.
+  // ============================================================
+
+  /**
+   * True when the user has manually corrected this photo.
+   * `hasCorrection` is set by extractResultsFromLogs from MANUAL_CORRECTION
+   * events in the JSONL (durable). The in-session Map is the fallback for
+   * changes not yet flushed to the log. A corrected photo is always a
+   * Matched + Correction, and never a No-Match (its raceNumber was set
+   * by the user).
+   */
+  _hasCorrection(r) {
+    if (r && r._markedNoMatch) return false; // WF-01 — a bulk "No Match" is not a correction
+    return r.hasCorrection === true || this.manualCorrections.has(r.fileName);
+  }
+
+  /**
+   * True when the AI returned a vehicle with `matchStatus === 'needs_review'`
+   * that the user hasn't resolved yet.
+   */
+  _isNeedsReview(r) {
+    return r.analysis && r.analysis.length > 0 &&
+           r.analysis.some(v => v.matchStatus === 'needs_review') &&
+           !r._reviewResolved;
+  }
+
+  /**
+   * True when the result has at least one vehicle with a usable raceNumber
+   * (or has been manually corrected). Excludes unresolved needs_review.
+   */
+  _isMatched(r) {
+    if (r && r._markedNoMatch) return false;                  // WF-01 — bulk "No Match" is never matched
+    if (this._hasCorrection(r)) return true;                  // manual correction wins
+    if (!r.analysis || r.analysis.length === 0) return false;
+    const hasRaceNumber = r.analysis.some(v => v.raceNumber && v.raceNumber !== 'N/A');
+    if (!hasRaceNumber) return false;
+    if (this._isNeedsReview(r)) return false;                 // needs_review is its own bucket
+    return true;
+  }
+
+  /**
+   * True when the result is neither matched nor needs_review nor corrected.
+   * Includes both "Gemini saw nothing" (analysis empty) AND "Gemini saw a
+   * vehicle but couldn't read the number" (analysis non-empty, raceNumber
+   * missing or 'N/A').
+   */
+  _isNoMatch(r) {
+    if (r && r._markedNoMatch) return true;                   // WF-01 — explicitly marked No Match
+    if (this._hasCorrection(r)) return false;                 // user touched it → not no-match
+    if (this._isMatched(r)) return false;
+    if (this._isNeedsReview(r)) return false;
+    return true;
+  }
+
   /**
    * Filter results based on search and filter criteria
    */
@@ -1011,14 +1605,17 @@ class LogVisualizer {
 
       if (!matchesSearch) return false;
 
-      // Type filter
+      // Type filter — uses the shared predicates so the rendered list
+      // always agrees with the counters in updateStatistics().
       switch (filterType) {
         case 'matched':
-          return result.analysis && result.analysis.length > 0;
+          return this._isMatched(result);
         case 'no-match':
-          return !result.analysis || result.analysis.length === 0;
+          return this._isNoMatch(result);
+        case 'needs-review':
+          return this._isNeedsReview(result);
         case 'corrected':
-          return this.manualCorrections.has(result.fileName);
+          return this._hasCorrection(result);
         case 'high-confidence':
           return this.getAverageConfidence(result) >= 0.9;
         case 'low-confidence':
@@ -1028,12 +1625,30 @@ class LogVisualizer {
       }
     });
 
+    // WF-01 — keep the multi-selection coherent across a filter change: drop any
+    // selected fileNames that are no longer visible, and reset the shift-click
+    // anchor (its index referred to the OLD filteredResults order).
+    if (this.selectedCardKeys.size > 0) {
+      const visible = new Set(this.filteredResults.map(r => r.fileName));
+      this.selectedCardKeys = new Set(
+        Array.from(this.selectedCardKeys).filter(fn => visible.has(fn))
+      );
+    }
+    this._lastSelectedIndex = null;
+
     this.updateStatistics();
     this.renderResults();
 
-    // If gallery is open, refresh the current image in case the filtered results changed
+    // If gallery is open, refresh the current image in case the filtered results changed.
+    // `refreshGalleryAfterFilter` is now async (it awaits performAutoSave first to flush
+    // any pending corrections on the outgoing image — see bugfix note in that function).
+    // We deliberately don't await here because filterResults itself is sync and the
+    // gallery refresh is fire-and-forget UI work; the .catch keeps the promise from
+    // surfacing as an unhandled rejection if performAutoSave or updateGalleryContent throw.
     if (this.isGalleryOpen) {
-      this.refreshGalleryAfterFilter();
+      this.refreshGalleryAfterFilter().catch(err => {
+        console.error('[LogVisualizer] refreshGalleryAfterFilter failed:', err);
+      });
     }
 
     console.log(`[LogVisualizer] Filtered to ${this.filteredResults.length} results`);
@@ -1063,9 +1678,31 @@ class LogVisualizer {
 
   /**
    * Refresh gallery after filtering to handle cases where current image is no longer in filtered results
+   *
+   * Bugfix (Save+FilterChange): when the user changes the filter while the
+   * gallery is open, this function may either reset `currentImageIndex` to
+   * 0 (if the currently-displayed image fell out of the new filter) or
+   * close the gallery entirely. Both paths previously discarded pending
+   * manual corrections on the outgoing image. We now flush via
+   * `performAutoSave()` BEFORE any index/close mutation so the user's
+   * in-flight edits are persisted regardless of which branch runs.
+   *
+   * `performAutoSave()` is idempotent / no-op when nothing is pending, so
+   * the cost on the happy path is just the `hasUnsavedChanges` check.
    */
-  refreshGalleryAfterFilter() {
+  async refreshGalleryAfterFilter() {
     if (!this.isGalleryOpen) return;
+
+    if (this.hasUnsavedChanges) {
+      try {
+        await this.performAutoSave();
+      } catch (error) {
+        console.error('[LogVisualizer] Auto-save before filter refresh failed:', error);
+        // Continue anyway — index reset must still happen so the gallery
+        // doesn't keep pointing at an image that's no longer in
+        // filteredResults. The Save All button remains available for retry.
+      }
+    }
 
     // Get current result being displayed in gallery
     const currentResult = this.filteredResults[this.currentImageIndex];
@@ -1075,10 +1712,10 @@ class LogVisualizer {
       if (this.filteredResults.length > 0) {
         // Show first available result
         this.currentImageIndex = 0;
-        this.updateGalleryContent();
+        await this.updateGalleryContent();
       } else {
         // No results available, close gallery
-        this.closeGallery();
+        await this.closeGallery();
       }
     } else {
       // Current image is still available, just refresh the vehicle editor
@@ -1103,20 +1740,56 @@ class LogVisualizer {
     const totalEl = document.getElementById('lv-total');
     const matchedEl = document.getElementById('lv-matched');
     const noMatchEl = document.getElementById('lv-no-match');
+    const needsReviewEl = document.getElementById('lv-needs-review');
     const correctionsEl = document.getElementById('lv-corrections');
 
-    const total = this.filteredResults.length;
-    const matched = this.filteredResults.filter(r => {
-      return r.analysis && r.analysis.length > 0 &&
-             r.analysis.some(vehicle => vehicle.raceNumber && vehicle.raceNumber !== 'N/A');
-    }).length;
-    const noMatch = total - matched;
-    const corrections = this.manualCorrections.size;
+    // FIXED: Always use imageResults (full dataset) for global counters,
+    // not filteredResults which changes with the active filter
+    const allResults = this.imageResults || [];
+    const total = allResults.length;
+
+    // Issue #125 — counters and the filter switch must use the same
+    // predicates, otherwise the user sees a discrepancy between the
+    // header strip and the rendered list (e.g. counter shows 4 no-match
+    // but filter only renders 2). Predicates are defined once on the
+    // class so there is a single source of truth.
+    const matched      = allResults.filter(r => this._isMatched(r)).length;
+    const needsReview  = allResults.filter(r => this._isNeedsReview(r)).length;
+    const noMatch      = allResults.filter(r => this._isNoMatch(r)).length;
+    const corrections  = allResults.filter(r => this._hasCorrection(r)).length;
+
+    // Sanity-check invariant (dev only): matched + noMatch + needsReview === total.
+    // If this ever fails it means a result fell through every bucket — bug to fix.
+    if (typeof window !== 'undefined' && window.DEBUG_MODE === true &&
+        matched + noMatch + needsReview !== total) {
+      console.warn('[LogVisualizer] Stats invariant violated', {
+        total, matched, noMatch, needsReview
+      });
+    }
 
     if (totalEl) totalEl.textContent = total.toLocaleString();
     if (matchedEl) matchedEl.textContent = matched.toLocaleString();
     if (noMatchEl) noMatchEl.textContent = noMatch.toLocaleString();
+    if (needsReviewEl) needsReviewEl.textContent = needsReview.toLocaleString();
     if (correctionsEl) correctionsEl.textContent = corrections.toLocaleString();
+
+    // Update active state on stat items based on current filter
+    const currentFilter = document.getElementById('lv-filter-type')?.value || 'all';
+    const filterMap = {
+      'all': 'lv-total',
+      'matched': 'lv-matched',
+      'needs-review': 'lv-needs-review',
+      'no-match': 'lv-no-match',
+      'corrected': 'lv-corrections'
+    };
+    document.querySelectorAll('.results-stat-item').forEach(item => {
+      item.classList.remove('results-stat-item--active');
+    });
+    const activeId = filterMap[currentFilter];
+    if (activeId) {
+      const activeEl = document.getElementById(activeId);
+      if (activeEl) activeEl.closest('.results-stat-item')?.classList.add('results-stat-item--active');
+    }
   }
 
   /**
@@ -1162,10 +1835,12 @@ class LogVisualizer {
       </div>
     `;
 
-    // Register lazy images with Intersection Observer
+    // Register lazy images with Intersection Observer (skip already-cached ones)
     const lazyImages = resultsContainer.querySelectorAll('.lv-lazy-image');
     lazyImages.forEach(img => {
-      if (this.imageObserver && !this.preloadedImages.has(img.dataset.fileName)) {
+      const fileName = img.dataset.fileName;
+      const alreadyCached = this.preloadedImages.has(fileName) || (this.dataUrlCache && this.dataUrlCache.has(fileName));
+      if (this.imageObserver && !alreadyCached) {
         this.imageObserver.observe(img);
       }
     });
@@ -1185,13 +1860,34 @@ class LogVisualizer {
     const vehicles = result.analysis || [];
     const primaryVehicle = vehicles[0] || {};
 
+    // Determine if any vehicle needs review (ambiguous match)
+    const needsReview = vehicles.some(v => v.matchStatus === 'needs_review');
+    const isResolved = result._reviewResolved === true; // User already chose a candidate
+
     // Check if we already have a cached image URL for this result
     const cachedImageUrl = this.getCachedImageUrl(result);
     const imageSrc = cachedImageUrl || this.getPlaceholderUrl();
 
+    // Count alternative candidates for needs_review badge
+    const altCount = primaryVehicle.alternativeCandidates ? primaryVehicle.alternativeCandidates.length : 0;
+
+    // Issue #104 — aggregate otherPeople across all vehicles (usually empty, unless preset opted in)
+    const otherPeople = [];
+    for (const v of vehicles) {
+      if (Array.isArray(v.otherPeople)) {
+        for (const p of v.otherPeople) {
+          if (p && p.name) otherPeople.push(p);
+        }
+      }
+    }
+    const otherPeopleLabel = otherPeople
+      .map(p => p.role ? `${this.escapeHtml(p.name)} (${this.escapeHtml(p.role)})` : this.escapeHtml(p.name))
+      .join(', ');
+
     return `
-      <div class="lv-result-card ${isModified ? 'modified' : ''}" data-index="${index}">
+      <div class="lv-result-card ${isModified ? 'modified' : ''} ${needsReview && !isResolved ? 'needs-review' : ''} ${isResolved ? 'review-resolved' : ''} ${this.selectedCardKeys.has(result.fileName) ? 'selected' : ''}" data-index="${index}" data-file-name="${result.fileName}">
         <div class="lv-card-image">
+          <input type="checkbox" class="lv-card-select" data-file-name="${result.fileName}" ${this.selectedCardKeys.has(result.fileName) ? 'checked' : ''} aria-label="Select photo for bulk action" title="Select for bulk action" style="position:absolute;top:8px;left:8px;width:18px;height:18px;z-index:6;cursor:pointer;accent-color:#1a9ee0;" />
           <img src="${imageSrc}"
                alt="${result.fileName}"
                loading="lazy"
@@ -1202,8 +1898,12 @@ class LogVisualizer {
                class="lv-lazy-image"
                style="${cachedImageUrl ? 'opacity: 1;' : ''}" />
           ${isModified ? '<div class="lv-modified-badge">✏️ Modified</div>' : ''}
+          ${needsReview && !isResolved ? '<div class="lv-needs-review-badge">⚠️ Review</div>' : ''}
+          ${isResolved ? '<div class="lv-resolved-badge">✅ Resolved</div>' : ''}
           ${result.metadataWritten === false ? '<div class="lv-no-metadata-badge">No metadata</div>' : ''}
-          ${vehicles.length > 1 ? `<div class="lv-multi-badge">${vehicles.length} vehicles</div>` : ''}
+          ${vehicles.length > 1 ? `<div class="lv-multi-badge">${vehicles.length} detections</div>` : ''}
+          ${otherPeople.length > 0 ? `<div class="lv-other-people-badge" title="${otherPeopleLabel}">★ ${otherPeople.length} VIP</div>` : ''}
+          ${result.sceneSkipped ? `<div class="lv-scene-skip-badge" title="AI skipped: scene classified as ${result.sceneCategory || 'non-relevant'}${result.sceneConfidence ? ` (${Math.round(result.sceneConfidence * 100)}%)` : ''}">🚫 ${(result.sceneCategory || 'scene skipped').replace(/_/g, ' ')}</div>` : ''}
         </div>
 
         <div class="lv-card-content">
@@ -1214,14 +1914,18 @@ class LogVisualizer {
               <div class="lv-race-number">#${primaryVehicle.raceNumber || '?'}</div>
               <div class="lv-team-name">${primaryVehicle.team || 'Unknown Team'}</div>
               ${primaryVehicle.drivers ? `<div class="lv-drivers">${primaryVehicle.drivers.join(', ')}</div>` : ''}
+              ${otherPeople.length > 0 ? `<div class="lv-other-people" title="People outside the preset (VIPs/guests)">★ ${otherPeopleLabel}</div>` : ''}
+              ${needsReview && !isResolved && altCount > 1 ? `
+                <div class="lv-ambiguous-hint">${altCount} candidates — click to choose</div>
+              ` : ''}
             ` : `
               <div class="lv-no-match">No recognition</div>
             `}
           </div>
 
           <div class="lv-card-meta">
-            <div class="lv-confidence confidence-${confidenceClass}">
-              ${Math.round(confidence * 100)}% confidence
+            <div class="lv-confidence confidence-${needsReview && !isResolved ? 'review' : confidenceClass}">
+              ${needsReview && !isResolved ? '⚠️ Needs review' : `${Math.round(confidence * 100)}% confidence`}
             </div>
             ${result.csvMatch && result.csvMatch.entry ? '<div class="lv-csv-matched">📊 CSV matched</div>' : ''}
           </div>
@@ -1270,12 +1974,14 @@ class LogVisualizer {
       const newCardHTML = this.createResultCardHTML(result, index);
       card.outerHTML = newCardHTML;
 
-      // Re-setup click listener for the new card
+      // Re-setup listeners for the new card. WF-01 — use the shared wiring so
+      // multi-select (checkbox / Ctrl / Shift) keeps working after a single-card
+      // re-render, not just plain click-to-open.
       const newCard = resultContainer.querySelector(`img[data-file-name="${fileName}"]`)?.closest('.lv-result-card');
       if (newCard) {
-        newCard.addEventListener('click', () => {
-          this.openGallery(index);
-        });
+        this._wireCard(newCard);
+        this._applySelectionVisual();
+        this._updateBulkBar();
       }
 
       console.log(`[LogVisualizer] Updated result card for ${fileName}`);
@@ -1288,19 +1994,638 @@ class LogVisualizer {
    * Setup click listeners for result cards
    */
   setupResultCardListeners(container) {
-    const cards = container.querySelectorAll('.lv-result-card');
-    cards.forEach(card => {
-      card.addEventListener('click', () => {
-        const index = parseInt(card.dataset.index);
-        this.openGallery(index);
+    container.querySelectorAll('.lv-result-card').forEach(card => this._wireCard(card));
+    // Reflect any existing selection onto the freshly-rendered cards + the bar.
+    this._applySelectionVisual();
+    this._updateBulkBar();
+  }
+
+  /** Wire a single result card's selection + click handlers (WF-01). Shared by
+   *  the full render (setupResultCardListeners) and single-card re-renders
+   *  (updateResultCard) so multi-select keeps working after an inline edit. */
+  _wireCard(card) {
+    // The per-card checkbox toggles selection without opening the gallery.
+    const cb = card.querySelector('.lv-card-select');
+    if (cb) {
+      cb.addEventListener('click', (e) => e.stopPropagation());
+      cb.addEventListener('change', (e) => {
+        e.stopPropagation();
+        const index = parseInt(card.dataset.index, 10);
+        this._setCardSelected(card.dataset.fileName, index, cb.checked);
+      });
+    }
+    card.addEventListener('click', (e) => {
+      const index = parseInt(card.dataset.index, 10);
+      // Ctrl/Cmd-click toggles selection; Shift-click selects a contiguous range.
+      if (e.metaKey || e.ctrlKey) {
+        e.preventDefault();
+        this._toggleCardSelection(card.dataset.fileName, index);
+        return;
+      }
+      if (e.shiftKey && this._lastSelectedIndex !== null) {
+        e.preventDefault();
+        this._selectRange(this._lastSelectedIndex, index);
+        return;
+      }
+      // Plain click → open the gallery (unchanged behavior).
+      this.openGallery(index);
+    });
+  }
+
+  // ============================================================
+  // WF-01 — bulk multi-select in the results grid
+  // ============================================================
+
+  _fileNameAtIndex(index) {
+    const r = this.filteredResults[index];
+    return r ? r.fileName : null;
+  }
+
+  _setCardSelected(fileName, index, selected) {
+    if (!fileName) return;
+    if (selected) {
+      this.selectedCardKeys.add(fileName);
+      this._lastSelectedIndex = index;
+    } else {
+      this.selectedCardKeys.delete(fileName);
+    }
+    this._applySelectionVisual();
+    this._updateBulkBar();
+  }
+
+  _toggleCardSelection(fileName, index) {
+    if (!fileName) return;
+    this._setCardSelected(fileName, index, !this.selectedCardKeys.has(fileName));
+  }
+
+  _selectRange(fromIndex, toIndex) {
+    const [a, b] = fromIndex <= toIndex ? [fromIndex, toIndex] : [toIndex, fromIndex];
+    for (let i = a; i <= b; i++) {
+      const r = this.filteredResults[i];
+      if (r) this.selectedCardKeys.add(r.fileName);
+    }
+    this._lastSelectedIndex = toIndex;
+    this._applySelectionVisual();
+    this._updateBulkBar();
+  }
+
+  clearSelection() {
+    this.selectedCardKeys.clear();
+    this._lastSelectedIndex = null;
+    this._applySelectionVisual();
+    this._updateBulkBar();
+  }
+
+  _applySelectionVisual() {
+    document.querySelectorAll('.lv-result-card').forEach(card => {
+      const fn = card.dataset.fileName;
+      const sel = !!(fn && this.selectedCardKeys.has(fn));
+      card.classList.toggle('selected', sel);
+      const cb = card.querySelector('.lv-card-select');
+      if (cb) cb.checked = sel;
+    });
+  }
+
+  _updateBulkBar() {
+    const count = this.selectedCardKeys.size;
+    const bar = document.getElementById('lv-bulk-bar');
+    if (bar) bar.style.display = count > 0 ? 'flex' : 'none';
+    const countEl = document.getElementById('lv-bulk-count');
+    if (countEl) countEl.textContent = `${count} selected`;
+    const nmBtn = document.getElementById('lv-bulk-nomatch');
+    if (nmBtn) nmBtn.textContent = `🚫 Mark ${count} as No Match`;
+  }
+
+  /** Plain, JSON-safe copy of a detection (for the training record). */
+  _plainVehicle(v) {
+    const out = {};
+    for (const [k, val] of Object.entries(v || {})) {
+      if (val === null || ['string', 'number', 'boolean'].includes(typeof val)) {
+        out[k] = val;
+      } else if (Array.isArray(val)) {
+        out[k] = val.filter(x => ['string', 'number', 'boolean'].includes(typeof x));
+      }
+    }
+    return out;
+  }
+
+  /**
+   * WF-01 — bulk-mark the selected photos as a REAL No-Match (they count as
+   * No-Match and organize into the unknown folder), while preserving the
+   * original AI detection in the analysis log for future auto-training
+   * (Federico: "salva la correzione a storico"). Persists all in one IPC call.
+   */
+  async bulkMarkSelectedNoMatch() {
+    const fileNames = Array.from(this.selectedCardKeys);
+    if (fileNames.length === 0) return;
+
+    const corrections = [];
+    let count = 0;
+    fileNames.forEach(fileName => {
+      const result = this.imageResults.find(r => r.fileName === fileName);
+      if (!result) return;
+      const original = Array.isArray(result.analysis)
+        ? result.analysis.map(v => this._plainVehicle(v))
+        : [];
+
+      // Real No-Match in memory; original kept for the training record.
+      result._markedNoMatch = true;
+      result._noMatchOriginal = original;
+      result.analysis = [];
+      result.hasCorrection = false;
+
+      // Mirror onto filteredResults if it holds a different object reference.
+      const fr = this.filteredResults.find(r => r.fileName === fileName);
+      if (fr && fr !== result) {
+        fr._markedNoMatch = true;
+        fr._noMatchOriginal = original;
+        fr.analysis = [];
+        fr.hasCorrection = false;
+      }
+
+      const correction = {
+        fileName,
+        vehicleIndex: 0,
+        // originalData is JSON-stringified so it survives any primitive-only
+        // filtering in the correction-log handler and stays a faithful record
+        // of what the AI had detected (for future auto-training).
+        changes: { markedNoMatch: true, originalData: JSON.stringify(original) },
+        timestamp: new Date().toISOString()
+      };
+      corrections.push(correction);
+      // Queue under the `${fileName}_${vehicleIndex}` key (the format
+      // saveAllChanges deletes by) so "Save All Changes" can genuinely retry —
+      // and then drop — this if the immediate persist below fails (offline).
+      // _hasCorrection ignores this entry because _markedNoMatch short-circuits
+      // it, so the photo stays a real No-Match, not a "Correction".
+      this.manualCorrections.set(`${fileName}_0`, correction);
+      count++;
+    });
+
+    if (corrections.length > 0) {
+      try {
+        const res = await window.api.invoke('update-analysis-log', {
+          executionId: this.executionId,
+          corrections,
+          timestamp: new Date().toISOString()
+        });
+        if (!res || !res.success) throw new Error(res && res.error ? res.error : 'persist failed');
+        // Persisted — drop from the retry queue.
+        fileNames.forEach(fn => this.manualCorrections.delete(`${fn}_0`));
+        if (this.manualCorrections.size === 0) this._hideSaveAllButton();
+      } catch (err) {
+        // Offline / persistence failure degrades gracefully: the in-memory state
+        // shows No-Match and the corrections stay queued, so "Save All Changes"
+        // really does retry them.
+        console.error('[LogVisualizer] Bulk no-match persist failed:', err);
+        this.hasUnsavedChanges = true;
+        const saveBtn = document.getElementById('lv-save-all');
+        if (saveBtn) saveBtn.style.display = '';
+        this.showNotification('⚠️ Marked locally — saving failed (offline?). Use "Save All Changes" to retry.', 'warning');
+      }
+    }
+
+    this.clearSelection();
+    this.filterResults(); // re-filter + re-render + refresh statistics
+    this.showNotification(`🚫 ${count} photo${count !== 1 ? 's' : ''} set to No Match — originals kept for training.`, 'success');
+  }
+
+  /**
+   * Build and inject the in-gallery review candidates UI
+   * Called by updateVehicleEditor when the current image has matchStatus === 'needs_review'
+   * Two placements: sidebar (Option A, >= 900px) and horizontal bar (Option B, < 900px)
+   */
+  /**
+   * Build and inject the in-gallery review candidates panel.
+   * ALWAYS shows all candidates — both for unresolved and already-resolved images.
+   * Highlights the AI-suggested or user-chosen candidate.
+   *
+   * @param {object} result - The image result object
+   * @param {number} resultIndex - Index in filteredResults
+   * @param {object} options - { resolved: boolean } — whether this image was already resolved
+   */
+  injectReviewCandidatesUI(result, resultIndex, options = {}) {
+    // Remove any existing review UIs first
+    document.querySelectorAll('.lv-review-panel, .lv-review-bar').forEach(el => el.remove());
+
+    const primaryVehicle = result.analysis?.[0];
+    if (!primaryVehicle) return;
+
+    const candidates = primaryVehicle.alternativeCandidates || [];
+    if (candidates.length === 0) return;
+
+    const isResolved = options.resolved || false;
+
+    // Determine which candidate is currently active by matching the vehicle's
+    // current raceNumber against the candidate list. This works for both:
+    // - AI's initial bestMatch (pre-resolution)
+    // - User's chosen candidate (post-resolution)
+    const currentRaceNumber = String(primaryVehicle.raceNumber || '');
+    const isNoneChosen = isResolved &&
+      (primaryVehicle.matchedBy === 'none' || currentRaceNumber === 'N/A' || !currentRaceNumber);
+
+    // Find the index of the active candidate by matching raceNumber
+    let activeCandidateIndex = -1;
+    if (currentRaceNumber && currentRaceNumber !== 'N/A') {
+      activeCandidateIndex = candidates.findIndex(c =>
+        String(c.participantNumber) === currentRaceNumber
+      );
+    }
+
+    // Header text and style depend on state
+    const headerIcon = isResolved ? '✓' : '⚠️';
+    const headerText = isResolved
+      ? (isNoneChosen ? 'Resolved: None matched' : `Resolved: #${currentRaceNumber}`)
+      : 'Ambiguous Match — Choose the Correct One';
+    const panelStateClass = isResolved
+      ? (isNoneChosen ? 'lv-review-state-none' : 'lv-review-state-resolved')
+      : 'lv-review-state-pending';
+
+    // Build candidate options HTML (shared between both layouts)
+    const buildCandidateHTML = (compact = false) => candidates.map((candidate, i) => {
+      const isActive = i === activeCandidateIndex;
+      const classes = [
+        'lv-candidate-option',
+        compact ? 'lv-candidate-compact' : '',
+        isActive ? 'lv-candidate-active' : ''
+      ].filter(Boolean).join(' ');
+
+      return `
+        <div class="${classes}" data-candidate-index="${i}" data-result-index="${resultIndex}">
+          <div class="lv-candidate-rank">${isActive ? '✓' : (i + 1)}</div>
+          <div class="lv-candidate-info">
+            <div class="lv-candidate-number">#${candidate.participantNumber || '?'}</div>
+            <div class="lv-candidate-name">${candidate.participantName || 'Unknown'}</div>
+            ${candidate.team ? `<div class="lv-candidate-team">${candidate.team}</div>` : ''}
+          </div>
+          <div class="lv-candidate-score">
+            ${candidate.score?.toFixed(1) || '?'}
+            <span class="lv-candidate-conf">${Math.round((candidate.confidence || 0) * 100)}%</span>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    // === Option A: Sidebar panel ===
+    const vehiclesContainer = document.getElementById('lv-vehicles');
+    if (vehiclesContainer) {
+      const sidebarPanel = document.createElement('div');
+      sidebarPanel.className = `lv-review-panel ${panelStateClass}`;
+      sidebarPanel.innerHTML = `
+        <div class="lv-review-panel-header">
+          <span class="lv-review-icon">${headerIcon}</span>
+          <span class="lv-review-title">${headerText}</span>
+        </div>
+        <div class="lv-candidate-list">
+          ${buildCandidateHTML(false)}
+        </div>
+        <div class="lv-review-actions">
+          <button class="lv-candidate-btn-none ${isNoneChosen ? 'lv-btn-none-active' : ''}" data-review-action="none" data-result-index="${resultIndex}">✕ None of these</button>
+        </div>
+      `;
+      vehiclesContainer.parentNode.insertBefore(sidebarPanel, vehiclesContainer);
+    }
+
+    // === Option B: Horizontal bar ===
+    const imageContainer = document.querySelector('.lv-gallery-image-container');
+    if (imageContainer) {
+      const horizontalBar = document.createElement('div');
+      horizontalBar.className = `lv-review-bar ${panelStateClass}`;
+      horizontalBar.innerHTML = `
+        <div class="lv-review-bar-header">
+          <span>${headerIcon} ${isResolved ? headerText : 'Ambiguous Match'}</span>
+          <button class="lv-candidate-btn-none lv-review-bar-none ${isNoneChosen ? 'lv-btn-none-active' : ''}" data-review-action="none" data-result-index="${resultIndex}">✕ None</button>
+        </div>
+        <div class="lv-review-bar-candidates">
+          ${buildCandidateHTML(true)}
+        </div>
+      `;
+      imageContainer.parentNode.insertBefore(horizontalBar, imageContainer.nextSibling);
+    }
+
+    // Wire up click handlers
+    this.setupReviewCandidateListeners(candidates, resultIndex, isResolved);
+  }
+
+  /**
+   * Wire click handlers for in-gallery review candidate selection.
+   * Works both for first-time selection and re-selection on resolved images.
+   */
+  setupReviewCandidateListeners(candidates, resultIndex, isAlreadyResolved) {
+    document.querySelectorAll('.lv-candidate-option[data-result-index]').forEach(option => {
+      option.addEventListener('click', async () => {
+        const candidateIndex = parseInt(option.dataset.candidateIndex);
+        const chosenCandidate = candidates[candidateIndex];
+
+        // Visual feedback: highlight the chosen one across BOTH layouts
+        document.querySelectorAll('.lv-candidate-option').forEach(o => {
+          o.classList.remove('lv-candidate-active');
+          // Update rank display: restore numbers
+          const rank = o.querySelector('.lv-candidate-rank');
+          if (rank) rank.textContent = String(parseInt(o.dataset.candidateIndex) + 1);
+        });
+        // Mark the chosen one
+        document.querySelectorAll(`.lv-candidate-option[data-candidate-index="${candidateIndex}"]`).forEach(el => {
+          el.classList.add('lv-candidate-active');
+          const rank = el.querySelector('.lv-candidate-rank');
+          if (rank) rank.textContent = '✓';
+        });
+
+        // Deactivate "None" button
+        document.querySelectorAll('.lv-candidate-btn-none').forEach(b => b.classList.remove('lv-btn-none-active'));
+
+        // Update header to resolved state
+        document.querySelectorAll('.lv-review-panel, .lv-review-bar').forEach(panel => {
+          panel.classList.remove('lv-review-state-pending', 'lv-review-state-none');
+          panel.classList.add('lv-review-state-resolved');
+        });
+        document.querySelectorAll('.lv-review-title').forEach(t => {
+          t.textContent = `Resolved: #${chosenCandidate.participantNumber || '?'}`;
+        });
+        document.querySelectorAll('.lv-review-icon').forEach(ic => {
+          ic.textContent = '✓';
+        });
+
+        // Resolve and auto-save
+        await this.resolveReview(resultIndex, chosenCandidate);
+
+        // Auto-fill the vehicle editor fields
+        this.autoFillVehicleEditorFromCandidate(chosenCandidate);
+
+        // Navigate to next needs_review (only on first resolution, not re-selections).
+        // The 150 ms delay is purely for visual feedback (let the user see the
+        // green check appear) — the actual persistence runs in background via
+        // resolveReview's fire-and-forget saveAllChanges call, so we no longer
+        // need the old 600 ms padding that was hiding the slow synchronous
+        // save round-trip.
+        if (!isAlreadyResolved) {
+          setTimeout(() => {
+            this.navigateToNextReview(resultIndex);
+          }, 150);
+        }
       });
     });
+
+    // "None of these" button
+    document.querySelectorAll('[data-review-action="none"]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+
+        // Deselect all candidates
+        document.querySelectorAll('.lv-candidate-option').forEach(o => {
+          o.classList.remove('lv-candidate-active');
+          const rank = o.querySelector('.lv-candidate-rank');
+          if (rank) rank.textContent = String(parseInt(o.dataset.candidateIndex) + 1);
+        });
+        // Highlight "None" button
+        document.querySelectorAll('.lv-candidate-btn-none').forEach(b => b.classList.add('lv-btn-none-active'));
+
+        // Update header
+        document.querySelectorAll('.lv-review-panel, .lv-review-bar').forEach(panel => {
+          panel.classList.remove('lv-review-state-pending', 'lv-review-state-resolved');
+          panel.classList.add('lv-review-state-none');
+        });
+        document.querySelectorAll('.lv-review-title').forEach(t => {
+          t.textContent = 'Resolved: None matched';
+        });
+        document.querySelectorAll('.lv-review-icon').forEach(ic => {
+          ic.textContent = '✕';
+        });
+
+        await this.resolveReview(resultIndex, null);
+
+        // Same rationale as the candidate click above: 150 ms is just for the
+        // ✕ icon to render before we move on; saveAllChanges runs async.
+        if (!isAlreadyResolved) {
+          setTimeout(() => {
+            this.navigateToNextReview(resultIndex);
+          }, 150);
+        }
+      });
+    });
+  }
+
+  /**
+   * B4 — auto-advance to the next image in the active filter context.
+   *
+   * Strategy: respect the user's current filter and find the next "actionable"
+   * photo starting from `currentResultIndex + 1`. Definition of actionable:
+   *  - In the "needs-review" filter: a photo that is still un-resolved.
+   *  - In any other filter: simply the next photo in `filteredResults`.
+   *
+   * This is the single source of truth for advance-after-confirmation. Both
+   * the candidate picker (`resolveReview`) and the race-number Enter handler
+   * (`_handleRaceNumberEnter`) call this so the user has a consistent
+   * "confirm → next" cadence regardless of which input triggered the save.
+   *
+   * When the list is exhausted (no more actionable photos forward of the
+   * current one), the modal CLOSES so the user can re-filter or move on,
+   * accompanied by a completion toast. This replaces the old behaviour of
+   * silently staying on the just-resolved image, which the user reported as
+   * "the modal exits by itself" because nothing happened on subsequent
+   * keystrokes.
+   *
+   * @param {number} currentResultIndex Index in filteredResults that we just
+   *        acted on — search starts at currentResultIndex + 1, no wrap.
+   */
+  async navigateToNextReview(currentResultIndex) {
+    const total = this.filteredResults.length;
+    const filterType = document.getElementById('lv-filter-type')?.value || 'all';
+    const wantsUnresolvedReview = filterType === 'needs-review';
+
+    // Search forward only — no wrap-around. Wrapping causes the modal to
+    // bounce back to a photo the user already touched in this session, which
+    // is confusing.
+    for (let idx = currentResultIndex + 1; idx < total; idx++) {
+      const r = this.filteredResults[idx];
+      if (!r) continue;
+      if (wantsUnresolvedReview) {
+        // Use the SAME predicate that built filteredResults so we never
+        // exhaust prematurely. The previous strict check on
+        // `analysis[0].matchStatus` skipped multi-vehicle photos where the
+        // needs_review status sits on a later vehicle, even though they're
+        // present in filteredResults. _isNeedsReview also folds in the
+        // _reviewResolved flag, so we don't need a separate check.
+        if (!this._isNeedsReview(r)) continue;
+      }
+      // Found the next actionable photo.
+      this.currentImageIndex = idx;
+      if (this.zoomController) this.zoomController.reset(false);
+      await this.updateGalleryContent();
+      console.log(`[LogVisualizer] Auto-advance: filter=${filterType}, index=${idx}`);
+      return;
+    }
+
+    // Exhausted: nothing more to do in this filter's forward direction.
+    if (wantsUnresolvedReview) {
+      const resolvedCount = this.filteredResults.filter(r => r._reviewResolved).length;
+      this.showNotification(
+        `✅ All done! ${resolvedCount} ambiguous match${resolvedCount !== 1 ? 'es' : ''} resolved.`,
+        'success'
+      );
+    } else {
+      this.showNotification('✅ Reached the end of the current view', 'info');
+    }
+    // Close modal — user is done with this batch in this filter.
+    await this.closeGallery();
+    console.log('[LogVisualizer] No more actionable photos forward — modal closed');
+  }
+
+  /**
+   * Auto-fill vehicle editor fields from a chosen candidate
+   */
+  autoFillVehicleEditorFromCandidate(candidate) {
+    if (!candidate) return;
+
+    const vehiclesContainer = document.getElementById('lv-vehicles');
+    if (!vehiclesContainer) return;
+
+    // Find the first vehicle editor (primary vehicle)
+    const editor = vehiclesContainer.querySelector('.lv-vehicle-editor');
+    if (!editor) return;
+
+    // Fill in the fields
+    const raceNumberInput = editor.querySelector('[data-field="raceNumber"]');
+    const teamInput = editor.querySelector('[data-field="team"]');
+    const driversInput = editor.querySelector('[data-field="drivers"]');
+
+    if (raceNumberInput && candidate.participantNumber) {
+      raceNumberInput.value = String(candidate.participantNumber);
+    }
+    if (teamInput && candidate.team) {
+      teamInput.value = candidate.team;
+    }
+    if (driversInput && candidate.participantName) {
+      driversInput.value = candidate.participantName;
+    }
+
+    // Mark the editor as modified visually
+    editor.classList.add('modified');
+  }
+
+  /**
+   * Resolve an ambiguous review by applying the user's choice
+   */
+  async resolveReview(resultIndex, chosenCandidate) {
+    const result = this.filteredResults[resultIndex];
+    if (!result || !result.analysis || result.analysis.length === 0) return;
+
+    const primaryVehicle = result.analysis[0];
+
+    if (chosenCandidate) {
+      // User chose a candidate — update the vehicle data
+      primaryVehicle.raceNumber = String(chosenCandidate.participantNumber || '');
+      primaryVehicle.matchedBy = 'user_review';
+      primaryVehicle.confidence = chosenCandidate.confidence || primaryVehicle.confidence;
+      if (chosenCandidate.participantName) {
+        primaryVehicle.drivers = [chosenCandidate.participantName];
+      }
+      if (chosenCandidate.team) {
+        primaryVehicle.team = chosenCandidate.team;
+      }
+
+      // Telemetry: REVIEW_CANDIDATE_ACCEPTED — picked a specific candidate
+      // from the ambiguous-match panel. We log the candidate's confidence
+      // and rank info that drove the pick, never the participant name.
+      if (window.logUserAction) {
+        window.logUserAction('REVIEW_CANDIDATE_ACCEPTED', 'CORRECT', {
+          confidence: typeof chosenCandidate.confidence === 'number'
+            ? +chosenCandidate.confidence.toFixed(2)
+            : null,
+          candidateScore: typeof chosenCandidate.score === 'number'
+            ? chosenCandidate.score
+            : null,
+          isBurstMode: !!chosenCandidate.isBurstMode
+        });
+      }
+    } else {
+      // User said "none" — mark as no match
+      primaryVehicle.raceNumber = 'N/A';
+      primaryVehicle.matchedBy = 'none';
+      primaryVehicle.confidence = 0;
+
+      // Telemetry: same event, with `dismissed: true` to distinguish
+      // "user picked a candidate" from "user explicitly rejected all".
+      // The latter is a stronger signal that something was wrong with
+      // the candidates we surfaced — useful for tuning the matcher.
+      if (window.logUserAction) {
+        window.logUserAction('REVIEW_CANDIDATE_ACCEPTED', 'CORRECT', {
+          dismissed: true
+        });
+      }
+    }
+
+    // Mark status as resolved
+    primaryVehicle.matchStatus = 'matched';
+    result._reviewResolved = true;
+    // Durable correction flag — survives the manualCorrections Map being
+    // cleared by the background save below, so the Corrections counter
+    // stays accurate.
+    result.hasCorrection = true;
+
+    // Track as a manual correction for saving
+    // Include matchStatus and matchedBy so they persist through JSONL refresh
+    if (!this.manualCorrections.has(result.fileName)) {
+      this.manualCorrections.set(result.fileName, {
+        fileName: result.fileName,
+        vehicleIndex: 0,
+        timestamp: new Date().toISOString(),
+        changes: {}
+      });
+    }
+
+    const correction = this.manualCorrections.get(result.fileName);
+    correction.changes.raceNumber = primaryVehicle.raceNumber;
+    correction.changes.matchedBy = primaryVehicle.matchedBy;
+    correction.changes.matchStatus = 'matched';
+    correction.changes.resolvedFromReview = true;
+    correction.changes.chosenCandidate = chosenCandidate;
+    if (chosenCandidate?.participantName) {
+      correction.changes.drivers = [chosenCandidate.participantName];
+    }
+    if (chosenCandidate?.team) {
+      correction.changes.team = chosenCandidate.team;
+    }
+    this.hasUnsavedChanges = true;
+
+    // Update the card visually
+    this.updateResultCard(result.fileName);
+
+    // Refresh statistics
+    this.updateStatistics();
+
+    const chosenLabel = chosenCandidate ? `#${chosenCandidate.participantNumber}` : 'None';
+    console.log(`[LogVisualizer] Review resolved for ${result.fileName}: chose ${chosenLabel}`);
+
+    // Persist in the background. We deliberately do NOT await here so the
+    // caller can advance to the next photo immediately. saveAllChanges()
+    // serialises overlapping saves internally and removes only the snapshot
+    // it actually persisted, so corrections queued while a save is in flight
+    // are not lost.
+    //
+    // silent:      suppress the "Saving..." / "Successfully saved" toasts
+    //              (would interrupt the rapid review cadence)
+    // skipRefresh: skip the post-save refreshDataFromLogs round-trip — we
+    //              already mutated the in-memory result, and the gallery's
+    //              own state machine (`_reviewResolved` + filteredResults)
+    //              keeps the UI consistent until the gallery is closed,
+    //              at which point the next manual save / page reload will
+    //              re-extract from the JSONL.
+    this.saveAllChanges({ silent: true, skipRefresh: true })
+      .catch(error => {
+        console.error('[LogVisualizer] Background auto-save failed:', error);
+        this.showNotification('⚠️ Save failed in background. Click Save All to retry.', 'warning');
+      });
   }
 
   /**
    * Get cached image URL if already loaded
    */
   getCachedImageUrl(result) {
+    // First: check if we have a cached data URL from IPC (survives DOM re-renders)
+    if (this.dataUrlCache && this.dataUrlCache.has(result.fileName)) {
+      return this.dataUrlCache.get(result.fileName);
+    }
     if (this.preloadedImages.has(result.fileName)) {
       // Return the best quality URL we know works - validate paths first
       if (this.isValidPath(result.thumbnailPath)) {
@@ -1346,34 +2671,28 @@ class LogVisualizer {
   }
 
   getGalleryImageUrl(result) {
-    console.log(`[LogVisualizer] getGalleryImageUrl for ${result.fileName}:`, {
-      thumbnailPath: !!result.thumbnailPath,
-      compressedPath: !!result.compressedPath,
-      supabaseUrl: !!result.supabaseUrl,
-      imagePath: !!result.imagePath
-    });
+    // 0. Priorità massima: immagine originale da disco (permette zoom a piena risoluzione)
+    if (this.isValidPath(result.originalPath) && !this.failedPaths.has(result.originalPath)) {
+      return result.originalPath;
+    }
 
-    // 1. Prima: immagine compressa di alta qualità (1080-1920px) - locale o Supabase
-    if (this.isValidPath(result.compressedPath)) {
-      console.log(`[LogVisualizer] Using compressedPath for gallery: ${result.fileName}`);
+    // 1. Immagine compressa di alta qualità (1080-1920px) - locale
+    if (this.isValidPath(result.compressedPath) && !this.failedPaths.has(result.compressedPath)) {
       return result.compressedPath;
     }
 
-    // 2. Seconda: Supabase URL originale (sempre valida se presente)
+    // 2. Supabase URL originale (sempre valida se presente)
     if (this.isValidPath(result.supabaseUrl)) {
-      console.log(`[LogVisualizer] Using supabaseUrl for gallery: ${result.fileName}`);
       return result.supabaseUrl;
     }
 
-    // 3. Terza: imagePath generico
-    if (this.isValidPath(result.imagePath)) {
-      console.log(`[LogVisualizer] Using imagePath for gallery: ${result.fileName}`);
+    // 3. imagePath generico
+    if (this.isValidPath(result.imagePath) && !this.failedPaths.has(result.imagePath)) {
       return result.imagePath;
     }
 
-    // 4. Ultima risorsa: thumbnail (280x280) - solo se nient'altro è disponibile
-    if (this.isValidPath(result.thumbnailPath)) {
-      console.log(`[LogVisualizer] Using thumbnailPath as fallback for gallery: ${result.fileName}`);
+    // 4. Ultima risorsa: thumbnail (280x280)
+    if (this.isValidPath(result.thumbnailPath) && !this.failedPaths.has(result.thumbnailPath)) {
       return result.thumbnailPath;
     }
 
@@ -1385,65 +2704,38 @@ class LogVisualizer {
    * Get thumbnail URL for result image
    */
   getThumbnailUrl(result) {
-    console.log(`[LogVisualizer] getThumbnailUrl for ${result.fileName}:`, {
-      thumbnailPath: !!result.thumbnailPath,
-      microThumbPath: !!result.microThumbPath,
-      compressedPath: !!result.compressedPath,
-      supabaseUrl: !!result.supabaseUrl,
-      imagePath: !!result.imagePath
-    });
-
-    // 1. Prima: thumbnail ad alta qualità (280x280) - locale o Supabase
-    if (result.thumbnailPath) {
-      if (result.thumbnailPath.startsWith('/')) {
-        console.log(`[LogVisualizer] Using local thumbnailPath for ${result.fileName}`);
-        return result.thumbnailPath;
-      } else if (result.thumbnailPath.startsWith('http')) {
-        console.log(`[LogVisualizer] Using Supabase thumbnailPath for ${result.fileName}`);
+    // 1. Thumbnail ad alta qualità (280x280) — skip if known to be missing
+    if (result.thumbnailPath && !this.failedPaths.has(result.thumbnailPath)) {
+      if (result.thumbnailPath.startsWith('/') || result.thumbnailPath.startsWith('http')) {
         return result.thumbnailPath;
       }
     }
 
-    // 2. Seconda: file compresso - locale o Supabase
-    if (result.compressedPath) {
-      if (result.compressedPath.startsWith('/')) {
-        console.log(`[LogVisualizer] Using local compressedPath for ${result.fileName}`);
-        return result.compressedPath;
-      } else if (result.compressedPath.startsWith('http')) {
-        console.log(`[LogVisualizer] Using Supabase compressedPath for ${result.fileName}`);
+    // 2. File compresso — skip if known to be missing
+    if (result.compressedPath && !this.failedPaths.has(result.compressedPath)) {
+      if (result.compressedPath.startsWith('/') || result.compressedPath.startsWith('http')) {
         return result.compressedPath;
       }
     }
 
-    // 3. Terza: Supabase URL originale (fallback)
+    // 3. Supabase URL originale (fallback)
     if (result.supabaseUrl) {
-      console.log(`[LogVisualizer] Using supabaseUrl for ${result.fileName}`);
       return result.supabaseUrl;
     }
 
-    // 4. Quarta: imagePath generico
+    // 4. imagePath generico
     if (result.imagePath) {
-      if (result.imagePath.startsWith('http')) {
-        console.log(`[LogVisualizer] Using imagePath URL for ${result.fileName}`);
-        return result.imagePath;
-      } else {
-        console.log(`[LogVisualizer] Using local imagePath for ${result.fileName}`);
-        return result.imagePath;
-      }
+      return result.imagePath;
     }
 
-    // 5. Ultima opzione: micro-thumbnail (solo se nient'altro è disponibile)
-    if (result.microThumbPath) {
-      if (result.microThumbPath.startsWith('/')) {
-        console.log(`[LogVisualizer] Using local microThumbPath as last resort for ${result.fileName}`);
-        return result.microThumbPath;
-      } else if (result.microThumbPath.startsWith('http')) {
-        console.log(`[LogVisualizer] Using Supabase microThumbPath as last resort for ${result.fileName}`);
+    // 5. Micro-thumbnail come ultima opzione
+    if (result.microThumbPath && !this.failedPaths.has(result.microThumbPath)) {
+      if (result.microThumbPath.startsWith('/') || result.microThumbPath.startsWith('http')) {
         return result.microThumbPath;
       }
     }
 
-    console.warn(`[LogVisualizer] No image source found for ${result.fileName}`, result);
+    console.warn(`[LogVisualizer] No image source found for ${result.fileName}`);
     return 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjE1MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZGRkIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPk5vIEltYWdlPC90ZXh0Pjwvc3ZnPg==';
   }
 
@@ -1468,38 +2760,100 @@ class LogVisualizer {
       document.body.style.overflow = 'hidden'; // Prevent background scrolling
     }
 
+    // [Narrate] log — high-level "story" of what the user is doing,
+    // grep-friendly with prefix [Narrate] for easy post-hoc review of
+    // a correction session. Kept always-on (NOT gated by DEBUG_MODE)
+    // so users on production builds can capture them in support logs.
+    try {
+      const opened = this.filteredResults[index] || this.imageResults[index];
+      const vehiclesCount = opened?.analysis?.length || 0;
+      const pendingForThis = (this.manualCorrections?.size || 0) > 0 &&
+        (this.manualCorrections.has(`${opened?.fileName}_0`) ||
+         this.manualCorrections.has(opened?.fileName));
+      console.log(
+        `[Narrate] Opened vehicle editor for ${opened?.fileName || '?'} ` +
+        `(index ${index} of ${this.filteredResults?.length ?? '?'}) — vehicles: ${vehiclesCount}, ` +
+        `pending unsaved correction: ${pendingForThis ? 'yes' : 'no'}`
+      );
+    } catch { /* narration must never throw */ }
+
+    // Telemetry: GALLERY_OPENED + start an aggregate that the close
+    // handler flushes. Per the explicit anti-pattern note in the design:
+    // we DO NOT log per-navigation events here. Instead, navigation is
+    // tracked in this in-memory aggregate and reported once at close as
+    // GALLERY_CLOSED with totals. See `_galleryAggregate` use in
+    // updateGalleryContent + closeGallery.
+    if (window.logUserAction) {
+      const filterAtOpen = document.getElementById('lv-filter-type')?.value || 'all';
+      const totalImages = (this.filteredResults?.length || this.imageResults?.length || 0);
+      window.logUserAction('GALLERY_OPENED', 'VIEW', {
+        startImageIndex: index,
+        totalImages,
+        entryFilter: filterAtOpen
+      });
+      // Begin the aggregate (uses the helper from user-action-logger.js).
+      // Track viewed indices as a Set, count navigations, remember
+      // deepestIndex. discard()/flush() are called in closeGallery.
+      if (window.beginUserActionAggregate) {
+        this._galleryAggregate = window.beginUserActionAggregate('gallery');
+        this._galleryAggregate.set('entryFilter', filterAtOpen);
+        this._galleryAggregate.track('viewed', index);
+        this._galleryAggregate.maxOf('deepestIndex', index);
+      }
+      // Snapshot how many corrections existed before the gallery opened
+      // so we can compute "corrections made while in the gallery" at close.
+      this._galleryCorrectionsAtOpen = this.manualCorrections?.size ?? 0;
+    }
+
     await this.updateGalleryContent();
     console.log(`[LogVisualizer] Opened gallery at index ${index}`);
   }
 
   /**
-   * Close gallery
+   * Close gallery.
+   *
+   * The gallery modal MUST disappear synchronously the moment the user clicks
+   * the top-right ✕ (or hits Escape, or clicks the overlay). Previously we
+   * removed the review-candidate panel up-front but only set
+   * `display: none` AFTER `await performAutoSave()` resolved — so when the
+   * save took a beat, the user saw the candidate panel vanish while the
+   * rest of the gallery stayed on screen, which read as "the X only closed
+   * the selection option, not the gallery." Order of operations matters:
+   * hide the modal first, then run async work in the background.
    */
   async closeGallery() {
     this.isGalleryOpen = false;
     if (this.zoomController) this.zoomController.reset(false);
 
-    // Handle unsaved changes before closing
-    if (this.hasUnsavedChanges) {
-      console.log('[LogVisualizer] Triggering final auto-save before closing gallery');
-      if (this.autoSaveTimer) {
-        clearTimeout(this.autoSaveTimer);
-        this.autoSaveTimer = null;
-      }
-
-      try {
-        await this.performAutoSave();
-      } catch (error) {
-        console.error('[LogVisualizer] Error during final auto-save:', error);
-        // Continue closing even if auto-save fails
-      }
+    // Telemetry: GALLERY_CLOSED. Flushes the aggregate started in
+    // openGallery — emits ONE summary event with totals (imagesViewed,
+    // navigationCount, deepestIndex, durationMs) instead of one per
+    // arrow press. correctionsMadeInGallery is computed from the delta
+    // of manualCorrections.size, so we know whether the gallery was a
+    // browse session or an active correction session.
+    if (this._galleryAggregate) {
+      const correctionsDelta = (this.manualCorrections?.size ?? 0) -
+                               (this._galleryCorrectionsAtOpen ?? 0);
+      this._galleryAggregate.flush('GALLERY_CLOSED', 'VIEW', {
+        correctionsMadeInGallery: Math.max(0, correctionsDelta),
+        lastIndex: this.currentImageIndex
+      });
+      this._galleryAggregate = null;
+      this._galleryCorrectionsAtOpen = 0;
     }
+
+    // ---- Synchronous teardown (visible to the user) -----------------------
+    document.body.style.overflow = '';
 
     const gallery = document.getElementById('lv-gallery');
     if (gallery) {
       gallery.style.display = 'none';
-      document.body.style.overflow = ''; // Restore scrolling
     }
+
+    // Remove any lingering review panels AFTER the modal is hidden so the
+    // user never sees the panel disappear while the modal is still on
+    // screen.
+    document.querySelectorAll('.lv-review-panel, .lv-review-bar').forEach(el => el.remove());
 
     // Clear vehicle editor content to prevent stale onclick handlers
     const vehiclesContainer = document.getElementById('lv-vehicles');
@@ -1516,6 +2870,34 @@ class LogVisualizer {
       }
     }
 
+    // ---- Async housekeeping (gallery is already hidden by now) ------------
+    // Handle unsaved changes — we still await this so callers (like the
+    // page-unload handler) can rely on the save having completed when the
+    // promise resolves, but it no longer blocks the visual close.
+    if (this.hasUnsavedChanges) {
+      console.log('[LogVisualizer] Triggering final auto-save after closing gallery');
+      if (this.autoSaveTimer) {
+        clearTimeout(this.autoSaveTimer);
+        this.autoSaveTimer = null;
+      }
+
+      try {
+        await this.performAutoSave();
+      } catch (error) {
+        console.error('[LogVisualizer] Error during final auto-save:', error);
+        // Modal is already hidden — surface the error but don't try to
+        // re-open anything.
+      }
+    }
+
+    // === Strategy G: Check for learned data after gallery closes ===
+    // Don't show modal automatically — just update the badge/button
+    try {
+      this._checkLearnedDataAvailability();
+    } catch (learnError) {
+      console.warn('[LogVisualizer] Learned data check failed (non-critical):', learnError);
+    }
+
     // Reset auto-save state
     this.hasUnsavedChanges = false;
     if (this.autoSaveTimer) {
@@ -1528,9 +2910,36 @@ class LogVisualizer {
 
   /**
    * Navigate gallery by offset
+   *
+   * Bugfix (Save+Arrow): arrow-key navigation previously swapped the
+   * displayed image without persisting any pending manual corrections on
+   * the outgoing image, so edits made via the in-modal Save button (or
+   * any other UI that only sets `hasUnsavedChanges`) were silently lost
+   * outside the "needs-review" tab. The Enter handler and candidate
+   * picker route through `navigateToNextReview` which is already preceded
+   * by an explicit save, so they're unaffected — this guard only fires
+   * for paths (like the keyboard arrows and the Prev/Next buttons) that
+   * previously skipped the flush.
+   *
+   * `performAutoSave()` is a no-op when `hasUnsavedChanges` is false /
+   * `manualCorrections` is empty, so this is safe to call unconditionally.
+   * We still gate on `hasUnsavedChanges` to avoid the extra await on the
+   * happy path where the user is just browsing.
    */
   async navigateGallery(offset) {
     if (this.zoomController) this.zoomController.reset(false);
+
+    if (this.hasUnsavedChanges) {
+      try {
+        await this.performAutoSave();
+      } catch (error) {
+        console.error('[LogVisualizer] Auto-save before arrow navigation failed:', error);
+        // Don't block navigation on a save failure — the Save All button
+        // remains visible so the user can retry. Losing the click would
+        // be worse than persisting on a later attempt.
+      }
+    }
+
     const newIndex = this.currentImageIndex + offset;
 
     if (newIndex >= 0 && newIndex < this.filteredResults.length) {
@@ -1545,6 +2954,16 @@ class LogVisualizer {
   async updateGalleryContent() {
     if (!this.isGalleryOpen || this.currentImageIndex < 0 || this.currentImageIndex >= this.filteredResults.length) {
       return;
+    }
+
+    // Telemetry aggregate: every navigation to a new image bumps the
+    // counter and tracks the index uniqueness. NO per-navigation event
+    // is emitted — the summary lands on close. See openGallery /
+    // closeGallery for begin/flush.
+    if (this._galleryAggregate) {
+      this._galleryAggregate.bump('navigationCount');
+      this._galleryAggregate.track('viewed', this.currentImageIndex);
+      this._galleryAggregate.maxOf('deepestIndex', this.currentImageIndex);
     }
 
     const result = this.filteredResults[this.currentImageIndex];
@@ -1585,12 +3004,43 @@ class LogVisualizer {
       if (imageUrl && imageUrl.startsWith('/') && !imageUrl.startsWith('http')) {
         try {
           const dataUrl = await window.api.invoke('get-local-image', imageUrl);
-          newImg.src = dataUrl || imageUrl;
+          if (dataUrl) {
+            newImg.src = dataUrl;
+          } else {
+            // File doesn't exist on disk — mark as failed and try next fallback
+            this.failedPaths.add(imageUrl);
+            const fallbackUrl = this.getGalleryImageUrl(result);
+            if (fallbackUrl && fallbackUrl !== imageUrl) {
+              // Recursively try next fallback via IPC or direct URL
+              if (fallbackUrl.startsWith('/') && !fallbackUrl.startsWith('http')) {
+                const fallbackData = await window.api.invoke('get-local-image', fallbackUrl);
+                if (fallbackData) {
+                  newImg.src = fallbackData;
+                } else {
+                  this.failedPaths.add(fallbackUrl);
+                  // Last resort: try supabase URL directly
+                  if (result.supabaseUrl) {
+                    newImg.src = result.supabaseUrl;
+                  }
+                }
+              } else {
+                newImg.src = fallbackUrl;
+              }
+            } else if (result.supabaseUrl) {
+              newImg.src = result.supabaseUrl;
+            }
+          }
         } catch (error) {
-          console.warn(`[LogVisualizer] Gallery IPC failed for ${imageUrl}:`, error);
-          newImg.src = imageUrl; // fallback to direct loading
+          this.failedPaths.add(imageUrl);
+          // Try fallback after marking failed
+          const fallbackUrl = this.getGalleryImageUrl(result);
+          if (fallbackUrl && fallbackUrl !== imageUrl) {
+            newImg.src = fallbackUrl;
+          } else if (result.supabaseUrl) {
+            newImg.src = result.supabaseUrl;
+          }
         }
-      } else {
+      } else if (imageUrl) {
         newImg.src = imageUrl;
       }
     }
@@ -1613,6 +3063,13 @@ class LogVisualizer {
     // Update vehicle information
     this.updateVehicleEditor(result, this.currentImageIndex);
 
+    // NOTE: we deliberately do NOT auto-focus the Race Number input here.
+    // Auto-focus + select() meant the first ←/→ keypress only deselected the
+    // text — the user had to press the arrow twice to actually navigate one
+    // image. Without auto-focus the gallery owns the keyboard, so arrows
+    // navigate immediately. Typing a digit still starts editing thanks to
+    // the type-to-edit fast-path in the keydown handler in setupGalleryListeners.
+
     // Update navigation buttons
     const prevBtn = document.getElementById('lv-gallery-prev');
     const nextBtn = document.getElementById('lv-gallery-next');
@@ -1628,19 +3085,19 @@ class LogVisualizer {
       this.imageCache = new Map();
     }
 
-    // Preload previous image
+    // Preload previous image — use gallery-quality URL (same as what gallery displays)
     if (this.currentImageIndex > 0) {
       const prevResult = this.filteredResults[this.currentImageIndex - 1];
       if (prevResult) {
-        await this.preloadImage(this.getThumbnailUrl(prevResult));
+        await this.preloadImage(this.getGalleryImageUrl(prevResult));
       }
     }
 
-    // Preload next image
+    // Preload next image — use gallery-quality URL (same as what gallery displays)
     if (this.currentImageIndex < this.filteredResults.length - 1) {
       const nextResult = this.filteredResults[this.currentImageIndex + 1];
       if (nextResult) {
-        await this.preloadImage(this.getThumbnailUrl(nextResult));
+        await this.preloadImage(this.getGalleryImageUrl(nextResult));
       }
     }
   }
@@ -1649,24 +3106,35 @@ class LogVisualizer {
    * Preload a single image with IPC support
    */
   async preloadImage(url) {
+    if (!url) return;
     if (this.imageCache.has(url)) return;
+    // Skip URLs that already failed — prevents retry flood
+    if (this.failedPaths && this.failedPaths.has(url)) return;
 
     const img = new Image();
     img.onload = () => {
       this.imageCache.set(url, img);
     };
     img.onerror = () => {
-      console.warn(`[LogVisualizer] Failed to preload image: ${url}`);
+      // Track failed URL to prevent future retries
+      if (!this.failedPaths) this.failedPaths = new Set();
+      this.failedPaths.add(url);
     };
 
     // Use IPC for local images
-    if (url && url.startsWith('/') && !url.startsWith('http')) {
+    if (url.startsWith('/') && !url.startsWith('http')) {
       try {
         const dataUrl = await window.api.invoke('get-local-image', url);
-        img.src = dataUrl || url;
+        if (dataUrl) {
+          img.src = dataUrl;
+        } else {
+          // IPC returned null — file doesn't exist, track as failed
+          if (!this.failedPaths) this.failedPaths = new Set();
+          this.failedPaths.add(url);
+        }
       } catch (error) {
-        console.warn(`[LogVisualizer] Preload IPC failed for ${url}:`, error);
-        img.src = url; // fallback to direct loading
+        if (!this.failedPaths) this.failedPaths = new Set();
+        this.failedPaths.add(url);
       }
     } else {
       img.src = url;
@@ -1680,20 +3148,43 @@ class LogVisualizer {
     const vehiclesContainer = document.getElementById('lv-vehicles');
     if (!vehiclesContainer || !result) return;
 
+    // Always remove existing review panels before rebuilding — prevents stale panels
+    // from previous images persisting when the new image doesn't need one
+    document.querySelectorAll('.lv-review-panel, .lv-review-bar').forEach(el => el.remove());
+
     // Use provided imageIndex or current gallery index
     const actualImageIndex = (imageIndex !== null && imageIndex !== undefined) ? imageIndex : this.currentImageIndex;
 
     const vehicles = result.analysis || [];
     const confidence = this.getAverageConfidence(result);
 
-    vehiclesContainer.innerHTML = vehicles.length > 0 ?
-      vehicles.map((vehicle, index) => this.createVehicleEditorHTML(vehicle, index, result.fileName, actualImageIndex)).join('') :
-      `<div class="lv-no-vehicle">
-        <p>No vehicles detected in this image</p>
-        <button class="lv-add-vehicle-btn" data-action="add" data-file-name="${result.fileName}">
-          + Add Manual Recognition
-        </button>
-      </div>`;
+    if (vehicles.length > 0) {
+      // Render the existing detection cards…
+      const cardsHtml = vehicles
+        .map((vehicle, index) => this.createVehicleEditorHTML(vehicle, index, result.fileName, actualImageIndex))
+        .join('');
+      // …then ALSO expose the "add detection" action. Previously this button
+      // only lived in the empty-state branch below, so on a group photo that
+      // detected e.g. 3 of 5 plates the user had no way to add the 2 missing
+      // ones (GitHub #167). Same class + data-action as the empty-state button,
+      // so the existing delegated handler (setupVehicleEditorEvents → 'add' →
+      // addVehicleByFileName) picks it up unchanged.
+      const addDetectionHtml =
+        `<div class="lv-add-detection-row">
+          <button class="lv-add-vehicle-btn" data-action="add" data-file-name="${result.fileName}">
+            + Add detection
+          </button>
+        </div>`;
+      vehiclesContainer.innerHTML = cardsHtml + addDetectionHtml;
+    } else {
+      vehiclesContainer.innerHTML =
+        `<div class="lv-no-vehicle">
+          <p>No detections in this image</p>
+          <button class="lv-add-vehicle-btn" data-action="add" data-file-name="${result.fileName}">
+            + Add detection
+          </button>
+        </div>`;
+    }
 
     // Update metadata info
     const confidenceEl = document.getElementById('lv-confidence');
@@ -1707,6 +3198,20 @@ class LogVisualizer {
     if (analysisTimeEl && result.logEvent) {
       const timestamp = new Date(result.logEvent.timestamp);
       analysisTimeEl.textContent = timestamp.toLocaleTimeString();
+    }
+
+    // Show review candidates panel if this image has/had needs_review status
+    const primaryMatchStatus = result.analysis?.[0]?.matchStatus;
+    const wasResolvedFromReview = result._reviewResolved ||
+      (this.manualCorrections.has(result.fileName) &&
+       this.manualCorrections.get(result.fileName)?.changes?.resolvedFromReview);
+    const hasAlternatives = (result.analysis?.[0]?.alternativeCandidates || []).length > 0;
+
+    if (hasAlternatives && (primaryMatchStatus === 'needs_review' || wasResolvedFromReview)) {
+      const actualIndex = this.filteredResults.indexOf(result);
+      if (actualIndex >= 0) {
+        this.injectReviewCandidatesUI(result, actualIndex, { resolved: wasResolvedFromReview });
+      }
     }
 
     // Update visual tags section
@@ -1803,7 +3308,49 @@ class LogVisualizer {
 
       switch (action) {
         case 'save':
-          this.saveVehicleChangesByFileName(fileName, vehicleIndex);
+          // Uniformity with the Enter / candidate-picker flows: clicking Save
+          // now also auto-advances to the next actionable image, matching the
+          // behaviour users already rely on in the needs-review tab. Without
+          // this, the manual Save button is the only confirmation path that
+          // leaves the user parked on the just-saved image, which was the
+          // original bug report ("would be best if the software automatically
+          // moved on to the next image after clicking Save").
+          //
+          // Implementation mirrors `_handleRaceNumberEnter`:
+          //   1) fire-and-forget save (don't block UI on IPC)
+          //   2) navigateToNextReview — respects the active filter
+          //      (skips already-resolved photos in needs-review, walks forward
+          //      otherwise, closes the modal when the list is exhausted)
+          //
+          // The save-button guard prevents a double-click from firing two
+          // save+advance cycles against the rebuilt editor of the next image.
+          {
+            // Per-editor guard, mirrors `_handleRaceNumberEnter` (riga ~2971):
+            // blocks only re-clicks on the SAME editor while the save IPC is
+            // in flight. After the auto-advance the next editor has a
+            // different key, so the user can keep clicking Save on each
+            // subsequent image without being throttled. The guard is cleared
+            // in `.finally()` only if it still points to the same key —
+            // important when several saves are in flight concurrently.
+            const guardKey = `${fileName}_${vehicleIndex}`;
+            if (this._saveBtnInFlight === guardKey) {
+              break;
+            }
+            this._saveBtnInFlight = guardKey;
+
+            const advanceFromIndex = this.currentImageIndex;
+            Promise.resolve(this.saveVehicleChangesByFileName(fileName, vehicleIndex))
+              .catch(err => console.error('[LogVisualizer] Save button: save failed:', err))
+              .finally(() => {
+                if (this._saveBtnInFlight === guardKey) {
+                  this._saveBtnInFlight = null;
+                }
+              });
+            // Advance immediately — same pattern as the Enter handler. The
+            // save runs in parallel; navigateToNextReview only updates the
+            // displayed image and doesn't depend on save completion.
+            this.navigateToNextReview(advanceFromIndex);
+          }
           break;
         case 'reset':
           this.resetVehicleByFileName(fileName, vehicleIndex);
@@ -1843,6 +3390,117 @@ class LogVisualizer {
         }
       });
     }
+
+    // Keyboard shortcuts on the Race Number input:
+    //   Enter → apply best match (exact or prefix), save async, navigate to next image
+    //   Empty Enter → save async, navigate to next image
+    //   Shift+Enter is handled by the gallery-level listener (goes back), so we ignore it here.
+    newContainer.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' || event.shiftKey) return;
+      const input = event.target;
+      if (input.tagName !== 'INPUT' || input.dataset.field !== 'raceNumber') return;
+
+      event.preventDefault();
+      this._handleRaceNumberEnter(input);
+    });
+  }
+
+  /**
+   * Find best participant match: exact match first, then prefix match.
+   */
+  findBestMatchByNumberPrefix(value) {
+    if (!this.presetParticipants || !value) return null;
+    const needle = String(value).trim();
+    if (!needle) return null;
+
+    const exact = this.findParticipantByNumber(needle);
+    if (exact) return exact;
+
+    return this.presetParticipants.find(p =>
+      p.numero && String(p.numero).trim().startsWith(needle)
+    ) || null;
+  }
+
+  /**
+   * Handle Enter pressed inside a Race Number input.
+   * Applies the first useful suggestion (if any), kicks off an async save and
+   * advances to the next image so the user keeps moving without waiting.
+   */
+  _handleRaceNumberEnter(input) {
+    // Re-entry guard: while a save+navigate cycle is already in flight,
+    // ignore further Enter keystrokes against the SAME editor. Without this,
+    // a second keydown (auto-repeat, double-tap, focus shifting back onto
+    // the rebuilt input within the same tick) would queue another save IPC
+    // for the same correction — exactly what we saw in the logs where the
+    // first image got "Wrote USER_MANUAL" twice.
+    const vehicleEditor = input.closest('.lv-vehicle-editor');
+    const guardKey = vehicleEditor
+      ? `${vehicleEditor.dataset.fileName || ''}_${vehicleEditor.dataset.vehicleIndex || ''}`
+      : '';
+    if (guardKey && this._enterInFlight === guardKey) {
+      return;
+    }
+    this._enterInFlight = guardKey || true;
+
+    const value = input.value.trim();
+
+    // 1) If the user typed something, apply the first useful match
+    if (value && this.presetParticipants && this.presetParticipants.length > 0 && vehicleEditor) {
+      const participant = this.findBestMatchByNumberPrefix(value);
+      if (participant) {
+        if (participant.numero) {
+          input.value = String(participant.numero);
+        }
+        this.autoFillFromParticipant(vehicleEditor, participant, 'raceNumber');
+      }
+    }
+
+    // 2) Fire-and-forget save for the current vehicle (do not block navigation)
+    if (vehicleEditor) {
+      const vehicleIndex = parseInt(vehicleEditor.dataset.vehicleIndex, 10);
+      const fileName = vehicleEditor.dataset.fileName;
+      if (!Number.isNaN(vehicleIndex) && fileName) {
+        Promise.resolve(this.saveVehicleChangesByFileName(fileName, vehicleIndex))
+          .catch(err => console.error('[LogVisualizer] Async save on Enter failed:', err))
+          .finally(() => {
+            // Clear the guard once the save settles. Navigation may have
+            // already advanced past this image, but we keep the guard tied
+            // to the editor key so a second Enter on the SAME editor can't
+            // double-fire while the IPC is still in flight.
+            if (this._enterInFlight === (guardKey || true)) {
+              this._enterInFlight = null;
+            }
+          });
+      } else {
+        this._enterInFlight = null;
+      }
+    } else {
+      this._enterInFlight = null;
+    }
+
+    // 3) Auto-advance using the unified logic. This respects the active
+    //    filter (needs-review skips already-resolved photos; other filters
+    //    just walk forward) and closes the modal when the list is exhausted
+    //    so the user gets explicit completion feedback instead of a silent
+    //    stuck-on-the-last-image state.
+    this.navigateToNextReview(this.currentImageIndex);
+  }
+
+  /**
+   * Auto-focus the first Race Number input in the gallery so the user can type
+   * a number immediately without clicking. Runs after the editor is rebuilt.
+   */
+  _focusFirstRaceNumberInput() {
+    // Defer so the just-rebuilt DOM is fully attached and visible
+    setTimeout(() => {
+      if (!this.isGalleryOpen) return;
+      const firstInput = document.querySelector('#lv-vehicles [data-field="raceNumber"]');
+      if (firstInput) {
+        firstInput.focus();
+        // Select existing value so typing replaces it
+        if (typeof firstInput.select === 'function') firstInput.select();
+      }
+    }, 50);
   }
 
   /**
@@ -1889,7 +3547,7 @@ class LogVisualizer {
     return `
       <div class="lv-vehicle-editor ${isModified ? 'modified' : ''}" data-vehicle-index="${vehicleIndex}" data-image-index="${imageIndex}" data-file-name="${fileName}">
         <div class="lv-vehicle-header">
-          <h5>Vehicle ${vehicleIndex + 1}</h5>
+          <h5>Detection ${vehicleIndex + 1}</h5>
           ${isModified ? '<span class="lv-modified-indicator">✏️ Modified</span>' : ''}
           ${hasPresetData ? '<span class="lv-autocomplete-indicator" title="Autocomplete enabled from participant preset">🎯</span>' : ''}
           <button class="lv-delete-vehicle" data-action="delete" data-vehicle-index="${vehicleIndex}" data-file-name="${fileName}">🗑️</button>
@@ -2070,6 +3728,12 @@ class LogVisualizer {
         // Set confidence to 100% for manual corrections
         result.analysis[vehicleIndex].confidence = 1.0;
 
+        // Durable correction flag — _hasCorrection() looks up the Map by
+        // `fileName` while saveVehicleChanges keys by `${fileName}_${vehicleIndex}`,
+        // so without this flag the Corrections counter would never increase
+        // for manual edits.
+        result.hasCorrection = true;
+
         // Update UI
         this.updateVehicleEditor(result, imageIndex);
         this.updateStatistics();
@@ -2079,7 +3743,7 @@ class LogVisualizer {
         console.log(`[LogVisualizer] Saved manual correction for ${fileName} vehicle ${vehicleIndex}:`, changes);
       } else {
         console.error(`[LogVisualizer] Invalid vehicle index ${vehicleIndex} for ${fileName}`);
-        this.showNotification('❌ Invalid vehicle data', 'error');
+        this.showNotification('❌ Invalid detection data', 'error');
       }
 
     } catch (error) {
@@ -2114,7 +3778,7 @@ class LogVisualizer {
       // Check if vehicle exists
       if (!result.analysis || !result.analysis[vehicleIndex]) {
         console.error(`[LogVisualizer] Vehicle ${vehicleIndex} not found for ${fileName}`);
-        this.showNotification('❌ Vehicle not found', 'error');
+        this.showNotification('❌ Detection not found', 'error');
         return;
       }
 
@@ -2142,6 +3806,8 @@ class LogVisualizer {
 
       // Store manual correction
       const correctionKey = `${fileName}_${vehicleIndex}`;
+      const wasOverwritingPriorDelete = this.manualCorrections.has(correctionKey) &&
+        this.manualCorrections.get(correctionKey)?.changes?.deleted === true;
       this.manualCorrections.set(correctionKey, {
         fileName,
         vehicleIndex,
@@ -2149,11 +3815,37 @@ class LogVisualizer {
         timestamp: new Date().toISOString()
       });
 
+      console.log(
+        `[Narrate] User SAVED vehicle ${vehicleIndex} of ${fileName} with changes: ` +
+        Object.entries(changes)
+          .map(([k, v]) => `${k}=${Array.isArray(v) ? `[${v.join(', ')}]` : JSON.stringify(v)}`)
+          .join(', ') +
+        (wasOverwritingPriorDelete
+          ? '. (In-memory: this overwrites a prior {deleted: true} for the same key — JSONL still has both events for now; enrichment will compact them on reload via last-write-wins.)'
+          : '. Triggering immediate persistence to JSONL + Supabase…')
+      );
+
       // Update the result data directly
       Object.assign(result.analysis[vehicleIndex], changes);
 
       // Set confidence to 100% for manual corrections
       result.analysis[vehicleIndex].confidence = 1.0;
+
+      // Force-resolve the review locally. Without this, _isNeedsReview()
+      // still returns true for this image (matchStatus stays 'needs_review'
+      // until the JSONL refreshes) and a subsequent re-filter would put it
+      // back in the queue — causing navigateToNextReview to bounce back to
+      // it instead of advancing.
+      if (result.analysis[vehicleIndex].matchStatus === 'needs_review') {
+        result.analysis[vehicleIndex].matchStatus = 'matched';
+        result.analysis[vehicleIndex].matchedBy = 'user_manual';
+      }
+      result._reviewResolved = true;
+      // Durable correction flag — _hasCorrection() looks up the Map by
+      // `fileName` but this code path keys by `${fileName}_${vehicleIndex}`,
+      // so without setting the flag on the result the Corrections counter
+      // would never tick up for needs-review or no-match edits.
+      result.hasCorrection = true;
 
       // Update UI - find the current index if in gallery
       let currentIndex = -1;
@@ -2179,9 +3871,29 @@ class LogVisualizer {
         this.scheduleAutoSave();
       }
 
+      // BUGFIX (preview not refreshed after save): update the result
+      // card on the grid right away so the user sees the corrected
+      // number as soon as they close the gallery. deleteVehicleByFileName
+      // already does the equivalent via this.renderResults(); for
+      // single-vehicle edits the cheaper updateResultCard suffices.
+      // Without this, the user had to re-open and re-close the modal
+      // to "kick" a render before the preview reflected the save.
+      try {
+        this.updateResultCard(fileName);
+      } catch (renderErr) {
+        // Defensive — the underlying renderer should never throw, but
+        // a corrupt result shape shouldn't break the save flow.
+        console.warn('[LogVisualizer] updateResultCard after save failed (non-critical):', renderErr);
+      }
+
       // Show feedback
       this.showNotification('✅ Changes saved and persisted', 'success');
       console.log(`[LogVisualizer] Saved and persisted manual correction for ${fileName} vehicle ${vehicleIndex}:`, changes);
+
+      // Strategy G: Recheck learned data availability after correction
+      if (changes.raceNumber) {
+        try { this._checkLearnedDataAvailability(); } catch (e) { /* non-critical */ }
+      }
 
     } catch (error) {
       console.error('[LogVisualizer] Error saving vehicle changes by fileName:', error);
@@ -2223,6 +3935,15 @@ class LogVisualizer {
 
       if (result.success) {
         console.log(`[LogVisualizer] Successfully persisted correction for ${correction.fileName}_${correction.vehicleIndex}`);
+        // Drop from the in-memory queue so the next saveAllChanges (gallery
+        // close, review-resolve, manual button) doesn't re-send a row we've
+        // already persisted. Without this delete the same correction lands
+        // in image_corrections 2-8x per real edit (observed: 27 rows/image
+        // on Gruppe C review-resolve flow).
+        this.manualCorrections.delete(correctionKey);
+        if (this.manualCorrections.size === 0) {
+          this._hideSaveAllButton();
+        }
         return true;
       } else {
         console.error(`[LogVisualizer] Failed to persist correction:`, result.error);
@@ -2234,6 +3955,19 @@ class LogVisualizer {
       console.error('[LogVisualizer] Error persisting single correction:', error);
       this.showNotification('⚠️ Save successful but persistence failed', 'warning');
       return false;
+    }
+  }
+
+  /**
+   * Clear the unsaved-changes flag and hide the Save All button. Called
+   * whenever the manual-corrections queue drains successfully.
+   */
+  _hideSaveAllButton() {
+    this.hasUnsavedChanges = false;
+    const saveAllBtn = document.getElementById('lv-save-all');
+    if (saveAllBtn) {
+      saveAllBtn.style.display = 'none';
+      saveAllBtn.classList.remove('btn-pulse');
     }
   }
 
@@ -2261,12 +3995,18 @@ class LogVisualizer {
     this.autoSaveTimer = setTimeout(async () => {
       if (this.hasUnsavedChanges && this.manualCorrections.size > 0) {
         console.log('[LogVisualizer] Auto-saving changes...');
+        console.log(
+          `[Narrate] Autosave (3s debounce) firing: ${this.manualCorrections.size} pending correction(s) to flush. ` +
+          `Files: ${[...new Set(Array.from(this.manualCorrections.values()).map(c => c.fileName))].slice(0, 5).join(', ')}` +
+          (this.manualCorrections.size > 5 ? ', …' : '')
+        );
 
         try {
-          // Get only corrections that haven't been saved since last auto-save
-          const corrections = Array.from(this.manualCorrections.values()).filter(correction => {
-            return !this.lastSaveTimestamp || new Date(correction.timestamp) > new Date(this.lastSaveTimestamp);
-          });
+          // Snapshot current pending corrections AND their Map keys, so we
+          // can drop only what we actually persisted (anything added during
+          // the in-flight save belongs to the next tick).
+          const corrections = Array.from(this.manualCorrections.values());
+          const persistedKeys = corrections.map(c => `${c.fileName}_${c.vehicleIndex}`);
 
           if (corrections.length > 0) {
             // Create clean copies of corrections to avoid circular references
@@ -2289,7 +4029,14 @@ class LogVisualizer {
 
             if (result.success) {
               this.lastSaveTimestamp = new Date().toISOString();
-              this.hasUnsavedChanges = false;
+              // Drop just the snapshot we persisted — entries added while
+              // the save was in flight stay in the Map for the next tick.
+              for (const key of persistedKeys) {
+                this.manualCorrections.delete(key);
+              }
+              if (this.manualCorrections.size === 0) {
+                this._hideSaveAllButton();
+              }
               this.showNotification(`🔄 Auto-saved ${corrections.length} changes`, 'info');
               console.log(`[LogVisualizer] Auto-saved ${corrections.length} corrections`);
             }
@@ -2336,15 +4083,7 @@ class LogVisualizer {
 
         if (result.success) {
           this.lastSaveTimestamp = new Date().toISOString();
-          this.hasUnsavedChanges = false;
-
-          // Hide Save All button after auto-save
-          const saveAllBtn = document.getElementById('lv-save-all');
-          if (saveAllBtn) {
-            saveAllBtn.style.display = 'none';
-            saveAllBtn.classList.remove('btn-pulse');
-          }
-
+          this._hideSaveAllButton();
           console.log(`[LogVisualizer] Auto-saved ${corrections.length} corrections immediately`);
         } else {
           console.error('[LogVisualizer] Failed to auto-save:', result.error);
@@ -2494,12 +4233,10 @@ class LogVisualizer {
     try {
       console.log(`[LogVisualizer] deleteVehicleByFileName called:`, { fileName, vehicleIndex });
 
-      // Ask for confirmation
-      const confirmDelete = confirm(`Are you sure you want to delete Vehicle ${vehicleIndex + 1} from ${fileName}?\n\nThis action cannot be undone.`);
-      if (!confirmDelete) {
-        console.log(`[LogVisualizer] Delete cancelled by user for ${fileName} vehicle ${vehicleIndex}`);
-        return;
-      }
+      // UX-01 — no confirmation popup (slows the review flow). The deletion is
+      // tracked in manualCorrections with originalData, so it stays recoverable
+      // (re-add the detection, or don't save changes) rather than being gated
+      // behind a blocking confirm() on every click.
 
       // Find the result by fileName
       let results = this.filteredResults.length > 0 ? this.filteredResults : this.imageResults;
@@ -2513,19 +4250,25 @@ class LogVisualizer {
 
       if (!result.analysis || !Array.isArray(result.analysis)) {
         console.error(`[LogVisualizer] No analysis data found for ${fileName}`);
-        this.showNotification('❌ Error: No vehicle data found', 'error');
+        this.showNotification('❌ Error: No detection data found', 'error');
         return;
       }
 
       if (vehicleIndex < 0 || vehicleIndex >= result.analysis.length) {
         console.error(`[LogVisualizer] Invalid vehicleIndex ${vehicleIndex} for ${fileName} (has ${result.analysis.length} vehicles)`);
-        this.showNotification('❌ Error: Invalid vehicle index', 'error');
+        this.showNotification('❌ Error: Invalid detection index', 'error');
         return;
       }
 
       // Save original data for the correction log
       const originalVehicle = { ...result.analysis[vehicleIndex] };
       console.log(`[LogVisualizer] Deleting vehicle:`, originalVehicle);
+      console.log(
+        `[Narrate] User DELETED vehicle ${vehicleIndex} of ${fileName} ` +
+        `(was #${originalVehicle?.raceNumber ?? '?'}` +
+        (originalVehicle?.team ? `, team "${originalVehicle.team}"` : '') +
+        `). Will autosave to JSONL + Supabase within 3s.`
+      );
 
       // Remove the vehicle from the analysis array
       result.analysis.splice(vehicleIndex, 1);
@@ -2581,12 +4324,12 @@ class LogVisualizer {
       }
 
       // Show feedback
-      this.showNotification(`🗑️ Vehicle ${vehicleIndex + 1} deleted successfully`, 'success');
+      this.showNotification(`🗑️ Detection ${vehicleIndex + 1} deleted successfully`, 'success');
       console.log(`[LogVisualizer] Successfully deleted vehicle ${vehicleIndex} from ${fileName}`);
 
     } catch (error) {
       console.error('[LogVisualizer] Error deleting vehicle:', error);
-      this.showNotification('❌ Error deleting vehicle', 'error');
+      this.showNotification('❌ Error deleting detection', 'error');
     }
   }
 
@@ -2616,6 +4359,13 @@ class LogVisualizer {
         confidence: 1.0 // Manual additions are 100% confidence
       });
 
+      const newIdx = result.analysis.length - 1;
+      console.log(
+        `[Narrate] User ADDED a new empty vehicle slot at index ${newIdx} of ${fileName}. ` +
+        `Total vehicles now: ${result.analysis.length}. No correction recorded yet — ` +
+        `will be tracked when the user clicks Save with the new fields filled in.`
+      );
+
       // Update UI if in gallery
       if (this.isGalleryOpen) {
         const currentIndex = this.filteredResults.findIndex(r => r.fileName === fileName);
@@ -2625,11 +4375,11 @@ class LogVisualizer {
       }
 
       this.updateStatistics();
-      this.showNotification('✅ Vehicle added successfully', 'success');
+      this.showNotification('✅ Detection added successfully', 'success');
 
     } catch (error) {
       console.error('[LogVisualizer] Error adding vehicle by fileName:', error);
-      this.showNotification('❌ Error adding vehicle', 'error');
+      this.showNotification('❌ Error adding detection', 'error');
     }
   }
 
@@ -2657,14 +4407,14 @@ class LogVisualizer {
     });
 
     this.updateVehicleEditor(result, actualImageIndex);
-    this.showNotification('✅ New vehicle added', 'success');
+    this.showNotification('✅ New detection added', 'success');
   }
 
   /**
    * Delete a vehicle recognition
    */
   deleteVehicle(imageIndex, vehicleIndex) {
-    if (!confirm('Are you sure you want to delete this vehicle recognition?')) {
+    if (!confirm('Are you sure you want to delete this detection?')) {
       return;
     }
 
@@ -2705,14 +4455,14 @@ class LogVisualizer {
 
     this.updateVehicleEditor(result, imageIndex);
     this.updateStatistics();
-    this.showNotification('✅ Vehicle deleted', 'success');
+    this.showNotification('✅ Detection deleted', 'success');
   }
 
   /**
    * Reset vehicle to original values
    */
   resetVehicle(imageIndex, vehicleIndex) {
-    if (!confirm('Reset this vehicle to original recognition?')) {
+    if (!confirm('Reset this detection to original recognition?')) {
       return;
     }
 
@@ -2751,62 +4501,342 @@ class LogVisualizer {
 
     // Refresh the UI to show original values
     this.updateVehicleEditor(result, imageIndex);
-    this.showNotification('🔄 Vehicle reset to original values', 'success');
+    this.showNotification('🔄 Detection reset to original values', 'success');
   }
 
   /**
    * Save all manual corrections to log and metadata
    */
-  async saveAllChanges() {
+  /**
+   * Persist all pending manualCorrections.
+   *
+   * Modes:
+   *  - User-initiated (Save All button): default options, shows toasts and
+   *    refreshes data from logs after persistence so the UI is up-to-date.
+   *  - Background auto-save (called by resolveReview after a candidate click):
+   *    pass `{ silent: true, skipRefresh: true }` so the user is not
+   *    interrupted by toasts and the rapid review cadence isn't broken by
+   *    the post-save refresh round-trip.
+   *
+   * Concurrency contract:
+   *  - At most one save is in flight at any time. If a second call arrives
+   *    while the first is awaiting the IPC response, the second is queued
+   *    (we keep at most ONE pending save — additional calls collapse onto
+   *    the same queued promise) and runs immediately after the first
+   *    settles. This matches the user's mental model: "save what's in the
+   *    correction map right now"; only one trailing run is needed because
+   *    each run snapshots whatever is currently pending.
+   *
+   * Snapshot/remove pattern:
+   *  - Old code did `manualCorrections.clear()` after a successful save.
+   *    With background saves the user could enqueue a new correction
+   *    BETWEEN the snapshot and the IPC reply; the clear would then drop
+   *    that correction. We now snapshot the file names we are persisting
+   *    and delete only those entries, leaving any newer corrections in the
+   *    map for the next save cycle.
+   *
+   * @param {Object} [options]
+   * @param {boolean} [options.silent=false]      Suppress info/success toasts.
+   * @param {boolean} [options.skipRefresh=false] Skip refreshDataFromLogs after save.
+   */
+  async saveAllChanges(options = {}) {
+    const { silent = false, skipRefresh = false } = options;
+
     if (this.manualCorrections.size === 0) {
-      this.showNotification('ℹ️ No changes to save', 'info');
+      if (!silent) this.showNotification('ℹ️ No changes to save', 'info');
       return;
     }
 
-    try {
-      this.showNotification('💾 Saving all changes...', 'info');
+    // ---- Concurrency guard (single in-flight + single queued) ----
+    if (this._saveInFlight) {
+      // Coalesce: if another save is already queued, just return its promise
+      // so all callers wait on the same trailing run.
+      if (this._saveQueued) return this._saveQueued;
+      this._saveQueued = (async () => {
+        try {
+          await this._saveInFlight;
+        } catch (_) { /* the in-flight call handles its own errors */ }
+        this._saveQueued = null;
+        return this.saveAllChanges(options);
+      })();
+      return this._saveQueued;
+    }
 
-      // Prepare correction data
-      const corrections = Array.from(this.manualCorrections.values());
+    this._saveInFlight = (async () => {
+      const __saveStartedAt = Date.now();
+      try {
+        if (!silent) this.showNotification('💾 Saving all changes...', 'info');
 
-      // Send to main process for log update and metadata writing
-      const result = await window.api.invoke('update-analysis-log', {
-        executionId: this.executionId,
-        corrections,
-        timestamp: new Date().toISOString()
-      });
+        // Snapshot what we're about to persist. Anything added to
+        // manualCorrections after this point belongs to the next save.
+        //
+        // BUG FIX: snapshot the actual MAP KEYS (`${fileName}_${vehicleIndex}`),
+        // not bare fileNames. Earlier code did `corrections.map(c => c.fileName)`
+        // and then `manualCorrections.delete(fn)`, but the entries are stored
+        // under `${fileName}_${vehicleIndex}` keys (see saveVehicleChangesByFileName
+        // around line 3159). The mismatch meant `delete()` never matched any key
+        // and the Map kept growing forever — every subsequent autosave tick
+        // (3s debounce) re-sent every entry, generating a fresh USER_MANUAL
+        // record on the backend for each photo over and over.
+        const corrections = Array.from(this.manualCorrections.values());
+        const persistedKeys = corrections.map(
+          c => `${c.fileName}_${c.vehicleIndex}`
+        );
 
-      if (result.success) {
-        this.showNotification(`✅ Successfully saved ${corrections.length} corrections`, 'success');
-        // Clear manual corrections since they're now persisted
-        this.manualCorrections.clear();
-        // Clear the unsaved changes flag to prevent beforeunload warning
-        this.hasUnsavedChanges = false;
-        this.updateStatistics();
+        const result = await window.api.invoke('update-analysis-log', {
+          executionId: this.executionId,
+          corrections,
+          timestamp: new Date().toISOString()
+        });
 
-        // Hide Save All button after successful save
-        const saveAllBtn = document.getElementById('lv-save-all');
-        if (saveAllBtn) {
-          saveAllBtn.style.display = 'none';
-          saveAllBtn.classList.remove('btn-pulse');
+        if (!result.success) {
+          throw new Error(result.error);
+        }
+
+        if (!silent) {
+          this.showNotification(`✅ Successfully saved ${corrections.length} corrections`, 'success');
+        }
+
+        // Telemetry: CORRECTIONS_SAVED. We log unique field types so we can
+        // see which fields users actually correct (raceNumber dominates? or
+        // is team/driver also common?) without persisting the values.
+        if (window.logUserAction) {
+          const fieldTypes = new Set();
+          for (const c of corrections) {
+            if (c && c.changes && typeof c.changes === 'object') {
+              for (const k of Object.keys(c.changes)) {
+                // Skip bookkeeping fields, only track real field corrections.
+                if (k === 'deleted' || k === 'deletedAt' || k === 'originalData' ||
+                    k === 'resolvedFromReview' || k === 'chosenCandidate') continue;
+                fieldTypes.add(k);
+              }
+            }
+          }
+          window.logUserAction('CORRECTIONS_SAVED', 'CORRECT', {
+            correctionCount: corrections.length,
+            fieldTypes: Array.from(fieldTypes),
+            silent: !!silent,
+            durationMs: Date.now() - __saveStartedAt
+          });
+        }
+
+        // Targeted removal — only drop the snapshot we just persisted, not
+        // anything the user has added in the meantime.
+        for (const key of persistedKeys) {
+          this.manualCorrections.delete(key);
+        }
+        // Only clear the unsaved flag if no other corrections snuck in.
+        if (this.manualCorrections.size === 0) {
+          this._hideSaveAllButton();
           console.log('[LogVisualizer] Save All button hidden - all changes saved');
         }
 
-        // IMPORTANT: Refresh data to show updated results immediately
-        await this.refreshDataFromLogs();
-        console.log('[LogVisualizer] Data refreshed after successful save');
-      } else {
-        throw new Error(result.error);
-      }
+        this.updateStatistics();
 
-    } catch (error) {
-      console.error('[LogVisualizer] Error saving all changes:', error);
-      this.showNotification('❌ Error saving changes: ' + error.message, 'error');
+        // The post-save log refresh is the single most expensive step in this
+        // function — it re-fetches the entire JSONL and re-extracts every
+        // result. For background saves during ambiguous-match review we
+        // skip it: in-memory state was already mutated by resolveReview,
+        // and the next manual Save All (or gallery close / page reload)
+        // will reconcile.
+        if (!skipRefresh) {
+          await this.refreshDataFromLogs();
+          console.log('[LogVisualizer] Data refreshed after successful save');
+        }
+      } catch (error) {
+        console.error('[LogVisualizer] Error saving all changes:', error);
+        if (!silent) {
+          this.showNotification('❌ Error saving changes: ' + error.message, 'error');
+        }
+        // Re-throw so background callers can decide what to do (resolveReview
+        // shows a non-blocking warning; manual Save All shows the toast above).
+        throw error;
+      } finally {
+        this._saveInFlight = null;
+      }
+    })();
+
+    return this._saveInFlight;
+  }
+
+  /**
+   * Strategy G: Check if there's learnable data available and show the badge/button.
+   * Called after gallery closes, after corrections are saved, and during initial render.
+   * Does NOT open the modal — just aggregates data and updates the UI badge.
+   */
+  async _checkLearnedDataAvailability() {
+    if (!window.learnedDataModal) return;
+
+    const presetId = this.participantPresetData?.id;
+    if (!presetId) return;
+
+    // If this execution was already processed (user accepted learned data),
+    // don't re-propose the same data — hide the button and exit early.
+    if (window.learnedDataModal.processedExecutions?.has(this.executionId)) {
+      const learnedBtn = document.getElementById('lv-learned-data');
+      if (learnedBtn) learnedBtn.style.display = 'none';
+      return;
+    }
+
+    // Persistent check: query DB to see if ANY participant in this preset
+    // already has this executionId in custom_fields.learned.source_execution_ids.
+    // This survives page reloads (unlike processedExecutions Set) and bypasses cache.
+    try {
+      const checkResult = await window.api.invoke('check-learned-data-exists', {
+        presetId,
+        executionId: this.executionId,
+      });
+      if (checkResult?.success && checkResult.data?.exists) {
+        // At least one participant already has learned data from this execution
+        console.log(`[LogVisualizer] Execution ${this.executionId} already has learned data saved — hiding button`);
+        window.learnedDataModal.processedExecutions.add(this.executionId);
+        const learnedBtn = document.getElementById('lv-learned-data');
+        if (learnedBtn) learnedBtn.style.display = 'none';
+        return;
+      }
+    } catch (dbCheckErr) {
+      // Non-critical, fall through to normal aggregation
+      console.warn('[LogVisualizer] DB check for learned data failed (non-critical):', dbCheckErr);
+    }
+
+    // Strategy G only applies to Gemini executions — ONNX models don't produce
+    // Vehicle DNA (sponsors, team, livery, etc.) so there's nothing to learn from.
+    // Check EXECUTION_COMPLETE.recognitionStats.method or individual vehicle modelSource.
+    // NOTE: historical 'rf-detr' executions (pre-2026-04-22 cleanup) are also covered
+    // so the learned-data button hides for archival ONNX/RF-DETR logs too.
+    if (this.logData) {
+      const completeEvent = this.logData.find(e => e.type === 'EXECUTION_COMPLETE');
+      const method = completeEvent?.recognitionStats?.method;
+      if (method === 'local-onnx' || method === 'rf-detr') {
+        // Pure local execution (ONNX today, historical RF-DETR logs) — no Vehicle DNA
+        const learnedBtn = document.getElementById('lv-learned-data');
+        if (learnedBtn) learnedBtn.style.display = 'none';
+        return;
+      }
+    }
+
+    // Reset the modal's aggregated data for fresh calculation
+    window.learnedDataModal.aggregatedData = null;
+
+    // Build corrections map from MANUAL_CORRECTION events in logData
+    const sessionCorrections = new Map();
+    if (this.logData) {
+      const manualEvents = this.logData.filter(e => e.type === 'MANUAL_CORRECTION');
+      for (const event of manualEvents) {
+        const key = `${event.fileName}_${event.vehicleIndex}`;
+        sessionCorrections.set(key, {
+          fileName: event.fileName,
+          vehicleIndex: event.vehicleIndex,
+          changes: event.changes || {},
+          timestamp: event.timestamp,
+        });
+      }
+    }
+
+    // Also include any still-in-memory corrections
+    if (this.manualCorrections && this.manualCorrections.size > 0) {
+      for (const [key, correction] of this.manualCorrections) {
+        if (!sessionCorrections.has(key)) {
+          sessionCorrections.set(key, correction);
+        }
+      }
+    }
+
+    const hasNumberCorrections = Array.from(sessionCorrections.values()).some(c => c.changes?.raceNumber);
+
+    // Aggregate from user corrections
+    if (hasNumberCorrections) {
+      window.learnedDataModal.aggregateLearnedData(
+        this.imageResults,
+        sessionCorrections,
+        this.presetParticipants
+      );
+    }
+
+    // Aggregate from consistent auto-detections
+    window.learnedDataModal.aggregateConsistentDetections(
+      this.imageResults,
+      this.presetParticipants,
+      5
+    );
+
+    const totalProposals = window.learnedDataModal.aggregatedData;
+    const learnedBtn = document.getElementById('lv-learned-data');
+    const learnedCount = document.getElementById('lv-learned-data-count');
+
+    if (totalProposals && totalProposals.size > 0 && learnedBtn) {
+      learnedBtn.style.display = 'inline-flex';
+      if (learnedCount) learnedCount.textContent = totalProposals.size;
+      console.log(`[LogVisualizer] Learned data available for ${totalProposals.size} participants — badge shown`);
+    } else if (learnedBtn) {
+      learnedBtn.style.display = 'none';
     }
   }
 
   /**
-   * Refresh data from updated logs after save
+   * Strategy G: Open the learned data modal on user request (button click).
+   */
+  async _openLearnedDataModal() {
+    if (!window.learnedDataModal) return;
+
+    const presetId = this.participantPresetData?.id;
+    if (!presetId) {
+      this.showNotification('No preset loaded', 'warning');
+      return;
+    }
+
+    const totalProposals = window.learnedDataModal.aggregatedData;
+    if (!totalProposals || totalProposals.size === 0) {
+      this.showNotification('No learnable data available', 'info');
+      return;
+    }
+
+    const accepted = await window.learnedDataModal.show(presetId, this.executionId);
+    if (accepted) {
+      console.log('[LogVisualizer] User accepted learned data updates');
+      this.showNotification('✅ Preset updated with learned data', 'success');
+
+      // Hide the button after successful update
+      const learnedBtn = document.getElementById('lv-learned-data');
+      if (learnedBtn) learnedBtn.style.display = 'none';
+
+      // Refresh preset participants so dedup logic sees saved data
+      // (prevents re-proposal if processedExecutions is somehow bypassed)
+      try {
+        await this.loadParticipantPresetData();
+        console.log('[LogVisualizer] Preset participants refreshed after learned data save');
+      } catch (e) {
+        console.warn('[LogVisualizer] Could not refresh preset participants:', e);
+      }
+    }
+  }
+
+  /**
+   * Refresh data from updated logs after save.
+   *
+   * IMPORTANT: when the gallery modal is open we must NOT call `render()` —
+   * `render()` rewrites `currentContainer.innerHTML`, which tears down the
+   * `#lv-gallery` modal DOM (re-emitting it with `display: none`). That is
+   * exactly what produced the "modal closes when 'Successfully saved' toast
+   * appears" bug during ambiguous-match resolution: after `resolveReview`
+   * auto-saved, this method nuked the modal before the deferred
+   * `navigateToNextReview` could move to the next needs-review photo.
+   *
+   * Equally important: we must NOT re-filter `filteredResults` here either.
+   * `_isNeedsReview()` excludes `_reviewResolved` photos, so re-filtering
+   * would shrink the array and shift its indices, which means the
+   * `setTimeout(() => navigateToNextReview(resultIndex), 600)` in the
+   * candidate-click handler would skip a photo (or land on the wrong one).
+   *
+   * Strategy:
+   *  - Always update `imageResults` from the source-of-truth logs.
+   *  - Preserve any in-memory `_reviewResolved` flag so the "Review resolved"
+   *    state persists across the refresh until the user closes the gallery.
+   *  - If the gallery is open: replace the stale entries inside
+   *    `filteredResults` with the fresh objects in place (same length, same
+   *    order), refresh just the result-card grid + statistics + the current
+   *    vehicle editor — leave the gallery modal DOM alone.
+   *  - If the gallery is closed: a full `render()` is fine.
    */
   async refreshDataFromLogs() {
     try {
@@ -2816,18 +4846,55 @@ class LogVisualizer {
       const logData = await window.api.invoke('get-analysis-log', this.executionId);
 
       if (logData && logData.length > 0) {
+        this.logData = logData;
+
         // Re-extract results from logs (like results-page does)
         const updatedResults = await this.extractResultsFromLogs(logData);
 
         if (updatedResults && updatedResults.length > 0) {
-          // Update the internal data
-          this.imageResults = updatedResults;
-          this.filteredResults = [...this.imageResults];
+          // Preserve _reviewResolved flag from the in-memory copy in case
+          // extractResultsFromLogs missed it (defensive: it should already
+          // re-apply it from MANUAL_CORRECTION events with resolvedFromReview).
+          const previouslyResolved = new Set(
+            (this.imageResults || []).filter(r => r._reviewResolved).map(r => r.fileName)
+          );
+          updatedResults.forEach(r => {
+            if (previouslyResolved.has(r.fileName)) r._reviewResolved = true;
+          });
 
-          // Re-render the interface with updated data
-          this.render(this.currentContainer);
+          if (this.isGalleryOpen) {
+            // Build a quick lookup so we can swap stale references in
+            // filteredResults without changing its length / order — that
+            // keeps navigateToNextReview's index math correct.
+            const byFileName = new Map(updatedResults.map(r => [r.fileName, r]));
+            this.filteredResults = this.filteredResults.map(stale => {
+              const fresh = byFileName.get(stale.fileName);
+              if (!fresh) return stale; // shouldn't happen, but be defensive
+              if (stale._reviewResolved) fresh._reviewResolved = true;
+              return fresh;
+            });
 
-          console.log(`[LogVisualizer] Successfully refreshed ${updatedResults.length} results`);
+            this.imageResults = updatedResults;
+
+            // Refresh result-card grid + counters without touching the
+            // gallery modal DOM.
+            this.renderResults();
+            this.updateStatistics();
+
+            // Refresh the vehicle editor for the photo currently shown in
+            // the gallery so any saved changes are reflected immediately.
+            const current = this.filteredResults[this.currentImageIndex];
+            if (current) {
+              this.updateVehicleEditor(current, this.currentImageIndex);
+            }
+          } else {
+            // Gallery closed — full re-render is safe.
+            this.imageResults = updatedResults;
+            this.filteredResults = [...this.imageResults];
+            this.render(this.currentContainer);
+          }
+
+          console.log(`[LogVisualizer] Successfully refreshed ${updatedResults.length} results (galleryOpen=${this.isGalleryOpen})`);
         }
       }
     } catch (error) {
@@ -2852,7 +4919,12 @@ class LogVisualizer {
         team: vehicle.finalResult?.team || null,
         drivers: vehicle.finalResult?.drivers || [],
         confidence: vehicle.confidence || 0,
-        matchedBy: vehicle.finalResult?.matchedBy || 'none'
+        matchedBy: vehicle.finalResult?.matchedBy || 'none',
+        matchStatus: vehicle.finalResult?.matchStatus || 'no_match',
+        alternativeCandidates: vehicle.finalResult?.alternativeCandidates || null,
+        // Issue #104 — extra-preset people (VIPs, team principals, etc.), only populated
+        // when the preset has allow_external_person_recognition = true.
+        otherPeople: Array.isArray(vehicle.otherPeople) ? vehicle.otherPeople : []
       }));
 
       return {
@@ -2868,6 +4940,12 @@ class LogVisualizer {
         compressedPath: event.compressedPath,
         // Include visual tags if available
         visualTags: event.visualTags || null,
+        // Scene classifier skip — surfaced as a badge so empty `analysis`
+        // arrays on these photos read as "intentionally skipped" rather
+        // than "AI ran and found nothing".
+        sceneSkipped: event.sceneSkipped === true,
+        sceneCategory: event.sceneCategory || null,
+        sceneConfidence: event.sceneConfidence || null,
         // Store original log event for additional data access
         logEvent: event
       };
@@ -2887,12 +4965,21 @@ class LogVisualizer {
       }
 
       // Apply the correction based on its type
-      if (changes && changes.deleted) {
+      if (changes && changes.markedNoMatch) {
+        // WF-01 — user bulk-marked this photo "No Match". Clear the detections so
+        // it classifies as a real No-Match, while the original detection survives
+        // in changes.originalData for future auto-training.
+        result.analysis = [];
+        result._markedNoMatch = true;
+      } else if (changes && changes.deleted) {
         // Handle deletion: remove the vehicle from analysis
         if (result.analysis && vehicleIndex >= 0 && vehicleIndex < result.analysis.length) {
           console.log(`[LogVisualizer] Applying deletion: ${fileName} vehicle ${vehicleIndex}`);
           result.analysis.splice(vehicleIndex, 1);
         }
+        // Mark as corrected so the Corrections counter reflects this edit
+        // even after the in-memory manualCorrections Map has been flushed.
+        result.hasCorrection = true;
       } else if (changes) {
         // Handle update: modify vehicle properties
         if (result.analysis && result.analysis[vehicleIndex]) {
@@ -2900,13 +4987,25 @@ class LogVisualizer {
 
           // Apply each field change
           Object.entries(changes).forEach(([field, value]) => {
-            if (field !== 'deleted' && field !== 'deletedAt' && field !== 'originalData') {
+            if (field !== 'deleted' && field !== 'deletedAt' && field !== 'originalData' &&
+                field !== 'resolvedFromReview' && field !== 'chosenCandidate') {
               result.analysis[vehicleIndex][field] = value;
             }
           });
 
+          // If this correction was a review resolution, mark the result accordingly
+          if (changes.resolvedFromReview) {
+            result._reviewResolved = true;
+          }
+
           // Set confidence to 100% for manually corrected vehicles
           result.analysis[vehicleIndex].confidence = 1.0;
+
+          // Durable correction flag — _hasCorrection() falls back to this
+          // when the in-memory manualCorrections Map has been cleared by
+          // a save (the comment above _hasCorrection promised this; the
+          // flag was just never being set here).
+          result.hasCorrection = true;
         }
       }
     });
@@ -2954,6 +5053,14 @@ class LogVisualizer {
 
       if (result.success) {
         if (result.count === 0) {
+          // Telemetry: also log the empty case — knowing how often users
+          // try to export tags when none exist is itself a UX signal.
+          if (window.logUserAction) {
+            window.logUserAction('CSV_TAGS_EXPORTED', 'EXPORT', {
+              count: 0,
+              empty: true
+            });
+          }
           this.showNotification('⚠️ No visual tags found for this execution', 'warning');
           return;
         }
@@ -2968,12 +5075,24 @@ class LogVisualizer {
         a.click();
 
         URL.revokeObjectURL(url);
+        if (window.logUserAction) {
+          window.logUserAction('CSV_TAGS_EXPORTED', 'EXPORT', {
+            count: result.count,
+            empty: false
+          });
+        }
         this.showNotification(`🏷️ Exported ${result.count} tagged images`, 'success');
       } else {
         this.showNotification(result.error || '❌ Failed to export tags', 'error');
       }
     } catch (error) {
       console.error('[LogVisualizer] Error exporting tags CSV:', error);
+      if (window.logUserAction) {
+        window.logUserAction('CSV_TAGS_EXPORTED', 'EXPORT', {
+          count: 0,
+          failed: true
+        });
+      }
       this.showNotification('❌ Failed to export visual tags: ' + error.message, 'error');
     }
   }
@@ -3022,11 +5141,17 @@ class LogVisualizer {
    * Trigger folder organization after analysis is complete
    */
   async triggerPostAnalysisOrganization() {
+    // Hoisted out of `try` so the `catch` block can reference them when
+    // emitting the FOLDER_ORGANIZATION_COMPLETED failure event. `let`
+    // (not `const`) because they're assigned inside the try and read
+    // from both branches; `const` would put them in TDZ for catch.
+    let folderOrgConfig = null;
+    let __orgStartedAt = 0;
     try {
       console.log('[LogVisualizer] Starting post-analysis folder organization...');
 
       // Get folder organization config from the post-organization form
-      const folderOrgConfig = this.getPostOrganizationConfig();
+      folderOrgConfig = this.getPostOrganizationConfig();
 
       if (!folderOrgConfig.enabled) {
         this.showNotification('ℹ️ Please configure folder organization first', 'info');
@@ -3046,8 +5171,90 @@ class LogVisualizer {
         }
       }
 
-      // Show progress indicator
-      this.showNotification('🔄 Organizing photos into folders...', 'info');
+      // FIX (folder-org-correction Fix A): Force a synchronous flush of any
+      // pending manual corrections BEFORE invoking the organize IPC. The
+      // 3-second autosave debounce can race with a user who finishes a
+      // correction and immediately clicks Organize, leaving the JSONL on
+      // disk WITHOUT the MANUAL_CORRECTION event. The main process would
+      // then read a stale JSONL and route the photo using the AI's
+      // original (wrong) participant — exactly the bug pattern reported
+      // by Lisa ("metadata correct, sorted incorrect").
+      //
+      // If the flush fails we BLOCK the organize: silently routing with
+      // stale data is worse than asking the user to retry once the
+      // network recovers. We surface the underlying error so they can
+      // distinguish "network glitch, try again" from "real bug".
+      if (this.hasUnsavedChanges && this.manualCorrections && this.manualCorrections.size > 0) {
+        try {
+          console.log('[LogVisualizer] Flushing pending corrections before organize…');
+          await this.saveAllChanges({ silent: true, skipRefresh: true });
+          console.log('[LogVisualizer] Pending corrections flushed; proceeding with organize.');
+        } catch (flushErr) {
+          console.error('[LogVisualizer] Failed to flush pending corrections before organize:', flushErr);
+          this.showNotification(
+            '⛔ Cannot organize: failed to save your pending corrections. ' +
+            'Check your network and try again. (' + (flushErr?.message || 'unknown error') + ')',
+            'error'
+          );
+          return;
+        }
+      }
+
+      // Show inline progress bar in the organization section
+      const actionsDiv = document.querySelector('.lv-folder-org-actions');
+      const startBtn = document.getElementById('lv-start-organization');
+      const toggleBtn = document.getElementById('lv-toggle-folder-org');
+
+      if (startBtn) startBtn.style.display = 'none';
+      if (toggleBtn) toggleBtn.style.display = 'none';
+
+      // Create progress bar container
+      const progressContainer = document.createElement('div');
+      progressContainer.id = 'lv-folder-org-progress';
+      progressContainer.className = 'lv-folder-org-progress';
+      progressContainer.innerHTML = `
+        <div class="lv-folder-org-progress-header">
+          <span class="lv-folder-org-progress-label">🔄 Organizing photos into folders...</span>
+          <span class="lv-folder-org-progress-count" id="lv-org-progress-count">0%</span>
+        </div>
+        <div class="lv-folder-org-progress-bar-container">
+          <div class="lv-folder-org-progress-bar" id="lv-org-progress-bar" style="width: 0%"></div>
+        </div>
+        <div class="lv-folder-org-progress-detail" id="lv-org-progress-detail">Preparing...</div>
+      `;
+
+      // Insert progress bar before actions or at end of section
+      const section = document.getElementById('lv-folder-org-section');
+      if (actionsDiv) {
+        actionsDiv.parentNode.insertBefore(progressContainer, actionsDiv);
+      } else if (section) {
+        section.appendChild(progressContainer);
+      }
+
+      // Listen for progress events
+      const cleanupProgress = window.api.receive('folder-organization-progress', (data) => {
+        const bar = document.getElementById('lv-org-progress-bar');
+        const count = document.getElementById('lv-org-progress-count');
+        const detail = document.getElementById('lv-org-progress-detail');
+        if (bar) bar.style.width = `${data.percent}%`;
+        if (count) count.textContent = `${data.percent}%`;
+        if (detail) detail.textContent = `${data.current} of ${data.total} photos processed`;
+      });
+
+      // Telemetry: FOLDER_ORGANIZATION_STARTED — captures the routing
+      // pattern and mode (copy/move) so we can answer "do users prefer
+      // copy or move?" and detect mid-flight cancellations vs. successful
+      // runs by pairing with the COMPLETED event below.
+      __orgStartedAt = Date.now();
+      if (window.logUserAction) {
+        window.logUserAction('FOLDER_ORGANIZATION_STARTED', 'EXECUTE', {
+          mode: folderOrgConfig.mode || 'copy',
+          conflictStrategy: folderOrgConfig.conflictStrategy || folderOrgConfig.conflict || null,
+          customDestination: !!folderOrgConfig.customDestinationEnabled,
+          createUnknownFolder: !!folderOrgConfig.createUnknownFolder,
+          includeXmpFiles: !!folderOrgConfig.includeXmpFiles
+        });
+      }
 
       // Call IPC handler
       const response = await window.api.invoke('organize-results-post-analysis', {
@@ -3055,29 +5262,44 @@ class LogVisualizer {
         folderOrganizationConfig: folderOrgConfig
       });
 
+      // Clean up progress listener
+      if (cleanupProgress) cleanupProgress();
+
+      // Remove progress bar
+      const progressEl = document.getElementById('lv-folder-org-progress');
+      if (progressEl) progressEl.remove();
+
       if (response.success) {
         const summary = response.summary;
-        const successMsg = `✅ Organization complete!
-${summary.organizedFiles} photos organized into ${summary.foldersCreated} folders
-${summary.skippedFiles} skipped, ${summary.unknownFiles} unknown`;
+        if (window.logUserAction) {
+          window.logUserAction('FOLDER_ORGANIZATION_COMPLETED', 'EXECUTE', {
+            mode: folderOrgConfig.mode || 'copy',
+            organizedFiles: summary.organizedFiles ?? 0,
+            foldersCreated: summary.foldersCreated ?? 0,
+            skippedFiles: summary.skippedFiles ?? 0,
+            unknownFiles: summary.unknownFiles ?? 0,
+            errorCount: (response.errors && response.errors.length) || 0,
+            durationMs: Date.now() - __orgStartedAt
+          });
+        }
+        const modeLabel = folderOrgConfig.mode === 'move' ? 'moved' : 'copied';
 
-        this.showNotification(successMsg, 'success');
+        // Replace the entire section with completion state
+        if (section) {
+          section.innerHTML = `
+            <div class="lv-folder-org-completed">
+              <div class="lv-folder-org-completed-icon">✅</div>
+              <div class="lv-folder-org-completed-text">
+                <h4>Folder Organization Completed</h4>
+                <p><strong>${summary.organizedFiles}</strong> photos ${modeLabel} into <strong>${summary.foldersCreated}</strong> folders${summary.skippedFiles > 0 ? `, ${summary.skippedFiles} skipped` : ''}${summary.unknownFiles > 0 ? `, ${summary.unknownFiles} unknown` : ''}</p>
+                ${folderOrgConfig.mode === 'move' ? '<p style="margin-top: 6px; opacity: 0.7; font-size: 13px;">Files were moved (not copied) — this operation cannot be repeated.</p>' : `<p style="margin-top: 6px; opacity: 0.7; font-size: 13px;">Files were copied — originals remain in place.</p>`}
+              </div>
+            </div>
+          `;
+        }
 
-        // If this was a move operation, disable the entire organization section
         if (folderOrgConfig.mode === 'move' && summary.organizedFiles > 0) {
           this.moveOrganizationCompleted = true;
-          const section = document.getElementById('lv-folder-org-section');
-          if (section) {
-            section.innerHTML = `
-              <div class="lv-folder-org-completed">
-                <div class="lv-folder-org-completed-icon">✅</div>
-                <div class="lv-folder-org-completed-text">
-                  <h4>Folder Organization Completed</h4>
-                  <p>Photos have been moved to their organized folders. Since the files were moved (not copied), they are no longer at their original location and this operation cannot be repeated.</p>
-                </div>
-              </div>
-            `;
-          }
         }
 
         if (response.errors && response.errors.length > 0) {
@@ -3085,12 +5307,29 @@ ${summary.skippedFiles} skipped, ${summary.unknownFiles} unknown`;
           this.showNotification(`⚠️ ${response.errors.length} files had errors (check console)`, 'warning');
         }
       } else {
+        // Restore buttons on error
+        if (startBtn) startBtn.style.display = 'inline-flex';
+        if (toggleBtn) toggleBtn.style.display = 'inline-flex';
         throw new Error(response.error || 'Organization failed');
       }
 
     } catch (error) {
       console.error('[LogVisualizer] Error in post-analysis organization:', error);
+      if (window.logUserAction) {
+        window.logUserAction('FOLDER_ORGANIZATION_COMPLETED', 'EXECUTE', {
+          mode: (folderOrgConfig && folderOrgConfig.mode) || 'copy',
+          organizedFiles: 0,
+          errorCount: 1,
+          failed: true,
+          durationMs: __orgStartedAt > 0 ? Date.now() - __orgStartedAt : 0
+        });
+      }
       this.showNotification(`❌ Organization failed: ${error.message}`, 'error');
+      // Restore buttons on error
+      const startBtn = document.getElementById('lv-start-organization');
+      const toggleBtn = document.getElementById('lv-toggle-folder-org');
+      if (startBtn) startBtn.style.display = 'inline-flex';
+      if (toggleBtn) toggleBtn.style.display = 'inline-flex';
     }
   }
 

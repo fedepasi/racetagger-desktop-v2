@@ -12,38 +12,46 @@
 }
 
 .feedback-fab {
-  width: 52px;
-  height: 52px;
-  border-radius: 50%;
+  height: 44px;
+  border-radius: 22px;
   border: none;
-  background: var(--accent-primary, #3b82f6);
-  color: #ffffff;
+  background: linear-gradient(135deg, #f59e0b, #eab308);
+  color: #1a1a2e;
   cursor: pointer;
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 8px;
+  padding: 0 18px;
   box-shadow:
-    0 4px 12px rgba(59, 130, 246, 0.35),
-    0 2px 4px rgba(0, 0, 0, 0.1);
-  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+    0 4px 14px rgba(245, 158, 11, 0.35),
+    0 2px 4px rgba(0, 0, 0, 0.15);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
   flex-shrink: 0;
+  font-family: inherit;
 }
 
 .feedback-fab:hover {
-  transform: scale(1.08);
-  background: var(--primary-hover, #2563eb);
+  transform: translateY(-2px);
   box-shadow:
-    0 6px 20px rgba(59, 130, 246, 0.45),
-    0 3px 6px rgba(0, 0, 0, 0.12);
+    0 6px 22px rgba(245, 158, 11, 0.5),
+    0 3px 6px rgba(0, 0, 0, 0.15);
 }
 
 .feedback-fab:active {
-  transform: scale(0.95);
+  transform: translateY(0) scale(0.97);
 }
 
 .feedback-fab-icon {
-  width: 22px;
-  height: 22px;
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
+  flex-shrink: 0;
+}
+
+.feedback-fab-label {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
   pointer-events: none;
 }
 
@@ -54,12 +62,12 @@
   align-items: center;
   gap: 8px;
   background: var(--bg-primary, #1e1e2e);
-  border: 1px solid var(--accent-primary, #3b82f6);
+  border: 1px solid rgba(245, 158, 11, 0.5);
   border-radius: 10px;
   padding: 10px 14px;
   max-width: 260px;
   box-shadow:
-    0 4px 16px rgba(59, 130, 246, 0.25),
+    0 4px 16px rgba(245, 158, 11, 0.2),
     0 2px 6px rgba(0, 0, 0, 0.2);
   animation: fabTooltipIn 0.4s ease-out;
 }
@@ -397,6 +405,70 @@ body:has(.feedback-modal-overlay[style*="display: flex"]) .feedback-fab-wrapper 
   color: var(--accent-danger, #ef4444);
   font-size: 13px;
   margin-top: 8px;
+}
+
+/* ---- Contextual Type Banner ---- */
+
+.feedback-type-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 13px;
+  border-radius: var(--radius-md, 8px);
+  margin-bottom: 16px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  border: 1px solid transparent;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+/* Bug: warm amber — conveys that diagnostic data is being collected */
+.feedback-type-banner--bug {
+  background: rgba(245, 158, 11, 0.08);
+  border-color: rgba(245, 158, 11, 0.25);
+  color: var(--text-secondary, #64748b);
+}
+
+.feedback-type-banner--bug .feedback-type-banner-icon {
+  color: #f59e0b;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+/* Feature: blue — constructive, forward-looking */
+.feedback-type-banner--feature {
+  background: rgba(59, 130, 246, 0.07);
+  border-color: rgba(59, 130, 246, 0.2);
+  color: var(--text-secondary, #64748b);
+}
+
+.feedback-type-banner--feature .feedback-type-banner-icon {
+  color: var(--accent-primary, #3b82f6);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+/* General: neutral */
+.feedback-type-banner--general {
+  background: rgba(100, 116, 139, 0.07);
+  border-color: rgba(100, 116, 139, 0.18);
+  color: var(--text-secondary, #64748b);
+}
+
+.feedback-type-banner--general .feedback-type-banner-icon {
+  color: var(--text-muted, #94a3b8);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.feedback-type-banner-icon {
+  display: flex;
+  align-items: center;
+  line-height: 1;
+}
+
+.feedback-type-banner-text {
+  flex: 1;
 }
 
 /* ---- Auth Warning ---- */

@@ -182,6 +182,30 @@
   color: #94a3b8;
 }
 
+/* Forgot Password Link */
+.forgot-password-link {
+  text-align: right;
+  margin-top: -8px;
+  margin-bottom: 4px;
+}
+
+.forgot-password-link a {
+  font-size: 13px;
+  color: #3b82f6;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.forgot-password-link a:hover {
+  color: #2563eb;
+  text-decoration: underline;
+}
+
+.form-group input.input-highlight {
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.15);
+}
+
 .form-actions {
   display: flex;
   justify-content: center;

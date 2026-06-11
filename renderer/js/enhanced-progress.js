@@ -432,8 +432,8 @@ class EnhancedProgressTracker {
       phasePercentage.textContent = '0%';
     }
 
-    this.updateCurrentStatus('Starting vehicle recognition...');
-    this.showStatusMessage('Started vehicle recognition phase', 'info');
+    this.updateCurrentStatus('Starting detection...');
+    this.showStatusMessage('Started detection phase', 'info');
   }
 
   updateCurrentStatus(message) {

@@ -97,10 +97,10 @@ document.addEventListener('DOMContentLoaded', () => {
             statusText = 'Select a RAW file...';
             break;
           case 'extracting':
-            statusText = `Estrazione anteprima da ${status.file}...`;
+            statusText = `Extracting preview from ${status.file}...`;
             break;
           case 'canceled':
-            statusText = 'Operazione annullata.';
+            statusText = 'Operation cancelled.';
             break;
           default:
             statusText = status.message || 'Processing...';
@@ -181,7 +181,7 @@ async function loadRecentPresets() {
 
       // Controllo di sicurezza per gestire risposte null o undefined
       if (!result) {
-        recentProjectsList.innerHTML = '<li>Errore nel caricamento dei preset partecipanti: risposta non valida.</li>';
+        recentProjectsList.innerHTML = '<li>Error loading participant presets: invalid response.</li>';
         return;
       }
 
@@ -189,17 +189,17 @@ async function loadRecentPresets() {
         // Take the most recent 5 presets
         const recentPresets = result.data.slice(0, 5);
         recentProjectsList.innerHTML = recentPresets.map(preset =>
-          `<li><a href="#" data-preset-id="${preset.id}" class="recent-preset-link">${preset.name}</a> (${preset.preset_participants?.length || 0} partecipanti, ${new Date(preset.updated_at || preset.created_at).toLocaleString()})</li>`
+          `<li><a href="#" data-preset-id="${preset.id}" class="recent-preset-link">${preset.name}</a> (${preset.preset_participants?.length || 0} participants, ${new Date(preset.updated_at || preset.created_at).toLocaleString()})</li>`
         ).join('');
         // TODO: Add event listeners for recent-preset-link to open preset details
       } else {
-        recentProjectsList.innerHTML = '<li>Nessun preset di partecipanti trovato.</li>';
+        recentProjectsList.innerHTML = '<li>No participant presets found.</li>';
       }
     } catch (error) {
-      recentProjectsList.innerHTML = '<li>Errore nel caricamento dei preset.</li>';
+      recentProjectsList.innerHTML = '<li>Error loading presets.</li>';
     }
   } else {
-    recentProjectsList.innerHTML = '<li>API non disponibile. Esegui l\'applicazione in Electron per accedere ai preset.</li>';
+    recentProjectsList.innerHTML = '<li>API not available. Run the application in Electron to access presets.</li>';
   }
 }
 
@@ -399,6 +399,7 @@ function setupModelDownloadListeners() {
   const currentText = document.getElementById('download-current');
   const totalText = document.getElementById('download-total');
   const funFact = document.getElementById('download-fun-fact');
+  const retryBtn = document.getElementById('download-retry-btn');
 
   if (!modal) {
     return;
@@ -415,9 +416,32 @@ function setupModelDownloadListeners() {
   let factIndex = 0;
   let factInterval = null;
 
+  // BUG-04 — Retry button re-triggers the download without an app restart.
+  if (retryBtn) {
+    retryBtn.addEventListener('click', async () => {
+      retryBtn.disabled = true;
+      retryBtn.style.display = 'none';
+      if (funFact) {
+        funFact.textContent = funFacts[0];
+        funFact.style.color = '';
+      }
+      try {
+        await window.api.invoke('retry-model-download');
+      } catch (e) {
+        // Failure surfaces via the 'model-download-error' event handler below.
+      } finally {
+        retryBtn.disabled = false;
+      }
+    });
+  }
+
   window.api.receive('model-download-start', (data) => {
     modal.style.display = 'flex';
     document.body.classList.add('modal-open');
+    if (retryBtn) retryBtn.style.display = 'none';
+    // BUG-04 — clear any prior interval before starting a new one (e.g. on retry)
+    // so fun-fact intervals can never stack across runs.
+    if (factInterval) { clearInterval(factInterval); factInterval = null; }
     if (totalText) totalText.textContent = `${data.totalSizeMB.toFixed(1)} MB`;
     if (currentText) currentText.textContent = '0 MB';
     if (percentText) percentText.textContent = '0%';
@@ -451,11 +475,12 @@ function setupModelDownloadListeners() {
       clearInterval(factInterval);
       factInterval = null;
     }
-    // Show error state - user can close and retry on next app start
+    // BUG-04 — show an in-modal Retry button instead of forcing an app restart.
     if (funFact) {
-      funFact.textContent = '\u{274C} Download failed. Please restart the app to retry.';
+      funFact.textContent = '\u{274C} Download failed. Click Retry to try again.';
       funFact.style.color = 'var(--accent-danger, #ef4444)';
     }
+    if (retryBtn) retryBtn.style.display = 'inline-flex';
   });
 }
 

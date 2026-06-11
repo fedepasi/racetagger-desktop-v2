@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
+import { contextBridge, ipcRenderer, IpcRendererEvent, webUtils } from 'electron';
 
 // Whitelist of channels to expose to the renderer process
 // We separate send/receive and invoke channels for clarity, though some might overlap
@@ -11,6 +11,7 @@ const validSendReceiveChannels: string[] = [
   'pending-tokens',
   'subscription-info',
   'auth-error',
+  'password-reset-result',
   'upload-progress', 'analysis-result', 'upload-error', 'token-used',
   'folder-selected', 'folder-error',
   'csv-loaded', 'csv-error',
@@ -30,7 +31,7 @@ const validSendReceiveChannels: string[] = [
   // General processing channels
   'processing-started', 'processing-progress', 'processing-file-started',
   'processing-phase-changed', 'processing-completed', 'processing-error',
-  'processing-paused', 'processing-resumed',
+  'processing-paused', 'processing-resumed', 'analysis-aborted',
   // Unified processor and temporal analysis channels
   'unified-processing-started',
   'temporal-analysis-started', 'temporal-batch-progress', 'temporal-analysis-complete',
@@ -58,8 +59,21 @@ const validSendReceiveChannels: string[] = [
   'model-download-error',
   // App update download progress channel
   'update-download-progress',
+  // Folder organization progress channel
+  'folder-organization-progress',
   // Startup health report (main → renderer DevTools console)
   'startup-health-report',
+  // IPTC finalization progress channels
+  'iptc-finalize-progress',
+  'iptc-finalize-error',
+  // Unified export progress channel
+  'unified-export-progress',
+  // Delivery & Gallery channels
+  'delivery-routing-complete',
+  'r2-upload-progress',
+  'r2-upload-complete',
+  // Preset participants save progress
+  'preset-save-progress',
 ];
 
 const validInvokeChannels: string[] = [
@@ -69,6 +83,7 @@ const validInvokeChannels: string[] = [
   'login',
   'register',
   'logout',
+  'request-password-reset',
   'continue-demo',
   'get-token-balance',
   'get-pending-tokens',
@@ -85,6 +100,7 @@ const validInvokeChannels: string[] = [
   'is-force-update-required',
   'get-app-version',
   'get-max-supported-edge-function-version',
+  'get-app-version-number',
   'open-download-url',
   'quit-app-for-update',
   'download-update',
@@ -96,6 +112,7 @@ const validInvokeChannels: string[] = [
   'load-csv',
   'download-csv-template',
   'analyze-folder',
+  'resume-analysis',
   'extract-raw-preview',
   // Enhanced File Browser Operations
   'dialog-show-open',
@@ -156,9 +173,12 @@ const validInvokeChannels: string[] = [
   'supabase-get-participant-presets',
   'supabase-get-participant-preset-by-id',
   'supabase-save-preset-participants',
+  'supabase-upsert-preset-participant',   // BUG-02: immediate single-row persist from the participant editor
+  'supabase-bulk-assign-folders',
   'supabase-update-participant-preset',
   'supabase-update-preset-last-used',
   'supabase-delete-participant-preset',
+  'supabase-duplicate-official-preset',
   'supabase-import-participants-from-csv',
   'supabase-get-cached-participant-presets',
   'supabase-get-all-participant-presets-admin',
@@ -180,7 +200,15 @@ const validInvokeChannels: string[] = [
   'get-execution-log',
   'get-analysis-log',
   'update-analysis-log',
+  'save-learned-participant-data',
+  'check-learned-data-exists',
   'get-local-executions',
+  'rename-execution',
+  'delete-local-execution',
+  'restore-execution-from-cloud',
+  // Post-analysis user-action telemetry. Wrapper:
+  // window.logUserAction(action, category, data) — see user-action-logger.js.
+  'log-user-action',
 
   // Local Thumbnail Operations
   'find-local-thumbnails',
@@ -204,6 +232,9 @@ const validInvokeChannels: string[] = [
   'preset-face-set-primary',
   'preset-face-update-descriptor',
   'preset-face-load-for-preset',
+  'preset-face-status-batch',
+  'face-rec-submit-survey',
+  'face-rec-check-survey',
 
   // Preset Participant Drivers Operations
   'preset-driver-get-all',
@@ -212,6 +243,15 @@ const validInvokeChannels: string[] = [
   'preset-driver-delete',
   'preset-driver-sync',
   'preset-driver-migrate-orphaned-photos',
+  'preset-get-drivers-for-participant',   // FIX #79: Missing from whitelist — needed for JSON preset export
+  'preset-create-drivers-batch',          // FIX #79: Missing from whitelist — needed for JSON preset import
+
+  // v1.1.4 — Preset Participant Toggle (soft-disable)
+  'preset:toggleParticipantActive',
+  'preset:toggleDriverActive',
+  'preset:bulkSetActive',
+  'preset:bulkSetIncludeDefaultFolder',
+  'preset:resetActiveStates',
 
   'get-app-path',
 
@@ -236,11 +276,67 @@ const validInvokeChannels: string[] = [
   'export-destinations-get-matching',
   'export-to-destinations',  // Export images to configured destinations
   'export-tags-csv',         // Export visual tags as CSV
+  'unified-export',          // Unified export with rename, organize, IPTC
 
   // Error Telemetry
   'get-telemetry-status',
   'set-telemetry-enabled',
   'flush-telemetry-queue',
+  'report-renderer-error',
+
+  // IPTC Metadata Operations
+  'preset-iptc-get',
+  'preset-iptc-save',
+  'preset-iptc-import-xmp',
+  'iptc-finalize-batch',
+  'iptc-defaults-get',       // UX-04: account-level default IPTC template
+  'iptc-defaults-save',      // UX-04: account-level default IPTC template
+
+  // Folder Path Validation
+  'validate-preset-folder-paths',
+
+  // Delivery Operations
+  'delivery-create-project',
+  'delivery-get-projects',
+  'delivery-get-project',
+  'delivery-update-project',
+  'delivery-delete-project',
+  'delivery-create-gallery',
+  'delivery-get-galleries',
+  'delivery-update-gallery',
+  'delivery-delete-gallery',
+  'delivery-create-rule',
+  'delivery-get-rules',
+  'delivery-update-rule',
+  'delivery-delete-rule',
+  'delivery-add-images',
+  'delivery-auto-route',
+  'delivery-send-execution-to-gallery',
+  'delivery-get-gallery-executions',
+  'delivery-get-plan-limits',
+  'delivery-get-recent-executions',
+  'delivery-r2-upload-start',
+  'delivery-r2-upload-progress',
+  'delivery-r2-upload-cancel',
+  'delivery-get-upload-history',
+  'delivery-r2-upload-status',
+  'delivery-r2-reset-status',
+  'delivery-update-source-folder',
+  'delivery-browse-source-folder',
+  'delivery-sync-rules-from-preset',
+  'delivery-create-client-user',
+  'delivery-get-client-users',
+  'delivery-update-client-user',
+  'delivery-delete-client-user',
+  'delivery-set-client-slug',
+  'delivery-send-client-invite',
+  'delivery-resend-client-invite',
+  'delivery-get-unlinked-galleries',
+  'delivery-link-gallery',
+  'delivery-submit-survey',
+  'delivery-check-survey',
+  // Model download retry (BUG-04 — in-modal "Retry" instead of app restart)
+  'retry-model-download',
 ];
 
 
@@ -289,6 +385,12 @@ contextBridge.exposeInMainWorld('api', {
     } else {
       console.warn(`Attempted to remove all listeners from an invalid channel: ${channel}`);
     }
+  },
+  // Resolves the OS file-system path for a File object from drag & drop.
+  // Uses Electron's webUtils API — the official way to get file paths
+  // when contextIsolation is enabled (File.path is undefined in main world).
+  getPathForFile: (file: File): string => {
+    return webUtils.getPathForFile(file);
   }
 });
 

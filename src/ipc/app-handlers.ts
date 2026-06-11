@@ -30,6 +30,11 @@ export function registerAppHandlers(): void {
     return MAX_SUPPORTED_EDGE_FUNCTION_VERSION;
   });
 
+  ipcMain.handle('get-app-version-number', () => {
+    const { APP_VERSION_NUMBER } = require('../config');
+    return APP_VERSION_NUMBER;
+  });
+
   // ==================== EXTERNAL URLS ====================
 
   ipcMain.handle('open-download-url', async (_, url: string) => {
@@ -122,7 +127,7 @@ export function registerAppHandlers(): void {
 
     ipcMain.handle('get-folder-organization-config', async () => {
       if (!authService.hasFolderOrganizationAccess()) {
-        throw new Error('Feature non disponibile');
+        throw new Error('Feature not available');
       }
       const { createDefaultConfig } = await import('../utils/folder-organizer');
       return createDefaultConfig();

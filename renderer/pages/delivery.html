@@ -1,0 +1,489 @@
+<div class="delivery-page" style="padding: 24px; max-width: 1200px;">
+
+  <!-- Page Header (hidden when inside client detail) -->
+  <div id="delivery-page-header" style="margin-bottom: 32px;">
+    <h1 style="font-size: 24px; font-weight: 700; color: var(--text-primary); margin: 0 0 8px 0;">
+      📦 Delivery & Galleries
+    </h1>
+    <p style="color: var(--text-muted); font-size: 14px; margin: 0;">
+      Manage your photo galleries and delivery rules for clients.
+    </p>
+  </div>
+
+  <!-- Interest Survey (shown when feature not enabled) -->
+  <div id="delivery-interest-survey" style="display: none; max-width: 600px; margin: 0 auto;">
+
+    <!-- Already submitted state -->
+    <div id="survey-submitted" style="display: none; text-align: center; padding: 40px 24px;">
+      <div style="font-size: 48px; margin-bottom: 16px;">🙏</div>
+      <h3 style="color: var(--text-primary); margin: 0 0 8px; font-size: 20px;">Thanks for your feedback!</h3>
+      <p style="color: var(--text-muted); font-size: 14px; margin: 0;">We'll notify you when Delivery & Galleries becomes available for your account.</p>
+    </div>
+
+    <!-- Survey form -->
+    <div id="survey-form">
+      <div style="text-align: center; margin-bottom: 24px;">
+        <div style="font-size: 48px; margin-bottom: 12px;">📦</div>
+        <h3 style="color: var(--text-primary); margin: 0 0 8px; font-size: 20px;">Photo Delivery & Galleries</h3>
+        <p style="color: var(--text-muted); font-size: 14px; margin: 0; line-height: 1.5;">
+          We're building a system to deliver photos directly to your clients via beautiful galleries.
+          Help us shape it by telling us what you need.
+        </p>
+      </div>
+
+      <!-- Question 1: Interest areas -->
+      <div style="background: var(--bg-card, #1e293b); border: 1px solid var(--border-color, #334155); border-radius: 12px; padding: 20px; margin-bottom: 16px;">
+        <p style="color: var(--text-primary); font-size: 14px; font-weight: 600; margin: 0 0 12px;">What would be most useful to you?</p>
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          <label style="display: flex; align-items: center; gap: 10px; color: var(--text-muted); font-size: 13px; cursor: pointer;">
+            <input type="checkbox" id="interest-single-gallery" style="accent-color: var(--accent-primary, #3b82f6); width: 16px; height: 16px;">
+            <span>A <strong style="color: var(--text-primary);">public gallery</strong> where runners/riders find their photos by bib number</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 10px; color: var(--text-muted); font-size: 13px; cursor: pointer;">
+            <input type="checkbox" id="interest-multi-client" style="accent-color: var(--accent-primary, #3b82f6); width: 16px; height: 16px;">
+            <span><strong style="color: var(--text-primary);">Multi-client delivery</strong> — auto-route photos to different teams/clients</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 10px; color: var(--text-muted); font-size: 13px; cursor: pointer;">
+            <input type="checkbox" id="interest-hd-download" style="accent-color: var(--accent-primary, #3b82f6); width: 16px; height: 16px;">
+            <span><strong style="color: var(--text-primary);">HD originals</strong> — clients download full-resolution files (not just previews)</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 10px; color: var(--text-muted); font-size: 13px; cursor: pointer;">
+            <input type="checkbox" id="interest-watermark" style="accent-color: var(--accent-primary, #3b82f6); width: 16px; height: 16px;">
+            <span><strong style="color: var(--text-primary);">Watermarking</strong> — preview with watermark, clean download after purchase/code</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 10px; color: var(--text-muted); font-size: 13px; cursor: pointer;">
+            <input type="checkbox" id="interest-payment" style="accent-color: var(--accent-primary, #3b82f6); width: 16px; height: 16px;">
+            <span><strong style="color: var(--text-primary);">Sell photos</strong> — payment integration for direct photo sales</span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Question 2: Current workflow -->
+      <div style="background: var(--bg-card, #1e293b); border: 1px solid var(--border-color, #334155); border-radius: 12px; padding: 20px; margin-bottom: 16px;">
+        <p style="color: var(--text-primary); font-size: 14px; font-weight: 600; margin: 0 0 12px;">How do you deliver photos today?</p>
+        <select id="interest-current-workflow" style="width: 100%; padding: 8px 12px; background: var(--bg-dark, #0f172a); border: 1px solid var(--border-color, #334155); border-radius: 8px; color: var(--text-primary); font-size: 13px;">
+          <option value="">Select one...</option>
+          <option value="manual_email">Email / WeTransfer / Dropbox links</option>
+          <option value="gallery_service">I use a gallery service (SmugMug, Pixieset, etc.)</option>
+          <option value="social_media">Social media / WhatsApp groups</option>
+          <option value="usb_physical">USB drive / physical delivery</option>
+          <option value="no_delivery">I don't deliver to clients yet</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+
+      <!-- Question 3: Free comment -->
+      <div style="background: var(--bg-card, #1e293b); border: 1px solid var(--border-color, #334155); border-radius: 12px; padding: 20px; margin-bottom: 20px;">
+        <p style="color: var(--text-primary); font-size: 14px; font-weight: 600; margin: 0 0 12px;">Anything else you'd like us to know? <span style="font-weight: 400; color: var(--text-muted);">(optional)</span></p>
+        <textarea id="interest-comment" rows="3" placeholder="e.g., I shoot MotoGP for 3 teams and need to deliver 500+ photos per weekend..." style="width: 100%; padding: 10px 12px; background: var(--bg-dark, #0f172a); border: 1px solid var(--border-color, #334155); border-radius: 8px; color: var(--text-primary); font-size: 13px; resize: vertical; box-sizing: border-box; outline: none; font-family: inherit;" onfocus="this.style.borderColor='var(--accent-primary)'" onblur="this.style.borderColor='var(--border-color)'"></textarea>
+      </div>
+
+      <!-- Submit -->
+      <div style="text-align: center;">
+        <button id="btn-submit-interest" style="padding: 12px 32px; background: linear-gradient(135deg, #3b82f6, #6366f1); border: none; border-radius: 10px; color: white; font-size: 14px; font-weight: 600; cursor: pointer; transition: opacity 0.2s;" onmouseenter="this.style.opacity='0.9'" onmouseleave="this.style.opacity='1'">
+          Submit Feedback
+        </button>
+        <p style="color: var(--text-muted); font-size: 11px; margin: 8px 0 0;">Your responses help us prioritize what to build next.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- HD Uploads Section -->
+  <div id="delivery-uploads-section" style="display: none; margin-bottom: 32px;">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+      <h2 style="font-size: 18px; font-weight: 600; color: var(--text-primary); margin: 0;">☁️ HD Uploads</h2>
+    </div>
+
+    <!-- Active upload card -->
+    <div id="upload-active-card" style="display: none; background: var(--bg-card, #1e293b); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 12px; padding: 16px; margin-bottom: 12px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+        <span id="upload-active-title" style="font-size: 14px; font-weight: 600; color: var(--text-primary);">Uploading...</span>
+        <span style="font-size: 10px; padding: 3px 10px; border-radius: 12px; background: rgba(59, 130, 246, 0.15); color: #60a5fa; font-weight: 600;">⟳ Uploading</span>
+      </div>
+      <div id="upload-active-meta" style="font-size: 11px; color: var(--text-muted); margin-bottom: 8px;"></div>
+      <div style="background: rgba(255,255,255,0.06); border-radius: 6px; height: 6px; overflow: hidden; margin-bottom: 6px;">
+        <div id="upload-active-progress" style="height: 100%; border-radius: 6px; background: linear-gradient(90deg, #3b82f6, #60a5fa); width: 0%; transition: width 0.4s ease;"></div>
+      </div>
+      <div id="upload-active-stats" style="display: flex; gap: 16px; font-size: 11px; color: var(--text-muted);"></div>
+    </div>
+
+    <!-- Upload history list -->
+    <div id="upload-history-list"></div>
+
+    <!-- Per-Execution R2 Status (DB-backed) -->
+    <div id="r2-execution-status" style="margin-top: 16px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+        <span style="font-size: 13px; font-weight: 600; color: var(--text-secondary);">Upload Status by Execution</span>
+        <button id="btn-refresh-r2-status" style="background: none; border: 1px solid var(--border-color); color: var(--text-muted); padding: 4px 10px; border-radius: 6px; font-size: 11px; cursor: pointer;" title="Refresh upload status">↻ Refresh</button>
+      </div>
+      <div id="r2-execution-list" style="display: flex; flex-direction: column; gap: 8px;"></div>
+      <div id="r2-execution-empty" style="display: none; text-align: center; padding: 16px; color: var(--text-muted); font-size: 12px;">
+        No executions with R2 upload data found.
+      </div>
+    </div>
+
+    <!-- Empty state -->
+    <div id="upload-history-empty" style="display: none; text-align: center; padding: 24px; color: var(--text-muted); font-size: 13px;">
+      No HD uploads yet. Use the "📦 Deliver" button on the Results page to start uploading originals.
+    </div>
+  </div>
+
+  <!-- Galleries Section -->
+  <div id="delivery-galleries-section" style="display: none; margin-bottom: 32px;">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+      <h2 style="font-size: 18px; font-weight: 600; color: var(--text-primary); margin: 0;">🖼️ Your Galleries</h2>
+      <button id="btn-create-gallery" style="background: var(--accent-primary); color: white; border: none; padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: opacity 0.2s;" onmouseenter="this.style.opacity='0.85'" onmouseleave="this.style.opacity='1'">
+        + New Gallery
+      </button>
+    </div>
+    <div id="galleries-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px;">
+    </div>
+    <div id="galleries-empty" style="display: none; text-align: center; padding: 40px; color: var(--text-muted); font-size: 14px;">
+      No galleries yet. Create your first gallery to start sharing photos.
+    </div>
+  </div>
+
+  <!-- Clients Section (formerly "Projects") -->
+  <div id="delivery-projects-section" style="display: none; margin-bottom: 32px;">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+      <h2 style="font-size: 18px; font-weight: 600; color: var(--text-primary); margin: 0;">👥 Clients</h2>
+      <button id="btn-create-project" style="background: var(--accent-primary); color: white; border: none; padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: opacity 0.2s;" onmouseenter="this.style.opacity='0.85'" onmouseleave="this.style.opacity='1'">
+        + New Client
+      </button>
+    </div>
+    <p style="color: var(--text-muted); font-size: 12px; margin: 0 0 12px; line-height: 1.4;">
+      Each client has their own galleries and delivery rules. Photos are auto-routed to the right gallery after each execution.
+    </p>
+
+    <div id="projects-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px;">
+    </div>
+  </div>
+
+  <!-- Client Detail (shown when client selected) -->
+  <div id="delivery-project-detail" style="display: none;">
+    <button id="btn-back-to-projects" style="background: none; border: none; color: var(--accent-primary); cursor: pointer; font-size: 13px; margin-bottom: 16px; padding: 0;">← Back to all clients</button>
+    <div id="project-detail-header" style="margin-bottom: 24px;"></div>
+
+    <div style="margin-bottom: 24px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+        <h3 style="font-size: 16px; font-weight: 600; color: var(--text-primary); margin: 0;">🖼️ Galleries</h3>
+        <div style="display: flex; gap: 6px;">
+          <button id="btn-link-gallery-to-project" style="background: var(--bg-light); color: var(--text-primary); border: 1px solid var(--border-color); padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer;">+ Link Existing</button>
+          <button id="btn-add-gallery-to-project" style="background: var(--bg-light); color: var(--text-primary); border: 1px solid var(--border-color); padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer;">+ New Gallery</button>
+        </div>
+      </div>
+      <div id="project-galleries-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px;"></div>
+    </div>
+
+    <!-- Shareable Links Section -->
+    <div id="shareable-links-section" style="margin-bottom: 24px;">
+      <h3 style="font-size: 16px; font-weight: 600; color: var(--text-primary); margin: 0 0 8px;">🔗 Shareable Links</h3>
+      <p style="color: var(--text-muted); font-size: 12px; margin: 0 0 12px; line-height: 1.4;">
+        Share this link with your client to give them access to their photos.
+      </p>
+
+      <!-- READ MODE: show link as copyable text -->
+      <div id="slug-read-mode" style="background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 10px; padding: 12px; display: flex; align-items: center; gap: 8px;">
+        <span id="slug-link-display" style="flex: 1; font-size: 13px; font-family: 'Monaco', monospace; color: var(--accent-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"></span>
+        <button id="btn-copy-client-link" title="Copy link" style="background: none; border: 1px solid var(--border-color); border-radius: 6px; padding: 5px 8px; cursor: pointer; color: var(--text-muted); font-size: 13px; flex-shrink: 0;">📋</button>
+        <button id="btn-edit-client-slug" title="Edit slug" style="background: none; border: 1px solid var(--border-color); border-radius: 6px; padding: 5px 8px; cursor: pointer; color: var(--text-muted); font-size: 13px; flex-shrink: 0;">✏️</button>
+      </div>
+
+      <!-- EDIT MODE: inline slug editor (hidden by default) -->
+      <div id="slug-edit-mode" style="display: none; background: var(--bg-dark); border: 1px solid var(--accent-primary); border-radius: 10px; padding: 12px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 12px; color: var(--text-muted); white-space: nowrap;">photos.racetagger.cloud/c/</span>
+          <input id="input-client-slug" type="text" style="flex: 1; padding: 6px 10px; background: var(--bg-elevated, #1e293b); border: 1px solid var(--border-color); border-radius: 6px; color: var(--accent-primary); font-size: 13px; font-family: 'Monaco', monospace; outline: none;" onfocus="this.style.borderColor='var(--accent-primary)'" onblur="this.style.borderColor='var(--border-color)'">
+          <button id="btn-save-client-slug" title="Save" style="background: var(--accent-primary); border: none; border-radius: 6px; padding: 6px 12px; cursor: pointer; color: white; font-size: 12px; font-weight: 600; flex-shrink: 0;">Save</button>
+          <button id="btn-cancel-edit-slug" title="Cancel" style="background: none; border: 1px solid var(--border-color); border-radius: 6px; padding: 6px 10px; cursor: pointer; color: var(--text-muted); font-size: 12px; flex-shrink: 0;">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Client Access Credentials -->
+    <div id="client-auth-section" style="margin-bottom: 24px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
+        <h3 style="font-size: 16px; font-weight: 600; color: var(--text-primary); margin: 0;">🔐 Access Credentials</h3>
+        <button id="btn-add-client-user" style="background: var(--bg-light); color: var(--text-primary); border: 1px solid var(--border-color); padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer;">+ Invite User</button>
+      </div>
+      <p style="color: var(--text-muted); font-size: 12px; margin: 0 0 12px; line-height: 1.4;">
+        Invite people to access this client's portal and galleries. They'll receive an email to complete their registration.
+      </p>
+      <div id="client-users-list" style="display: flex; flex-direction: column; gap: 8px;"></div>
+      <div id="client-users-empty" style="display: none; text-align: center; padding: 20px; color: var(--text-muted); font-size: 13px; background: var(--bg-dark); border: 1px dashed var(--border-color); border-radius: 8px;">
+        No users invited yet. Click "+ Invite User" to send an invitation email.
+      </div>
+    </div>
+
+    <div id="delivery-rules-section" style="display: none;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
+        <h3 style="font-size: 16px; font-weight: 600; color: var(--text-primary); margin: 0;">🔀 Delivery Rules</h3>
+        <button id="btn-add-rule" style="background: var(--bg-light); color: var(--text-primary); border: 1px solid var(--border-color); padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer;">+ Add Rule</button>
+      </div>
+      <p style="color: var(--text-muted); font-size: 12px; margin: 0 0 12px; line-height: 1.4;">
+        Rules automatically route photos to galleries after each execution. Rules marked <span style="color: #06b6d4; font-weight: 600;">FROM PRESET</span> are auto-generated from the "Delivery to" field in your participant presets and cannot be edited here — update them by editing the preset.
+      </p>
+      <div id="delivery-rules-list" style="display: flex; flex-direction: column; gap: 8px;"></div>
+      <div id="delivery-rules-empty" style="display: none; text-align: center; padding: 20px; color: var(--text-muted); font-size: 13px; background: var(--bg-dark); border: 1px dashed var(--border-color); border-radius: 8px;">
+        No delivery rules yet. Set the "Delivery to" field in your participant presets, or add a manual rule.
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Invite Client User Modal -->
+<div id="modal-create-client-user" style="display: none; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); align-items: center; justify-content: center;">
+  <div style="background: var(--bg-medium); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; width: 100%; max-width: 440px; margin: auto;">
+    <h3 style="color: var(--text-primary); margin: 0 0 4px; font-size: 18px;">✉️ Invite User</h3>
+    <p style="color: var(--text-muted); font-size: 12px; margin: 0 0 16px; line-height: 1.4;">
+      Enter the person's name and email. They'll receive an invitation to create their account and access this client's galleries.
+    </p>
+    <div style="display: flex; flex-direction: column; gap: 12px;">
+      <div>
+        <label style="display: block; color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">Name *</label>
+        <input id="input-client-display-name" type="text" placeholder="e.g., Marco Rossi" style="width: 100%; padding: 8px 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); font-size: 14px; box-sizing: border-box; outline: none;" onfocus="this.style.borderColor='var(--accent-primary)'" onblur="this.style.borderColor='var(--border-color)'">
+      </div>
+      <div>
+        <label style="display: block; color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">Email *</label>
+        <input id="input-client-email" type="email" placeholder="marco@porsche-motorsport.com" style="width: 100%; padding: 8px 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); font-size: 14px; box-sizing: border-box; outline: none;" onfocus="this.style.borderColor='var(--accent-primary)'" onblur="this.style.borderColor='var(--border-color)'">
+      </div>
+    </div>
+    <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px;">
+      <button id="btn-cancel-client-user" style="background: var(--bg-light); color: var(--text-primary); border: 1px solid var(--border-color); padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px;">Cancel</button>
+      <button id="btn-save-client-user" style="background: var(--accent-primary); color: white; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">Send Invitation</button>
+    </div>
+  </div>
+</div>
+
+<!-- Create Gallery Modal -->
+<div id="modal-create-gallery" style="display: none; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); align-items: center; justify-content: center;">
+  <div style="background: var(--bg-medium); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; width: 100%; max-width: 440px; margin: auto;">
+    <h3 style="color: var(--text-primary); margin: 0 0 16px; font-size: 18px;">Create Gallery</h3>
+    <div style="display: flex; flex-direction: column; gap: 12px;">
+      <div>
+        <label style="display: block; color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">Gallery Title</label>
+        <input id="input-gallery-title" type="text" placeholder="e.g., IMSA Daytona 2026" style="width: 100%; padding: 8px 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); font-size: 14px; box-sizing: border-box; outline: none;" onfocus="this.style.borderColor='var(--accent-primary)'" onblur="this.style.borderColor='var(--border-color)'">
+      </div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+        <div>
+          <label style="display: block; color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">Access Type</label>
+          <select id="input-gallery-access" style="width: 100%; padding: 8px 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); font-size: 14px;">
+            <option value="unrestricted">Public (no code needed)</option>
+            <option value="code">Private (access code required)</option>
+          </select>
+        </div>
+        <div>
+          <label style="display: block; color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">Season / Championship</label>
+          <input id="input-gallery-season" type="text" placeholder="e.g., WEC 2026" style="width: 100%; padding: 8px 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); font-size: 14px; box-sizing: border-box; outline: none;" onfocus="this.style.borderColor='var(--accent-primary)'" onblur="this.style.borderColor='var(--border-color)'">
+        </div>
+      </div>
+      <div>
+        <label style="display: block; color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">Event Date</label>
+        <input id="input-gallery-event-date" type="date" style="width: 100%; padding: 8px 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); font-size: 14px; box-sizing: border-box; outline: none;" onfocus="this.style.borderColor='var(--accent-primary)'" onblur="this.style.borderColor='var(--border-color)'">
+      </div>
+    </div>
+    <div style="display: flex; gap: 8px; margin-top: 20px; justify-content: flex-end;">
+      <button id="btn-cancel-gallery" style="padding: 8px 16px; background: var(--bg-light); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); cursor: pointer; font-size: 13px;">Cancel</button>
+      <button id="btn-save-gallery" style="padding: 8px 16px; background: var(--accent-primary); border: none; border-radius: 8px; color: white; cursor: pointer; font-size: 13px; font-weight: 600;">Create Gallery</button>
+    </div>
+  </div>
+</div>
+
+<!-- Link Existing Gallery Modal -->
+<div id="modal-link-gallery" style="display: none; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); align-items: center; justify-content: center;">
+  <div style="background: var(--bg-medium); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; width: 100%; max-width: 440px; margin: auto;">
+    <h3 style="color: var(--text-primary); margin: 0 0 4px; font-size: 18px;">Link Existing Gallery</h3>
+    <p style="color: var(--text-muted); font-size: 12px; margin: 0 0 16px; line-height: 1.4;">
+      Select a gallery that is not yet assigned to any client.
+    </p>
+    <div>
+      <select id="select-link-gallery" style="width: 100%; padding: 10px 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); font-size: 14px; box-sizing: border-box; outline: none;" onfocus="this.style.borderColor='var(--accent-primary)'" onblur="this.style.borderColor='var(--border-color)'">
+        <option value="">Loading galleries...</option>
+      </select>
+    </div>
+    <div id="link-gallery-empty" style="display: none; text-align: center; padding: 16px; color: var(--text-muted); font-size: 13px; margin-top: 8px;">
+      All galleries are already assigned to clients. Use "+ New Gallery" to create one.
+    </div>
+    <div style="display: flex; gap: 8px; margin-top: 20px; justify-content: flex-end;">
+      <button id="btn-cancel-link-gallery" style="padding: 8px 16px; background: var(--bg-light); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); cursor: pointer; font-size: 13px;">Cancel</button>
+      <button id="btn-confirm-link-gallery" style="padding: 8px 16px; background: var(--accent-primary); border: none; border-radius: 8px; color: white; cursor: pointer; font-size: 13px; font-weight: 600;">Link Gallery</button>
+    </div>
+  </div>
+</div>
+
+<!-- Create Client Modal -->
+<div id="modal-create-project" style="display: none; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); align-items: center; justify-content: center;">
+  <div style="background: var(--bg-medium); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; width: 100%; max-width: 480px; margin: auto; max-height: 90vh; overflow-y: auto;">
+    <h3 id="modal-project-title" style="color: var(--text-primary); margin: 0 0 16px; font-size: 18px;">New Client</h3>
+    <div style="display: flex; flex-direction: column; gap: 12px;">
+      <!-- Client identity -->
+      <div>
+        <label style="display: block; color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">Client Name</label>
+        <input id="input-project-name" type="text" placeholder="e.g., Porsche Motorsport" style="width: 100%; padding: 8px 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); font-size: 14px; box-sizing: border-box; outline: none;" onfocus="this.style.borderColor='var(--accent-primary)'" onblur="this.style.borderColor='var(--border-color)'">
+      </div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+        <div>
+          <label style="display: block; color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">Client Type</label>
+          <select id="input-project-client-type" style="width: 100%; padding: 8px 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); font-size: 14px;">
+            <option value="team">Team</option>
+            <option value="sponsor">Sponsor</option>
+            <option value="organizer">Organizer</option>
+            <option value="media">Media</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div>
+          <label style="display: block; color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">Contact Email <span style="color: var(--text-muted); font-weight: 400;">(optional)</span></label>
+          <input id="input-project-email" type="email" placeholder="e.g., media@porsche.com" style="width: 100%; padding: 8px 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); font-size: 14px; box-sizing: border-box; outline: none;" onfocus="this.style.borderColor='var(--accent-primary)'" onblur="this.style.borderColor='var(--border-color)'">
+        </div>
+      </div>
+    </div>
+    <div style="display: flex; gap: 8px; margin-top: 20px; justify-content: flex-end;">
+      <button id="btn-cancel-project" style="padding: 8px 16px; background: transparent; border: 1px solid var(--border-color); border-radius: 8px; color: inherit; cursor: pointer; font-size: 13px;">Cancel</button>
+      <button id="btn-save-project" style="padding: 8px 16px; background: var(--accent-primary); border: none; border-radius: 8px; color: white; cursor: pointer; font-size: 13px; font-weight: 600;">Create Client</button>
+    </div>
+  </div>
+</div>
+
+<!-- Create Delivery Rule Modal -->
+<div id="modal-create-rule" style="display: none; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); align-items: center; justify-content: center;">
+  <div style="background: var(--bg-medium); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; width: 100%; max-width: 500px; margin: auto; max-height: 90vh; overflow-y: auto;">
+    <h3 style="color: var(--text-primary); margin: 0 0 16px; font-size: 18px;">Create Delivery Rule</h3>
+    <div style="display: flex; flex-direction: column; gap: 12px;">
+      <div>
+        <label style="display: block; color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">Rule Name</label>
+        <input id="input-rule-name" type="text" placeholder="e.g., Team Red Rule" style="width: 100%; padding: 8px 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); font-size: 14px; box-sizing: border-box; outline: none;" onfocus="this.style.borderColor='var(--accent-primary)'" onblur="this.style.borderColor='var(--border-color)'">
+      </div>
+      <div>
+        <label style="display: block; color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">Target Gallery</label>
+        <select id="input-rule-gallery" style="width: 100%; padding: 8px 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); font-size: 14px;">
+          <option value="">-- Select a gallery --</option>
+        </select>
+      </div>
+      <div style="border-top: 1px solid var(--border-color); padding-top: 12px; margin-top: 4px;">
+        <h4 style="color: var(--text-primary); font-size: 13px; font-weight: 600; margin: 0 0 12px;">Match Criteria</h4>
+        <div>
+          <label style="display: block; color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">Teams (comma-separated)</label>
+          <input id="input-rule-teams" type="text" placeholder="e.g., Ferrari, Mercedes" style="width: 100%; padding: 8px 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); font-size: 14px; box-sizing: border-box; outline: none;" onfocus="this.style.borderColor='var(--accent-primary)'" onblur="this.style.borderColor='var(--border-color)'">
+        </div>
+        <div style="margin-top: 8px;">
+          <label style="display: block; color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">Race Numbers (comma-separated)</label>
+          <input id="input-rule-numbers" type="text" placeholder="e.g., 1, 2, 3" style="width: 100%; padding: 8px 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); font-size: 14px; box-sizing: border-box; outline: none;" onfocus="this.style.borderColor='var(--accent-primary)'" onblur="this.style.borderColor='var(--border-color)'">
+        </div>
+        <div style="margin-top: 8px;">
+          <label style="display: block; color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">Participant Names (comma-separated)</label>
+          <input id="input-rule-participants" type="text" placeholder="e.g., Hamilton, Vettel" style="width: 100%; padding: 8px 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); font-size: 14px; box-sizing: border-box; outline: none;" onfocus="this.style.borderColor='var(--accent-primary)'" onblur="this.style.borderColor='var(--border-color)'">
+        </div>
+      </div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+        <div>
+          <label style="display: block; color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">Priority</label>
+          <input id="input-rule-priority" type="number" value="1" min="1" style="width: 100%; padding: 8px 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); font-size: 14px; box-sizing: border-box;">
+        </div>
+        <div style="display: flex; align-items: flex-end;">
+          <label style="display: flex; align-items: center; gap: 8px; color: var(--text-primary); font-size: 13px; cursor: pointer;">
+            <input id="input-rule-active" type="checkbox" checked style="width: 16px; height: 16px; cursor: pointer;">
+            Active
+          </label>
+        </div>
+      </div>
+    </div>
+    <div style="display: flex; gap: 8px; margin-top: 20px; justify-content: flex-end;">
+      <button id="btn-cancel-rule" style="padding: 8px 16px; background: var(--bg-light); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); cursor: pointer; font-size: 13px;">Cancel</button>
+      <button id="btn-save-rule" style="padding: 8px 16px; background: var(--accent-primary); border: none; border-radius: 8px; color: white; cursor: pointer; font-size: 13px; font-weight: 600;">Create Rule</button>
+    </div>
+  </div>
+</div>
+
+<!-- Gallery Detail/Admin Modal -->
+<div id="modal-gallery-detail" style="display: none; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); align-items: center; justify-content: center;">
+  <div style="background: var(--bg-medium); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; width: 100%; max-width: 500px; margin: auto; max-height: 90vh; overflow-y: auto;">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+      <h3 id="gallery-detail-title" style="color: var(--text-primary); margin: 0; font-size: 18px;">Gallery Details</h3>
+      <button id="btn-close-gallery-detail" style="background: none; border: none; color: var(--text-muted); font-size: 20px; cursor: pointer; padding: 0;">✕</button>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 16px;">
+      <div style="border-bottom: 1px solid var(--border-color); padding-bottom: 12px;">
+        <div style="margin-bottom: 8px;">
+          <label style="display: block; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Title</label>
+          <div id="gallery-detail-name" style="color: var(--text-primary); font-size: 14px; font-weight: 600;"></div>
+        </div>
+        <div style="margin-bottom: 8px;">
+          <label style="display: block; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Gallery Link</label>
+          <div id="gallery-detail-slug-wrapper" style="display: flex; align-items: center; gap: 8px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; padding: 6px 10px; cursor: pointer; transition: border-color 0.2s;" onclick="copyGalleryLink()" onmouseenter="this.style.borderColor='#06b6d4'" onmouseleave="this.style.borderColor='var(--border-color)'">
+            <span id="gallery-detail-slug" style="color: var(--text-primary); font-size: 12px; font-family: Monaco, Consolas, monospace; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"></span>
+            <span id="gallery-slug-copy-icon" style="color: var(--text-muted); font-size: 14px; flex-shrink: 0;" title="Copy link">📋</span>
+          </div>
+        </div>
+        <div style="margin-bottom: 8px;">
+          <label style="display: block; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Access</label>
+          <select id="gallery-detail-access-type" style="width: 100%; padding: 6px 10px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); font-size: 12px; cursor: pointer;">
+            <option value="unrestricted">🌐 Public — anyone with the link</option>
+            <option value="code">🔒 Access code required</option>
+            <option value="password">🔑 Password protected</option>
+          </select>
+        </div>
+        <div>
+          <label style="display: block; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Status</label>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <span id="gallery-detail-status" style="font-size: 10px; padding: 2px 8px; border-radius: 99px; background: rgba(16,185,129,0.2); color: #10b981;"></span>
+          </div>
+        </div>
+      </div>
+      <div style="border-bottom: 1px solid var(--border-color); padding-bottom: 12px;">
+        <h4 style="color: var(--text-primary); font-size: 13px; font-weight: 600; margin: 0 0 8px;">Statistics</h4>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+          <div style="background: var(--bg-dark); padding: 8px; border-radius: 6px;">
+            <div style="color: var(--text-muted); font-size: 11px;">Views</div>
+            <div id="gallery-detail-views" style="color: var(--text-primary); font-size: 16px; font-weight: 600;">0</div>
+          </div>
+          <div style="background: var(--bg-dark); padding: 8px; border-radius: 6px;">
+            <div style="color: var(--text-muted); font-size: 11px;">Downloads</div>
+            <div id="gallery-detail-downloads" style="color: var(--text-primary); font-size: 16px; font-weight: 600;">0</div>
+          </div>
+        </div>
+      </div>
+      <div style="border-bottom: 1px solid var(--border-color); padding-bottom: 12px;">
+        <h4 style="color: var(--text-primary); font-size: 13px; font-weight: 600; margin: 0 0 8px;">Executions in Gallery</h4>
+
+        <!-- List of already-linked executions -->
+        <div id="gallery-linked-executions" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px;">
+          <div id="gallery-linked-empty" style="color: var(--text-muted); font-size: 12px; padding: 8px 0;">No executions added yet.</div>
+        </div>
+
+        <!-- Add execution picker (hidden by default) -->
+        <div id="gallery-add-execution-picker" style="display: none; margin-bottom: 8px;">
+          <div style="display: flex; gap: 8px;">
+            <select id="gallery-detail-execution-select" style="flex: 1; padding: 8px 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); font-size: 12px;">
+              <option value="">-- Select execution --</option>
+            </select>
+            <button id="btn-send-execution-to-gallery" style="padding: 8px 14px; background: var(--accent-primary); border: none; border-radius: 8px; color: white; cursor: pointer; font-size: 12px; font-weight: 600; white-space: nowrap;">Add</button>
+          </div>
+        </div>
+
+        <!-- Add execution button -->
+        <button id="btn-show-add-execution" style="width: 100%; padding: 8px 12px; background: var(--bg-dark); border: 1px dashed var(--border-color); border-radius: 8px; color: var(--text-muted); cursor: pointer; font-size: 12px; transition: border-color 0.2s, color 0.2s;" onmouseenter="this.style.borderColor='var(--accent-primary)';this.style.color='var(--text-primary)'" onmouseleave="this.style.borderColor='var(--border-color)';this.style.color='var(--text-muted)'">
+          + Add Execution
+        </button>
+      </div>
+      <div style="display: flex; gap: 8px;">
+        <button id="btn-toggle-gallery-status" style="flex: 1; padding: 8px 12px; background: var(--bg-light); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); cursor: pointer; font-size: 13px; font-weight: 600;">Publish/Unpublish</button>
+        <button id="btn-delete-gallery" style="flex: 1; padding: 8px 12px; background: rgba(239,68,68,0.2); border: 1px solid rgba(239,68,68,0.3); border-radius: 8px; color: #ef4444; cursor: pointer; font-size: 13px; font-weight: 600;">Delete</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Post-Execution Routing Banner -->
+<div id="delivery-routing-banner" style="display: none; position: fixed; bottom: 20px; right: 20px; background: var(--bg-card); border: 1px solid rgba(16,185,129,0.4); border-radius: 12px; padding: 16px 20px; max-width: 380px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); z-index: 500;">
+  <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <span style="font-size: 18px;">🔀</span>
+      <h4 style="color: var(--text-primary); margin: 0; font-size: 14px; font-weight: 600;">Auto-Routing Complete</h4>
+    </div>
+    <button style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 18px; padding: 0; line-height: 1;" onclick="document.getElementById('delivery-routing-banner').style.display='none';">✕</button>
+  </div>
+  <p id="delivery-routing-message" style="color: var(--text-primary); font-size: 13px; margin: 0 0: 12px; line-height: 1.4;">Photos routed successfully.</p>
+  <button id="btn-routing-banner-view" style="width: 100%; padding: 8px 12px; margin-top: 12px; background: var(--accent-primary); border: none; border-radius: 8px; color: white; cursor: pointer; font-size: 13px; font-weight: 600; transition: opacity 0.2s;" onmouseenter="this.style.opacity='0.85'" onmouseleave="this.style.opacity='1'">View in Delivery Page</button>
+</div>

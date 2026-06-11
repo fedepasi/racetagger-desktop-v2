@@ -182,9 +182,13 @@ describe('JPEG Metadata Writing', () => {
     await writeKeywordsToImage(testFile, ['20', 'Second'], true, 'overwrite');
 
     const metadata = await validator.readMetadata(testFile);
-    const keywords = String(metadata['Keywords'] || '');
+    // simplifyKeywords lowercases (sanitizeKeyword) — compare case-insensitively.
+    const keywords = String(metadata['Keywords'] || '').toLowerCase();
+    // Overwrite must REPLACE, not accumulate: new keywords present, old ones gone.
     expect(keywords).toContain('20');
-    expect(keywords).toContain('Second');
+    expect(keywords).toContain('second');
+    expect(keywords).not.toContain('10');
+    expect(keywords).not.toContain('first');
   });
 
   test('append mode adds keywords without removing existing ones', async () => {
@@ -199,9 +203,13 @@ describe('JPEG Metadata Writing', () => {
     await writeKeywordsToImage(testFile, ['RaceTagger', 'Monza'], true, 'append');
 
     const metadata = await validator.readMetadata(testFile);
-    const keywords = String(metadata['Keywords'] || '');
+    // simplifyKeywords lowercases — compare case-insensitively.
+    const keywords = String(metadata['Keywords'] || '').toLowerCase();
+    // Append must KEEP the first batch AND add the new keywords.
     expect(keywords).toContain('42');
-    expect(keywords).toContain('RaceTagger');
+    expect(keywords).toContain('pro');
+    expect(keywords).toContain('racetagger');
+    expect(keywords).toContain('monza');
   });
 
   test('batch metadata writes to 50+ files without file handle leaks', async () => {
@@ -223,5 +231,5 @@ describe('JPEG Metadata Writing', () => {
     const sampleFile = testFiles[25];
     const metadata = await validator.readMetadata(sampleFile);
     expect(metadata['Keywords']).toBeDefined();
-  }, 60000); // 60s timeout for batch
+  }, 180000); // 3min: append mode does 2 exiftool spawns/file; slow on constrained CI/dev boxes
 });

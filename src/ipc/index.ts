@@ -42,6 +42,9 @@ import { registerVersionHandlers } from './version-handlers';
 import { registerFeedbackHandlers } from './feedback-handlers';
 import { registerDiagnosticHandlers } from './diagnostic-handlers';
 import { registerErrorTelemetryHandlers } from './error-telemetry-handlers';
+import { registerPresetIptcHandlers } from './preset-iptc-handlers';
+import { registerUnifiedExportHandler } from './unified-export-handler';
+import { registerDeliveryHandlers } from './delivery-handlers';
 
 /**
  * Initialize IPC context with mainWindow reference
@@ -108,8 +111,17 @@ export function registerAllHandlers(): void {
   // Error telemetry handlers (3)
   registerErrorTelemetryHandlers();
 
+  // IPTC metadata handlers (4)
+  registerPresetIptcHandlers();
+
+  // Unified export handler (1)
+  registerUnifiedExportHandler();
+
+  // Delivery handlers (14)
+  registerDeliveryHandlers();
+
   console.log('[IPC] ========================================');
-  console.log('[IPC] All handlers registered (136 modular handlers)');
+  console.log('[IPC] All handlers registered (155 modular handlers)');
   console.log('[IPC] ========================================');
 }
 
@@ -118,6 +130,7 @@ export { getMainWindow, setMainWindow, safeSend, safeSendToSender } from './cont
 export { getGlobalCsvData, setGlobalCsvData } from './context';
 export { getBatchConfig, setBatchConfig } from './context';
 export { isBatchProcessingCancelled, setBatchProcessingCancelled } from './context';
+export { getActiveProcessingExecutionId, setActiveProcessingExecutionId } from './context';
 export { getSupabase, getSupabaseImageUrlCache } from './context';
 export { isForceUpdateRequired, setVersionCheckResult, getVersionCheckResult } from './context';
 

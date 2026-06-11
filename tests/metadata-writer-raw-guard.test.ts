@@ -15,10 +15,14 @@ jest.mock('../src/utils/native-tool-manager', () => ({
   },
 }));
 
-// Mock xmp-manager
+// Mock xmp-manager. Both sidecar builders must be stubbed: writeFullMetadata
+// routes RAW files to createFullXmpSidecar in IPTC-Pro mode (creator/copyright/
+// credit present) and to createXmpSidecar otherwise.
 const mockCreateXmpSidecar = jest.fn().mockResolvedValue('/test/image.xmp');
+const mockCreateFullXmpSidecar = jest.fn().mockResolvedValue('/test/image.xmp');
 jest.mock('../src/utils/xmp-manager', () => ({
   createXmpSidecar: mockCreateXmpSidecar,
+  createFullXmpSidecar: mockCreateFullXmpSidecar,
 }));
 
 import {
@@ -206,7 +210,7 @@ describe('B1: RAW file metadata protection', () => {
   });
 
   describe('writeFullMetadata', () => {
-    it('should write to XMP sidecar for RAW files with keywords', async () => {
+    it('should write a full XMP sidecar for RAW files in IPTC-Pro mode', async () => {
       await writeFullMetadata('/photos/DSC.orf', {
         keywords: ['ferrari', 'gt3', 'monza'],
         creator: 'John Photographer',
@@ -214,11 +218,17 @@ describe('B1: RAW file metadata protection', () => {
         description: 'Ferrari 296 GT3 at Monza',
       });
 
-      expect(mockCreateXmpSidecar).toHaveBeenCalledWith(
+      // creator + copyright => IPTC-Pro mode => createFullXmpSidecar(path, metadata)
+      expect(mockCreateFullXmpSidecar).toHaveBeenCalledWith(
         '/photos/DSC.orf',
-        expect.arrayContaining(['ferrari', 'gt3', 'monza', 'John Photographer', 'racetagger']),
-        'Ferrari 296 GT3 at Monza'
+        expect.objectContaining({
+          keywords: ['ferrari', 'gt3', 'monza'],
+          creator: 'John Photographer',
+          copyright: '2025 John Photo',
+          description: 'Ferrari 296 GT3 at Monza',
+        })
       );
+      expect(mockCreateXmpSidecar).not.toHaveBeenCalled();
       expect(mockExecuteTool).not.toHaveBeenCalled();
     });
 
@@ -281,8 +291,11 @@ describe('B1: RAW file metadata protection', () => {
         expect(lastArg).not.toMatch(/\.(nef|arw|cr2|cr3|orf|raw|rw2|dng)$/i);
       }
 
-      // XMP sidecar should have been called 5 times (once per function)
-      expect(mockCreateXmpSidecar).toHaveBeenCalledTimes(5);
+      // 4 simple-sidecar writes (keywords, special-instructions, extended
+      // description, person-shown) + 1 FULL sidecar (writeFullMetadata in
+      // IPTC-Pro mode, since copyright/creator are present).
+      expect(mockCreateXmpSidecar).toHaveBeenCalledTimes(4);
+      expect(mockCreateFullXmpSidecar).toHaveBeenCalledTimes(1);
     });
   });
 });

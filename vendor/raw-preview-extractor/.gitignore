@@ -7,7 +7,8 @@ yarn-error.log*
 # Build output
 build/
 dist/
-prebuilds/
+# NOTE: prebuilds/ is NOT ignored — native .node binaries must be in the repo
+# because CI cannot compile C++ native addons from source
 
 # TypeScript
 *.tsbuildinfo
@@ -47,8 +48,8 @@ test/samples/*.rw2
 examples/electron-app/dist/
 examples/electron-app/node_modules/
 
-# Native build artifacts
-*.node
+# Native build artifacts (except .node prebuilds which are committed)
+!prebuilds/**/*.node
 *.obj
 *.pdb
 *.exp

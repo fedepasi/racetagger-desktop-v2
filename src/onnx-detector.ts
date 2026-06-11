@@ -33,6 +33,14 @@ export interface OnnxDetection {
   classIndex: number;  // Class index
   className: string;   // Class name (e.g., "SF-25_16")
   raceNumber: string | null;  // Extracted race number (e.g., "16")
+  /** Diagnostic: second-best class info for ambiguity analysis */
+  _ambiguityInfo?: {
+    secondClassName: string;
+    secondConfidence: number;
+    secondRaceNumber: string | null;
+    gap: number;          // confidence - secondConfidence
+    ratio: number;        // secondConfidence / confidence
+  };
 }
 
 /**
@@ -48,6 +56,8 @@ export interface OnnxAnalysisResult {
     width: number;
     height: number;
   };
+  /** Diagnostic: ambiguity info propagated from detection */
+  _ambiguityInfo?: OnnxDetection['_ambiguityInfo'];
 }
 
 /**
@@ -58,6 +68,18 @@ interface ModelConfig {
   confidenceThreshold: number;
   iouThreshold: number;
   classes: string[];
+  preprocessingMethod: 'stretch' | 'letterbox';
+  outputFormat: 'yolo-nms' | 'yolo-end2end' | 'rf-detr';
+}
+
+/**
+ * Letterbox padding info for coordinate transform
+ * Stored after preprocessing to allow bbox "unletterboxing"
+ */
+interface LetterboxInfo {
+  scale: number;   // Scale factor applied to the image
+  padX: number;    // Horizontal padding in pixels (each side)
+  padY: number;    // Vertical padding in pixels (each side)
 }
 
 /**
@@ -74,6 +96,7 @@ export class OnnxDetector {
   private modelManager: ModelManager;
   private loadingPromise: Promise<boolean> | null = null;  // Track ongoing load operation
   private lastImageDimensions: { width: number; height: number } | null = null;  // Original image dimensions for bbox mapping
+  private lastLetterboxInfo: LetterboxInfo | null = null;  // Letterbox padding info for bbox unletterboxing
 
   private constructor() {
     this.modelManager = getModelManager();
@@ -173,13 +196,8 @@ export class OnnxDetector {
         safeSend('model-download-complete', { categoryCode });
       }
 
-      // Skip if same model already loaded
-      if (this.session && this.currentModelPath === modelPath) {
-        this.isLoading = false;
-        return true;
-      }
-
-      // Load model configuration
+      // Load model configuration (always refresh config even if session is cached,
+      // so that metadata changes like preprocessingMethod are picked up)
       const config = this.modelManager.getLocalModelConfig(categoryCode);
       if (!config) {
         throw new Error(`Model config not found for ${categoryCode}`);
@@ -190,7 +208,16 @@ export class OnnxDetector {
         confidenceThreshold: config.confidenceThreshold,
         iouThreshold: config.iouThreshold,
         classes: config.classes,
+        preprocessingMethod: config.preprocessingMethod || 'stretch',
+        outputFormat: config.outputFormat || 'yolo-nms',
       };
+      console.log(`[OnnxDetector] Preprocessing method: ${this.modelConfig.preprocessingMethod}, Output format: ${this.modelConfig.outputFormat}`);
+
+      // Skip ONNX session creation if same model file already loaded
+      if (this.session && this.currentModelPath === modelPath) {
+        this.isLoading = false;
+        return true;
+      }
 
       // Create inference session
       const sessionOptions: import('onnxruntime-node').InferenceSession.SessionOptions = {
@@ -237,10 +264,19 @@ export class OnnxDetector {
 
   /**
    * Preprocess image for inference
-   * Matches Roboflow training pipeline:
-   * 1. Auto-orient based on EXIF (Roboflow "Auto-Orient: Applied")
-   * 2. Resize to 640x640 STRETCH (Roboflow "Stretch to 640x640")
-   * 3. Simple /255 normalization (Roboflow default, NOT ImageNet!)
+   * Supports two modes based on model training configuration:
+   *
+   * STRETCH (Roboflow default):
+   * 1. Auto-orient based on EXIF
+   * 2. Resize to 640x640 with fit:'fill' (distorts aspect ratio)
+   * 3. Simple /255 normalization
+   *
+   * LETTERBOX (aspect ratio preserved):
+   * 1. Auto-orient based on EXIF
+   * 2. Resize to fit within 640x640 preserving aspect ratio (fit:'contain')
+   * 3. Pad remaining space with gray (114,114,114) — YOLO standard
+   * 4. Simple /255 normalization
+   * 5. Store padding info for bbox coordinate compensation
    */
   private async preprocessImage(imageBuffer: Buffer): Promise<Float32Array> {
     if (!this.modelConfig) {
@@ -248,34 +284,72 @@ export class OnnxDetector {
     }
 
     const [targetWidth, targetHeight] = this.modelConfig.inputSize;
+    const useLetterbox = this.modelConfig.preprocessingMethod === 'letterbox';
 
-    // Save original image dimensions for bbox mapping
-    const metadata = await sharp(imageBuffer).metadata();
+    // Get original image dimensions (after EXIF rotation)
+    const rotatedBuffer = await sharp(imageBuffer).rotate().toBuffer();
+    const metadata = await sharp(rotatedBuffer).metadata();
     this.lastImageDimensions = {
       width: metadata.width!,
       height: metadata.height!
     };
 
-    // Resize and convert to RGB
-    const { data, info } = await sharp(imageBuffer)
-      .rotate()  // Auto-rotate based on EXIF orientation data (matches Roboflow "Auto-Orient: Applied")
-      .resize(targetWidth, targetHeight, {
-        fit: 'fill',
-        kernel: 'lanczos3',
-      })
-      .removeAlpha()
-      .raw()
-      .toBuffer({ resolveWithObject: true });
+    let data: Buffer;
 
-    // NORMALIZATION SELECTION based on model type
-    // Roboflow YOLO training uses SIMPLE /255 normalization (NOT ImageNet!)
-    // Verified via notebook testing - ImageNet normalization causes 0.0 confidence
-    const useImageNetNorm = false; // YOLOv11 trained with SIMPLE /255 normalization (Roboflow default)
+    if (useLetterbox) {
+      // LETTERBOX: preserve aspect ratio, pad with gray
+      const origW = metadata.width!;
+      const origH = metadata.height!;
+      const scale = Math.min(targetWidth / origW, targetHeight / origH);
+      const scaledW = Math.round(origW * scale);
+      const scaledH = Math.round(origH * scale);
+      const padX = Math.round((targetWidth - scaledW) / 2);
+      const padY = Math.round((targetHeight - scaledH) / 2);
 
-    const mean = [0.485, 0.456, 0.406];  // RGB (ImageNet)
-    const std = [0.229, 0.224, 0.225];   // RGB (ImageNet)
+      // Store letterbox info for bbox unletterboxing
+      this.lastLetterboxInfo = { scale, padX, padY };
 
-    // Convert to Float32 (CHW format: channels, height, width)
+      const resized = await sharp(rotatedBuffer)
+        .resize(scaledW, scaledH, { fit: 'fill', kernel: 'lanczos3' })
+        .removeAlpha()
+        .raw()
+        .toBuffer();
+
+      // Create target buffer filled with gray (114,114,114) — YOLO standard padding color
+      const targetPixels = targetWidth * targetHeight * 3;
+      const padded = Buffer.alloc(targetPixels);
+      for (let i = 0; i < targetPixels; i += 3) {
+        padded[i] = 114;     // R
+        padded[i + 1] = 114; // G
+        padded[i + 2] = 114; // B
+      }
+
+      // Copy resized image into padded buffer at offset
+      for (let row = 0; row < scaledH; row++) {
+        const srcOffset = row * scaledW * 3;
+        const dstOffset = ((row + padY) * targetWidth + padX) * 3;
+        resized.copy(padded, dstOffset, srcOffset, srcOffset + scaledW * 3);
+      }
+
+      data = padded;
+      console.log(`[ONNX-Preprocess] Letterbox: ${origW}x${origH} → ${scaledW}x${scaledH} + pad(${padX},${padY}) → ${targetWidth}x${targetHeight}`);
+    } else {
+      // STRETCH: distort to fill (Roboflow default)
+      this.lastLetterboxInfo = null;
+
+      const result = await sharp(rotatedBuffer)
+        .resize(targetWidth, targetHeight, {
+          fit: 'fill',
+          kernel: 'lanczos3',
+        })
+        .removeAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+      data = result.data;
+      console.log(`[ONNX-Preprocess] Stretch: ${metadata.width}x${metadata.height} → ${targetWidth}x${targetHeight}`);
+    }
+
+    // NORMALIZATION: Simple /255 (Roboflow YOLO default, NOT ImageNet)
     const floatData = new Float32Array(3 * targetHeight * targetWidth);
 
     for (let c = 0; c < 3; c++) {
@@ -283,18 +357,10 @@ export class OnnxDetector {
         for (let w = 0; w < targetWidth; w++) {
           const srcIdx = (h * targetWidth + w) * 3 + c;
           const dstIdx = c * targetHeight * targetWidth + h * targetWidth + w;
-
-          if (useImageNetNorm) {
-            // ImageNet normalization: (pixel / 255.0 - mean) / std
-            floatData[dstIdx] = (data[srcIdx] / 255.0 - mean[c]) / std[c];
-          } else {
-            // Simple normalization: pixel / 255.0 (YOLOv11 standard)
-            floatData[dstIdx] = data[srcIdx] / 255.0;
-          }
+          floatData[dstIdx] = data[srcIdx] / 255.0;
         }
       }
     }
-    console.log(`[ONNX-Preprocess] Using ${useImageNetNorm ? 'ImageNet' : 'Simple'} normalization`);
 
     return floatData;
   }
@@ -306,6 +372,7 @@ export class OnnxDetector {
   public async detect(imageBuffer: Buffer): Promise<{
     results: OnnxAnalysisResult[];
     imageSize: { width: number; height: number };
+    preprocessingMethod: 'stretch' | 'letterbox';
   }> {
     if (!this.session || !this.modelConfig || !ort) {
       throw new Error('Model not loaded. Call loadModel() first.');
@@ -342,23 +409,47 @@ export class OnnxDetector {
       // Parse detections based on output format
       const detections = this.parseDetections(results);
 
-      // Apply NMS
-      const filteredDetections = this.applyNMS(detections, this.modelConfig.iouThreshold);
+      // Apply NMS (skip for end2end and rf-detr models that handle suppression internally)
+      const filteredDetections = this.modelConfig.outputFormat === 'yolo-end2end' || this.modelConfig.outputFormat === 'rf-detr'
+        ? detections
+        : this.applyNMS(detections, this.modelConfig.iouThreshold);
 
-      // Convert to analysis results
+      // Convert to analysis results, applying letterbox compensation if needed
       const analysisResults = filteredDetections
         .filter(d => d.confidence >= this.modelConfig!.confidenceThreshold)
-        .map(d => ({
-          raceNumber: d.raceNumber || 'unknown',
-          confidence: d.confidence,
-          className: d.className,
-          boundingBox: {
-            x: d.x,
-            y: d.y,
-            width: d.width,
-            height: d.height,
-          },
-        }))
+        .map(d => {
+          let bx = d.x, by = d.y, bw = d.width, bh = d.height;
+
+          // Unletterbox: convert bbox from padded input space to original image space (normalized 0-1)
+          if (this.lastLetterboxInfo) {
+            const [inputW, inputH] = this.modelConfig!.inputSize;
+            const { padX, padY } = this.lastLetterboxInfo;
+            const padXNorm = padX / inputW;
+            const padYNorm = padY / inputH;
+            const scaleXNorm = (inputW - 2 * padX) / inputW;
+            const scaleYNorm = (inputH - 2 * padY) / inputH;
+
+            // Remove padding offset and rescale to original image proportions
+            bx = (bx - padXNorm) / scaleXNorm;
+            by = (by - padYNorm) / scaleYNorm;
+            bw = bw / scaleXNorm;
+            bh = bh / scaleYNorm;
+
+            // Clamp to [0, 1] range (detections near padding edge)
+            bx = Math.max(0, Math.min(1, bx));
+            by = Math.max(0, Math.min(1, by));
+            bw = Math.min(bw, 1 - bx);
+            bh = Math.min(bh, 1 - by);
+          }
+
+          return {
+            raceNumber: d.raceNumber || 'unknown',
+            confidence: d.confidence,
+            className: d.className,
+            boundingBox: { x: bx, y: by, width: bw, height: bh },
+            ...(d._ambiguityInfo ? { _ambiguityInfo: d._ambiguityInfo } : {}),
+          };
+        })
         .filter(r => r.raceNumber !== 'unknown');
 
       // DEBUG: Detection summary with class distribution
@@ -382,7 +473,8 @@ export class OnnxDetector {
 
       return {
         results: analysisResults,
-        imageSize: this.lastImageDimensions!
+        imageSize: this.lastImageDimensions!,
+        preprocessingMethod: this.modelConfig.preprocessingMethod,
       };
     } catch (error) {
       console.error('[OnnxDetector] Detection failed:', error);
@@ -440,12 +532,16 @@ export class OnnxDetector {
       for (let i = 0; i < numDetections; i++) {
         let confidence: number;
         let classIndex: number;
+        let secondBestScore = -Infinity;
+        let secondBestIdx = -1;
 
         if (isMultiClassFormat) {
           // Multi-class format: find argmax across class scores for this detection
           // Skip index 0 if model has background class (score indices start from 1)
           let maxScore = -Infinity;
+          let secondMaxScore = -Infinity;
           let bestClassIndex = 0;
+          let secondBestClassIndex = 0;
           const startIdx = hasBackgroundClass ? 1 : 0;  // Skip background if present
           const endIdx = hasBackgroundClass ? numClasses + 1 : numClasses;  // Only check real classes
 
@@ -453,14 +549,21 @@ export class OnnxDetector {
             const scoreIdx = i * scoresPerDetection + c;
             const classScore = this.sigmoid(scores[scoreIdx]);
             if (classScore > maxScore) {
+              secondMaxScore = maxScore;
+              secondBestClassIndex = bestClassIndex;
               maxScore = classScore;
               bestClassIndex = c;
+            } else if (classScore > secondMaxScore) {
+              secondMaxScore = classScore;
+              secondBestClassIndex = c;
             }
           }
 
           confidence = maxScore;
           // Adjust for background offset: model index 1 = our index 0
           classIndex = hasBackgroundClass ? bestClassIndex - 1 : bestClassIndex;
+          secondBestScore = secondMaxScore;
+          secondBestIdx = hasBackgroundClass ? secondBestClassIndex - 1 : secondBestClassIndex;
         } else {
           // Single score format: use labels tensor for class
           confidence = this.sigmoid(scores[i]);
@@ -521,6 +624,11 @@ export class OnnxDetector {
         const cornerX = centerX - boxWidth / 2;
         const cornerY = centerY - boxHeight / 2;
 
+        // Build ambiguity info if multi-class format had a valid second candidate
+        const secondClassName = (isMultiClassFormat && secondBestScore > -Infinity && secondBestIdx >= 0)
+          ? (this.modelConfig.classes[secondBestIdx] || `class_${secondBestIdx}`)
+          : undefined;
+
         detections.push({
           x: cornerX,      // Top-left X (normalized 0-1)
           y: cornerY,      // Top-left Y (normalized 0-1)
@@ -530,11 +638,20 @@ export class OnnxDetector {
           classIndex,
           className,
           raceNumber: this.extractRaceNumber(className),
+          ...(isMultiClassFormat && secondClassName && secondBestScore > 0.05 ? {
+            _ambiguityInfo: {
+              secondClassName,
+              secondConfidence: secondBestScore,
+              secondRaceNumber: this.extractRaceNumber(secondClassName),
+              gap: confidence - secondBestScore,
+              ratio: secondBestScore / confidence,
+            }
+          } : {}),
         });
       }
     }
 
-    // Format 2: Combined output tensor (YOLOv11/YOLOv8 format)
+    // Format 2: Combined output tensor (YOLOv11/YOLOv8/YOLO26 format)
     else if (results['output'] || results['detections'] || results['output0']) {
       console.log('[ONNX-Parse] Using YOLO combined format');
       const outputTensor = results['output'] || results['detections'] || results['output0'];
@@ -549,6 +666,60 @@ export class OnnxDetector {
 
         console.log(`[ONNX-Parse] 3D tensor format: [${batchSize}, ${dim1}, ${dim2}]`);
         console.log(`[ONNX-Parse] Model has ${this.modelConfig.classes.length} classes`);
+
+        // Format 3: YOLO end2end format [1, max_det, 6] with [x1, y1, x2, y2, conf, class_id]
+        // Produced by YOLO26 (and others) exported with end2end=True. No NMS needed.
+        if (this.modelConfig.outputFormat === 'yolo-end2end' && dim2 === 6) {
+          console.log(`[ONNX-Parse] Detected YOLO end2end format [1, ${dim1}, 6] — no NMS needed`);
+          const numDetections = dim1;
+          const [inputW, inputH] = this.modelConfig.inputSize;
+
+          for (let i = 0; i < numDetections; i++) {
+            const offset = i * 6;
+            const x1 = output[offset];
+            const y1 = output[offset + 1];
+            const x2 = output[offset + 2];
+            const y2 = output[offset + 3];
+            const confidence = output[offset + 4];
+            const classId = Math.round(output[offset + 5]);
+
+            // Skip padding/empty detections (confidence 0 or very low)
+            if (confidence < 0.1) continue;
+
+            // Convert [x1,y1,x2,y2] pixel coords to normalized center-based [cx,cy,w,h]
+            const boxWidth = x2 - x1;
+            const boxHeight = y2 - y1;
+
+            // Normalize to 0-1 range (end2end coords are in pixel space relative to input size)
+            const normWidth = boxWidth / inputW;
+            const normHeight = boxHeight / inputH;
+            const normCx = (x1 + boxWidth / 2) / inputW;
+            const normCy = (y1 + boxHeight / 2) / inputH;
+
+            // Convert from center-based to corner-based (top-left) for frontend display
+            const cornerX = normCx - normWidth / 2;
+            const cornerY = normCy - normHeight / 2;
+
+            const classIndex = Math.max(0, Math.min(classId, this.modelConfig.classes.length - 1));
+            const className = this.modelConfig.classes[classIndex] || `class_${classIndex}`;
+
+            detections.push({
+              x: cornerX,
+              y: cornerY,
+              width: normWidth,
+              height: normHeight,
+              confidence,
+              classIndex,
+              className,
+              raceNumber: this.extractRaceNumber(className),
+            });
+          }
+
+          console.log(`[ONNX-Parse] End2end detections found: ${detections.length}`);
+        }
+
+        // Format 2a: YOLOv11 transposed format [1, 4+num_classes, num_anchors]
+        else {
         console.log(`[ONNX-Parse] Expected transposed dim1: ${4 + this.modelConfig.classes.length}`);
 
         // YOLOv11 transposed format: [1, 4+num_classes, num_anchors]
@@ -624,24 +795,30 @@ export class OnnxDetector {
               }
             }
 
+            let secondMaxClassScore = 0;
+            let secondBestClassIndex = 0;
+
             for (let c = 0; c < numClasses; c++) {
               const classScore = output[(4 + c) * numAnchors + i];
               if (classScore > maxClassScore) {
+                secondMaxClassScore = maxClassScore;
+                secondBestClassIndex = bestClassIndex;
                 maxClassScore = classScore;
                 bestClassIndex = c;
+              } else if (classScore > secondMaxClassScore) {
+                secondMaxClassScore = classScore;
+                secondBestClassIndex = c;
               }
             }
 
             const confidence = maxClassScore; // YOLOv11 already combines objectness*class_prob
 
-            // DEBUG: Sample first 10 anchors unconditionally to see raw values
-            if (sampledAnchors < 10) {
-              const className = this.modelConfig.classes[bestClassIndex] || `class_${bestClassIndex}`;
-            }
-
             if (confidence < 0.1) continue;
 
             const className = this.modelConfig.classes[bestClassIndex] || `class_${bestClassIndex}`;
+            const secondClassName = (secondMaxClassScore > 0.05)
+              ? (this.modelConfig.classes[secondBestClassIndex] || `class_${secondBestClassIndex}`)
+              : undefined;
 
             // YOLOv11 outputs center-based coords, normalized 0-1
             const [inputW, inputH] = this.modelConfig.inputSize;
@@ -663,6 +840,15 @@ export class OnnxDetector {
               classIndex: bestClassIndex,
               className,
               raceNumber: this.extractRaceNumber(className),
+              ...(secondClassName ? {
+                _ambiguityInfo: {
+                  secondClassName,
+                  secondConfidence: secondMaxClassScore,
+                  secondRaceNumber: this.extractRaceNumber(secondClassName),
+                  gap: confidence - secondMaxClassScore,
+                  ratio: secondMaxClassScore / confidence,
+                }
+              } : {}),
             });
           }
         } else {
@@ -683,20 +869,31 @@ export class OnnxDetector {
 
             // Find best class (apply sigmoid to class scores)
             let maxClassScore = 0;
+            let secondMaxClassScore = 0;
             let bestClassIndex = 0;
+            let secondBestClassIndex = 0;
 
             for (let c = 0; c < this.modelConfig.classes.length; c++) {
               const classScore = this.sigmoid(output[offset + 5 + c] || 0);
               if (classScore > maxClassScore) {
+                secondMaxClassScore = maxClassScore;
+                secondBestClassIndex = bestClassIndex;
                 maxClassScore = classScore;
                 bestClassIndex = c;
+              } else if (classScore > secondMaxClassScore) {
+                secondMaxClassScore = classScore;
+                secondBestClassIndex = c;
               }
             }
 
             const confidence = objectness * maxClassScore;
+            const secondConfidence = objectness * secondMaxClassScore;
             if (confidence < 0.1) continue;
 
             const className = this.modelConfig.classes[bestClassIndex] || `class_${bestClassIndex}`;
+            const secondClassName = (secondConfidence > 0.05)
+              ? (this.modelConfig.classes[secondBestClassIndex] || `class_${secondBestClassIndex}`)
+              : undefined;
 
             detections.push({
               x,
@@ -707,9 +904,19 @@ export class OnnxDetector {
               classIndex: bestClassIndex,
               className,
               raceNumber: this.extractRaceNumber(className),
+              ...(secondClassName ? {
+                _ambiguityInfo: {
+                  secondClassName,
+                  secondConfidence,
+                  secondRaceNumber: this.extractRaceNumber(secondClassName),
+                  gap: confidence - secondConfidence,
+                  ratio: secondConfidence / confidence,
+                }
+              } : {}),
             });
           }
         }
+      } // end else (Format 2a transposed/standard)
       }
     } else {
       console.warn('[ONNX-Parse] ⚠️ Unrecognized output format. Available tensors:', outputNames);
@@ -717,6 +924,36 @@ export class OnnxDetector {
     }
 
     console.log(`[ONNX-Parse] Parsed ${detections.length} detections before NMS`);
+
+    // === DIAGNOSTIC: Ambiguity analysis ===
+    const ambiguousDetections = detections.filter(d => d._ambiguityInfo);
+    if (ambiguousDetections.length > 0) {
+      console.log(`[ONNX-Ambiguity] 📊 ${ambiguousDetections.length}/${detections.length} detections have a second candidate (conf > 0.05)`);
+
+      // Categorize by gap severity
+      const critical = ambiguousDetections.filter(d => d._ambiguityInfo!.gap < 0.05);
+      const warning = ambiguousDetections.filter(d => d._ambiguityInfo!.gap >= 0.05 && d._ambiguityInfo!.gap < 0.15);
+      const safe = ambiguousDetections.filter(d => d._ambiguityInfo!.gap >= 0.15);
+
+      console.log(`[ONNX-Ambiguity]   🔴 CRITICAL (gap < 0.05): ${critical.length} — needs_review candidates`);
+      console.log(`[ONNX-Ambiguity]   🟡 WARNING  (gap 0.05-0.15): ${warning.length} — borderline`);
+      console.log(`[ONNX-Ambiguity]   🟢 SAFE     (gap > 0.15): ${safe.length} — confident`);
+
+      // Detail critical cases (the ones that would trigger needs_review)
+      for (const d of critical) {
+        const a = d._ambiguityInfo!;
+        const sameRaceNumber = d.raceNumber === a.secondRaceNumber;
+        console.log(`[ONNX-Ambiguity]   🔴 "${d.className}" (${(d.confidence * 100).toFixed(1)}%) vs "${a.secondClassName}" (${(a.secondConfidence * 100).toFixed(1)}%) — gap=${(a.gap * 100).toFixed(2)}% ratio=${(a.ratio * 100).toFixed(1)}%${sameRaceNumber ? ' [SAME RACE#]' : ` [#${d.raceNumber} vs #${a.secondRaceNumber}]`}`);
+      }
+      // Also detail warning cases for completeness
+      for (const d of warning) {
+        const a = d._ambiguityInfo!;
+        console.log(`[ONNX-Ambiguity]   🟡 "${d.className}" (${(d.confidence * 100).toFixed(1)}%) vs "${a.secondClassName}" (${(a.secondConfidence * 100).toFixed(1)}%) — gap=${(a.gap * 100).toFixed(2)}%`);
+      }
+    } else {
+      console.log(`[ONNX-Ambiguity] ✅ All ${detections.length} detections have clear winner (no second candidate > 0.05)`);
+    }
+
     return detections;
   }
 

@@ -78,48 +78,50 @@ class ResultsPageManager {
    * Aggiorna l'header con le informazioni dell'execution
    */
   updateHeader(execution) {
-    const badge = document.getElementById('execution-badge');
-    const title = document.getElementById('results-title');
     const subtitle = document.getElementById('results-subtitle');
 
-    if (badge && execution.id) {
-      badge.textContent = `#${execution.id.slice(-8)}`;
-      badge.style.cssText = `
-        background: var(--accent-primary);
-        color: white;
-        padding: 2px 8px;
-        border-radius: 12px;
-        font-size: 12px;
-        font-weight: 500;
-      `;
-    }
-
-    // Keep the title as "Analysis Complete!" - don't override it
-    // Title is set in HTML and should remain static
-
     if (subtitle) {
-      // Show project name, total images, and date
-      const projectName = execution.project_name || execution.folder_name || 'Unnamed Project';
-      const totalImages = execution.total_images || 0;
-      const photosText = totalImages === 1 ? 'photo' : 'photos';
+      const projectName = execution.project_name || execution.folder_name || null;
 
-      subtitle.textContent = `${projectName} • ${totalImages} ${photosText} analyzed`;
+      if (projectName) {
+        subtitle.textContent = projectName;
+      } else {
+        // No project name — hide the subtitle entirely
+        subtitle.style.display = 'none';
+      }
     }
 
-    // Add sport category tag immediately (data is available on execution)
+    // Add sport category and preset tags with prominent styling
     const category = execution.category ||
                      execution.execution_settings?.sport_category;
-    if (category) {
-      const tagsContainer = document.getElementById('results-info-tags');
-      if (tagsContainer) {
+    const tagsContainer = document.getElementById('results-info-tags');
+    if (tagsContainer) {
+      let tagsHtml = '';
+
+      if (category) {
         const categoryLabel = category.charAt(0).toUpperCase() + category.slice(1);
-        tagsContainer.innerHTML = `
+        tagsHtml += `
           <span class="results-info-tag results-info-tag--category">
+            <span class="results-info-tag__icon">${this.getCategoryEmoji(category)}</span>
             <span class="results-info-tag__label">Category</span>
             <span class="results-info-tag__value">${categoryLabel}</span>
           </span>
         `;
       }
+
+      // Try to add preset tag immediately from execution_settings (before logVisualizer loads)
+      const presetName = execution.execution_settings?.participantPreset?.name;
+      if (presetName) {
+        tagsHtml += `
+          <span class="results-info-tag results-info-tag--preset" id="results-preset-tag">
+            <span class="results-info-tag__icon">&#x1F4CB;</span>
+            <span class="results-info-tag__label">Preset</span>
+            <span class="results-info-tag__value">${presetName}</span>
+          </span>
+        `;
+      }
+
+      tagsContainer.innerHTML = tagsHtml;
     }
   }
 
@@ -130,13 +132,42 @@ class ResultsPageManager {
     const tagsContainer = document.getElementById('results-info-tags');
     if (!tagsContainer || !presetName) return;
 
+    // Check if preset tag was already added from execution_settings
+    const existingTag = document.getElementById('results-preset-tag');
+    if (existingTag) {
+      // Update the value in case the DB-loaded name is more accurate
+      const valueEl = existingTag.querySelector('.results-info-tag__value');
+      if (valueEl) valueEl.textContent = presetName;
+      return;
+    }
+
     const presetTag = document.createElement('span');
     presetTag.className = 'results-info-tag results-info-tag--preset';
+    presetTag.id = 'results-preset-tag';
     presetTag.innerHTML = `
+      <span class="results-info-tag__icon">&#x1F4CB;</span>
       <span class="results-info-tag__label">Preset</span>
       <span class="results-info-tag__value">${presetName}</span>
     `;
     tagsContainer.appendChild(presetTag);
+  }
+
+  /**
+   * Get emoji for a sport category code
+   */
+  getCategoryEmoji(category) {
+    const emojiMap = {
+      'motorsport': '\u{1F3CE}\u{FE0F}',
+      'running': '\u{1F3C3}',
+      'cycling': '\u{1F6B4}',
+      'triathlon': '\u{1F3CA}',
+      'skiing': '\u{26F7}\u{FE0F}',
+      'equestrian': '\u{1F40E}',
+      'sailing': '\u{26F5}',
+      'aviation': '\u{2708}\u{FE0F}',
+      'other': '\u{1F4F7}'
+    };
+    return emojiMap[category?.toLowerCase()] || '\u{1F3C6}';
   }
 
   /**
@@ -180,10 +211,25 @@ class ResultsPageManager {
   }
 
   /**
-   * Estrae i risultati dai log JSONL
+   * Estrae i risultati dai log JSONL.
+   *
+   * B1/B5 fix: pre-scan the log to build a Set of fileNames that have at
+   * least one MANUAL_CORRECTION event. The IMAGE_ANALYSIS pass then attaches
+   * `hasCorrection` to each result. This is the single source of truth used
+   * by the home/results filters and counters — no in-memory tracking, no
+   * sync drift between Map keys.
    */
   async extractResultsFromLogs(logData) {
     const results = [];
+
+    // Pre-scan for manual corrections. We do this once up-front so the
+    // per-result loop is O(1) per entry rather than O(N).
+    const correctedFileNames = new Set();
+    for (const entry of logData) {
+      if (entry?.type === 'MANUAL_CORRECTION' && typeof entry.fileName === 'string') {
+        correctedFileNames.add(entry.fileName);
+      }
+    }
 
     for (const entry of logData) {
       if (entry.type === 'IMAGE_ANALYSIS' && entry.fileName) {
@@ -194,7 +240,12 @@ class ResultsPageManager {
           team: vehicle.finalResult?.team || null,
           drivers: vehicle.finalResult?.drivers || [],
           confidence: vehicle.confidence || 0,
-          matchedBy: vehicle.finalResult?.matchedBy || 'none'
+          matchedBy: vehicle.finalResult?.matchedBy || 'none',
+          matchStatus: vehicle.finalResult?.matchStatus || 'no_match',
+          alternativeCandidates: vehicle.finalResult?.alternativeCandidates || null,
+          // Issue #104 — extra-preset people (VIPs, team principals, etc.), only populated
+          // when the preset has allow_external_person_recognition = true.
+          otherPeople: Array.isArray(vehicle.otherPeople) ? vehicle.otherPeople : []
         }));
 
         // Cerca i path locali delle anteprime usando saved thumbnail paths o search
@@ -231,6 +282,16 @@ class ResultsPageManager {
         results.push({
           fileName: entry.fileName,
           originalFileName: entry.originalFileName, // Preserve original filename for thumbnail lookup
+          // BUGFIX: propagate originalPath from the IMAGE_ANALYSIS log entry so that
+          // Export & IPTC features (Export to Folder, Write to Originals) operate on
+          // the full-resolution source file rather than silently falling back to the
+          // local thumbnail in `imagePath`. Without this field, buildUnifiedImages()
+          // in unified-export-iptc-modal.js (and the analogous helpers in
+          // results-export.js / results-iptc.js) compute
+          //   filePath = r.originalPath || r.imagePath
+          // and end up exporting the thumbnail saved under
+          // ~/.racetagger-temp/thumbnails/.
+          originalPath: entry.originalPath,
           analysis: analysis,
           confidence: vehicles[0]?.confidence || 0,
           csvMatch: (vehicles[0]?.participantMatch && vehicles[0].participantMatch.entry) ? vehicles[0].participantMatch : null,
@@ -240,7 +301,21 @@ class ResultsPageManager {
           microThumbPath: (localPaths.microThumbPath && localPaths.microThumbPath !== 'null') ? localPaths.microThumbPath : entry.supabaseUrl,
           metadataWritten: entry.metadataWritten !== undefined ? entry.metadataWritten : true,
           metadataSkipReason: entry.metadataSkipReason || null,
-          timestamp: entry.timestamp
+          timestamp: entry.timestamp,
+          // B1/B5 — derived from the JSONL itself, not from in-memory state.
+          // True iff at least one MANUAL_CORRECTION event exists for this
+          // fileName. Filters and counters use this to route the photo to
+          // the "Corrections" view and out of "No Match".
+          hasCorrection: correctedFileNames.has(entry.fileName),
+          // Scene classifier skip metadata: when sceneSkipped=true the AI was
+          // bypassed and `analysis` is empty by design (not a recognition
+          // failure). The visualizer surfaces this with a badge so the user
+          // sees "this photo was filtered out as crowd" instead of an
+          // unexplained empty cell.
+          sceneSkipped: entry.sceneSkipped === true,
+          sceneCategory: entry.sceneCategory || null,
+          sceneConfidence: entry.sceneConfidence || null,
+          visualTags: entry.visualTags || null
         });
       }
     }
@@ -552,12 +627,7 @@ class SmartCacheManager {
     }
 
     this.loggedErrors.add(errorKey);
-    console.warn(`[SmartCacheManager] Failed to load ${fileName} (${context}):`, error);
-
-    // Clean up logged errors periodically to allow retry after some time
-    setTimeout(() => {
-      this.loggedErrors.delete(errorKey);
-    }, 60000); // 1 minute
+    console.debug(`[SmartCacheManager] Image fallback for ${fileName} (${context})`);
   }
 
   /**

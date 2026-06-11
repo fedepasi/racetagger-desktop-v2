@@ -9,13 +9,13 @@ import * as fs from 'fs';
 import { promises as fsPromises } from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { exec } from 'child_process';
-import { promisify } from 'util';
 import { SUPABASE_CONFIG } from '../config';
 import { authService } from '../auth-service';
 import { getSupabase, getSupabaseImageUrlCache } from './context';
 
-const execPromise = promisify(exec);
+// child_process.exec was only used to shell out to `dcraw` for RAW
+// previews; that path was removed in favour of the native
+// raw-preview-extractor → ExifTool cascade. No more imports needed.
 
 // Supported extensions
 const RAW_EXTENSIONS = ['.nef', '.arw', '.cr2', '.cr3', '.orf', '.raw', '.rw2', '.dng'];
@@ -116,20 +116,31 @@ export function registerImageHandlers(): void {
         }
       }
 
-      // For RAW files: Generate halfsize thumbnail using dcraw -h
+      // For RAW files: extract the embedded preview via the native
+      // raw-preview-extractor → ExifTool cascade (no dcraw — its fallback
+      // was emitting hundreds of "dcraw: command not found" errors on
+      // every Mac without dcraw on PATH; see support_1778335167281
+      // 13:40–13:57 for an extreme example).
       if (isRaw && fs.existsSync(imagePath)) {
         try {
-          const dcrawCommand = `dcraw -h -w -c "${imagePath}"`;
-          const result = await execPromise(dcrawCommand, { maxBuffer: 10 * 1024 * 1024, encoding: 'buffer' });
+          const { rawPreviewExtractor } = await import('../utils/raw-preview-native');
+          const result = await rawPreviewExtractor.extractPreview(imagePath, {
+            // Halfsize preview sizing — bigger than the thumbnail path
+            // (50–500 KB above) because we render at modal/half-screen
+            // resolution.
+            targetMinSize: 200 * 1024,        //   200 KB min
+            targetMaxSize: 3 * 1024 * 1024,   // 3 MB max
+            timeout: 8000,
+            preferQuality: 'preview'
+          });
 
-          if (result.stdout && result.stdout.length > 0) {
-            const buffer = Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(result.stdout, 'binary');
-            const base64Data = buffer.toString('base64');
+          if (result.success && result.data && result.data.length > 0) {
+            const base64Data = result.data.toString('base64');
             return `data:image/jpeg;base64,${base64Data}`;
           }
           return null;
-        } catch (dcrawError) {
-          console.error(`[IPC] dcraw halfsize generation failed for ${path.basename(imagePath)}:`, dcrawError);
+        } catch (rawError) {
+          console.error(`[IPC] Halfsize preview extraction failed for ${path.basename(imagePath)}:`, rawError);
           return null;
         }
       }
@@ -221,20 +232,27 @@ export function registerImageHandlers(): void {
         }
       }
 
-      // For RAW files, generate a preview
+      // For RAW files, extract a preview via raw-preview-extractor →
+      // ExifTool. dcraw was removed in v1.2.0 — calls to it generated
+      // hundreds of `command not found` errors on Macs without a system
+      // dcraw install (see support reports from the field).
       if (isRaw && fs.existsSync(imagePath)) {
         try {
-          const dcrawCommand = `dcraw -h -w -c "${imagePath}"`;
-          const result = await execPromise(dcrawCommand, { maxBuffer: 10 * 1024 * 1024, encoding: 'buffer' });
+          const { rawPreviewExtractor } = await import('../utils/raw-preview-native');
+          const result = await rawPreviewExtractor.extractPreview(imagePath, {
+            targetMinSize: 200 * 1024,        //   200 KB min
+            targetMaxSize: 3 * 1024 * 1024,   // 3 MB max
+            timeout: 8000,
+            preferQuality: 'preview'
+          });
 
-          if (result.stdout && result.stdout.length > 0) {
-            const buffer = Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(result.stdout, 'binary');
-            const base64Data = buffer.toString('base64');
+          if (result.success && result.data && result.data.length > 0) {
+            const base64Data = result.data.toString('base64');
             return `data:image/jpeg;base64,${base64Data}`;
           }
           return null;
-        } catch (dcrawError) {
-          console.error(`[IPC] dcraw conversion failed for ${imagePath}:`, dcrawError);
+        } catch (rawError) {
+          console.error(`[IPC] RAW preview extraction failed for ${imagePath}:`, rawError);
           return null;
         }
       }

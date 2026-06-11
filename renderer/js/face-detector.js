@@ -428,6 +428,12 @@ function setupFaceDetectionIPC() {
 // Auto-initialize on DOM ready
 // ============================================
 
+/**
+ * Initialize face detector if face recognition is enabled.
+ * Can be called manually after the feature flag has been loaded from DB.
+ * Uses the global FACE_RECOGNITION_ENABLED flag set by loadFaceRecognitionFlag()
+ * in driver-face-manager.js (loaded via delivery-get-plan-limits IPC).
+ */
 function initFaceDetector() {
   // Face recognition now runs entirely in main process via ONNX (YuNet + AuraFace)
   // This renderer-side face-api.js detector is deprecated and no longer loaded.
@@ -439,6 +445,7 @@ function initFaceDetector() {
     return null;
   }
 
+  console.log('[FaceDetector] Face recognition enabled - initializing models');
   const detector = getFaceDetector();
   setupFaceDetectionIPC();
 
@@ -459,10 +466,7 @@ if (typeof window !== 'undefined') {
   window.setupFaceDetectionIPC = setupFaceDetectionIPC;
 }
 
-// Auto-init when DOM is ready
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initFaceDetector);
-} else {
-  // DOM already loaded
-  setTimeout(initFaceDetector, 100);
-}
+// NOTE: Auto-init removed. Face detector is now initialized explicitly
+// by loadFaceRecognitionFlag() in driver-face-manager.js after the
+// feature flag has been loaded from DB via delivery-get-plan-limits IPC.
+// Call window.initFaceDetector() manually when ready.

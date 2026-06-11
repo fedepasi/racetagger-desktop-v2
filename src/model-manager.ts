@@ -37,6 +37,8 @@ export interface ModelRegistryEntry {
   confidence_threshold: number;
   iou_threshold: number;
   classes: string[];
+  preprocessing_method: 'stretch' | 'letterbox';
+  output_format: 'yolo-nms' | 'yolo-end2end' | 'rf-detr';
   min_app_version: string | null;
   is_active: boolean;
   release_notes: string | null;
@@ -56,6 +58,8 @@ interface LocalModelEntry {
   confidenceThreshold: number;
   iouThreshold: number;
   inputSize: number[];
+  preprocessingMethod: 'stretch' | 'letterbox';
+  outputFormat: 'yolo-nms' | 'yolo-end2end' | 'rf-detr';
 }
 
 /**
@@ -343,14 +347,17 @@ export class ModelManager {
       }
     }
 
-    // Combine chunks and write to file
+    // BUG-04 — write atomically (.tmp → validate → rename) so an interrupted
+    // write can never leave a truncated file at the final path (a half-written
+    // .onnx was "sticky": existsSync passed and it was never re-downloaded).
     const fileBuffer = Buffer.concat(chunks.map(chunk => Buffer.from(chunk)));
-    fs.writeFileSync(localPath, fileBuffer);
+    const tmpPath = `${localPath}.tmp`;
+    fs.writeFileSync(tmpPath, fileBuffer);
 
-    // Validate checksum
-    const isValid = await this.validateChecksum(localPath, modelInfo.checksum_sha256);
+    // Validate checksum on the temp file BEFORE promoting it to the final path
+    const isValid = await this.validateChecksum(tmpPath, modelInfo.checksum_sha256);
     if (!isValid) {
-      fs.unlinkSync(localPath);
+      try { fs.unlinkSync(tmpPath); } catch { /* best-effort cleanup */ }
       const checksumError = new Error('Model checksum validation failed - file may be corrupted');
       errorTelemetryService.reportCriticalError({
         errorType: 'onnx_model',
@@ -360,6 +367,12 @@ export class ModelManager {
       });
       throw checksumError;
     }
+    // Remove any existing file first — fs.renameSync over an existing/in-use
+    // destination is unreliable on Windows.
+    if (fs.existsSync(localPath)) {
+      try { fs.unlinkSync(localPath); } catch { /* will surface on rename */ }
+    }
+    fs.renameSync(tmpPath, localPath);
 
     // Update manifest
     this.manifest.models[categoryCode] = {
@@ -372,6 +385,8 @@ export class ModelManager {
       confidenceThreshold: modelInfo.confidence_threshold,
       iouThreshold: modelInfo.iou_threshold,
       inputSize: modelInfo.input_size,
+      preprocessingMethod: modelInfo.preprocessing_method || 'stretch',
+      outputFormat: modelInfo.output_format || 'yolo-nms',
     };
     this.saveManifest();
 
@@ -490,20 +505,49 @@ export class ModelManager {
     const remoteModel = await this.getModelFromRegistry(categoryCode);
     if (!remoteModel) return false;
 
-    // Only update if version matches but classes differ
     if (localModel.version === remoteModel.version) {
-      const localClasses = JSON.stringify(localModel.classes);
-      const remoteClasses = JSON.stringify(remoteModel.classes);
-
-      if (localClasses !== remoteClasses) {
-        localModel.classes = remoteModel.classes;
-        localModel.confidenceThreshold = remoteModel.confidence_threshold;
-        localModel.iouThreshold = remoteModel.iou_threshold;
-        this.saveManifest();
-        return true;
-      }
+      return this.syncModelMetadata(localModel, remoteModel);
     }
     return false;
+  }
+
+  /**
+   * Sync all metadata fields (classes, thresholds, preprocessingMethod) from remote to local.
+   * Only saves manifest if something actually changed. No re-download needed.
+   */
+  private syncModelMetadata(localModel: LocalModelEntry, remoteModel: ModelRegistryEntry): boolean {
+    let changed = false;
+
+    // Sync classes
+    const localClasses = JSON.stringify(localModel.classes);
+    const remoteClasses = JSON.stringify(remoteModel.classes);
+    if (localClasses !== remoteClasses) {
+      localModel.classes = remoteModel.classes;
+      changed = true;
+    }
+
+    // Sync thresholds
+    if (localModel.confidenceThreshold !== remoteModel.confidence_threshold) {
+      localModel.confidenceThreshold = remoteModel.confidence_threshold;
+      changed = true;
+    }
+    if (localModel.iouThreshold !== remoteModel.iou_threshold) {
+      localModel.iouThreshold = remoteModel.iou_threshold;
+      changed = true;
+    }
+
+    // Sync preprocessing method
+    const remotePreprocessing = remoteModel.preprocessing_method || 'stretch';
+    if (localModel.preprocessingMethod !== remotePreprocessing) {
+      console.log(`[ModelManager] Syncing preprocessingMethod: ${localModel.preprocessingMethod} → ${remotePreprocessing}`);
+      localModel.preprocessingMethod = remotePreprocessing;
+      changed = true;
+    }
+
+    if (changed) {
+      this.saveManifest();
+    }
+    return changed;
   }
 
   /**
@@ -533,11 +577,8 @@ export class ModelManager {
       return this.downloadModel(categoryCode, onProgress);
     }
 
-    // Case 3: Only classes changed - update manifest only (no download!)
-    const classesChanged = JSON.stringify(localModel.classes) !== JSON.stringify(remoteModel.classes);
-    if (classesChanged) {
-      await this.updateClassesFromRemote(categoryCode);
-    }
+    // Case 3: Sync metadata from remote (classes, thresholds, preprocessing) without re-downloading
+    this.syncModelMetadata(localModel, remoteModel);
 
     // Verify local file exists
     if (!fs.existsSync(localModel.localPath)) {
@@ -600,6 +641,8 @@ import {
   YOLO_MODEL_REGISTRY,
   getModelConfig,
   YoloModelConfig,
+  parseSegmentationConfig,
+  getDefaultModelId,
 } from './yolo-model-registry';
 
 /**
@@ -672,10 +715,19 @@ ModelManager.prototype.ensureGenericModelAvailable = async function(
 
   const localPath = path.join(modelCacheDir, `${modelId}-v${modelConfig.version}.onnx`);
 
-  // Check if already cached
+  // Check if already cached — BUG-04: validate size to reject a truncated /
+  // partially-written file left by an interrupted download (existsSync alone
+  // let a corrupt file stay "sticky" forever). The registry sizeBytes is
+  // approximate, so we use a generous 50% floor to avoid false rejects.
   if (fs.existsSync(localPath)) {
-    console.log(`[ModelManager] Found cached model at: ${localPath}`);
-    return localPath;
+    const cachedBytes = fs.statSync(localPath).size;
+    const minBytes = Math.floor(modelConfig.sizeBytes * 0.5);
+    if (cachedBytes >= minBytes) {
+      console.log(`[ModelManager] Found cached model at: ${localPath} (${cachedBytes} bytes)`);
+      return localPath;
+    }
+    console.warn(`[ModelManager] Cached model at ${localPath} looks truncated (${cachedBytes} < ${minBytes} bytes); re-downloading.`);
+    try { fs.unlinkSync(localPath); } catch { /* best-effort cleanup */ }
   }
 
   console.log(`[ModelManager] Model not cached at: ${localPath}, downloading from Supabase...`);
@@ -723,9 +775,25 @@ ModelManager.prototype.ensureGenericModelAvailable = async function(
     }
   }
 
-  // Combine chunks and write to file
+  // BUG-04 — write atomically (.tmp → verify size → rename) so an interrupted
+  // write can never leave a truncated file at the final path. The YOLO registry
+  // carries no checksum, so we sanity-check the downloaded size against the
+  // (approximate) expected size with a generous floor.
   const fileBuffer = Buffer.concat(chunks.map(chunk => Buffer.from(chunk)));
-  fs.writeFileSync(localPath, fileBuffer);
+  const tmpPath = `${localPath}.tmp`;
+  fs.writeFileSync(tmpPath, fileBuffer);
+
+  const minBytes = Math.floor(modelConfig.sizeBytes * 0.5);
+  if (fileBuffer.length < minBytes) {
+    try { fs.unlinkSync(tmpPath); } catch { /* best-effort cleanup */ }
+    throw new Error(`Downloaded model ${modelId} is too small (${fileBuffer.length} < ${minBytes} bytes) — likely truncated`);
+  }
+  // Remove any existing file first — fs.renameSync over an existing/in-use
+  // destination is unreliable on Windows.
+  if (fs.existsSync(localPath)) {
+    try { fs.unlinkSync(localPath); } catch { /* will surface on rename */ }
+  }
+  fs.renameSync(tmpPath, localPath);
 
   return localPath;
 };
@@ -758,6 +826,109 @@ ModelManager.prototype.getGenericModelPath = function(
   return null;
 };
 
+/**
+ * Determine which YOLO models from the registry need to be downloaded for the
+ * sport categories enabled for the current user.
+ *
+ * The existing `getModelsToDownload()` covers the legacy "code-based" model
+ * registry stored in the `model_registry` Supabase table (used by categories
+ * with `use_local_onnx=true`). It does NOT cover the YOLO segmenter models
+ * defined in `yolo-model-registry.ts` (`yolo26-detector-v1`, etc.) — those are
+ * downloaded lazily by `ensureGenericModelAvailable()` the first time
+ * `initializeGenericSegmenter()` runs, which adds ~30s of blocking wait at the
+ * first "Avvia analisi" click for any category with `crop_config.enabled`.
+ *
+ * This method closes that gap: it queries the user's enabled sport categories,
+ * collects the YOLO model IDs needed (segmenter via crop_config / detector via
+ * use_local_onnx), deduplicates them, and returns those that are not already on
+ * disk so they can be pre-downloaded at app startup with the existing progress UI.
+ *
+ * Failure mode: if the DB query fails for any reason, falls back to "all models
+ * in YOLO_MODEL_REGISTRY" so the lazy-download regression cannot resurface.
+ *
+ * Related: issue #124 (Verifica lentezza allo start).
+ */
+ModelManager.prototype.getYoloModelsToDownload = async function(
+  this: ModelManager
+): Promise<{ models: { modelId: string; sizeMB: number }[]; totalSizeMB: number }> {
+  const neededModelIds = new Set<string>();
+
+  // Step 1 — collect the model_ids needed by the user's enabled sport categories.
+  try {
+    const supabase = (this as any).getSupabase() as SupabaseClient;
+    const { data, error } = await supabase
+      .from('sport_categories')
+      .select('code, use_local_onnx, crop_config, segmentation_config')
+      .eq('is_active', true);
+
+    if (error || !data) {
+      console.warn(
+        '[ModelManager] getYoloModelsToDownload: failed to fetch sport_categories, falling back to full registry',
+        error?.message
+      );
+      // Safety net: ensure all registered YOLO models are downloaded so the
+      // lazy-download bug (#124) cannot resurface even on a DB query failure.
+      Object.keys(YOLO_MODEL_REGISTRY).forEach(id => neededModelIds.add(id));
+    } else {
+      for (const cat of data as Array<{
+        code: string;
+        use_local_onnx: boolean | null;
+        crop_config: any;
+        segmentation_config: any;
+      }>) {
+        // crop_config.enabled triggers the segmenter (e.g. motorsport_v3 uses
+        // yolo26-detector-v1 to extract crops + masks before sending to Gemini).
+        let cropConfig: any = cat.crop_config;
+        if (typeof cropConfig === 'string') {
+          try { cropConfig = JSON.parse(cropConfig); } catch (_e) { cropConfig = null; }
+        }
+        if (cropConfig?.enabled) {
+          const segConfig = parseSegmentationConfig(cat.segmentation_config);
+          neededModelIds.add(segConfig?.model_id || getDefaultModelId());
+        }
+
+        // use_local_onnx categories also use a YOLO model for local detection.
+        // The legacy code-based downloader (getModelsToDownload) already covers
+        // these, but adding the registry default here is harmless and protects
+        // against a future migration where detector model_id moves to the
+        // yolo-model-registry as well.
+        if (cat.use_local_onnx) {
+          neededModelIds.add(getDefaultModelId());
+        }
+      }
+    }
+  } catch (error) {
+    console.error(
+      '[ModelManager] getYoloModelsToDownload: unexpected error, falling back to full registry',
+      error
+    );
+    Object.keys(YOLO_MODEL_REGISTRY).forEach(id => neededModelIds.add(id));
+  }
+
+  // Step 2 — skip the ones already on disk (bundled or cached); collect the rest.
+  const models: { modelId: string; sizeMB: number }[] = [];
+  let totalSizeMB = 0;
+
+  for (const modelId of neededModelIds) {
+    if (this.getGenericModelPath(modelId)) {
+      // Already bundled or cached locally — nothing to download.
+      continue;
+    }
+
+    const config = getModelConfig(modelId);
+    if (!config) {
+      console.warn(`[ModelManager] getYoloModelsToDownload: unknown modelId "${modelId}" — skipping`);
+      continue;
+    }
+
+    const sizeMB = config.sizeBytes / (1024 * 1024);
+    models.push({ modelId, sizeMB });
+    totalSizeMB += sizeMB;
+  }
+
+  return { models, totalSizeMB };
+};
+
 // Extend type declarations
 declare module './model-manager' {
   interface ModelManager {
@@ -766,6 +937,10 @@ declare module './model-manager' {
       onProgress?: DownloadProgressCallback
     ): Promise<string>;
     getGenericModelPath(modelId: string): string | null;
+    getYoloModelsToDownload(): Promise<{
+      models: { modelId: string; sizeMB: number }[];
+      totalSizeMB: number;
+    }>;
   }
 }
 

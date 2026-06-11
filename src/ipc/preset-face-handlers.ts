@@ -20,7 +20,15 @@ import {
   loadPresetFaceDescriptors,
   getPresetParticipantFacePhotoCount,
   PresetParticipantFacePhoto,
-  CreatePresetFacePhotoParams
+  CreatePresetFacePhotoParams,
+  submitFeatureInterestSurvey,
+  checkFeatureInterestSurvey,
+  // v1.1.4 — Preset Participant Toggle (soft-disable)
+  togglePresetParticipantActive,
+  togglePresetDriverActive,
+  bulkSetPresetParticipantsActive,
+  bulkSetPresetParticipantsIncludeDefaultFolder,
+  resetPresetActiveStates
 } from '../database-service';
 import { FaceRecognitionOnnxProcessor } from '../face-recognition-onnx-processor';
 import * as crypto from 'crypto';
@@ -379,12 +387,13 @@ export function registerPresetFaceHandlers(): void {
 
   /**
    * Update a driver
-   * Expects: { driverId, driverName?, driverMetatag?, driverOrder? }
+   * Expects: { driverId, driverName?, driverMetatag?, driverNationality?, driverOrder? }
    */
   ipcMain.handle('preset-driver-update', async (_, params: {
     driverId: string;
     driverName?: string;
     driverMetatag?: string;
+    driverNationality?: string;
     driverOrder?: number;
   }) => {
     try {
@@ -396,6 +405,7 @@ export function registerPresetFaceHandlers(): void {
 
       if (params.driverName !== undefined) updates.driver_name = params.driverName;
       if (params.driverMetatag !== undefined) updates.driver_metatag = params.driverMetatag;
+      if (params.driverNationality !== undefined) updates.driver_nationality = params.driverNationality;
       if (params.driverOrder !== undefined) updates.driver_order = params.driverOrder;
 
       const { data: driver, error } = await supabase
@@ -451,6 +461,10 @@ export function registerPresetFaceHandlers(): void {
   ipcMain.handle('preset-driver-sync', async (_, params: {
     participantId: string;
     driverNames: string[];
+    // Optional per-driver metadata aligned by index with driverNames. Used by
+    // the CSV/PDF entry-list merge to carry nationality (and metatag) through.
+    // When absent, behavior is unchanged (names + order only).
+    driverMeta?: Array<{ nationality?: string; metatag?: string }>;
   }) => {
     try {
       const supabase = authService.getSupabaseClient();
@@ -509,9 +523,15 @@ export function registerPresetFaceHandlers(): void {
 
         if (!existingDriver) {
           toCreate.push(name);
-        } else if (existingDriver.driver_name !== name || existingDriver.driver_order !== index) {
-          // Update if name or order changed
-          toUpdate.push({ id: existingDriver.id, name, order: index });
+        } else {
+          // Update if name/order changed, or if import-provided per-driver
+          // metadata (nationality/metatag) differs from what's stored.
+          const meta = params.driverMeta?.[index];
+          const natChanged = !!meta?.nationality && existingDriver.driver_nationality !== meta.nationality;
+          const tagChanged = !!meta?.metatag && existingDriver.driver_metatag !== meta.metatag;
+          if (existingDriver.driver_name !== name || existingDriver.driver_order !== index || natChanged || tagChanged) {
+            toUpdate.push({ id: existingDriver.id, name, order: index });
+          }
         }
       });
 
@@ -527,11 +547,15 @@ export function registerPresetFaceHandlers(): void {
 
       // Create new drivers
       for (const name of toCreate) {
+        const order = newNames.indexOf(name);
+        const meta = params.driverMeta?.[order];
         await supabase.from('preset_participant_drivers').insert({
           id: uuidv4(),
           participant_id: params.participantId,
           driver_name: name,
-          driver_order: newNames.indexOf(name),
+          driver_order: order,
+          ...(meta?.nationality ? { driver_nationality: meta.nationality } : {}),
+          ...(meta?.metatag ? { driver_metatag: meta.metatag } : {}),
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString()
         });
@@ -539,8 +563,15 @@ export function registerPresetFaceHandlers(): void {
 
       // Update existing drivers
       for (const { id, name, order } of toUpdate) {
+        const meta = params.driverMeta?.[order];
         await supabase.from('preset_participant_drivers')
-          .update({ driver_name: name, driver_order: order, updated_at: new Date().toISOString() })
+          .update({
+            driver_name: name,
+            driver_order: order,
+            ...(meta?.nationality ? { driver_nationality: meta.nationality } : {}),
+            ...(meta?.metatag ? { driver_metatag: meta.metatag } : {}),
+            updated_at: new Date().toISOString()
+          })
           .eq('id', id);
       }
 
@@ -731,5 +762,210 @@ export function registerPresetFaceHandlers(): void {
     }
   });
 
-  console.log('[PresetFace IPC] Registered 14 preset face & driver handlers');
+  /**
+   * Get face photo status for all participants in a preset (for traffic light indicator).
+   * Returns a map: participantId → { totalDrivers, driversWithPhotos }
+   * - green: driversWithPhotos === totalDrivers (all have photos)
+   * - yellow: driversWithPhotos > 0 but < totalDrivers (partial)
+   * - grey: driversWithPhotos === 0 or no drivers
+   */
+  ipcMain.handle('preset-face-status-batch', async (_, presetId: string) => {
+    try {
+      if (!presetId) {
+        return { success: false, error: 'presetId is required' };
+      }
+
+      const client = authService.getSupabaseClient();
+
+      // Get all drivers for this preset's participants
+      const { data: participants, error: pErr } = await client
+        .from('preset_participants')
+        .select(`
+          id,
+          preset_participant_drivers(
+            id,
+            driver_name
+          )
+        `)
+        .eq('preset_id', presetId);
+
+      if (pErr) throw pErr;
+
+      // Get all face photos for drivers in this preset (single query)
+      const allDriverIds = (participants || [])
+        .flatMap((p: any) => (p.preset_participant_drivers || []).map((d: any) => d.id))
+        .filter(Boolean);
+
+      let photosMap: Record<string, number> = {};
+      if (allDriverIds.length > 0) {
+        const { data: photos, error: phErr } = await client
+          .from('preset_participant_face_photos')
+          .select('driver_id')
+          .in('driver_id', allDriverIds);
+
+        if (phErr) throw phErr;
+
+        // Count photos per driver
+        for (const photo of photos || []) {
+          if (photo.driver_id) {
+            photosMap[photo.driver_id] = (photosMap[photo.driver_id] || 0) + 1;
+          }
+        }
+      }
+
+      // Build status map per participant
+      const statusMap: Record<string, { totalDrivers: number; driversWithPhotos: number }> = {};
+      for (const p of participants || []) {
+        const drivers = (p as any).preset_participant_drivers || [];
+        const totalDrivers = drivers.length;
+        const driversWithPhotos = drivers.filter((d: any) => (photosMap[d.id] || 0) > 0).length;
+        statusMap[(p as any).id] = { totalDrivers, driversWithPhotos };
+      }
+
+      return { success: true, data: statusMap };
+    } catch (error) {
+      console.error('[PresetFace IPC] Batch status error:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  // ==================== FACE RECOGNITION INTEREST SURVEY ====================
+  ipcMain.handle('face-rec-submit-survey', async (_, data: { responses: any; comment: string | null }) => {
+    try {
+      await submitFeatureInterestSurvey({ ...data, feature_area: 'face_recognition' });
+      return { success: true };
+    } catch (error) {
+      console.error('[PresetFace IPC] Survey submit error:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  ipcMain.handle('face-rec-check-survey', async () => {
+    try {
+      return { success: true, ...(await checkFeatureInterestSurvey('face_recognition')) };
+    } catch (error) {
+      console.error('[PresetFace IPC] Survey check error:', error);
+      return { success: false, submitted: false };
+    }
+  });
+
+  // ==================== PRESET PARTICIPANT TOGGLE (v1.1.4) ====================
+  // Soft-disable flag for participants/drivers. Mirrors database-service API
+  // on the renderer side. All handlers follow the standard { success, data?, error? }
+  // contract used elsewhere in this file. RLS enforces that only the preset
+  // owner can update — public/official presets bubble up a Supabase error
+  // the renderer presents as a "Duplica per personalizzare" hint.
+
+  /**
+   * Toggle is_active on a single preset participant (entire car/crew).
+   */
+  ipcMain.handle('preset:toggleParticipantActive', async (_, params: {
+    participantId: string;
+    isActive: boolean;
+  }) => {
+    try {
+      if (!params?.participantId || typeof params.isActive !== 'boolean') {
+        return { success: false, error: 'participantId and isActive are required' };
+      }
+      const updated = await togglePresetParticipantActive(params.participantId, params.isActive);
+      return { success: true, data: updated };
+    } catch (error) {
+      console.error('[PresetToggle IPC] toggleParticipantActive error:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  /**
+   * Toggle is_active on a single driver inside a multi-driver crew (endurance).
+   */
+  ipcMain.handle('preset:toggleDriverActive', async (_, params: {
+    driverId: string;
+    isActive: boolean;
+  }) => {
+    try {
+      if (!params?.driverId || typeof params.isActive !== 'boolean') {
+        return { success: false, error: 'driverId and isActive are required' };
+      }
+      const updated = await togglePresetDriverActive(params.driverId, params.isActive);
+      return { success: true, data: updated };
+    } catch (error) {
+      console.error('[PresetToggle IPC] toggleDriverActive error:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  /**
+   * Bulk set is_active on many participants of the same preset. Used by
+   * "Disabilita tutta la squadra X" / "Riabilita selezionati".
+   */
+  ipcMain.handle('preset:bulkSetActive', async (_, params: {
+    presetId: string;
+    participantIds: string[];
+    isActive: boolean;
+  }) => {
+    try {
+      if (!params?.presetId || !Array.isArray(params.participantIds) || typeof params.isActive !== 'boolean') {
+        return { success: false, error: 'presetId, participantIds[] and isActive are required' };
+      }
+      const updated = await bulkSetPresetParticipantsActive(
+        params.presetId,
+        params.participantIds,
+        params.isActive
+      );
+      return { success: true, data: { updated } };
+    } catch (error) {
+      console.error('[PresetToggle IPC] bulkSetActive error:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  /**
+   * Bulk set `include_default_folder` on many participants of the same
+   * preset in one round-trip. Used by the "Also export to default folder"
+   * checkbox in the Assign Folder side panel.
+   */
+  ipcMain.handle('preset:bulkSetIncludeDefaultFolder', async (_, params: {
+    presetId: string;
+    participantIds: string[];
+    includeDefaultFolder: boolean;
+  }) => {
+    try {
+      if (!params?.presetId ||
+          !Array.isArray(params.participantIds) ||
+          typeof params.includeDefaultFolder !== 'boolean') {
+        return {
+          success: false,
+          error: 'presetId, participantIds[] and includeDefaultFolder are required'
+        };
+      }
+      const updated = await bulkSetPresetParticipantsIncludeDefaultFolder(
+        params.presetId,
+        params.participantIds,
+        params.includeDefaultFolder
+      );
+      return { success: true, data: { updated } };
+    } catch (error) {
+      console.error('[PresetToggle IPC] bulkSetIncludeDefaultFolder error:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  /**
+   * Reset every participant + every driver of a preset back to is_active=true.
+   * Two-step confirmation handled by the renderer.
+   */
+  ipcMain.handle('preset:resetActiveStates', async (_, params: { presetId: string }) => {
+    try {
+      if (!params?.presetId) {
+        return { success: false, error: 'presetId is required' };
+      }
+      const res = await resetPresetActiveStates(params.presetId);
+      return { success: true, data: res };
+    } catch (error) {
+      console.error('[PresetToggle IPC] resetActiveStates error:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  console.log('[PresetFace IPC] Registered 17 preset face & driver handlers + 4 toggle handlers');
 }

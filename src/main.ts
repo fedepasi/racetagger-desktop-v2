@@ -89,19 +89,20 @@ import {
   // Export Destinations - most moved to export-handlers.ts, kept only those used in main.ts
   ExportDestination,
   getActiveExportDestinations,
-  getExportDestinationById
+  getExportDestinationById,
 } from './database-service';
+import { r2UploadService } from './r2-upload-service';
 // Determine if we're in development mode - will be set after app is ready
 let isDev = true; // Default to true for safety during initialization
 // Don't import @electron/remote at top level - it will be required when needed
 let remoteEnable: any = null; // Will be set after app is ready
 import { createClient } from '@supabase/supabase-js';
-import { SUPABASE_CONFIG, APP_CONFIG, ResizePreset, RESIZE_PRESETS, PIPELINE_CONFIG, DEBUG_MODE } from './config';
+import { SUPABASE_CONFIG, APP_CONFIG, ResizePreset, RESIZE_PRESETS, PIPELINE_CONFIG, DEBUG_MODE, SEND_PRESET_TO_AI } from './config';
 import { authService } from './auth-service';
 import * as piexif from 'piexifjs';
 import { createImageProcessor, initializeImageProcessor } from './utils/native-modules';
 import { createXmpSidecar, xmpSidecarExists } from './utils/xmp-manager';
-import { writeKeywordsToImage } from './utils/metadata-writer';
+import { writeKeywordsToImage, buildCorrectionKeywords, writeCorrectionKeywords } from './utils/metadata-writer';
 import { rawConverter } from './utils/raw-converter'; // Import for temp cleanup only
 import { rawPreviewExtractor } from './utils/raw-preview-native'; // Native RAW preview extraction
 import { unifiedImageProcessor, UnifiedImageFile, UnifiedProcessingResult, UnifiedProcessorConfig } from './unified-image-processor';
@@ -109,7 +110,8 @@ import { FolderOrganizerConfig } from './utils/folder-organizer';
 // face-detection-bridge removed — ONNX pipeline runs in main process (no IPC bridge needed)
 import { getModelManager } from './model-manager';
 // Modular IPC handlers
-import { registerAllHandlers, initializeIpcContext, isForceUpdateRequired, checkAppVersion, isBatchProcessingCancelled, setBatchProcessingCancelled } from './ipc';
+import { registerAllHandlers, initializeIpcContext, isForceUpdateRequired, checkAppVersion, isBatchProcessingCancelled, setBatchProcessingCancelled, setActiveProcessingExecutionId } from './ipc';
+import { loadExecutionLogIfExists } from './utils/execution-log-loader';
 
 // Definisci le estensioni supportate a livello globale per riutilizzo
 const RAW_EXTENSIONS = ['.nef', '.arw', '.cr2', '.cr3', '.orf', '.raw', '.rw2', '.dng'];
@@ -126,6 +128,23 @@ function safeSend(channel: string, ...args: any[]) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, ...args);
   }
+}
+
+// R2 upload progress listeners are wired exactly once per process lifetime.
+// Previously they were attached inside the post-execution auto-upload block,
+// which (a) leaked listeners on every analysis and (b) only worked when that
+// block ran. With auto-upload removed, listeners are registered up-front so
+// any upload trigger (Deliver button, project_id auto-routing) emits progress
+// events to the renderer.
+let __r2ListenersBound = false;
+function bindR2UploadListenersOnce() {
+  if (__r2ListenersBound) return;
+  r2UploadService.on('upload-progress', (data: any) => safeSend('r2-upload-progress', data));
+  r2UploadService.on('all-uploads-complete', (data: any) => {
+    console.log(`[R2 Upload] Complete: ${data.completed}/${data.total} uploaded, ${data.failed} failed`);
+    safeSend('r2-upload-complete', data);
+  });
+  __r2ListenersBound = true;
 }
 
 // Safe IPC message sending utility with event sender fallback
@@ -175,11 +194,18 @@ type BatchProcessConfig = {
   folderPath: string;
   csvData?: CsvEntry[];
   updateExif: boolean;
-  projectId?: string; // DEPRECATED: Projects removed. This will always be null.
+  projectId?: string; // Optional: link execution to a project for delivery auto-routing
   executionName?: string;
   model?: string;                      // Modello AI da utilizzare per l'analisi
   category?: string;                   // Categoria di sport per prompt dedicato
-  
+  // When set, RESUME that interrupted execution: reuse its id, skip already-analyzed images
+  // (read from its local JSONL), charge only the remaining, append + finalize the JSONL.
+  resumeExecutionId?: string;
+  // The original run's processed_images (from the DB row). Used as a SAFETY check: if the
+  // local JSONL can't account for this many done images, resume aborts rather than risk
+  // re-charging the whole folder.
+  resumeExpectedDone?: number;
+
   // Nuove opzioni avanzate per la gestione dei metadati
   metadataStrategy?: MetadataStrategy; // Strategia da usare se non c'è match CSV
   manualMetadataValue?: string;        // Valore del metatag manuale (se strategia = manual)
@@ -472,6 +498,9 @@ function createWindow() {
 
   // Face recognition now runs entirely in main process via ONNX — no bridge needed
 
+  // Wire R2 upload progress events to renderer (idempotent across reopens)
+  bindR2UploadListenersOnce();
+
   // Enable @electron/remote for this window
   if (remoteEnable) {
     remoteEnable(mainWindow.webContents);
@@ -528,7 +557,7 @@ async function handleFolderSelection(event: IpcMainEvent) {
     console.log('[FolderSelection] Opening dialog...');
     const result = await dialog.showOpenDialog(mainWindow, {
       properties: ['openDirectory'],
-      title: 'Seleziona una cartella di immagini'
+      title: 'Select an image folder'
     });
 
     console.log('[FolderSelection] Dialog result:', { canceled: result.canceled, filePaths: result.filePaths });
@@ -545,7 +574,7 @@ async function handleFolderSelection(event: IpcMainEvent) {
     // Verifica se la cartella esiste
     if (!fs.existsSync(folderPath)) {
       console.error('Selected folder does not exist:', folderPath);
-      event.sender.send('folder-selected', { success: false, message: 'La cartella selezionata non esiste' });
+      event.sender.send('folder-selected', { success: false, message: 'Selected folder does not exist' });
       return;
     }
 
@@ -575,7 +604,7 @@ async function handleFolderSelection(event: IpcMainEvent) {
     }
   } catch (error) {
     console.error('Error during folder selection:', error);
-    event.sender.send('folder-selected', { success: false, message: 'Errore durante la selezione della cartella' });
+    event.sender.send('folder-selected', { success: false, message: 'Error during folder selection' });
   }
 }
 
@@ -897,11 +926,11 @@ async function handleCsvLoading(event: IpcMainEvent, fileData: { buffer: Uint8Ar
         mainWindow.webContents.send('csv-loaded', {
           filename: fileName,
           entries: csvEntries.length,
-          message: `CSV caricato con ${csvEntries.length} voci valide`
+          message: `CSV loaded with ${csvEntries.length} valid entries`
         });
       } catch (parseError) {
         console.error('Error parsing CSV:', parseError);
-        mainWindow.webContents.send('csv-error', 'Errore nel parsing del CSV. Verifica il formato.');
+        mainWindow.webContents.send('csv-error', 'Error parsing CSV. Please check the file format.');
       }
     } else {
       mainWindow.webContents.send('csv-loaded', {
@@ -1249,6 +1278,21 @@ async function trackExecutionSettings(
   }
 }
 
+/**
+ * Did this IMAGE_ANALYSIS event represent a SUCCESSFUL analysis? Used by resume to decide which
+ * images count as already-done. Conservative: only a CLEAR failure (an explicit `ERROR:` rawText
+ * or a non-recoverable processingError) counts as not-done, so a normal success is never
+ * re-queued (which would re-charge it); ambiguous shapes are treated as done.
+ */
+function imageAnalysisSucceeded(ev: any): boolean {
+  try {
+    const raw = ev?.aiResponse?.rawText;
+    if (typeof raw === 'string' && raw.trim().toUpperCase().startsWith('ERROR:')) return false;
+    if (Array.isArray(ev?.processingErrors) && ev.processingErrors.some((e: any) => e && e.recoverable === false)) return false;
+  } catch { /* be permissive on unexpected shapes */ }
+  return true;
+}
+
 async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchProcessConfig) {
   if (!mainWindow) {
     console.error('handleUnifiedImageProcessing: mainWindow is null');
@@ -1269,9 +1313,25 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
   
   const executionStartTime = Date.now();
   let currentExecutionId: string | null = null;
+  const isResume = !!config.resumeExecutionId;
 
-  // Crea sempre un'execution per tracciare questa operazione se l'utente è autenticato
-  if (authService.getAuthState().isAuthenticated) {
+  if (isResume) {
+    // RESUME: reuse the interrupted execution's id instead of creating a new one, and reopen
+    // it (the recovery may have flipped it to 'failed') so the per-chunk checkpoint + finalize
+    // status guards apply during this run.
+    currentExecutionId = config.resumeExecutionId!;
+    // Guard BEFORE the reopen await: the home-open recovery must never flag/flip this run
+    // during the await window. Critical for resume, which reuses an OLD execution id (and old
+    // createdAt) that the recovery would otherwise treat as an interrupted prior-session run.
+    setActiveProcessingExecutionId(currentExecutionId);
+    try {
+      await updateExecutionOnline(currentExecutionId, { status: 'processing' });
+    } catch (error: any) {
+      console.warn(`[Resume] Could not reopen execution ${currentExecutionId}: ${error instanceof Error ? error.message : error}`);
+    }
+    console.log(`[Resume] Reusing execution ${currentExecutionId}`);
+  } else if (authService.getAuthState().isAuthenticated) {
+    // Crea sempre un'execution per tracciare questa operazione se l'utente è autenticato
     try {
       // Determina il nome dell'execution
       const executionName = config.executionName || `Analysis_${new Date().toISOString().replace(/[:.]/g, '-')}`;
@@ -1283,17 +1343,28 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
       }
 
       const newExecution = await createExecutionOnline({
-        project_id: null, // Projects removed - always null
+        project_id: config.projectId || null, // Link to project for delivery auto-routing (null for standalone)
         name: executionName,
         execution_at: new Date().toISOString(),
         status: 'running',
-        sport_category_id: sportCategoryId
+        category: config.category || 'motorsport', // FIX: Include category field for management portal display
+        sport_category_id: sportCategoryId,
+        source_folder: config.folderPath || null, // Save source folder for R2 HD upload to locate originals
       });
       currentExecutionId = newExecution.id!;
+      console.log(`[Execution] Created execution ${currentExecutionId} for category "${config.category || 'motorsport'}"${config.projectId ? `, project: ${config.projectId}` : ''}`);
     } catch (error: any) {
-      if (DEBUG_MODE) console.warn('[Tracking] Failed to create execution for tracking:', error);
+      // ALWAYS log execution creation failures — these are critical for management portal visibility
+      const errMsg = error instanceof Error ? error.message : JSON.stringify(error);
+      console.error(`[Execution] ⚠️ Failed to create execution record: ${errMsg}`);
+      if (error?.code) console.error(`[Execution] Error code: ${error.code} (42501=RLS violation, 42P01=missing table)`);
     }
   }
+
+  // Mark this execution as the one actively processing in this session, so the
+  // interrupted-run recovery (home-open) never flags/flips it while it is live. Cleared
+  // when the run completes or errors (the processBatch .then/.catch below).
+  if (currentExecutionId) setActiveProcessingExecutionId(currentExecutionId);
 
   try {
     const { folderPath, updateExif, csvData } = config;
@@ -1344,7 +1415,7 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
     const filesWithTimestamps = filesWithStatsUnsorted.sort((a, b) => a.timestamp - b.timestamp);
 
     // Ora mappa i file ordinati alla struttura UnifiedImageFile
-    const imageFiles: UnifiedImageFile[] = filesWithTimestamps.map((item, index) => ({
+    let imageFiles: UnifiedImageFile[] = filesWithTimestamps.map((item, index) => ({
       id: `img_${index}_${Date.now()}`,
       originalPath: item.path,
       fileName: item.file,
@@ -1352,13 +1423,96 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
       originalFormat: path.extname(item.file).toLowerCase()
     }));
 
+    // The full folder count is the execution's total regardless of resume — a resumed run
+    // keeps the ORIGINAL total so the row/JSONL reflect the complete set, not the subset.
+    const fullFolderCount = imageFiles.length;
+
     // Aggiorna le statistiche
-    executionStats.totalImages = imageFiles.length;
+    executionStats.totalImages = fullFolderCount;
     executionStats.totalRawFiles = imageFiles.filter(f => f.isRaw).length;
     executionStats.totalStandardFiles = imageFiles.filter(f => !f.isRaw).length;
 
     if (imageFiles.length === 0) {
       throw new Error('No supported image files found in the selected folder');
+    }
+
+    // RESUME: process ONLY the images not yet SUCCESSFULLY analyzed in the original run. The
+    // done-set comes from the original run's LOCAL JSONL — the only trusted on-device record
+    // of what was analyzed here. Pre-auth keys off imageFiles.length, so filtering the array
+    // = charging only the remaining, for free. Match by fileName (the only reliable on-device
+    // key; a renamed file counts as new).
+    let priorDoneCount = 0;
+    if (isResume && currentExecutionId) {
+      let priorLog: Awaited<ReturnType<typeof loadExecutionLogIfExists>> = null;
+      let loadFailed = false;
+      try {
+        priorLog = await loadExecutionLogIfExists(currentExecutionId);
+      } catch (error: any) {
+        loadFailed = true;
+        console.warn(`[Resume] Could not read prior log for ${currentExecutionId}: ${error instanceof Error ? error.message : error}`);
+      }
+
+      // SAFETY — never double-charge. If the original run made progress (DB processed_images > 0)
+      // but we cannot account for it from a trusted LOCAL log (missing/unreadable — e.g. another
+      // device, deleted/corrupted log), we must NOT silently re-process and re-charge the whole
+      // folder. Abort and tell the user to re-run from the folder instead.
+      const expectedDone = config.resumeExpectedDone ?? 0;
+      if (!priorLog && expectedDone > 0) {
+        console.warn(`[Resume] Aborting: no local log for ${currentExecutionId} but DB shows ${expectedDone} done (loadFailed=${loadFailed}).`);
+        safeSend('analysis-aborted', {
+          reason: 'resume-unavailable',
+          message: "Can't resume on this device: the record of which photos were already analyzed isn't available here, and resuming would risk charging you twice. Re-run the analysis from the folder instead.",
+        });
+        setActiveProcessingExecutionId(null);
+        return;
+      }
+
+      // Build the done-set from SUCCESSFUL analyses only — an image that errored must be
+      // re-tried on resume, not treated as done.
+      const done = new Set<string>();
+      for (const ev of (priorLog?.events ?? [])) {
+        if (ev && ev.type === 'IMAGE_ANALYSIS' && imageAnalysisSucceeded(ev)) {
+          if (typeof ev.fileName === 'string') done.add(ev.fileName);
+          if (typeof ev.originalFileName === 'string') done.add(ev.originalFileName);
+        }
+      }
+
+      // Local log present but accounts for nothing while the DB says progress was made → the
+      // log is corrupt/truncated; abort rather than risk re-charging the done work.
+      if (done.size === 0 && expectedDone > 0) {
+        console.warn(`[Resume] Aborting: local log for ${currentExecutionId} has no successful analyses but DB shows ${expectedDone} done.`);
+        safeSend('analysis-aborted', {
+          reason: 'resume-unavailable',
+          message: "Can't resume on this device: the local analysis record looks incomplete, and resuming would risk charging you twice. Re-run the analysis from the folder instead.",
+        });
+        setActiveProcessingExecutionId(null);
+        return;
+      }
+
+      if (done.size > 0) {
+        const before = imageFiles.length;
+        imageFiles = imageFiles.filter(f => !done.has(f.fileName));
+        priorDoneCount = before - imageFiles.length;
+      }
+      console.log(`[Resume] ${priorDoneCount} already analyzed, ${imageFiles.length} remaining of ${fullFolderCount}`);
+
+      if (imageFiles.length === 0) {
+        // Everything was already analyzed — nothing left to resume. Finalize and notify.
+        try {
+          await updateExecutionOnline(currentExecutionId, {
+            status: 'completed',
+            processed_images: priorDoneCount || fullFolderCount,
+            total_images: fullFolderCount,
+            completed_at: new Date().toISOString(),
+          });
+        } catch { /* non-fatal */ }
+        safeSend('analysis-aborted', {
+          reason: 'resume-nothing-to-do',
+          message: 'This analysis was already complete — there is nothing left to resume.',
+        });
+        setActiveProcessingExecutionId(null);
+        return;
+      }
     }
 
     // Setup event listeners per progress tracking
@@ -1438,7 +1592,10 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
           unknownFolderName: config.folderOrganization.unknownFolderName || 'Unknown_Numbers',
           includeXmpFiles: config.folderOrganization.includeXmpFiles !== false,
           destinationPath: destinationPath,
-          conflictStrategy: config.folderOrganization.conflictStrategy || 'rename'
+          conflictStrategy: config.folderOrganization.conflictStrategy || 'rename',
+          // (1.2.0 — the "include default folder with custom" flag is now
+          // per-participant on CsvParticipantData; FolderOrganizer reads
+          // it directly at organize time.)
         };
       } catch (error) {
         // Could not get folder organization config, feature disabled
@@ -1457,13 +1614,91 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
       }
     }
 
+    // ------------------------------------------------------------------
+    // Issue #104 — Guardrail: when the renderer sends a presetId but an
+    // empty `participants` array (race condition where the preset hadn't
+    // finished loading before Analyze was clicked), re-fetch from DB so the
+    // Edge Function always sees the canonical participant list. Without
+    // this, Gemini falls back to world-knowledge names which leak into IPTC.
+    // ------------------------------------------------------------------
+    if (
+      config.participantPreset?.id &&
+      (!Array.isArray(config.participantPreset.participants) ||
+        config.participantPreset.participants.length === 0)
+    ) {
+      console.warn(
+        `[main] [Issue #104] Preset ${config.participantPreset.id} arrived with empty participants — reloading from DB before analysis.`
+      );
+      try {
+        const reloaded = await getParticipantPresetByIdSupabase(
+          config.participantPreset.id
+        );
+        if (reloaded?.participants && reloaded.participants.length > 0) {
+          config.participantPreset.participants = reloaded.participants as any;
+          // Also pick up the flag if it wasn't propagated by the renderer.
+          if (
+            typeof (config.participantPreset as any)
+              .allow_external_person_recognition !== 'boolean' &&
+            typeof reloaded.allow_external_person_recognition === 'boolean'
+          ) {
+            (config.participantPreset as any).allow_external_person_recognition =
+              reloaded.allow_external_person_recognition;
+          }
+          // ACC-01 (Gruppe C): likewise pick up the series-sponsor ignore list from
+          // the reloaded preset when the renderer didn't send an array, so the
+          // empty-participants reload path doesn't drop the filter.
+          if (
+            !Array.isArray((config.participantPreset as any).series_sponsor_ignore) &&
+            Array.isArray((reloaded as any).series_sponsor_ignore)
+          ) {
+            (config.participantPreset as any).series_sponsor_ignore =
+              (reloaded as any).series_sponsor_ignore;
+          }
+          console.log(
+            `[main] [Issue #104] Reloaded ${reloaded.participants.length} participants from DB for preset ${config.participantPreset.id}`
+          );
+        } else {
+          console.error(
+            `[main] [Issue #104] Preset ${config.participantPreset.id} is empty or unreachable — aborting analysis.`
+          );
+          safeSend('analysis-aborted', {
+            reason: 'preset-empty',
+            message: `Il preset "${config.participantPreset.name || config.participantPreset.id}" risulta vuoto o non raggiungibile. L'analisi è stata annullata per evitare risultati non attendibili.`,
+          });
+          setActiveProcessingExecutionId(null);
+          return;
+        }
+      } catch (reloadErr) {
+        console.error(
+          `[main] [Issue #104] Failed to reload preset ${config.participantPreset.id}:`,
+          reloadErr
+        );
+        safeSend('analysis-aborted', {
+          reason: 'preset-reload-failed',
+          message: `Impossibile ricaricare il preset "${config.participantPreset.name || config.participantPreset.id}". Riseleziona il preset e riprova.`,
+        });
+        setActiveProcessingExecutionId(null);
+        return;
+      }
+    }
+
     // DEBUG: Log config details before passing to processor
     const processorConfig = {
       csvData: csvData || [],
       category: config.category || 'motorsport',
       executionId: currentExecutionId || undefined, // Pass execution_id to link images to this execution
       presetId: config.participantPreset?.id || undefined, // Preset ID for loading face descriptors specific to this preset
+      presetName: config.participantPreset?.name || undefined, // Preset name for JSONL logging
       participantPresetData: config.participantPreset?.participants || [], // Pass participant data directly to workers
+      // Issue #104: propagate the preset-level flag so V6 knows whether to allow
+      // external (non-participant) person recognition for this batch.
+      allowExternalPersonRecognition:
+        (config.participantPreset as any)?.allow_external_person_recognition === true,
+      // ACC-01 (Gruppe C): propagate the preset-level series-sponsor ignore list so
+      // each worker's SmartMatcher drops those brands from SPONSOR evidence.
+      seriesSponsorIgnore: Array.isArray((config.participantPreset as any)?.series_sponsor_ignore)
+        ? (config.participantPreset as any).series_sponsor_ignore
+        : [],
       personShownTemplate: config.participantPreset?.person_shown_template || undefined, // Template for IPTC PersonInImage field
       folderOrganization: folderOrgConfig,
       keywordsMode: config.keywordsMode || 'append', // How to handle existing keywords
@@ -1478,7 +1713,13 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
         }
       },
       // Visual Tagging configuration
-      visualTagging: config.visualTagging
+      visualTagging: config.visualTagging,
+      // RESUME: tells the processor to append to the existing JSONL (not overwrite), reuse the
+      // execution row (no re-create / no second EXECUTION_START). undefined for a normal run.
+      resumeExecutionId: config.resumeExecutionId,
+      // Images already analyzed before this resume, so the processor's local sidecar +
+      // per-chunk checkpoint report the CUMULATIVE count, not just this run's subset.
+      resumePriorDoneCount: priorDoneCount
     };
 
     // Configura il processor con i parametri necessari
@@ -1517,20 +1758,30 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
           ? executionStats.executionDurationMs / results.length
           : 0;
 
+        // This run has stopped processing — release the active-execution guard so the
+        // interrupted-run recovery can act on it again (e.g. if it was cancelled/failed).
+        setActiveProcessingExecutionId(null);
+
+        // For a resume, the terminal counts must cover the FULL set (prior + this run), not
+        // just the resumed subset, so the row reflects one complete execution.
+        const processedTotal = priorDoneCount + results.length;
+
         // Aggiorna status execution se creata
         if (currentExecutionId) {
           try {
             await updateExecutionOnline(currentExecutionId, {
               status: wasCancelled ? 'cancelled' : 'completed',
               results_reference: wasCancelled
-                ? `Cancelled after ${results.length}/${executionStats.totalImages} images`
-                : `${results.length} images processed`,
+                ? `Cancelled after ${processedTotal}/${executionStats.totalImages} images`
+                : `${processedTotal} images processed`,
               completed_at: new Date().toISOString(),
               total_images: executionStats.totalImages,
-              processed_images: results.length
+              processed_images: processedTotal
             });
-          } catch (error) {
-            if (DEBUG_MODE) console.warn('[Tracking] Failed to update execution status:', error);
+            console.log(`[Execution] Updated execution ${currentExecutionId} → ${wasCancelled ? 'cancelled' : 'completed'} (${processedTotal}/${executionStats.totalImages} images${isResume ? `, resumed +${results.length}` : ''})`);
+          } catch (error: any) {
+            // ALWAYS log — execution update failures affect management portal visibility
+            console.error(`[Execution] ⚠️ Failed to update execution status: ${error instanceof Error ? error.message : JSON.stringify(error)}`);
           }
         }
 
@@ -1540,6 +1791,26 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
             if (DEBUG_MODE) console.warn('[Tracking] Failed to track execution settings:', error);
           });
         }
+
+        // ==================== POST-EXECUTION: NO automatic delivery ====================
+        //
+        // Rule (decided 2026-05-04 by product owner): nothing — neither
+        // gallery routing nor HD R2 upload — runs automatically at the end
+        // of an analysis. Reason: the user must always be able to review
+        // results first, because an analysis can contain mistakes. Pushing
+        // photos to galleries or to R2 before review risks delivering
+        // wrong tags to clients.
+        //
+        // The ONLY trigger for delivery is an explicit click on the
+        // "Deliver" button in the results modal. When the user clicks it,
+        // the modal will:
+        //   - Apply preset delivery_rules if `executions.project_id` is set
+        //     (the user has explicitly bound the preset to a client).
+        //   - Otherwise let the user pick a gallery manually.
+        //   - HD R2 upload is opt-in via the toggle (default OFF).
+        //
+        // A future iteration may add a per-user setting to opt back into
+        // automatic post-execution delivery; for now there is none.
 
         // Automatic export to destinations (if configured)
         let exportResult = null;
@@ -1632,6 +1903,7 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
         }
 
         // Always send batch-complete so any listener gets the partial/full results
+        console.log(`[Main Process] 📤 Sending batch-complete to renderer (${results.length} results, executionId: ${currentExecutionId})`);
         safeSend('batch-complete', {
           results,
           executionId: currentExecutionId,
@@ -1639,19 +1911,38 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
           wasCancelled,
           exportResult
         });
+
+        // Send processing-completed for enhanced-progress.js overlay completion
+        if (!wasCancelled) {
+          console.log(`[Main Process] 📤 Sending processing-completed to renderer`);
+          safeSend('processing-completed', {
+            total: results.length,
+            successful: results.filter((r: any) => r.success).length,
+            executionId: currentExecutionId
+          });
+        }
       })
       .catch(async (error) => {
-        console.error('[Main Process] Unified processing error:', error);
+        // FIX #78: Improved error logging — Error objects serialize as {} with JSON.stringify
+        // because message/stack are non-enumerable. Log message and stack explicitly.
+        const errorMessage = error instanceof Error ? error.message : (typeof error === 'string' ? error : JSON.stringify(error));
+        const errorStack = error instanceof Error ? error.stack : undefined;
+        console.error('[Main Process] Unified processing error:', errorMessage);
+        if (errorStack) console.error('[Main Process] Stack trace:', errorStack);
+
+        // Run stopped — release the active-execution guard (a re-interrupted resume becomes
+        // recoverable/resumable again on the next home open).
+        setActiveProcessingExecutionId(null);
 
         // Aggiorna status execution in caso di errore
         if (currentExecutionId) {
           try {
             await updateExecutionOnline(currentExecutionId, {
               status: 'failed',
-              results_reference: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
+              results_reference: `Error: ${errorMessage}`
             });
-          } catch (updateError) {
-            if (DEBUG_MODE) console.warn('[Tracking] Failed to update execution status on error:', updateError);
+          } catch (updateError: any) {
+            console.error(`[Execution] ⚠️ Failed to update execution status on error: ${updateError instanceof Error ? updateError.message : JSON.stringify(updateError)}`);
           }
 
           // Traccia comunque le impostazioni anche in caso di errore
@@ -1662,8 +1953,21 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
         }
 
         safeSend('processing-error', {
-          error: error instanceof Error ? error.message : 'Unknown error occurred',
-          details: error
+          error: errorMessage || 'Unknown error occurred',
+          details: error,
+          stack: errorStack
+        });
+
+        // CRITICAL FIX: Also send batch-complete so the renderer can redirect to results.html
+        // Previously, if processBatch() threw (e.g., during finalization logging),
+        // only processing-error was sent, and the renderer never got batch-complete,
+        // leaving the user stuck on the progress screen with no redirect.
+        safeSend('batch-complete', {
+          results: [],
+          executionId: currentExecutionId,
+          isProcessingComplete: true,
+          wasCancelled: false,
+          exportResult: null
         });
       });
 
@@ -1671,10 +1975,61 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
   } catch (error) {
     // This catch only handles errors in setup, not in processing
     console.error('[Main Process] Unified processing setup error:', error);
+    // Setup failed before processing started — release the active-execution guard so a resumed
+    // run that errored during setup is recoverable/resumable again.
+    setActiveProcessingExecutionId(null);
     safeSend('processing-error', {
       error: error instanceof Error ? error.message : 'Failed to start processing',
       details: error
     });
+  }
+}
+
+/**
+ * Resume an interrupted analysis: rebuild the original run's config from its DB row +
+ * execution_settings (folder, category, preset) and hand off to handleUnifiedImageProcessing
+ * with `resumeExecutionId` set. That path reuses the execution id, skips the images already
+ * analyzed in the original local JSONL, charges ONLY the remaining ones, appends to the same
+ * JSONL and finalizes — so the result covers the full set without re-charging the done work.
+ */
+async function handleResumeAnalysis(event: IpcMainEvent, payload: { executionId?: string }) {
+  const executionId = payload?.executionId;
+  if (!executionId) {
+    safeSend('processing-error', { error: 'Resume failed: missing execution id' });
+    return;
+  }
+  try {
+    const row: any = await getExecutionByIdOnline(executionId);
+    if (!row) {
+      safeSend('analysis-aborted', { reason: 'resume-not-found', message: 'Could not find that analysis to resume.' });
+      return;
+    }
+    const settings: any = row.execution_settings || {};
+    const folderPath: string = row.source_folder || '';
+    if (!folderPath) {
+      safeSend('analysis-aborted', {
+        reason: 'resume-no-folder',
+        message: 'The original folder for this analysis is unknown on this device. Re-run the analysis from the folder instead.',
+      });
+      return;
+    }
+    const presetId: string | undefined = settings.participantPresetId || undefined;
+    const resumeConfig: BatchProcessConfig = {
+      folderPath,
+      updateExif: true,
+      category: row.category || settings.category || 'motorsport',
+      // Empty participants → handleUnifiedImageProcessing reloads the preset from DB (Issue #104).
+      participantPreset: presetId ? { id: presetId, name: settings.presetName || '', participants: [] } : undefined,
+      resumeExecutionId: executionId,
+      // Safety baseline: how many images the original run reported as processed. If the local
+      // log can't account for these, resume aborts rather than risk a double charge.
+      resumeExpectedDone: typeof row.processed_images === 'number' ? row.processed_images : 0,
+    } as BatchProcessConfig;
+    console.log(`[Resume] Resuming execution ${executionId} (folder: ${folderPath}, preset: ${presetId || 'none'})`);
+    await handleUnifiedImageProcessing(event, resumeConfig);
+  } catch (error: any) {
+    console.error('[Resume] Failed to start resume:', error instanceof Error ? error.message : error);
+    safeSend('processing-error', { error: `Resume failed: ${error instanceof Error ? error.message : 'unknown error'}` });
   }
 }
 
@@ -1711,11 +2066,18 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
         name: executionName,
         execution_at: new Date().toISOString(),
         status: 'running',
-        sport_category_id: sportCategoryId
+        category: config.category || 'motorsport', // FIX: Include category field for management portal display
+        sport_category_id: sportCategoryId,
+        total_images: 0, // Will be updated after processing
+        source_folder: config.folderPath || null,
       });
       currentExecutionId = newExecution.id!;
+      console.log(`[Execution] Created folder analysis execution ${currentExecutionId} for category "${config.category || 'motorsport'}"`);
     } catch (error: any) {
-      if (DEBUG_MODE) console.warn('[Tracking] Failed to create execution for tracking:', error);
+      // ALWAYS log execution creation failures — these are critical for management portal visibility
+      const errMsg = error instanceof Error ? error.message : JSON.stringify(error);
+      console.error(`[Execution] ⚠️ Failed to create execution record: ${errMsg}`);
+      if (error?.code) console.error(`[Execution] Error code: ${error.code} (42501=RLS violation, 42P01=missing table)`);
     }
   }
 
@@ -1729,13 +2091,13 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
     
     // Verifica se la cartella esiste
     if (!fs.existsSync(folderPath)) {
-      throw new Error(`La cartella ${folderPath} non esiste`);
+      throw new Error(`Folder ${folderPath} does not exist`);
     }
     
     // Ottieni la lista delle immagini nella cartella
     const imageFiles = await getImagesFromFolder(folderPath);
     if (imageFiles.length === 0) {
-      throw new Error('Nessuna immagine trovata nella cartella selezionata');
+      throw new Error('No images found in the selected folder');
     }
 
     // Aggiorna le statistiche
@@ -1746,7 +2108,7 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
     // Verifica token balance
     const canProcessImages = await authService.canUseToken(imageFiles.length);
     if (!canProcessImages) {
-      safeSend('upload-error', `Token insufficienti per elaborare ${imageFiles.length} immagini`);
+      safeSend('upload-error', `Insufficient tokens to process ${imageFiles.length} images`);
       return;
     }
     
@@ -2110,8 +2472,9 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
           total_images: totalImages,
           processed_images: completedImages
         });
-      } catch (error) {
-        if (DEBUG_MODE) console.warn('[Tracking] Failed to update execution status:', error);
+        console.log(`[Execution] Updated execution ${currentExecutionId} → completed (${completedImages}/${totalImages} images)`);
+      } catch (error: any) {
+        console.error(`[Execution] ⚠️ Failed to update execution status: ${error instanceof Error ? error.message : JSON.stringify(error)}`);
       }
     }
 
@@ -2160,8 +2523,8 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
           status: 'failed',
           results_reference: `Error: ${error.message || 'Unknown error'}`
         });
-      } catch (updateError) {
-        if (DEBUG_MODE) console.warn('[Tracking] Failed to update execution status on error:', updateError);
+      } catch (updateError: any) {
+        console.error(`[Execution] ⚠️ Failed to update execution status on error: ${updateError instanceof Error ? updateError.message : JSON.stringify(updateError)}`);
       }
 
       // Traccia comunque le impostazioni anche in caso di errore
@@ -2175,7 +2538,7 @@ async function handleFolderAnalysis(event: IpcMainEvent, config: BatchProcessCon
     // Individual image errors already handle DNG cleanup in their catch blocks
     
     if (mainWindow) {
-      mainWindow.webContents.send('upload-error', error.message || 'Si è verificato un errore durante l\'analisi della cartella');
+      mainWindow.webContents.send('upload-error', error.message || 'An error occurred while analyzing the folder');
     }
   }
 }
@@ -2372,9 +2735,9 @@ async function handleRawPreviewExtraction(event: IpcMainEvent) {
     // Chiedi all'utente di selezionare un file RAW
     const result = await dialog.showOpenDialog(mainWindow, {
       properties: ['openFile'],
-      title: 'Seleziona un file RAW',
-      filters: [{ 
-        name: 'File RAW', 
+      title: 'Select a RAW file',
+      filters: [{
+        name: 'RAW Files', 
         extensions: RAW_EXTENSIONS.map(ext => ext.substring(1)) // Use global RAW_EXTENSIONS
       }]
     });
@@ -2390,7 +2753,7 @@ async function handleRawPreviewExtraction(event: IpcMainEvent) {
     const rawFileExtension = path.extname(rawFilePath).toLowerCase();
     if (!RAW_EXTENSIONS.includes(rawFileExtension)) { // Use global RAW_EXTENSIONS
       mainWindow.webContents.send('raw-preview-error', {
-        message: 'Il file selezionato non è un formato RAW supportato.'
+        message: 'The selected file is not a supported RAW format.'
       });
       return;
     }
@@ -2484,7 +2847,7 @@ async function handleRawPreviewExtraction(event: IpcMainEvent) {
     console.error('Error during RAW preview extraction:', error);
     if (mainWindow) {
       mainWindow.webContents.send('raw-preview-error', {
-        message: error.message || 'Si è verificato un errore durante l\'estrazione dell\'anteprima RAW'
+        message: error.message || 'An error occurred during RAW preview extraction'
       });
     }
   }
@@ -2513,31 +2876,79 @@ async function handleFeedbackSubmission(event: IpcMainEvent, feedbackData: any) 
       });
     
     if (error) {
-      console.error('Errore nel salvare il feedback:', error);
-      mainWindow.webContents.send('feedback-error', 'Errore nel salvare il feedback');
+      console.error('Error saving feedback:', error);
+      mainWindow.webContents.send('feedback-error', 'Error saving feedback');
       return;
     }
-    
-    // Conferma il salvataggio del feedback
+
+    // Confirm feedback saved
     mainWindow.webContents.send('feedback-saved', {
       success: true,
-      message: 'Feedback salvato con successo'
+      message: 'Feedback saved successfully'
     });
 
   } catch (error: any) {
-    console.error('Errore durante l\'invio del feedback:', error);
+    console.error('Error submitting feedback:', error);
     if (mainWindow) {
-      mainWindow.webContents.send('feedback-error', error.message || 'Si è verificato un errore durante l\'invio del feedback');
+      mainWindow.webContents.send('feedback-error', error.message || 'An error occurred while submitting feedback');
     }
   }
 }
 
 /**
- * Check and download ONNX models at app startup
- * Shows progress modal in renderer if downloads are needed
+ * Check and download ONNX models at app startup.
+ * Shows progress modal in renderer if downloads are needed.
+ *
+ * Two stages, presented as a single download flow to the user:
+ *   1) Legacy code-based models from the `model_registry` Supabase table
+ *      (categories with use_local_onnx=true), via ModelManager.downloadModel(code).
+ *   2) YOLO models from yolo-model-registry.ts needed by the user's enabled
+ *      sport categories (segmenter for crop_config.enabled, detector for
+ *      use_local_onnx), via ModelManager.ensureGenericModelAvailable(modelId).
+ *
+ * Stage 2 closes issue #124: previously the YOLO segmenter (~42 MB) was
+ * downloaded lazily at the first "Avvia analisi" click, blocking the pipeline
+ * for ~30s on the first run after install/upgrade.
  */
+// BUG-04 — set while a model download is running, to reject concurrent runs.
+let modelDownloadInProgress = false;
+
+/**
+ * Retry an async model-download step with exponential backoff. BUG-04: the
+ * model-download path had no retry, so a single transient failure (expired
+ * signed URL, network not ready right after an OS update / reboot) aborted
+ * startup with "restart the app to retry". Mirrors the retry+backoff already
+ * used on the analysis edge-function call.
+ */
+async function downloadWithRetry<T>(
+  label: string,
+  fn: () => Promise<T>,
+  maxAttempts = 3
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      console.warn(`[Main Process] Model download "${label}" attempt ${attempt}/${maxAttempts} failed:`, error);
+      if (attempt < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(`Model download failed: ${label}`);
+}
+
 async function checkAndDownloadModels(): Promise<void> {
   console.log('[Main Process] checkAndDownloadModels() called');
+  // BUG-04 — guard against concurrent runs (the startup call overlapping a user
+  // "Retry" click): two parallel downloads would race on the same files.
+  if (modelDownloadInProgress) {
+    console.warn('[Main Process] Model download already in progress — ignoring concurrent call');
+    return;
+  }
+  modelDownloadInProgress = true;
   try {
     const modelManager = getModelManager();
     console.log('[Main Process] ModelManager instance obtained');
@@ -2548,38 +2959,77 @@ async function checkAndDownloadModels(): Promise<void> {
     modelManager.setSupabaseClient(supabaseClient);
     console.log('[Main Process] Supabase client set');
 
-    // Check which models need to be downloaded
-    console.log('[Main Process] Checking models to download...');
-    const { models, totalSizeMB } = await modelManager.getModelsToDownload();
-    console.log('[Main Process] Models to download:', models.length, 'Total size:', totalSizeMB, 'MB');
+    // Stage 1 — legacy code-based models (use_local_onnx=true categories)
+    console.log('[Main Process] Checking code-based models to download...');
+    const { models: codeModels, totalSizeMB: codeSizeMB } =
+      await modelManager.getModelsToDownload();
+    console.log(
+      `[Main Process] Code-based models to download: ${codeModels.length} (${codeSizeMB.toFixed(1)} MB)`
+    );
 
-    if (models.length === 0) {
+    // Stage 2 — YOLO registry models needed by user's enabled sport categories
+    // (issue #124: pre-download to avoid lazy ~30s wait at first analysis)
+    console.log('[Main Process] Checking YOLO registry models to download...');
+    const { models: yoloModels, totalSizeMB: yoloSizeMB } =
+      await modelManager.getYoloModelsToDownload();
+    console.log(
+      `[Main Process] YOLO registry models to download: ${yoloModels.length} (${yoloSizeMB.toFixed(1)} MB)`
+    );
+
+    const totalModels = codeModels.length + yoloModels.length;
+    const totalSizeMB = codeSizeMB + yoloSizeMB;
+
+    if (totalModels === 0) {
       console.log('[Main Process] No models need download, all up to date');
       return;
     }
 
-    // Notify renderer to show download modal
+    // Notify renderer to show download modal (combined stages)
     safeSend('model-download-start', {
-      totalModels: models.length,
+      totalModels,
       totalSizeMB
     });
 
-    // Download each model with progress tracking
+    // Download each model with progress tracking. Both stages share the same
+    // running counters so the renderer sees a single "X / Y models" flow.
     let downloadedTotal = 0;
-    for (let i = 0; i < models.length; i++) {
-      const model = models[i];
+    let modelIndex = 0;
 
-      await modelManager.downloadModel(model.code, (percent, downloadedMB, totalMB) => {
-        safeSend('model-download-progress', {
-          currentModel: i + 1,
-          totalModels: models.length,
-          modelPercent: percent,
-          downloadedMB: downloadedTotal + downloadedMB,
-          totalMB: totalSizeMB
-        });
-      });
-
+    // Stage 1 — code-based models via downloadModel(code)
+    for (const model of codeModels) {
+      modelIndex++;
+      await downloadWithRetry(`code:${model.code}`, () =>
+        modelManager.downloadModel(model.code, (percent, downloadedMB, _totalMB) => {
+          safeSend('model-download-progress', {
+            currentModel: modelIndex,
+            totalModels,
+            modelPercent: percent,
+            downloadedMB: downloadedTotal + downloadedMB,
+            totalMB: totalSizeMB
+          });
+        })
+      );
       downloadedTotal += model.sizeMB;
+    }
+
+    // Stage 2 — YOLO registry models via ensureGenericModelAvailable(modelId)
+    for (const yoloModel of yoloModels) {
+      modelIndex++;
+      await downloadWithRetry(`yolo:${yoloModel.modelId}`, () =>
+        modelManager.ensureGenericModelAvailable(
+          yoloModel.modelId,
+          (percent, downloadedMB, _totalMB) => {
+            safeSend('model-download-progress', {
+              currentModel: modelIndex,
+              totalModels,
+              modelPercent: percent,
+              downloadedMB: downloadedTotal + downloadedMB,
+              totalMB: totalSizeMB
+            });
+          }
+        )
+      );
+      downloadedTotal += yoloModel.sizeMB;
     }
 
     // Notify renderer that download is complete
@@ -2590,6 +3040,8 @@ async function checkAndDownloadModels(): Promise<void> {
       message: error instanceof Error ? error.message : 'Unknown error'
     });
     throw error;
+  } finally {
+    modelDownloadInProgress = false;
   }
 }
 
@@ -2835,6 +3287,9 @@ async function logStartupHealthReport(startupMs: number): Promise<void> {
       logLine(`[RaceTagger]  RAM: ${ramStr || 'N/A'} \u2502 CPU: ${cpuStr || 'N/A'}`);
     }
     logLine(`[RaceTagger]  Startup: ${startupMs.toLocaleString()}ms`);
+    if (!SEND_PRESET_TO_AI) {
+      logLine(`[RaceTagger]  ⚠️ SEND_PRESET_TO_AI: DISABLED (Gemini will do pure OCR)`);
+    }
     logLine(`[RaceTagger] ${sep}`);
 
     // Also send to renderer DevTools console
@@ -2886,6 +3341,18 @@ app.whenReady().then(async () => { // Added async here
   ipcMain.handle('get-token-balance', handleGetTokenBalance);
   ipcMain.handle('get-pending-tokens', handleGetPendingTokens);
   ipcMain.handle('get-token-info', handleGetTokenInfo);
+
+  // BUG-04 — let the renderer re-trigger model download via a "Retry" button
+  // instead of forcing an app restart. checkAndDownloadModels emits its own
+  // start/progress/complete/error events, so the modal updates as usual.
+  ipcMain.handle('retry-model-download', async () => {
+    try {
+      await checkAndDownloadModels();
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  });
 
   // Register modular IPC handlers BEFORE window creation
   registerAllHandlers();
@@ -2948,22 +3415,88 @@ app.whenReady().then(async () => { // Added async here
   // Log startup health report (non-blocking, all checks have individual timeouts)
   await logStartupHealthReport(Date.now() - startupStart);
 
+  // Schedule JSONL upload reconciliation in the background. Recovers from
+  // analyses whose finalize() upload step lost the 15s race in
+  // unified-image-processor.ts (typical for 2k+ image batches on slow
+  // uplinks). Best-effort, debounced, never blocks startup. See
+  // src/utils/jsonl-upload-reconciler.ts for the contract.
+  setTimeout(() => {
+    try {
+      const { scheduleBackgroundReconciliation } = require('./utils/jsonl-upload-reconciler');
+      const { getSupabaseClient } = require('./database-service');
+      scheduleBackgroundReconciliation(
+        {
+          getSupabase: getSupabaseClient,
+          getCurrentUserId: () => authService.getAuthState().user?.id ?? null,
+        },
+        { reason: 'app-boot' }
+      );
+    } catch (err: any) {
+      console.warn('[Main] Failed to schedule JSONL reconciliation (non-critical):', err?.message ?? err);
+    }
+  }, 5_000);
+
+  // Initialise the correction outbox — a durable, retry-with-backoff queue
+  // for Supabase writes that MUST eventually succeed even if the network
+  // flaps during a correction session. We saw `TypeError: fetch failed`
+  // errors drop at least one image_corrections row in the field (Michele
+  // 13:58:30, support_1778335167281). The outbox persists the write to
+  // userData/.outbox/corrections.jsonl BEFORE the network attempt so the
+  // op survives process death, then retries with exponential backoff in
+  // the background.
+  try {
+    const { init: initCorrectionOutbox } = require('./utils/correction-outbox');
+    initCorrectionOutbox(async (op: any) => {
+      // Executor: knows how to run each queued op against Supabase.
+      const { getSupabaseClient } = require('./database-service');
+      const supabase = getSupabaseClient();
+      if (!supabase) {
+        throw new Error('Supabase client not available');
+      }
+      switch (op.type) {
+        case 'image_corrections_insert': {
+          const { error } = await supabase
+            .from('image_corrections')
+            .insert(op.payload);
+          if (error) throw new Error(error.message || 'image_corrections insert failed');
+          return;
+        }
+        case 'analysis_results_update': {
+          const { image_id, update } = op.payload || {};
+          if (!image_id || !update) {
+            throw new Error('analysis_results_update payload missing image_id or update');
+          }
+          const { error } = await supabase
+            .from('analysis_results')
+            .update(update)
+            .eq('image_id', image_id);
+          if (error) throw new Error(error.message || 'analysis_results update failed');
+          return;
+        }
+        default:
+          throw new Error(`Unknown outbox op type: ${op.type}`);
+      }
+    }).catch((err: any) => {
+      console.warn('[Main] Correction outbox init failed (non-critical):', err?.message ?? err);
+    });
+  } catch (err: any) {
+    console.warn('[Main] Failed to load correction outbox module (non-critical):', err?.message ?? err);
+  }
+
   ipcMain.on('select-folder', handleFolderSelection);
 
-  // Handle folder selection by path (drag & drop)
-  ipcMain.on('select-folder-by-path', async (event, folderPath: string) => {
+  // Handle folder selection by path (drag & drop) — uses handle/invoke pattern for reliability
+  ipcMain.handle('select-folder-by-path', async (_event, folderPath: string) => {
     try {
       console.log('[FolderSelection] select-folder-by-path called with:', folderPath);
 
       if (!folderPath || !fs.existsSync(folderPath)) {
-        event.sender.send('folder-selected', { success: false, message: 'La cartella selezionata non esiste' });
-        return;
+        return { success: false, message: 'Selected folder does not exist' };
       }
 
       const stat = fs.statSync(folderPath);
       if (!stat.isDirectory()) {
-        event.sender.send('folder-selected', { success: false, message: 'Il percorso selezionato non è una cartella' });
-        return;
+        return { success: false, message: 'The selected path is not a folder' };
       }
 
       const imageFiles = await getImagesFromFolder(folderPath);
@@ -2976,17 +3509,18 @@ app.whenReady().then(async () => { // Added async here
         imageCount,
         rawCount
       };
-      console.log('[FolderSelection] Sending folder-selected event with payload:', payload);
-      event.sender.send('folder-selected', payload);
+      console.log('[FolderSelection] Returning folder payload:', payload);
 
       if (batchConfig) {
         batchConfig.folderPath = folderPath;
       } else {
         batchConfig = { folderPath, updateExif: false };
       }
+
+      return payload;
     } catch (error) {
       console.error('Error during folder selection by path:', error);
-      event.sender.send('folder-selected', { success: false, message: 'Errore durante la selezione della cartella' });
+      return { success: false, message: 'Error during folder selection' };
     }
   });
   
@@ -3021,24 +3555,13 @@ app.whenReady().then(async () => { // Added async here
           throw new Error('Folder organization feature not available');
         }
 
-        // Read JSONL log file
-        const logsDir = path.join(app.getPath('userData'), '.analysis-logs');
-        const logFilePath = path.join(logsDir, `exec_${executionId}.jsonl`);
-
-        if (!fs.existsSync(logFilePath)) {
-          throw new Error(`Log file not found for execution ${executionId}`);
-        }
-
-        // Parse JSONL file
-        const logContent = fs.readFileSync(logFilePath, 'utf-8');
-        const logLines = logContent.trim().split('\n').filter(line => line.trim());
-        const logEvents = logLines.map(line => {
-          try {
-            return JSON.parse(line);
-          } catch (error) {
-            return null;
-          }
-        }).filter(Boolean);
+        // Load the execution event stream via the unified loader.
+        // Today: reads the local JSONL. Future (Phase 3): falls back to
+        // DB reconstruction for cross-machine support — see contract in
+        // src/utils/execution-log-loader.ts. Call sites here do NOT need
+        // to change when that lands.
+        const { loadExecutionLog } = require('./utils/execution-log-loader');
+        const { events: logEvents, logFilePath } = await loadExecutionLog(executionId);
 
         // Block repeated "move" operations - files are no longer at original paths
         if (folderOrganizationConfig.mode === 'move') {
@@ -3052,19 +3575,270 @@ app.whenReady().then(async () => { // Added async here
         }
 
         // Extract image analysis events
-        const imageAnalysisEvents = logEvents.filter(event => event.type === 'IMAGE_ANALYSIS');
+        const imageAnalysisEvents = logEvents.filter((event: any) => event.type === 'IMAGE_ANALYSIS');
 
         // Build correction map from MANUAL_CORRECTION events
         const correctionMap = new Map();
         logEvents
-          .filter(event => event.type === 'MANUAL_CORRECTION')
-          .forEach(event => {
+          .filter((event: any) => event.type === 'MANUAL_CORRECTION')
+          .forEach((event: any) => {
             const key = `${event.fileName}_${event.vehicleIndex}`;
             correctionMap.set(key, event.changes);
           });
 
+        // Best-effort flush of the correction outbox BEFORE we read
+        // image_corrections from Supabase. Any pending USER_MANUAL row
+        // that failed to land at correction time (network glitch) will
+        // be retried now so the defense-in-depth merge sees the most
+        // current state of the DB.
+        try {
+          const outbox = require('./utils/correction-outbox');
+          if (typeof outbox.flushPending === 'function') {
+            await outbox.flushPending();
+          }
+        } catch (flushErr) {
+          // Non-critical — the merge query below is itself a safety net.
+          console.warn('[Main Process] Pre-merge outbox flush failed (non-critical):', flushErr);
+        }
+
+        // Defense-in-depth (Fix B for the "metadati corretti, cartella sbagliata"
+        // class of bugs): also merge USER_MANUAL rows from `image_corrections`
+        // on Supabase. Covers the race where:
+        //   - The user corrected a match in the renderer but the autosave
+        //     debounce (3s) hasn't fired yet → the JSONL on disk doesn't
+        //     have the MANUAL_CORRECTION event, but `update-analysis-log`
+        //     may already have written the row to Supabase.
+        //   - update-analysis-log succeeded for the DB write but failed
+        //     for the JSONL write (or the JSONL got reconciled by a
+        //     concurrent flow).
+        //   - A future correction flow lands rows in image_corrections
+        //     without re-writing the JSONL (e.g. the IPTC Finalizer path,
+        //     which today bypasses MANUAL_CORRECTION entirely).
+        // Rows are read in created_at ascending order so later edits
+        // overwrite earlier ones in the Map.
+        try {
+          const { getSupabaseClient } = await import('./database-service');
+          const supabase = getSupabaseClient();
+          if (supabase) {
+            const { data: corrRows, error: corrErr } = await supabase
+              .from('image_corrections')
+              .select('image_id, vehicle_index, corrected_value, created_at')
+              .eq('execution_id', executionId)
+              .eq('correction_type', 'USER_MANUAL')
+              .order('created_at', { ascending: true });
+            if (!corrErr && Array.isArray(corrRows)) {
+              // Build an in-memory index from imageId/dbImageId → fileName so
+              // we can translate the DB's image_id back to the
+              // `${fileName}_${vehicleIndex}` key the correctionMap uses.
+              // We index by BOTH `imageId` and `dbImageId` because the
+              // insert payload at correction time picks `imageAnalysisEvent.imageId`
+              // first and only falls back to the composite key. Older rows
+              // can therefore appear under either form.
+              const imageIdToFileName = new Map<string, string>();
+              for (const ev of imageAnalysisEvents) {
+                if (ev?.imageId && ev?.fileName) imageIdToFileName.set(String(ev.imageId), ev.fileName);
+                if (ev?.dbImageId && ev?.fileName) imageIdToFileName.set(String(ev.dbImageId), ev.fileName);
+              }
+              let merged = 0;
+              let overrode = 0;
+              let unmatched = 0;
+              for (const row of corrRows) {
+                const imageId = (row as any)?.image_id;
+                const vehicleIndex = (row as any)?.vehicle_index;
+                const correctedValue = (row as any)?.corrected_value;
+                if (!imageId || vehicleIndex == null || !correctedValue) continue;
+
+                // Resolve the fileName for this row. Strategy:
+                //   1. Look up imageAnalysisEvents by imageId (UUID dbImageId
+                //      or legacy client-side id).
+                //   2. Fall back: if image_id matches the composite form
+                //      `${fileName}_${vehicleIndex}` we wrote when no
+                //      dbImageId was available, parse the fileName out.
+                let fileName = imageIdToFileName.get(String(imageId));
+                if (!fileName) {
+                  const trailingIdx = `_${vehicleIndex}`;
+                  if (String(imageId).endsWith(trailingIdx)) {
+                    fileName = String(imageId).slice(0, -trailingIdx.length);
+                  }
+                }
+                if (!fileName) {
+                  unmatched++;
+                  continue;
+                }
+                const key = `${fileName}_${vehicleIndex}`;
+                if (correctionMap.has(key)) overrode++;
+                correctionMap.set(key, correctedValue);
+                merged++;
+              }
+              if (merged > 0 || unmatched > 0) {
+                console.log(
+                  `[Main Process] Merged ${merged} USER_MANUAL rows from image_corrections into correctionMap ` +
+                  `(${overrode} overrode an existing JSONL MANUAL_CORRECTION, ${unmatched} could not be mapped to a fileName)`
+                );
+              }
+            } else if (corrErr) {
+              console.warn(`[Main Process] image_corrections fetch failed (continuing with JSONL only): ${corrErr.message}`);
+            }
+          }
+        } catch (mergeErr) {
+          // Non-fatal — JSONL-only correctionMap is a safe degraded mode.
+          console.warn('[Main Process] Failed to merge image_corrections from Supabase (non-fatal):', mergeErr);
+        }
+
         // Import FolderOrganizer
         const { FolderOrganizer } = await import('./utils/folder-organizer');
+
+        // Determine destination path:
+        // If user selected "Source folder" (destinationPath is undefined), create "Organized_Photos"
+        // inside the source folder (derived from the first image's directory)
+        let resolvedDestinationPath = folderOrganizationConfig.destinationPath;
+        if (!resolvedDestinationPath && imageAnalysisEvents.length > 0) {
+          const firstImagePath = imageAnalysisEvents[0].originalPath;
+          if (firstImagePath) {
+            resolvedDestinationPath = path.join(path.dirname(firstImagePath), 'Organized_Photos');
+            console.log(`[Main Process] Folder org: Source folder mode → destination: ${resolvedDestinationPath}`);
+          }
+        }
+
+        // =====================================================================
+        // Issue #105 Point 2: derive preset "allowed numbers" for the JSONL flow
+        // ---------------------------------------------------------------------
+        // The post-analysis organizer was creating folders with race numbers that
+        // didn't exist in the active preset — mirror of the bug in-process fixed
+        // earlier via organizeToFolders(). The root cause on this path:
+        //   (a) no allowedNumbers passed to FolderOrganizer → no defensive filter
+        //   (b) JSONL fallback used vehicle.raceNumber (raw AI) when a
+        //       participant preset was active, by-passing the preset restriction.
+        //
+        // We fix both here:
+        //   1) Detect whether a participant preset was active at analysis time
+        //      via the EXECUTION_START event.
+        //   2) Try to load the authoritative preset participants from Supabase
+        //      (best effort — handles preset numbers that were never matched).
+        //   3) Fall back to the union of participantMatch.entry.numero found in
+        //      the JSONL (approximation — only includes numbers that were matched).
+        //   4) Pass the resulting list to FolderOrganizer with
+        //      restrictToAllowedNumbers=true, so any leaked phantom number is
+        //      filtered into Unknown_Numbers instead of creating a phantom folder.
+        // =====================================================================
+        const executionStartEvent: any = logEvents.find((ev: any) => ev.type === 'EXECUTION_START');
+        const presetIdFromStart: string | null =
+          executionStartEvent?.participantPreset?.id || executionStartEvent?.participantPresetId || null;
+        const presetWasActive = !!presetIdFromStart;
+
+        let allowedNumbersFromPreset: string[] | undefined = undefined;
+        // FIX (Issue #folder-org-correction):
+        //   When the user corrects a vehicle's raceNumber via the log
+        //   visualizer or the IPTC modal, the JSONL `MANUAL_CORRECTION`
+        //   event only carries the new number — NOT the full preset entry
+        //   for the new participant (folders, include_default_folder,
+        //   nome, squadra, …). The original `vehicle.participantMatch`
+        //   stays pointing at the AI's wrong participant, so the
+        //   csvDataList we build below ends up with the WRONG
+        //   participant's folders[] / include_default_folder / nome,
+        //   while raceNumbers carries the CORRECT number. Result: the
+        //   organizer's `csvDataArray.find(csv => csv.numero === num)`
+        //   returns undefined, custom folders never get created for the
+        //   corrected participant, and the photo lands in
+        //   `Organized_Photos/{number}/` (the default fallback) — exactly
+        //   what users in the field have been reporting.
+        //
+        //   Fix: load the FULL preset entry (folders, include_default_folder,
+        //   nome, squadra, …) keyed by numero, then use it as the override
+        //   whenever a MANUAL_CORRECTION provided a new raceNumber.
+        const presetParticipantMap = new Map<string, any>();
+        if (presetWasActive) {
+          const allowedSet = new Set<string>();
+
+          // 1) Authoritative source: Supabase preset_participants (best effort)
+          try {
+            const { getSupabaseClient } = await import('./database-service');
+            const supabase = getSupabaseClient();
+            if (supabase && presetIdFromStart) {
+              // v1.1.4 — only consider active participants: disabled ones
+              // should not appear in the "allowed numbers" gate used by
+              // FolderOrganizer (Issue #105), so their output lands in
+              // Unknown_Numbers consistently with matching behaviour.
+              //
+              // folder-org-correction fix: also pull the columns that
+              // CsvParticipantData needs at routing time (folders[],
+              // include_default_folder, nome, squadra, …) plus the
+              // associated driver list, so a user correction to a number
+              // not seen at analysis time still gets its full preset
+              // entry honoured by the organizer.
+              const { data: presetRows, error: presetErr } = await supabase
+                .from('preset_participants')
+                .select(`
+                  numero,
+                  is_active,
+                  nome,
+                  squadra,
+                  categoria,
+                  metatag,
+                  folders,
+                  include_default_folder,
+                  folder_1, folder_2, folder_3,
+                  folder_1_path, folder_2_path, folder_3_path,
+                  preset_participant_drivers (
+                    driver_name,
+                    driver_order,
+                    driver_nationality,
+                    driver_metatag
+                  )
+                `)
+                .eq('preset_id', presetIdFromStart)
+                .eq('is_active', true);
+              if (!presetErr && Array.isArray(presetRows)) {
+                for (const row of presetRows) {
+                  const num = (row as any)?.numero;
+                  if (num != null) {
+                    const s = typeof num === 'string' ? num.trim() : String(num);
+                    if (s) {
+                      allowedSet.add(s);
+                      presetParticipantMap.set(s, row);
+                    }
+                  }
+                }
+                console.log(`[Main Process] Issue #105: loaded ${allowedSet.size} preset numbers from Supabase (preset_id=${presetIdFromStart})`);
+              } else if (presetErr) {
+                console.warn(`[Main Process] Issue #105: Supabase preset lookup failed, will fall back to JSONL scan: ${presetErr.message}`);
+              }
+            }
+          } catch (presetFetchErr) {
+            console.warn('[Main Process] Issue #105: preset lookup threw, falling back to JSONL scan:', presetFetchErr);
+          }
+
+          // 2) Fallback / augment: scan all participantMatch.entry.numero in JSONL
+          //    (covers offline mode and any preset entry that did get matched).
+          //    We also harvest the entry payload itself as a secondary
+          //    source for presetParticipantMap, so the correction lookup
+          //    keeps working when the Supabase fetch failed but the
+          //    matched-AI participant happens to be the corrected one.
+          for (const ev of imageAnalysisEvents) {
+            const vehicles = ev?.aiResponse?.vehicles;
+            if (!Array.isArray(vehicles)) continue;
+            for (const v of vehicles) {
+              const entry = v?.participantMatch?.entry || v?.participantMatch;
+              const num = entry?.numero;
+              if (num != null) {
+                const s = typeof num === 'string' ? num.trim() : String(num);
+                if (s) {
+                  allowedSet.add(s);
+                  if (!presetParticipantMap.has(s)) {
+                    presetParticipantMap.set(s, entry);
+                  }
+                }
+              }
+            }
+          }
+
+          if (allowedSet.size > 0) {
+            allowedNumbersFromPreset = Array.from(allowedSet);
+            console.log(`[Main Process] Issue #105: FolderOrganizer will enforce ${allowedNumbersFromPreset.length} preset-allowed numbers (restrictToAllowedNumbers=true)`);
+          } else {
+            console.warn(`[Main Process] Issue #105: preset was active but no allowed numbers could be derived — defensive filter will be disabled for this run`);
+          }
+        }
 
         // Create organizer instance
         const organizer = new FolderOrganizer({
@@ -3075,13 +3849,27 @@ app.whenReady().then(async () => { // Added async here
           createUnknownFolder: folderOrganizationConfig.createUnknownFolder !== false,
           unknownFolderName: folderOrganizationConfig.unknownFolderName || 'Unknown_Numbers',
           includeXmpFiles: folderOrganizationConfig.includeXmpFiles !== false,
-          destinationPath: folderOrganizationConfig.destinationPath,
-          conflictStrategy: folderOrganizationConfig.conflictStrategy || 'rename'
+          destinationPath: resolvedDestinationPath,
+          conflictStrategy: folderOrganizationConfig.conflictStrategy || 'rename',
+          renamePattern: folderOrganizationConfig.renamePattern || undefined,
+          // (1.2.0 — flag moved to per-participant; FolderOrganizer reads
+          // csvData.include_default_folder at organize time.)
+          // Issue #105 Point 2 hardening (defense-in-depth)
+          allowedNumbers: allowedNumbersFromPreset,
+          restrictToAllowedNumbers: allowedNumbersFromPreset !== undefined,
         });
 
-        // Process each image
+        // Process each image — JSONL is the authoritative source.
+        // Note: prior to April 2026 this loop also tried to read a structured
+        // payload (`RACETAGGER_V1:{...}`) from XMP:Instructions as a "primary"
+        // source. That payload leaked absolute folder paths (privacy issue)
+        // and has been removed. JSONL — already the existing fallback — is
+        // now the only source. Cross-machine re-organization will be served
+        // by a DB-reconstruction path (see execution-log-loader.ts).
         const results = [];
         const errors = [];
+        const totalImages = imageAnalysisEvents.length;
+        let processedCount = 0;
 
         for (const event of imageAnalysisEvents) {
           try {
@@ -3121,58 +3909,214 @@ app.whenReady().then(async () => { // Added async here
               continue;
             }
 
-            // Get final race numbers (apply corrections if any)
+            // === Build raceNumbers + csvDataList from JSONL ===
             let raceNumbers: string[] = [];
-            if (event.aiResponse?.vehicles) {
-              event.aiResponse.vehicles.forEach((vehicle: any, index: number) => {
-                const key = `${fileName}_${index}`;
-                const correction = correctionMap.get(key);
+            let csvDataList: any[] = [];
 
-                if (correction && correction.number) {
-                  raceNumbers.push(correction.number);
-                } else if (vehicle.finalResult?.raceNumber) {
-                  raceNumbers.push(vehicle.finalResult.raceNumber);
-                } else if (vehicle.raceNumber) {
-                  raceNumbers.push(vehicle.raceNumber);
-                }
-              });
+            {
+              // Get final race numbers AND csvDataList in a single pass — apply
+              // user corrections to BOTH so the participant entry handed to
+              // the organizer (folders[], include_default_folder, nome,
+              // squadra, …) matches the corrected number rather than the
+              // original AI participantMatch.
+              //
+              // Issue #105 Point 2: when a participant preset is active we must NOT
+              // fall through to the raw AI output (vehicle.raceNumber) because that
+              // bypasses the preset restriction and produces phantom folders. Only
+              // the following sources are considered preset-safe:
+              //   - correction.raceNumber   → user manual correction (authoritative)
+              //   - finalResult.raceNumber  → smart-matcher output (preset-restricted)
+              //
+              // When no preset is active, legacy behaviour applies (accept
+              // vehicle.raceNumber as last resort).
+              //
+              // FIX (correction field name): the MANUAL_CORRECTION payload uses
+              // `changes.raceNumber` (see analysis-logger), NOT `changes.number`.
+              // Previously this branch read `correction.number` and was therefore
+              // never truthy, silently losing every USER_MANUAL correction for
+              // images whose XMP:Instructions metadata was missing (e.g. images
+              // with metadataWritten=false / "no_preset_match"). Those files then
+              // fell through to finalResult.raceNumber (null) and ended up in
+              // Unknown_Numbers. Read the correct field.
+              //
+              // FIX (folder-org-correction Fix C): when a correction supplied a
+              // raceNumber different from the AI match, the entry used to build
+              // csvDataList MUST come from the preset entry for the CORRECTED
+              // number (folders, include_default_folder, nome, squadra) — NOT
+              // from `vehicle.participantMatch.entry` which still points at the
+              // AI's wrong participant. Without this, the organizer's
+              // `csvDataArray.find(csv => csv.numero === num)` returns
+              // undefined and the file falls back to `Organized_Photos/{number}/`
+              // (default folder) ignoring the corrected participant's custom
+              // folders and `include_default_folder=false` flag.
+              if (event.aiResponse?.vehicles) {
+                event.aiResponse.vehicles.forEach((vehicle: any, index: number) => {
+                  const key = `${fileName}_${index}`;
+                  const correction = correctionMap.get(key);
+
+                  // Correction with {deleted: true} means the vehicle was removed;
+                  // skip it so the image is not forced into a number folder.
+                  if (correction?.deleted) {
+                    return;
+                  }
+
+                  // Support both the canonical field name (raceNumber) and the
+                  // legacy alias (number) so logs produced by older builds keep
+                  // working after this fix is deployed.
+                  const rawCorrectedNumber = correction?.raceNumber ?? correction?.number;
+                  const correctedNumber = rawCorrectedNumber != null
+                    ? String(rawCorrectedNumber).trim() || null
+                    : null;
+
+                  // --- 1) Resolve the final number for raceNumbers[] ---
+                  let finalNumber: string | null = null;
+                  if (correctedNumber) {
+                    finalNumber = correctedNumber;
+                  } else if (vehicle.finalResult?.raceNumber) {
+                    finalNumber = String(vehicle.finalResult.raceNumber);
+                  } else if (vehicle.raceNumber && !presetWasActive) {
+                    // Legacy fallback — only when no preset was active at analysis time
+                    finalNumber = String(vehicle.raceNumber);
+                  } else if (vehicle.raceNumber && presetWasActive) {
+                    // Drop raw AI output silently (defensive filter will catch it too).
+                    // Log at debug level via console.warn for observability.
+                    console.warn(
+                      `[Main Process] Issue #105: dropped raw AI number "${vehicle.raceNumber}" ` +
+                      `for ${fileName} vehicle[${index}] — preset active and no finalResult match.`
+                    );
+                  }
+
+                  if (finalNumber) {
+                    raceNumbers.push(finalNumber);
+                  }
+
+                  // --- 2) Resolve the preset entry that backs THIS vehicle's csvData ---
+                  let entry: any = null;
+                  if (correctedNumber) {
+                    // User-driven correction: look up the CORRECTED participant
+                    // in the preset map so folders[] / include_default_folder /
+                    // nome / squadra reflect the new number, not the AI's
+                    // original (wrong) match.
+                    entry = presetParticipantMap.get(correctedNumber);
+                    if (!entry) {
+                      // Corrected number isn't in the preset (e.g. user typed
+                      // a number that doesn't belong to any active
+                      // participant). Synthesize a minimal entry so the
+                      // organizer's `csvData.find(c => c.numero === num)`
+                      // still resolves — without it the file would silently
+                      // fall back to the default `Organized_Photos/{number}/`
+                      // folder even though we have a csvDataList row.
+                      entry = { numero: correctedNumber };
+                      if (DEBUG_MODE) {
+                        console.log(
+                          `[Main Process] Corrected number "${correctedNumber}" for ${fileName}[${index}] ` +
+                          `not found in preset participant map — synthesizing minimal entry (no custom folders).`
+                        );
+                      }
+                    }
+                  } else if (vehicle.participantMatch) {
+                    const match = vehicle.participantMatch;
+                    entry = match.entry || match;
+                  }
+
+                  // --- 3) Push the csvData row (skip when we have no entry) ---
+                  if (entry) {
+                    let driverName = '';
+                    if (entry.preset_participant_drivers?.length > 0) {
+                      const sorted = [...entry.preset_participant_drivers].sort((a: any, b: any) => (a.driver_order || 0) - (b.driver_order || 0));
+                      const names = sorted.map((d: any) => d.driver_name).filter(Boolean);
+                      driverName = names.join(', ');
+                    } else if (entry.nome) {
+                      driverName = entry.nome;
+                    }
+
+                    // Per-field overrides from the correction payload. When the
+                    // user explicitly typed a new team/drivers, prefer those
+                    // over the preset entry so the {team}/{name} placeholder
+                    // substitution in custom folder names reflects the user's
+                    // intent (e.g. they re-assigned car #69 to a different
+                    // team than what the preset says).
+                    const teamOverride =
+                      typeof correction?.team === 'string' && correction.team.trim()
+                        ? correction.team
+                        : entry.squadra;
+                    const driversOverride =
+                      Array.isArray(correction?.drivers) && correction.drivers.length > 0
+                        ? correction.drivers.join(', ')
+                        : driverName;
+
+                    csvDataList.push({
+                      numero: entry.numero,
+                      nome: driversOverride,
+                      categoria: entry.categoria,
+                      squadra: teamOverride,
+                      metatag: entry.metatag,
+                      // Mirror the soft-disable flag from the cached entry.
+                      // For the live re-organize flow the authoritative guard
+                      // is the `allowedNumbers` gate above (DB-fresh, see
+                      // line ~3329) — this propagation just keeps the inner
+                      // FolderOrganizer filter consistent when the cached
+                      // entry happens to carry an explicit `is_active=false`.
+                      is_active: entry.is_active,
+                      // 1.2.0 — propagate the canonical folders[] coming from
+                      // the preset (normalized upstream). Legacy slots stay
+                      // alongside as a defensive fallback for code paths
+                      // that bypass normalization.
+                      folders: Array.isArray(entry.folders) ? entry.folders : undefined,
+                      // 1.2.0 — per-participant additive-default flag.
+                      // Defaults to true when the column is missing
+                      // (legacy participants pre-migration), matching the
+                      // DB DEFAULT.
+                      include_default_folder: entry.include_default_folder !== false,
+                      folder_1: entry.folder_1,
+                      folder_2: entry.folder_2,
+                      folder_3: entry.folder_3,
+                      folder_1_path: entry.folder_1_path,
+                      folder_2_path: entry.folder_2_path,
+                      folder_3_path: entry.folder_3_path
+                    });
+                  }
+                });
+              }
             }
 
             if (raceNumbers.length === 0) {
               raceNumbers = ['unknown'];
             }
 
-            // Collect CSV data for ALL vehicles (not just the first)
-            const csvDataList: any[] = [];
-            if (event.aiResponse?.vehicles) {
-              event.aiResponse.vehicles.forEach((vehicle: any) => {
-                if (vehicle.participantMatch) {
-                  const match = vehicle.participantMatch;
-                  const entry = match.entry || match; // entry contains full participant data
-                  // Get primary driver name from preset_participant_drivers array
-                  let driverName = '';
-                  if (entry.preset_participant_drivers?.length > 0) {
-                    const sorted = [...entry.preset_participant_drivers].sort((a: any, b: any) => a.driver_order - b.driver_order);
-                    driverName = sorted[0]?.driver_name || '';
-                  } else if (entry.nome) {
-                    driverName = entry.nome; // Legacy CSV fallback
-                  }
-                  csvDataList.push({
-                    numero: entry.numero,
-                    nome: driverName,
-                    categoria: entry.categoria,
-                    squadra: entry.squadra,
-                    metatag: entry.metatag,
-                    folder_1: entry.folder_1,
-                    folder_2: entry.folder_2,
-                    folder_3: entry.folder_3,
-                    folder_1_path: entry.folder_1_path,
-                    folder_2_path: entry.folder_2_path,
-                    folder_3_path: entry.folder_3_path
-                  });
+            // [Narrate] per-file routing decision — surfaces the
+            // AI-detected number vs. the final number actually used
+            // for routing, the source (correction vs. AI), the custom
+            // folders that will be created and the include_default
+            // flag. Truncated to one line per file so a 1k-image
+            // organize doesn't make the log unreadable.
+            try {
+              const aiNumbers: string[] = [];
+              if (Array.isArray(event.aiResponse?.vehicles)) {
+                for (const v of event.aiResponse.vehicles) {
+                  const n = v?.raceNumber ?? v?.finalResult?.raceNumber;
+                  if (n != null) aiNumbers.push(String(n));
                 }
-              });
-            }
+              }
+              const hadCorrection = Array.from({ length: event.aiResponse?.vehicles?.length || 1 })
+                .some((_, idx) => correctionMap.has(`${fileName}_${idx}`));
+              const customFolderNames = csvDataList.flatMap((c: any) =>
+                Array.isArray(c?.folders) ? c.folders.map((f: any) => (typeof f === 'string' ? f : f?.name)) : []
+              ).filter(Boolean);
+              const includeDefault = csvDataList.length === 0
+                ? true
+                : csvDataList.some((c: any) => c?.include_default_folder !== false);
+              console.log(
+                `[Narrate] Routing ${fileName}: ` +
+                `AI=[${aiNumbers.join(', ') || 'none'}] → final=[${raceNumbers.join(', ')}]` +
+                (hadCorrection ? ' (USER_MANUAL correction applied)' : '') +
+                `. csvDataList rows: ${csvDataList.length}` +
+                (customFolderNames.length > 0
+                  ? `, custom folders: [${customFolderNames.slice(0, 3).join(', ')}${customFolderNames.length > 3 ? ', …' : ''}]`
+                  : ', no custom folders') +
+                `, include_default_folder=${includeDefault}.`
+              );
+            } catch { /* narration must never throw */ }
 
             // Organize the image
             const result = await organizer.organizeImage(
@@ -3188,6 +4132,35 @@ app.whenReady().then(async () => { // Added async here
             console.error(`[Main Process] Error organizing image:`, errorMsg);
             errors.push(`${event.fileName}: ${errorMsg}`);
           }
+
+          // Send progress update to renderer
+          processedCount++;
+          if (processedCount % 10 === 0 || processedCount === totalImages) {
+            safeSend('folder-organization-progress', {
+              current: processedCount,
+              total: totalImages,
+              percent: Math.round((processedCount / totalImages) * 100)
+            });
+          }
+        }
+
+        console.log(`[Main Process] Folder organization processed ${totalImages} images from JSONL`);
+
+        // Issue #105 Point 2 telemetry: surface any phantom-number events the
+        // FolderOrganizer's defensive filter caught, so we can spot silent
+        // regressions in the upstream number extraction.
+        try {
+          const phantomEvents = organizer.getPhantomNumberEvents();
+          if (phantomEvents.length > 0) {
+            const phantomNumbers = [...new Set(phantomEvents.map(e => e.number))];
+            console.warn(
+              `[Main Process] Issue #105: FolderOrganizer filtered ${phantomEvents.length} phantom occurrences ` +
+              `(${phantomNumbers.length} distinct numbers: ${phantomNumbers.slice(0, 20).join(', ')}${phantomNumbers.length > 20 ? ', …' : ''}) ` +
+              `for execution ${executionId}`
+            );
+          }
+        } catch (telemetryErr) {
+          console.error('[Main Process] Issue #105 phantom telemetry drain failed:', telemetryErr);
         }
 
         // Get summary
@@ -3228,24 +4201,15 @@ app.whenReady().then(async () => { // Added async here
     // Check if a move organization was already completed for an execution
     ipcMain.handle('check-organization-move-completed', async (_, executionId: string) => {
       try {
-        const logsDir = path.join(app.getPath('userData'), '.analysis-logs');
-        const logFilePath = path.join(logsDir, `exec_${executionId}.jsonl`);
-
-        if (!fs.existsSync(logFilePath)) {
+        const { loadExecutionLogIfExists } = require('./utils/execution-log-loader');
+        const result = await loadExecutionLogIfExists(executionId);
+        if (!result) {
           return { completed: false };
         }
 
-        const logContent = fs.readFileSync(logFilePath, 'utf-8');
-        const logLines = logContent.trim().split('\n').filter(line => line.trim());
-
-        for (const line of logLines) {
-          try {
-            const event = JSON.parse(line);
-            if (event.type === 'ORGANIZATION_MOVE_COMPLETED') {
-              return { completed: true, timestamp: event.timestamp };
-            }
-          } catch {
-            // Skip malformed lines
+        for (const event of result.events) {
+          if (event.type === 'ORGANIZATION_MOVE_COMPLETED') {
+            return { completed: true, timestamp: event.timestamp };
           }
         }
 
@@ -3278,6 +4242,12 @@ app.whenReady().then(async () => { // Added async here
   ipcMain.on('analyze-folder', (event: IpcMainEvent, config: BatchProcessConfig) => {
     // Always use unified processor
     handleUnifiedImageProcessing(event, config);
+  });
+
+  // Resume an interrupted analysis: process only the images not yet analyzed, charging
+  // only those. Config is rebuilt server-side from the original execution's DB settings.
+  ipcMain.on('resume-analysis', (event: IpcMainEvent, payload: { executionId?: string }) => {
+    handleResumeAnalysis(event, payload);
   });
   
   
@@ -3331,24 +4301,14 @@ app.whenReady().then(async () => { // Added async here
         return { success: true, data: mockLogData };
       }
 
-      const logsDir = path.join(app.getPath('userData'), '.analysis-logs');
-      const logFilePath = path.join(logsDir, `exec_${executionId}.jsonl`);
+      const { loadExecutionLogIfExists } = require('./utils/execution-log-loader');
+      const result = await loadExecutionLogIfExists(executionId);
 
-      if (!fs.existsSync(logFilePath)) {
+      if (!result) {
         return { success: true, data: [] }; // Return empty array if no log file
       }
 
-      const logContent = fs.readFileSync(logFilePath, 'utf-8');
-      const logLines = logContent.trim().split('\n').filter(line => line.trim());
-      const logEvents = logLines.map(line => {
-        try {
-          return JSON.parse(line);
-        } catch (error) {
-          return null;
-        }
-      }).filter(Boolean);
-
-      return { success: true, data: logEvents };
+      return { success: true, data: result.events };
 
     } catch (error) {
       console.error('[Main Process] Error reading execution log:', error);
@@ -3369,6 +4329,26 @@ app.whenReady().then(async () => { // Added async here
   }) => {
     try {
       const { executionId, corrections, timestamp } = data;
+
+      // [Narrate] entry log — gives the support log a clear "story
+      // pin" for the start of a correction batch. Includes the
+      // execution_id, batch size, and a compact summary of which files
+      // and fields are affected (truncated to keep one line readable).
+      try {
+        const filesAffected = Array.from(new Set(corrections.map(c => c.fileName)));
+        const fieldsTouched = Array.from(new Set(
+          corrections.flatMap(c => Object.keys(c.changes || {}))
+        ));
+        const deletions = corrections.filter(c => c.changes?.deleted === true).length;
+        console.log(
+          `[Narrate] update-analysis-log received batch of ${corrections.length} correction(s) ` +
+          `for execution ${executionId} ` +
+          `(${filesAffected.length} file(s), fields=${fieldsTouched.join('+') || 'none'}` +
+          (deletions > 0 ? `, ${deletions} deletion(s)` : '') +
+          `). About to persist to JSONL + image_corrections + analysis_results.`
+        );
+      } catch { /* narration must never throw */ }
+
       const logsDir = path.join(app.getPath('userData'), '.analysis-logs');
       const logFilePath = path.join(logsDir, `exec_${executionId}.jsonl`);
 
@@ -3422,6 +4402,112 @@ app.whenReady().then(async () => { // Added async here
         }
       }
 
+      // =====================================================================
+      // PIPELINE PREP — Batched pre-fetch + parallel/background accumulators
+      // =====================================================================
+      // Historical behaviour: the per-correction loop below did ALL its I/O
+      // sequentially — one exiftool spawn, one `analysis_results` SELECT, one
+      // outbox UPDATE, one outbox INSERT, then on to the next correction.
+      // On a batch of 60 corrections that meant ~120 sequential DB round-trips
+      // plus 60 sequential exiftool spawns, dominating the IPC response time
+      // and freezing the renderer's Export & IPTC modal for minutes (Lisa
+      // Hallmann support thread, 2026-05-15).
+      //
+      // The new pipeline keeps the same SEMANTICS but reorders the I/O:
+      //
+      //   1. Loop in-memory only (snapshot pre-mutation state, apply B1 fix,
+      //      compute `valuesActuallyChanged`). Accumulate per-correction
+      //      `ctxs` for later phases. No filesystem, no DB.
+      //   2. Single batched SELECT on `analysis_results` for every dbImageId
+      //      touched by a raceNumber change (one IN(...) query instead of N).
+      //   3. Parallel exiftool writes (pool of 4) — still on the critical
+      //      path because Export reads the file with its IPTC keywords.
+      //   4. Parallel folder reorg (pool of 4) — still on the critical path
+      //      because Export reads `organizedPath` from the JSONL.
+      //   5. Write the updated JSONL to disk.
+      //   6. Return success → renderer unblocks immediately.
+      //   7. BACKGROUND (fire-and-forget): batched `analysis_results` updates
+      //      + bulk `image_corrections` insert via the correction-outbox.
+      //      Safe because Export & IPTC does NOT read these tables — they
+      //      feed the management portal, web platform, and training pipeline,
+      //      all of which tolerate eventual consistency. The outbox already
+      //      persists to disk before the network attempt so nothing is lost
+      //      if the app dies mid-flush.
+
+      // UUID regex hoisted out of the loop (used both for pre-fetch and for
+      // the per-correction `dbImageIdForUpdate` derivation below).
+      const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+      // Resolve dbImageId for each correction up-front. We use the same logic
+      // as the per-correction derivation (prefer `dbImageId`, fall back to
+      // legacy `imageId` only if it parses as a UUID — non-UUID legacy ids
+      // would produce "invalid input syntax for type uuid" against Postgres).
+      const dbImageIdByFileName = new Map<string, string>();
+      for (const c of corrections) {
+        const ev = logEvents.find(
+          (e: any) => e.type === 'IMAGE_ANALYSIS' && e.fileName === c.fileName
+        );
+        if (!ev) continue;
+        const id: string | undefined =
+          ev.dbImageId ||
+          (ev.imageId && UUID_REGEX.test(ev.imageId) ? ev.imageId : undefined);
+        if (id) dbImageIdByFileName.set(c.fileName, id);
+      }
+
+      // Batched pre-fetch of raw_response + training_flags. Only fetch for
+      // corrections that change raceNumber (the only field that triggers a
+      // DB UPDATE downstream). One IN(...) round-trip replaces what was
+      // previously N sequential SELECTs.
+      const rawResponseMap = new Map<string, { raw_response: any; training_flags: any }>();
+      const idsToFetch = corrections
+        .filter((c: any) => c?.changes?.raceNumber)
+        .map((c: any) => dbImageIdByFileName.get(c.fileName))
+        .filter((id: string | undefined): id is string => Boolean(id));
+      if (idsToFetch.length > 0) {
+        try {
+          const { getSupabaseClient } = await import('./database-service');
+          const supabase = getSupabaseClient();
+          const { data: rows, error: preFetchErr } = await supabase
+            .from('analysis_results')
+            .select('image_id, raw_response, training_flags')
+            .in('image_id', idsToFetch);
+          if (preFetchErr) {
+            console.warn(
+              '[Main Process] Batched raw_response pre-fetch failed (non-critical, downstream updates skip the merge):',
+              preFetchErr.message
+            );
+          } else if (rows) {
+            for (const row of rows) {
+              rawResponseMap.set(row.image_id, {
+                raw_response: row.raw_response,
+                training_flags: row.training_flags,
+              });
+            }
+          }
+        } catch (preFetchErr) {
+          console.warn('[Main Process] Batched raw_response pre-fetch threw (non-critical):', preFetchErr);
+        }
+      }
+
+      // Per-correction tasks collected during the in-memory loop. Each phase
+      // (exiftool, DB updates, image_corrections inserts) consumes the
+      // entries that are relevant to it. We capture references to the
+      // mutable `imageAnalysisEvent` so phase 3 can flip
+      // `metadataWritten=true` on the same object the JSONL writer
+      // serialises later.
+      type ExiftoolTask = {
+        correction: any;
+        imageAnalysisEvent: any | null;
+      };
+      type AnalysisResultsUpdate = {
+        fileName: string;
+        image_id: string;
+        update: Record<string, any>;
+      };
+      const exiftoolTasks: ExiftoolTask[] = [];
+      const analysisResultsUpdates: AnalysisResultsUpdate[] = [];
+      const imageCorrectionInserts: Record<string, any>[] = [];
+
       // Add manual correction events
       for (const correction of corrections) {
         const manualCorrectionEvent = {
@@ -3444,63 +4530,584 @@ app.whenReady().then(async () => { // Added async here
           event.type === 'IMAGE_ANALYSIS' && event.fileName === correction.fileName
         );
 
-        if (imageAnalysisEvent && imageAnalysisEvent.aiResponse?.vehicles?.[correction.vehicleIndex]) {
-          const vehicle = imageAnalysisEvent.aiResponse.vehicles[correction.vehicleIndex];
+        // B1 fix — TWO scenarios for the IMAGE_ANALYSIS update:
+        //
+        //  1. The vehicle the user corrected already exists in
+        //     `aiResponse.vehicles[index]`. We mutate it in place AND force
+        //     `matchStatus='matched'` + `matchedBy='user_manual'` so the home
+        //     page filters classify the photo correctly.
+        //
+        //  2. There IS NO vehicle at the corrected index — typical for a
+        //     true "no match" photo where the AI emitted an empty `vehicles`
+        //     array. Without this branch the correction was silently dropped
+        //     for these cases (the original code had a guard that just
+        //     skipped the update). We now CREATE a vehicle entry so the
+        //     correction lands in the JSONL and the photo can leave the
+        //     "no match" filter view.
+        //
+        // Either branch additionally writes `matchStatus`/`matchedBy` so the
+        // renderer can transition the photo to "matched" + "corrections"
+        // bucket without re-deriving anything.
+        //
+        // `valuesActuallyChanged` is hoisted to this outer scope so the
+        // `image_corrections` insert below can also gate on it — without the
+        // gate the feedback-learning table accumulates the same dedup-noise
+        // we filter out of the JSONB array.
+        let valuesActuallyChanged = true;
+        // Pre-mutation snapshot of the vehicle's tracked fields, also hoisted.
+        // The image_corrections insert farther down must read these values
+        // (NOT the live `vehicle[*]`) when serializing the `original_value`
+        // payload — by the time we reach that insert the Object.assign at
+        // L4207 + the B1 fix have already overwritten the vehicle with the
+        // corrected state, so a fresh read produces a phantom row where
+        // `original_value == corrected_value`. Audit on 2026-05-13 found
+        // 141/141 USER_MANUAL rows for info@gruppec.de were such phantoms,
+        // making the management portal show 30-76% correction rates while
+        // the AI was actually right. Same reason `originalConfidence` is
+        // captured separately: the asymmetric confidence-on-raceNumber-change
+        // attachment below would otherwise always read 1.0 (set by B1 fix).
+        const originalValues: Record<string, any> = {};
+        let originalConfidence: number | null = null;
+        if (imageAnalysisEvent) {
+          imageAnalysisEvent.aiResponse = imageAnalysisEvent.aiResponse || {};
+          imageAnalysisEvent.aiResponse.vehicles = imageAnalysisEvent.aiResponse.vehicles || [];
+          const vehicles = imageAnalysisEvent.aiResponse.vehicles;
 
-          // Store only the specific fields we need to track, not the entire vehicle object
-          // This prevents circular references when the vehicle object contains corrections array
-          const originalValues: any = {};
-          for (const [key, value] of Object.entries(correction.changes)) {
+          // Pad the array with empty placeholders if the index is past the
+          // current end. This handles the (rare) case of a correction
+          // targeting vehicleIndex=2 on a photo that originally had only
+          // vehicle[0]. Each placeholder gets a `finalResult` so subsequent
+          // mutation has a stable structure.
+          while (vehicles.length <= correction.vehicleIndex) {
+            vehicles.push({ raceNumber: null, confidence: 0, finalResult: {} });
+          }
+
+          const vehicle = vehicles[correction.vehicleIndex];
+          if (!vehicle.finalResult) vehicle.finalResult = {};
+
+          // Snapshot original values for `originalValues` — only the keys we
+          // are about to overwrite, to keep the correction record compact.
+          // `originalValues` is declared in the outer scope (above the
+          // `if (imageAnalysisEvent)` branch) so the image_corrections insert
+          // farther down reads pre-mutation values.
+          for (const [key] of Object.entries(correction.changes)) {
             if (vehicle[key] !== undefined) {
               originalValues[key] = vehicle[key];
             }
           }
+          // Capture confidence separately — it is attached asymmetrically to
+          // the image_corrections payload (only on raceNumber changes) and
+          // must come from the pre-mutation vehicle, not the 1.0 set by the
+          // B1 fix below.
+          originalConfidence = vehicle.confidence ?? null;
 
-          // Update with new values
+          // Apply user changes to BOTH the vehicle root and finalResult.
+          // Vehicle root is what older code paths read; finalResult is what
+          // the home page renderer + results-page extractor read.
           Object.assign(vehicle, correction.changes);
+          Object.assign(vehicle.finalResult, correction.changes);
 
-          // Update also the finalResult which is what's actually displayed
-          if (vehicle.finalResult) {
-            Object.assign(vehicle.finalResult, correction.changes);
-          }
+          // ---- THE B1 FIX ----
+          // Force the matched state so the photo:
+          //   * leaves the "no match" filter
+          //   * shows up correctly in the matched counters
+          //   * is flagged as a manual correction in raw_response.lastManualCorrection
+          // We always set these even if `correction.changes` already contained
+          // them — defensive against renderers that send only `raceNumber`.
+          vehicle.matchStatus = 'matched';
+          vehicle.matchedBy = 'user_manual';
+          vehicle.finalResult.matchStatus = 'matched';
+          vehicle.finalResult.matchedBy = 'user_manual';
 
-          // If this is the first vehicle, also update primaryVehicle
-          if (correction.vehicleIndex === 0 && imageAnalysisEvent.primaryVehicle) {
+          // primaryVehicle mirror — same treatment for the legacy field that
+          // some downstream code still reads.
+          if (correction.vehicleIndex === 0) {
+            imageAnalysisEvent.primaryVehicle = imageAnalysisEvent.primaryVehicle || {};
+            imageAnalysisEvent.primaryVehicle.finalResult = imageAnalysisEvent.primaryVehicle.finalResult || {};
             Object.assign(imageAnalysisEvent.primaryVehicle, correction.changes);
-            if (imageAnalysisEvent.primaryVehicle.finalResult) {
-              Object.assign(imageAnalysisEvent.primaryVehicle.finalResult, correction.changes);
-            }
+            Object.assign(imageAnalysisEvent.primaryVehicle.finalResult, correction.changes);
+            imageAnalysisEvent.primaryVehicle.matchStatus = 'matched';
+            imageAnalysisEvent.primaryVehicle.matchedBy = 'user_manual';
+            imageAnalysisEvent.primaryVehicle.finalResult.matchStatus = 'matched';
+            imageAnalysisEvent.primaryVehicle.finalResult.matchedBy = 'user_manual';
           }
 
-          // Set confidence to 100% for manual corrections
+          // Manual correction confidence is 100%.
           vehicle.confidence = 1.0;
 
-          // Add correction metadata
+          // Append correction metadata for audit trail / training data.
+          // Dedup guard: if `originalValues` deep-equals `correction.changes`,
+          // the user is just re-saving an already-persisted state (e.g. via
+          // the renderer's autosave loop replaying entries it forgot to drop
+          // from `manualCorrections`, or a back-and-forth nav that re-fires
+          // the same Enter handler). Without this check the same vehicle
+          // accumulates dozens of identical USER_MANUAL records, inflating
+          // the management portal's correction counter and polluting the
+          // training-data feedback loop. We only record an entry when at
+          // least one tracked field actually changed.
           if (!vehicle.corrections) {
             vehicle.corrections = [];
           }
-
-          vehicle.corrections.push({
-            type: 'USER_MANUAL',
-            timestamp: correction.timestamp,
-            originalValues,
-            newValues: correction.changes
-          });
-
+          // Semantic-field whitelist: only count a correction when the user
+          // visibly changed something the photographer reviews — race number,
+          // team, drivers list, match status, or the deleted flag. Without
+          // this filter the renderer's "open photo → save" round-trip writes
+          // a phantom correction every time, because it always flips
+          // `matchedBy` from `user_manual` to `user_review` (and drops
+          // `confidence` from the payload) regardless of whether the user
+          // actually edited a field. Audit of 4 motorsport_v3 executions on
+          // 2026-05-13 found 53 such rows where `matchedBy` was the ONLY
+          // delta, masquerading as real corrections in the management portal.
+          const SEMANTIC_FIELDS = new Set([
+            'raceNumber', 'team', 'drivers', 'matchStatus', 'deleted',
+          ]);
+          const semanticDiff = Object.entries(correction.changes).some(
+            ([key, newVal]) => {
+              if (!SEMANTIC_FIELDS.has(key)) return false;
+              const oldVal = originalValues[key];
+              // Use JSON.stringify for deep equality on arrays (drivers).
+              // Treat undefined/null as the same "absence" so a save that
+              // explicitly sets a field to null after it was undefined is
+              // not classified as a change.
+              const oldNorm = oldVal === undefined ? null : oldVal;
+              const newNorm = newVal === undefined ? null : newVal;
+              return JSON.stringify(oldNorm) !== JSON.stringify(newNorm);
+            }
+          );
+          // Re-delete (deleted: true → true) is a no-op even though `deleted`
+          // is in the whitelist: the user clicked Delete on something already
+          // deleted from a stale UI. Audit found 7 such rows on 2026-05-13.
+          const isReDelete =
+            correction.changes.deleted === true &&
+            originalValues.deleted === true;
+          valuesActuallyChanged = semanticDiff && !isReDelete;
+          if (valuesActuallyChanged) {
+            vehicle.corrections.push({
+              type: 'USER_MANUAL',
+              timestamp: correction.timestamp,
+              originalValues,
+              newValues: correction.changes,
+            });
+          } else if (DEBUG_MODE) {
+            console.log(
+              `[Main Process] Skipping no-op USER_MANUAL record for ${correction.fileName} ` +
+              `vehicle ${correction.vehicleIndex} (originalValues == newValues)`
+            );
+          }
         }
 
-        // Update image metadata using exiftool
-        try {
-          await updateImageMetadataWithCorrection(
-            correction,
-            imageAnalysisEvent?.originalPath,
-            imageAnalysisEvent?.organizedPath
-          );
-        } catch (metadataError) {
-          if (DEBUG_MODE) console.warn('[Main Process] Failed to update image metadata:', metadataError);
-          // Continue with log update even if metadata update fails
+        // Defer exiftool / IPTC keyword writes to a parallel pool (Phase 3,
+        // below). The Export flow downstream reads the file with its
+        // keywords so this MUST run before we respond — but each exiftool
+        // spawn is 300ms-1s, and the original sequential loop of N spawns
+        // dominated the IPC response time on large batches. We just collect
+        // a task here; the pool runs them with concurrency=4 and applies
+        // `metadataWritten=true` to the same `imageAnalysisEvent` reference
+        // we captured (mutation through the live JSONL events array).
+        exiftoolTasks.push({ correction, imageAnalysisEvent });
+
+        // === Build analysis_results update payload ===
+        // Critical for: retraining pipelines (ONNX/YOLO), web platform accuracy,
+        // management portal data, and gallery correctness. Each manual
+        // correction is valuable ground truth for model improvement.
+        //
+        // NOTE: analysis_results.image_id is a UUID. Historically we passed
+        // imageAnalysisEvent.imageId here, but that field holds the legacy
+        // client-side id (`img_{index}_{timestamp}`) which produces
+        // "invalid input syntax for type uuid" errors in Postgres and silently
+        // drops the correction. Prefer the new dbImageId field; fall back to
+        // imageId only if it looks like a UUID (older JSONL logs may not have dbImageId).
+        //
+        // The actual DB UPDATE is deferred to a background task (see Phase 7
+        // after the JSONL writeFileSync). This handler returns to the renderer
+        // as soon as JSONL + IPTC + folder reorg are durable on disk; the
+        // Export & IPTC flow does NOT read analysis_results so eventual
+        // consistency here is safe. The raw_response merge below reads from
+        // the batched pre-fetch (`rawResponseMap`) populated in PIPELINE PREP.
+        const dbImageIdForUpdate: string | undefined =
+          imageAnalysisEvent?.dbImageId ||
+          (imageAnalysisEvent?.imageId && UUID_REGEX.test(imageAnalysisEvent.imageId)
+            ? imageAnalysisEvent.imageId
+            : undefined);
+
+        if (dbImageIdForUpdate && correction.changes.raceNumber) {
+          const dbUpdate: Record<string, any> = {
+            recognized_number: correction.changes.raceNumber,
+            confidence_score: 1.0, // Manual correction = 100% confidence
+            confidence_level: 'manual',
+          };
+
+          const currentRow = rawResponseMap.get(dbImageIdForUpdate);
+          if (currentRow?.raw_response) {
+            const rawResponse = { ...currentRow.raw_response };
+            // Update the specific vehicle in the vehicles array
+            if (rawResponse.vehicles && rawResponse.vehicles[correction.vehicleIndex]) {
+              const vehicle = rawResponse.vehicles[correction.vehicleIndex];
+              vehicle.raceNumber = correction.changes.raceNumber;
+              if (correction.changes.team) vehicle.teamName = correction.changes.team;
+              if (correction.changes.drivers) vehicle.drivers = correction.changes.drivers;
+              vehicle.manuallyCorreected = true;
+              vehicle.correctedAt = correction.timestamp;
+            }
+            rawResponse.lastManualCorrection = correction.timestamp;
+            dbUpdate.raw_response = rawResponse;
+
+            // Mark training_flags to indicate manual correction (ground truth for retraining)
+            const trainingFlags = currentRow.training_flags || {};
+            trainingFlags.has_manual_correction = true;
+            trainingFlags.manual_correction_at = correction.timestamp;
+            trainingFlags.corrected_vehicle_index = correction.vehicleIndex;
+            trainingFlags.original_number = currentRow.raw_response?.vehicles?.[correction.vehicleIndex]?.raceNumber || null;
+            trainingFlags.corrected_number = correction.changes.raceNumber;
+            dbUpdate.training_flags = trainingFlags;
+          }
+
+          analysisResultsUpdates.push({
+            fileName: correction.fileName,
+            image_id: dbImageIdForUpdate,
+            update: dbUpdate,
+          });
+        } else if (imageAnalysisEvent?.imageId && !dbImageIdForUpdate && correction.changes.raceNumber) {
+          // Legacy JSONL without dbImageId and non-UUID imageId: skip silently to avoid
+          // flooding logs. The correction still lands in image_corrections + XMP.
+          if (DEBUG_MODE) {
+            console.warn(
+              `[Main Process] Skipping analysis_results update for ${correction.fileName}: ` +
+              `no valid dbImageId (legacy id: ${imageAnalysisEvent.imageId}). ` +
+              `Correction persisted to image_corrections and XMP only.`
+            );
+          }
+        }
+
+        // === Build USER_MANUAL image_corrections insert payload ===
+        // This feeds the feedback learning system (Strategy G):
+        // When a user corrects a race number, we capture the Vehicle DNA
+        // (sponsors, team, make, model, livery) that Gemini detected for that
+        // crop. The learned-data-enricher will later aggregate these to
+        // enrich the preset.
+        //
+        // Skip the insert when nothing actually changed — same dedup logic as
+        // the JSONB `vehicle.corrections` array above. Without the gate the
+        // training-data feedback loop sees dozens of "user corrected X to X"
+        // rows per real correction, which (a) skews any learning weights and
+        // (b) wastes RLS-checked DB writes on every autosave tick.
+        //
+        // The DB INSERT itself is deferred to a background task after the
+        // IPC response. We just collect the payload here; the bulk insert
+        // runs in Phase 7 via the correction-outbox (which already persists
+        // each op to disk before the network attempt, so a process crash
+        // mid-flush doesn't lose the correction).
+        if (!valuesActuallyChanged) {
+          if (DEBUG_MODE) {
+            console.log(
+              `[Main Process] Skipping image_corrections insert for ${correction.fileName} ` +
+              `vehicle ${correction.vehicleIndex} (no-op save)`
+            );
+          }
+        } else {
+          const userId = authService.getAuthState().user?.id;
+          if (userId) {
+            // Extract Vehicle DNA snapshot from the Gemini analysis data
+            const vehicleDna: Record<string, any> = {};
+            if (imageAnalysisEvent?.aiResponse?.vehicles?.[correction.vehicleIndex]) {
+              const v = imageAnalysisEvent.aiResponse.vehicles[correction.vehicleIndex];
+              if (v.sponsors?.length > 0 || v.otherText?.length > 0) {
+                vehicleDna.detected_sponsors = v.sponsors || v.otherText || [];
+              }
+              if (v.team) vehicleDna.detected_team = v.team;
+              if (v.make) vehicleDna.detected_make = v.make;
+              if (v.model) vehicleDna.detected_model = v.model;
+              if (v.livery) vehicleDna.detected_livery = v.livery;
+              if (v.category) vehicleDna.detected_category = v.category;
+              if (v.plateNumber) vehicleDna.detected_plate = v.plateNumber;
+              if (v.context) vehicleDna.detected_context = v.context;
+            }
+
+            // Build the original and corrected values. CRITICAL: read
+            // `original_value` from the pre-mutation snapshot captured
+            // earlier in this iteration, NOT from the live vehicle object.
+            // The Object.assign + B1 fix above have already overwritten
+            // `vehicle[*]` with the corrected values, so reading from the
+            // vehicle here produces a payload where
+            // `original_value == corrected_value` for every row — the
+            // phantom pattern that polluted image_corrections (141/141
+            // rows on 2026-05-13 for info@gruppec.de) and made the
+            // training feedback loop useless.
+            const originalValue: Record<string, any> = {};
+            const correctedValue: Record<string, any> = {};
+            for (const [field, newVal] of Object.entries(correction.changes)) {
+              originalValue[field] = originalValues[field] ?? null;
+              correctedValue[field] = newVal;
+            }
+            // Confidence is attached asymmetrically — only on raceNumber
+            // changes — and must come from the pre-mutation snapshot
+            // (`originalConfidence`). Reading the vehicle's confidence here
+            // would always yield 1.0 (the manual-correction value).
+            if (correction.changes.raceNumber) {
+              originalValue.confidence = originalConfidence;
+            }
+
+            // Note on schema: image_corrections does NOT have a `file_name`
+            // column today (see migrations 20251216000000 and
+            // 20260320100000). The fileName lives implicitly inside
+            // image_id when we fall back to the composite
+            // `${fileName}_${vehicleIndex}` form, and inside `message`.
+            // The downstream "defense-in-depth" merge in organize reads
+            // image_id + vehicle_index + corrected_value and joins back
+            // to fileName via the in-memory imageAnalysisEvents list.
+            imageCorrectionInserts.push({
+              execution_id: executionId,
+              user_id: userId,
+              image_id: imageAnalysisEvent?.imageId || `${correction.fileName}_${correction.vehicleIndex}`,
+              correction_type: 'USER_MANUAL',
+              field: Object.keys(correction.changes).join(','),
+              original_value: originalValue,
+              corrected_value: correctedValue,
+              confidence: imageAnalysisEvent?.aiResponse?.vehicles?.[correction.vehicleIndex]?.confidence ?? null,
+              reason: 'Manual user correction via results page',
+              message: `User corrected ${Object.keys(correction.changes).join(', ')} for ${correction.fileName} vehicle ${correction.vehicleIndex}`,
+              vehicle_index: correction.vehicleIndex,
+              details: Object.keys(vehicleDna).length > 0 ? vehicleDna : null,
+              preset_id: executionStartEvent?.participantPresetId || null,
+            });
+          }
         }
       }
+
+      // =====================================================================
+      // PHASE 3 — Parallel exiftool / IPTC keyword writes (pool of 4)
+      // =====================================================================
+      // The Export & IPTC flow copies physical files to destinations and reads
+      // their keywords, so this MUST complete before we respond. But the per-
+      // file exiftool spawn (300ms-1s each) was the dominant cost in the old
+      // sequential loop. Pool of 4 quarters wall-clock time without saturating
+      // disk I/O on the photographer's machine.
+      //
+      // #167 — COLLAPSE to one write per file. The keyword write uses
+      // 'overwrite' mode (clears IPTC:Keywords / the RAW XMP dc:subject before
+      // re-adding), so two corrections on the SAME group photo previously (a)
+      // each wrote only their own vehicle's keywords — last-write-wins clobbered
+      // the other — and (b) raced on the same file inside the pool. All
+      // corrections for a file share the same already-B1-mutated
+      // imageAnalysisEvent, so a single write rebuilds the union of every
+      // detection's keywords (see updateImageMetadataWithCorrection / #167).
+      if (exiftoolTasks.length > 0) {
+        const tasksByFile = new Map<string, ExiftoolTask>();
+        for (const task of exiftoolTasks) {
+          const key = task.correction.fileName;
+          const existing = tasksByFile.get(key);
+          // Prefer a task that carries the analysis event so we can rebuild the
+          // full vehicle set; otherwise keep the first one seen.
+          if (!existing || (!existing.imageAnalysisEvent && task.imageAnalysisEvent)) {
+            tasksByFile.set(key, task);
+          }
+        }
+        const fileTasks = Array.from(tasksByFile.values());
+
+        const concurrency = Math.min(4, fileTasks.length);
+        const queue = fileTasks.slice();
+        await Promise.all(
+          Array.from({ length: concurrency }, async () => {
+            while (queue.length > 0) {
+              const task = queue.shift();
+              if (!task) break;
+              try {
+                const metaResult = await updateImageMetadataWithCorrection(
+                  task.correction,
+                  task.imageAnalysisEvent?.originalPath,
+                  task.imageAnalysisEvent?.organizedPath,
+                  task.imageAnalysisEvent?.aiResponse?.vehicles,
+                  task.imageAnalysisEvent?.visualTags
+                );
+                if (metaResult?.success && task.imageAnalysisEvent) {
+                  task.imageAnalysisEvent.metadataWritten = true;
+                  if (DEBUG_MODE) {
+                    console.log(
+                      `[Main Process] Flipped metadataWritten=true for ${task.correction.fileName} ` +
+                      `after USER_MANUAL keyword write.`
+                    );
+                  }
+                }
+              } catch (metadataError) {
+                if (DEBUG_MODE) console.warn('[Main Process] Failed to update image metadata:', metadataError);
+                // Continue with the rest of the pool even if one file fails.
+              }
+            }
+          })
+        );
+      }
+
+      // ====================================================================
+      // B3 + B6 — Folder reorganization on manual correction
+      // ====================================================================
+      // Without this block, the JSONL/DB/XMP have the corrected race number
+      // but the file ITSELF stays in the wrong folder (e.g. Unknown_Numbers
+      // or the old number). Photographers reported corrected photos getting
+      // delivered from the wrong category folder and surplus "N" /
+      // "No number" folders left behind.
+      //
+      // We pull the original folder organization config from the
+      // `executions` row (saved by the analysis pipeline as
+      // execution_settings.folderOrganizationConfig) and re-run
+      // FolderOrganizer.organizeImage for each correction whose changes
+      // include a raceNumber. Best-effort: any failure is logged but
+      // doesn't abort the rest of the correction flow.
+      try {
+        const correctionsTouchingRaceNumber = corrections.filter(
+          (c: any) => c?.changes && typeof c.changes.raceNumber === 'string' && c.changes.raceNumber.trim() !== ''
+        );
+
+        if (correctionsTouchingRaceNumber.length > 0) {
+          // Read the run's folder-org config from Supabase (authoritative).
+          let folderOrgConfig: any = null;
+          let resolvedDestinationPath: string | undefined;
+          try {
+            const { getSupabaseClient } = await import('./database-service');
+            const supabase = getSupabaseClient();
+            const { data: execRow } = await supabase
+              .from('executions')
+              .select('execution_settings, source_folder')
+              .eq('id', executionId)
+              .maybeSingle();
+            if (execRow?.execution_settings) {
+              folderOrgConfig =
+                execRow.execution_settings.folderOrganizationConfig ||
+                execRow.execution_settings.folderOrganization ||
+                null;
+              // destinationPath was either the user's explicit choice or the source folder.
+              resolvedDestinationPath =
+                folderOrgConfig?.destinationPath ||
+                execRow.execution_settings.destinationPath ||
+                execRow.source_folder ||
+                undefined;
+            }
+          } catch (cfgErr) {
+            if (DEBUG_MODE) console.warn('[Main Process] [B3] Failed to load folder-org config from executions:', cfgErr);
+          }
+
+          // Bail silently when:
+          //  - the user never enabled folder org for this run
+          //  - we don't know where to put the files (no destinationPath)
+          // Both cases are by-design no-ops, not errors.
+          const folderOrgEnabled =
+            folderOrgConfig?.enabled === true ||
+            folderOrgConfig?.folderOrganizationEnabled === true;
+
+          if (folderOrgEnabled && resolvedDestinationPath) {
+            const { FolderOrganizer } = await import('./utils/folder-organizer');
+            const organizer = new FolderOrganizer({
+              enabled: true,
+              mode: folderOrgConfig.mode || 'copy',
+              pattern: folderOrgConfig.pattern || 'number',
+              customPattern: folderOrgConfig.customPattern,
+              createUnknownFolder: folderOrgConfig.createUnknownFolder !== false,
+              unknownFolderName: folderOrgConfig.unknownFolderName || 'Unknown_Numbers',
+              includeXmpFiles: folderOrgConfig.includeXmpFiles !== false,
+              destinationPath: resolvedDestinationPath,
+              conflictStrategy: folderOrgConfig.conflictStrategy || 'rename',
+              renamePattern: folderOrgConfig.renamePattern || undefined,
+              // (1.2.0 — flag moved to per-participant; FolderOrganizer
+              // reads csvData.include_default_folder at organize time.)
+              // No restriction on allowed numbers for re-org of a manual correction —
+              // the user is the source of truth here.
+            });
+
+            // Parallel pool of 4. Each per-correction reorg is independent
+            // (different source paths) so they can safely run concurrently;
+            // cap concurrency at 4 to avoid hammering disk I/O on slow
+            // external drives. Old behaviour: strictly sequential — 50ms-500ms
+            // per file × 60 corrections dominated the response time on large
+            // batches.
+            const reorgConcurrency = Math.min(4, correctionsTouchingRaceNumber.length);
+            const reorgQueue = correctionsTouchingRaceNumber.slice();
+            await Promise.all(
+              Array.from({ length: reorgConcurrency }, async () => {
+                while (reorgQueue.length > 0) {
+                  const correction = reorgQueue.shift();
+                  if (!correction) break;
+                  try {
+                    const ev = logEvents.find(
+                      (e: any) => e.type === 'IMAGE_ANALYSIS' && e.fileName === correction.fileName
+                    );
+                    // Source path priority:
+                    //   1. organizedPath — where the file ended up after the original analysis
+                    //   2. originalPath — where the user dropped it (works when org=copy)
+                    const sourcePath = ev?.organizedPath || ev?.originalPath;
+                    if (!sourcePath) {
+                      if (DEBUG_MODE) console.warn(`[Main Process] [B3] No source path for ${correction.fileName} — skipping reorg`);
+                      continue;
+                    }
+                    if (!fs.existsSync(sourcePath)) {
+                      if (DEBUG_MODE) console.warn(`[Main Process] [B3] Source path no longer exists for ${correction.fileName}: ${sourcePath}`);
+                      continue;
+                    }
+
+                    const newRaceNumber = String(correction.changes.raceNumber).trim();
+                    const sourceDir = require('path').dirname(ev?.originalPath || sourcePath);
+
+                    // organizeImage handles the move/copy semantics, conflict
+                    // resolution, and the optional XMP sidecar move based on
+                    // the mode the user originally chose for this run.
+                    const orgResult = await organizer.organizeImage(
+                      sourcePath,
+                      [newRaceNumber],
+                      undefined, // CSV data not needed for re-org of a single file
+                      sourceDir
+                    );
+
+                    if (orgResult?.success && orgResult.organizedPath) {
+                      // Update organizedPath in the JSONL so subsequent
+                      // corrections and re-renders see the new location.
+                      if (ev) ev.organizedPath = orgResult.organizedPath;
+                      console.log(
+                        `[Main Process] [B3] Reorganized ${correction.fileName} → ${orgResult.folderName || orgResult.organizedPath}`
+                      );
+
+                      // Best-effort cleanup: remove the OLD folder if it's
+                      // now empty (e.g. Unknown_Numbers/ after the only
+                      // file in it was moved). Only attempt when mode='move'.
+                      if (folderOrgConfig.mode === 'move' && sourcePath !== orgResult.organizedPath) {
+                        try {
+                          const oldDir = require('path').dirname(sourcePath);
+                          const remaining = fs.readdirSync(oldDir);
+                          if (
+                            remaining.length === 0 &&
+                            oldDir.startsWith(resolvedDestinationPath) &&
+                            oldDir !== resolvedDestinationPath
+                          ) {
+                            fs.rmdirSync(oldDir);
+                            if (DEBUG_MODE) console.log(`[Main Process] [B3] Cleaned up empty folder: ${oldDir}`);
+                          }
+                        } catch (cleanupErr) {
+                          // Cleanup is opportunistic — never fatal.
+                          if (DEBUG_MODE) console.warn('[Main Process] [B3] Cleanup error:', cleanupErr);
+                        }
+                      }
+                    } else {
+                      console.warn(
+                        `[Main Process] [B3] Reorg returned no destination for ${correction.fileName}: ${orgResult?.error || 'unknown'}`
+                      );
+                    }
+                  } catch (perCorrectionErr) {
+                    console.warn(`[Main Process] [B3] Failed to reorg ${correction.fileName}:`, perCorrectionErr);
+                    // Continue with the rest of the pool — one bad file shouldn't poison the rest.
+                  }
+                }
+              })
+            );
+          } else {
+            if (DEBUG_MODE) {
+              console.log(
+                `[Main Process] [B3] Folder reorg skipped: enabled=${folderOrgEnabled}, destPath=${resolvedDestinationPath ?? 'undefined'}`
+              );
+            }
+          }
+        }
+      } catch (reorgErr) {
+        // Defensive — folder reorg must never abort the correction flow.
+        console.warn('[Main Process] [B3] Folder reorganization block failed (non-critical):', reorgErr);
+      }
+      // ====================================================================
 
       // Update EXECUTION_COMPLETE event with manual correction stats (if it exists)
       if (executionCompleteEvent) {
@@ -3600,51 +5207,296 @@ app.whenReady().then(async () => { // Added async here
         console.error('[Main Process] CRITICAL: File verification failed!', verificationError);
       }
 
-      // Upload updated log to Supabase if possible
-      try {
-        const { getSupabaseClient } = await import('./database-service');
-        const supabase = getSupabaseClient();
-        const userId = authService.getAuthState().user?.id || 'unknown';
-        const date = new Date().toISOString().split('T')[0];
-        const supabaseUploadPath = `${userId}/${date}/exec_${executionId}.jsonl`;
+      // =====================================================================
+      // PHASE 7 — Background DB writes (fire-and-forget, safe to defer)
+      // =====================================================================
+      // All durable state the Export & IPTC flow consumes is already on disk:
+      //   - JSONL with the corrected fields, organizedPath, metadataWritten
+      //   - The image files themselves with new IPTC keywords (exiftool)
+      //   - The new physical folder layout (FolderOrganizer)
+      //
+      // The remaining sync targets — analysis_results, image_corrections,
+      // and the Supabase Storage log mirror — are eventually-consistent:
+      // they feed the management portal, the training pipeline, and the
+      // web platform, none of which the desktop Export flow reads. So we
+      // dispatch them in the background and respond to the renderer now.
+      //
+      // Durability: every Supabase write goes through the correction-outbox,
+      // which persists the op to userData/.outbox/corrections.jsonl BEFORE
+      // the network attempt. Even if the app is closed before the flush
+      // completes, the periodic flusher will retry at next boot.
+      //
+      // Bulk semantics: image_corrections becomes ONE multi-row insert
+      // (Supabase .insert() accepts an array). analysis_results stays as
+      // N parallel UPDATEs because each targets a different image_id with
+      // a different payload — PostgREST has no clean primitive for
+      // heterogeneous bulk update.
+      const corrCountForBg = corrections.length;
+      const fileContentForBg = fs.readFileSync(logFilePath);
+      const userIdForBg = authService.getAuthState().user?.id || 'unknown';
+      void (async () => {
+        try {
+          const outbox = require('./utils/correction-outbox');
 
-        // Read the file we just saved and upload it
-        const fileContent = fs.readFileSync(logFilePath);
+          if (imageCorrectionInserts.length > 0) {
+            try {
+              const res = await outbox.enqueueAndTry('image_corrections_insert', imageCorrectionInserts);
+              if (res.ok) {
+                console.log(
+                  `[Main Process] ✅ Bulk-inserted ${imageCorrectionInserts.length} USER_MANUAL row(s) into image_corrections`
+                );
+              } else if (res.queued) {
+                console.warn(
+                  `[Main Process] image_corrections bulk insert queued for retry (network issue) — ` +
+                  `${imageCorrectionInserts.length} row(s) safe in outbox`
+                );
+              }
+            } catch (bulkErr) {
+              console.warn('[Main Process] image_corrections bulk insert threw:', bulkErr);
+            }
+          }
 
-        const { error } = await supabase.storage
-          .from('analysis-logs')
-          .upload(supabaseUploadPath, fileContent, {
-            cacheControl: '3600',
-            upsert: true, // Allow overwriting
-            contentType: 'application/x-ndjson'
-          });
-
-        if (error) {
-          if (DEBUG_MODE) console.warn('[Main Process] Direct upload failed:', error);
-        } else {
-          // Also create/update metadata record
-          await supabase
-            .from('analysis_log_metadata')
-            .upsert({
-              execution_id: executionId,
-              user_id: userId,
-              storage_path: supabaseUploadPath,
-              total_images: 0,
-              total_corrections: corrections.length,
-              correction_types: { USER_MANUAL: corrections.length },
-              category: 'unknown',
-              app_version: app.getVersion()
-            });
+          if (analysisResultsUpdates.length > 0) {
+            const results = await Promise.allSettled(
+              analysisResultsUpdates.map(u =>
+                outbox.enqueueAndTry('analysis_results_update', {
+                  image_id: u.image_id,
+                  update: u.update,
+                })
+              )
+            );
+            const ok = results.filter(r => r.status === 'fulfilled' && (r.value as any).ok).length;
+            const queued = results.filter(r => r.status === 'fulfilled' && (r.value as any).queued).length;
+            const failed = results.filter(r => r.status === 'rejected').length;
+            console.log(
+              `[Main Process] analysis_results background sync: ${ok} ok, ${queued} queued for retry, ${failed} threw (outbox will retry).`
+            );
+          }
+        } catch (bgErr) {
+          console.warn('[Main Process] Background DB write block failed (non-critical, outbox will retry):', bgErr);
         }
-      } catch (uploadError) {
-        if (DEBUG_MODE) console.warn('[Main Process] Failed to upload updated log to Supabase:', uploadError);
-      }
 
-      if (DEBUG_MODE) console.log(`[Main Process] Updated analysis log with ${corrections.length} manual corrections`);
+        // Log file upload — also moved off the critical path. Consumed by
+        // the management portal and support tooling, not by Export.
+        try {
+          const { getSupabaseClient } = await import('./database-service');
+          const supabase = getSupabaseClient();
+          const date = new Date().toISOString().split('T')[0];
+          const supabaseUploadPath = `${userIdForBg}/${date}/exec_${executionId}.jsonl`;
+
+          const { error } = await supabase.storage
+            .from('analysis-logs')
+            .upload(supabaseUploadPath, fileContentForBg, {
+              cacheControl: '3600',
+              upsert: true,
+              contentType: 'application/x-ndjson',
+            });
+
+          if (error) {
+            if (DEBUG_MODE) console.warn('[Main Process] Direct upload failed:', error);
+          } else {
+            await supabase
+              .from('analysis_log_metadata')
+              .upsert({
+                execution_id: executionId,
+                user_id: userIdForBg,
+                storage_path: supabaseUploadPath,
+                total_images: 0,
+                total_corrections: corrCountForBg,
+                correction_types: { USER_MANUAL: corrCountForBg },
+                category: 'unknown',
+                app_version: app.getVersion(),
+              });
+          }
+        } catch (uploadError) {
+          if (DEBUG_MODE) console.warn('[Main Process] Failed to upload updated log to Supabase:', uploadError);
+        }
+      })();
+
+      if (DEBUG_MODE) {
+        console.log(
+          `[Main Process] Updated analysis log with ${corrections.length} manual corrections ` +
+          `(DB writes + storage upload deferred to background)`
+        );
+      }
       return { success: true };
 
     } catch (error) {
       console.error('[Main Process] Error updating analysis log:', error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  // ============================================
+  // LEARNED DATA: Save user-accepted learned data to preset participants
+  // Part of Strategy G (Feedback Learning System)
+  // ============================================
+
+  // Check if learned data from a given execution already exists in the preset
+  ipcMain.handle('check-learned-data-exists', async (_, data: { presetId: string; executionId: string }) => {
+    try {
+      const { getSupabaseClient } = await import('./database-service');
+      const supabase = getSupabaseClient();
+      if (!supabase) return { success: false, error: 'No Supabase client' };
+
+      const { data: rows, error } = await supabase
+        .from('preset_participants')
+        .select('id')
+        .eq('preset_id', data.presetId)
+        .contains('custom_fields', { learned: { source_execution_ids: [data.executionId] } })
+        .limit(1);
+
+      if (error) {
+        console.warn(`[LearnedData] Check query failed: ${error.message}`);
+        return { success: false, error: error.message };
+      }
+
+      return { success: true, data: { exists: rows && rows.length > 0 } };
+    } catch (error) {
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  ipcMain.handle('save-learned-participant-data', async (_, data: {
+    presetId: string;
+    executionId: string;
+    participants: Array<{
+      raceNumber: string;
+      participantId: string | null;
+      fields: Record<string, any>;
+      observationCount: number;
+      isAutoDetected: boolean;
+    }>;
+  }) => {
+    try {
+      const { presetId, executionId, participants } = data;
+      const { getSupabaseClient } = await import('./database-service');
+      const supabase = getSupabaseClient();
+      const userId = authService.getAuthState().user?.id;
+
+      if (!userId) {
+        return { success: false, error: 'User not authenticated' };
+      }
+
+      let updatedCount = 0;
+
+      for (const participant of participants) {
+        // If we don't have a participantId, look it up by number + preset
+        let participantId = participant.participantId;
+        if (!participantId) {
+          const { data: found } = await supabase
+            .from('preset_participants')
+            .select('id')
+            .eq('preset_id', presetId)
+            .eq('numero', participant.raceNumber)
+            .maybeSingle();
+
+          if (found) {
+            participantId = found.id;
+          } else {
+            console.warn(`[LearnedData] Participant #${participant.raceNumber} not found in preset ${presetId}`);
+            continue;
+          }
+        }
+
+        // Build the learned data object for custom_fields
+        const learnedData: Record<string, any> = {
+          observation_count: participant.observationCount,
+          confidence: 0.90, // User-accepted data starts at high confidence
+          source_execution_ids: [executionId],
+          last_confirmed_at: new Date().toISOString(),
+          user_accepted: true,
+          user_accepted_at: new Date().toISOString(),
+        };
+
+        // Map fields to learned data structure
+        if (participant.fields.sponsors) learnedData.sponsors = participant.fields.sponsors;
+        if (participant.fields.team) learnedData.team = participant.fields.team;
+        if (participant.fields.car_model) {
+          // Try to split into make + model
+          const parts = participant.fields.car_model.split(' ');
+          if (parts.length >= 2) {
+            learnedData.make = parts[0];
+            learnedData.model = parts.slice(1).join(' ');
+          } else {
+            learnedData.make = participant.fields.car_model;
+          }
+        }
+        if (participant.fields.category) learnedData.category = participant.fields.category;
+        if (participant.fields.plate_number) learnedData.plate = participant.fields.plate_number;
+        if (participant.fields.livery) learnedData.livery = participant.fields.livery;
+
+        // Also update the main preset fields directly (sponsor, squadra, car_model)
+        // so they're immediately visible and used by SmartMatcher without custom_fields parsing
+        const directUpdate: Record<string, any> = {};
+        if (participant.fields.sponsors) {
+          // Append to existing sponsor field
+          const { data: current } = await supabase
+            .from('preset_participants')
+            .select('sponsor')
+            .eq('id', participantId)
+            .maybeSingle();
+
+          const existingSponsors = current?.sponsor ? current.sponsor.split(',').map((s: string) => s.trim()) : [];
+          const newSponsors = participant.fields.sponsors.filter((s: string) => !existingSponsors.map((e: string) => e.toLowerCase()).includes(s.toLowerCase()));
+          if (newSponsors.length > 0) {
+            directUpdate.sponsor = [...existingSponsors, ...newSponsors].join(', ');
+          }
+        }
+        if (participant.fields.team) directUpdate.squadra = participant.fields.team;
+        if (participant.fields.car_model) directUpdate.car_model = participant.fields.car_model;
+        if (participant.fields.category) directUpdate.categoria = participant.fields.category;
+        if (participant.fields.plate_number) directUpdate.plate_number = participant.fields.plate_number;
+
+        // Write learned data to custom_fields AND direct fields in a single update
+        const { data: existingRow } = await supabase
+          .from('preset_participants')
+          .select('custom_fields')
+          .eq('id', participantId)
+          .maybeSingle();
+
+        const existingCustomFields = existingRow?.custom_fields || {};
+        const existingLearned = existingCustomFields.learned || {};
+
+        // Merge: keep existing learned data, add/update with new data
+        const mergedLearned = { ...existingLearned, ...learnedData };
+        // Merge sponsors arrays (union)
+        if (existingLearned.sponsors && learnedData.sponsors) {
+          mergedLearned.sponsors = [...new Set([...existingLearned.sponsors, ...learnedData.sponsors])];
+        }
+        // Merge execution IDs
+        if (existingLearned.source_execution_ids) {
+          mergedLearned.source_execution_ids = [...new Set([...existingLearned.source_execution_ids, executionId])];
+        }
+
+        const updatePayload: Record<string, any> = {
+          custom_fields: { ...existingCustomFields, learned: mergedLearned },
+          ...directUpdate,
+        };
+
+        const { error } = await supabase
+          .from('preset_participants')
+          .update(updatePayload)
+          .eq('id', participantId);
+
+        if (error) {
+          console.warn(`[LearnedData] Failed to update participant #${participant.raceNumber}: ${error.message}`);
+        } else {
+          updatedCount++;
+          console.log(`[LearnedData] ✅ Updated participant #${participant.raceNumber} with learned data:`, Object.keys(participant.fields).join(', '));
+        }
+      }
+
+      // Invalidate presets cache so next fetch returns fresh data with learned fields
+      if (updatedCount > 0) {
+        const { invalidatePresetsCache } = await import('./database-service');
+        invalidatePresetsCache();
+      }
+
+      return { success: true, data: { updated: updatedCount, total: participants.length } };
+
+    } catch (error) {
+      console.error('[LearnedData] Error saving learned data:', error);
       return { success: false, error: (error as Error).message };
     }
   });
@@ -3664,7 +5516,16 @@ app.whenReady().then(async () => { // Added async here
       changes: any;
     },
     originalPath?: string,
-    organizedPath?: string
+    organizedPath?: string,
+    // ALL current detections of the photo (post-correction state). The
+    // `update-analysis-log` handler has already mutated these in place (B1
+    // fix, ~main.ts:4557+), so passing the whole array lets us rebuild the
+    // full keyword set instead of just the corrected vehicle's — see #167.
+    allVehicles?: any[],
+    // Visual tags the AI extracted for this photo (location/weather/scene).
+    // Passed so the overwrite keyword write can re-preserve the ones already
+    // embedded on the file instead of wiping them.
+    visualTags?: any
   ) {
     try {
       // Use organized path (after move/copy) if available, otherwise original
@@ -3680,27 +5541,36 @@ app.whenReady().then(async () => { // Added async here
         return { success: false, reason: 'file_not_found' };
       }
 
-      // Build keywords from correction changes
-      const keywords: string[] = [];
-      if (correction.changes.raceNumber) {
-        keywords.push(`RaceNumber:${correction.changes.raceNumber}`);
-      }
-      if (correction.changes.team) {
-        keywords.push(`Team:${correction.changes.team}`);
-      }
-      if (correction.changes.drivers) {
-        const drivers = Array.isArray(correction.changes.drivers)
-          ? correction.changes.drivers
-          : [correction.changes.drivers];
-        drivers.forEach((driver: string) => {
-          if (driver) keywords.push(`Driver:${driver}`);
-        });
-      }
+      // #167 — Rebuild the FULL keyword set from EVERY current detection of the
+      // photo, not just the one the user edited. writeKeywordsToImage(...,
+      // 'overwrite') clears IPTC:Keywords (and the RAW XMP dc:subject block)
+      // before re-adding, so a single-vehicle keyword list wiped sibling
+      // detections on group photos. `allVehicles` reflects the post-correction
+      // state of all detections; we fall back to `correction.changes` only when
+      // it is unavailable (legacy JSONL / missing IMAGE_ANALYSIS event).
+      const keywords = buildCorrectionKeywords(allVehicles, correction.changes);
 
       if (keywords.length > 0) {
-        if (DEBUG_MODE) console.log(`[Main Process] Writing corrected metadata to ${effectivePath}:`, keywords);
-        await writeKeywordsToImage(effectivePath, keywords, true, 'overwrite');
+        if (DEBUG_MODE) console.log(`[Main Process] Writing corrected metadata to ${effectivePath} (${Array.isArray(allVehicles) ? `${allVehicles.length} detection(s)` : 'single correction'}):`, keywords);
+        // Overwrite mode now truly clears keywords first, so re-add any visual
+        // tags (location/weather/scene) already embedded on this file — without
+        // this a correction would wipe them. writeCorrectionKeywords reads the
+        // file/sidecar and only re-adds tags actually present, so the user's
+        // embedInMetadata choice is respected. See #167 / metadata-writer.ts.
+        await writeCorrectionKeywords(effectivePath, keywords, visualTags);
       }
+
+      // ─────────────────────────────────────────────────────────────────────
+      // Privacy fix (April 2026): the legacy block here used to read-merge-
+      // write the XMP:Instructions `RACETAGGER_V1:{...}` payload to keep
+      // manual corrections in sync with the on-file metadata used by folder
+      // organization. The payload has been removed (it leaked absolute folder
+      // paths). Folder organization now reads MANUAL_CORRECTION events
+      // directly from the JSONL (see correctionMap, ~main.ts:3360+), so the
+      // XMP merge is no longer needed. The IPTC keywords above are still
+      // written normally for the file to remain self-describing for
+      // photo-management software.
+      // ─────────────────────────────────────────────────────────────────────
 
       return { success: true };
 

@@ -4,6 +4,7 @@ import { SUPABASE_CONFIG } from './config';
 import * as fs from 'fs';
 import * as path from 'path';
 import { errorTelemetryService } from './utils/error-telemetry-service';
+import { getMachineId } from './utils/system-info';
 
 // Tipi per lo stato dell'autenticazione e gestione token
 export interface AuthState {
@@ -30,6 +31,11 @@ export interface PreAuthResult {
   error?: string;
   available?: number;
   needed?: number;
+  // Populated when the RPC returns error: 'MACHINE_BLOCKED'. Surfaces the
+  // admin-supplied reason string so the UI can show a meaningful message
+  // instead of a generic "auth failed".
+  reason?: string;
+  blockedAt?: string;
 }
 
 export interface BatchTokenUsage {
@@ -745,7 +751,7 @@ export class AuthService {
         return {
           success: false,
           forceUpdate: true,
-          error: 'Aggiornamento richiesto. Aggiorna l\'app per continuare.'
+          error: 'Update required. Please update the app to continue.'
         };
       }
 
@@ -783,6 +789,29 @@ export class AuthService {
         // Ripristina i dati dell'utente da Supabase
         await this.restoreUserDataOnLogin();
 
+        // Trigger JSONL upload reconciliation now that we have an
+        // authenticated session — recovers any local JSONLs that failed to
+        // upload at finalize() time. Best-effort, never blocks login.
+        try {
+          const { scheduleBackgroundReconciliation } = require('./utils/jsonl-upload-reconciler');
+          const { getSupabaseClient } = require('./database-service');
+          scheduleBackgroundReconciliation(
+            {
+              getSupabase: getSupabaseClient,
+              getCurrentUserId: () => this.authState.user?.id ?? null,
+            },
+            { reason: 'login', force: true }
+          );
+        } catch (reconErr: any) {
+          console.warn('[Auth] Failed to schedule JSONL reconciliation (non-critical):', reconErr?.message ?? reconErr);
+        }
+
+        // NOTE: interrupted-run recovery is intentionally NOT triggered here. login()
+        // does not run on a normal app restart (the session is silently restored from
+        // disk), so recovery is driven from the home-open handler (get-local-executions),
+        // which fires on every app start regardless of login-vs-restore. See
+        // src/ipc/analysis-handlers.ts and reconcileOrphanExecutions().
+
         return {
           success: true,
           user: data.user,
@@ -798,7 +827,12 @@ export class AuthService {
   }
 
   // Gestisci la registrazione usando edge function unificata
-  async register(email: string, password: string, name?: string, referralCode?: string): Promise<{ success: boolean; error?: string; tokensGranted?: number }> {
+  async register(email: string, password: string, name?: string, referralCode?: string, consentData?: {
+    acceptedPrivacyPolicy?: boolean;
+    acceptedTermsOfService?: boolean;
+    privacyPolicyVersion?: string;
+    termsOfServiceVersion?: string;
+  }): Promise<{ success: boolean; error?: string; tokensGranted?: number }> {
     try {
       // Validate password strength
       if (password.length < 8) {
@@ -817,8 +851,8 @@ export class AuthService {
       // Normalize email to ensure consistent registration (lowercase + trim)
       const normalizedEmail = email.toLowerCase().trim();
 
-      // Use unified registration edge function
-      const body: Record<string, string> = {
+      // Use unified registration edge function (GDPR Art. 7: include consent proof)
+      const body: Record<string, any> = {
         email: normalizedEmail,
         password,
         name: name || normalizedEmail.split('@')[0], // Extract name from email if not provided
@@ -826,6 +860,12 @@ export class AuthService {
       };
       if (referralCode) {
         body.referralCode = referralCode;
+      }
+      if (consentData) {
+        if (consentData.acceptedPrivacyPolicy) body.acceptedPrivacyPolicy = true;
+        if (consentData.acceptedTermsOfService) body.acceptedTermsOfService = true;
+        if (consentData.privacyPolicyVersion) body.privacyPolicyVersion = consentData.privacyPolicyVersion;
+        if (consentData.termsOfServiceVersion) body.termsOfServiceVersion = consentData.termsOfServiceVersion;
       }
 
       const { data, error } = await this.supabase.functions.invoke('register-user-unified', {
@@ -863,6 +903,31 @@ export class AuthService {
       };
     } catch (error: any) {
       console.error('Registration exception:', error);
+      return { success: false, error: error.message || 'An unexpected error occurred' };
+    }
+  }
+
+  // Request a password reset email via web API route (sends via Brevo for better deliverability)
+  async requestPasswordReset(email: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const normalizedEmail = email.toLowerCase().trim();
+
+      // Use the web API route which sends via Brevo (better deliverability than Supabase native email)
+      const response = await fetch('https://www.racetagger.cloud/api/auth/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: normalizedEmail }),
+      });
+
+      if (!response.ok) {
+        console.error('Password reset request failed:', response.status, response.statusText);
+        return { success: false, error: 'Failed to send recovery email' };
+      }
+
+      console.log(`Password reset email requested for ${normalizedEmail} (via web API)`);
+      return { success: true };
+    } catch (error: any) {
+      console.error('Password reset request exception:', error);
       return { success: false, error: error.message || 'An unexpected error occurred' };
     }
   }
@@ -1343,13 +1408,28 @@ export class AuthService {
       };
     }
 
+    // Anonymized device fingerprint (SHA-256 truncated). Forwarded to the
+    // RPC so the server-side machine_blacklist check can fire BEFORE we
+    // reserve any tokens. If the helper throws or returns empty (very
+    // unlikely — pure os.* calls) we fall back to undefined: the RPC then
+    // skips the blacklist check, so the worst case is "we forgot to enforce
+    // for this one batch", not "the user can't run anything".
+    let machineId: string | undefined;
+    try {
+      const id = getMachineId();
+      machineId = id && id.length > 0 ? id : undefined;
+    } catch {
+      machineId = undefined;
+    }
+
     try {
       const { data, error } = await this.supabase.rpc('pre_authorize_tokens', {
         p_user_id: this.authState.user.id,
         p_tokens_needed: tokenCount,
         p_batch_id: batchId,
         p_image_count: imageCount,
-        p_visual_tagging: visualTagging
+        p_visual_tagging: visualTagging,
+        p_machine_id: machineId ?? null
       });
 
       if (error) {
@@ -1366,7 +1446,11 @@ export class AuthService {
           authorized: false,
           error: data?.error || 'UNKNOWN_ERROR',
           available: data?.available,
-          needed: data?.needed
+          needed: data?.needed,
+          // MACHINE_BLOCKED specifics: forward verbatim so the UI layer can
+          // render a "your device has been blocked: <reason>" dialog.
+          reason: data?.reason,
+          blockedAt: data?.blockedAt
         };
       }
 
@@ -1472,14 +1556,27 @@ export class AuthService {
   /**
    * Calcola il numero di token necessari per un batch.
    *
+   * Il calcolo restituisce il valore ESATTO (potenzialmente frazionario, es. 1.5
+   * per 1 immagine con visual tagging). Dal 2026-05-13 il backend supporta
+   * NUMERIC su tokens_reserved/consumed/refunded e su token_transactions.amount,
+   * quindi non serve piu' arrotondare per eccesso (vecchio Math.ceil rimosso).
+   *
+   * Nota di compatibilita': il valore restituito viene passato come
+   * `p_tokens_needed` alla RPC `pre_authorize_tokens`, il cui parametro e' INTEGER.
+   * La RPC ignora quel valore per la prenotazione effettiva (ricalcola server-side
+   * con math NUMERIC esatta da p_image_count + p_visual_tagging) e lo usa solo
+   * per il check di disponibilita'. Quindi anche un Math.ceil residuo qui non
+   * cambia il consumo reale; lo rimuoviamo solo per allineare la UI ("questo
+   * batch consumera' X token") al valore effettivo.
+   *
    * @param imageCount - Numero di immagini
    * @param visualTaggingEnabled - Se true, applica moltiplicatore 1.5x
-   * @returns Numero totale di token necessari
+   * @returns Numero totale di token necessari (puo' essere frazionario)
    */
   calculateTokensNeeded(imageCount: number, visualTaggingEnabled: boolean): number {
     const baseTokens = imageCount;
     const visualTaggingTokens = visualTaggingEnabled ? imageCount * 0.5 : 0;
-    return Math.ceil(baseTokens + visualTaggingTokens);
+    return baseTokens + visualTaggingTokens;
   }
 }
 

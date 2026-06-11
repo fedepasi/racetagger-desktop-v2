@@ -30,7 +30,10 @@ export type ErrorType =
   | 'token_reservation'
   | 'segmentation'
   | 'zero_results'
+  | 'ghost_images'
   | 'memory'
+  | 'pdf_parser'
+  | 'renderer_action'
   | 'uncaught';
 
 export type ErrorSeverity = 'fatal' | 'recoverable' | 'warning';

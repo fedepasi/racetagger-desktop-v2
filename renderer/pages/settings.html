@@ -75,6 +75,68 @@
             </div>
           </label>
         </div>
+
+        <hr style="border: none; border-top: 1px solid var(--border-color); margin: 16px 0;">
+
+        <div class="settings-item">
+          <div class="settings-item-label">Learn More</div>
+          <div class="settings-item-value">
+            <a href="#" id="settings-privacy-policy-link" class="settings-link" title="Read our full Privacy Policy">Privacy Policy</a>
+            <span style="margin: 0 8px; color: var(--text-muted);">|</span>
+            <a href="#" id="settings-terms-link" class="settings-link" title="Read our Terms of Service">Terms of Service</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- IPTC Pro Defaults -->
+    <div class="card mb-lg" id="settings-iptc-pro-card">
+      <div class="card-header">
+        <div class="card-title">IPTC Pro Defaults</div>
+        <span class="settings-card-badge">PRO</span>
+      </div>
+      <div class="card-body">
+        <p class="settings-section-description">
+          Default behavior for IPTC metadata writing. Individual presets can override these settings.
+        </p>
+
+        <!-- Face Recognition Scope -->
+        <div class="toggle-option">
+          <label class="toggle-container" for="settings-iptc-face-only">
+            <input type="checkbox" id="settings-iptc-face-only" class="toggle-input" checked>
+            <div class="toggle-content">
+              <div class="toggle-title">When a face is recognized, write only that person's data</div>
+              <div class="form-text">
+                When enabled, portrait photos with a recognized face will only include the identified person's metadata — not all participants linked to that number. When disabled, all participants for the number are always included.
+              </div>
+            </div>
+          </label>
+        </div>
+
+        <hr style="border: none; border-top: 1px solid var(--border-color); margin: 16px 0;">
+
+        <!-- Default IPTC template (UX-04) -->
+        <div class="settings-iptc-template-row">
+          <div class="settings-iptc-template-info">
+            <div class="toggle-title">Default IPTC template</div>
+            <div class="form-text">
+              Applied to new presets and used as the fallback in <strong>Export & IPTC</strong> when a preset has no profile of its own. Per-preset profiles always take precedence.
+            </div>
+            <div class="settings-iptc-template-status" id="settings-iptc-template-status">Not configured</div>
+          </div>
+          <div class="settings-iptc-template-actions">
+            <button class="btn btn-secondary btn-sm" id="settings-iptc-template-edit">Edit template…</button>
+            <button class="btn btn-secondary btn-sm" id="settings-iptc-template-import">Import from XMP…</button>
+            <button class="btn btn-secondary btn-sm" id="settings-iptc-template-clear">Clear</button>
+          </div>
+        </div>
+
+        <div class="info-box mt-md">
+          <span class="info-icon">💡</span>
+          <div class="info-text text-sm">
+            <strong>Example:</strong> Car #51 has two drivers (Pier Guidi + Calado). With this option enabled, a portrait of Pier Guidi will only include his data, while an action shot of the car will include both drivers.
+          </div>
+        </div>
       </div>
     </div>
 
@@ -88,6 +150,51 @@
           <div class="settings-item-label">Version</div>
           <div class="settings-item-value" id="settings-app-version">Loading...</div>
         </div>
+        <div class="settings-item">
+          <div class="settings-item-label">Developer</div>
+          <div class="settings-item-value">Federico Pasinetti</div>
+        </div>
+        <div class="settings-item">
+          <div class="settings-item-label">Website</div>
+          <div class="settings-item-value">
+            <a href="#" id="settings-website-link" class="settings-link">racetagger.cloud</a>
+          </div>
+        </div>
+        <div class="settings-item">
+          <div class="settings-item-label">Legal</div>
+          <div class="settings-item-value">
+            <a href="#" id="about-privacy-policy-link" class="settings-link">Privacy Policy</a>
+            <span style="margin: 0 8px; color: var(--text-muted);">|</span>
+            <a href="#" id="about-terms-link" class="settings-link">Terms of Service</a>
+          </div>
+        </div>
+        <div class="settings-item">
+          <div class="settings-item-label">Support</div>
+          <div class="settings-item-value">
+            <a href="#" id="about-support-link" class="settings-link">info@racetagger.cloud</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Default IPTC template editor modal (UX-04, Option B). The form markup is
+       mounted on demand into #iptc-defaults-form-mount by ensureIptcFormMarkup()
+       (the SAME shared partial used by the preset editor). Behavior options
+       (writing timing / face scope) are hidden here via scoped CSS — they are
+       per-preset only. -->
+  <div id="iptc-defaults-modal" class="modal">
+    <div class="modal-content iptc-defaults-modal-content">
+      <div class="modal-header">
+        <h2>Default IPTC Template</h2>
+        <button class="modal-close" id="iptc-defaults-modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="iptc-defaults-form-mount"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="iptc-defaults-cancel">Cancel</button>
+        <button class="btn btn-primary" id="iptc-defaults-save">Save default</button>
       </div>
     </div>
   </div>

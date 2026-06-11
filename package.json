@@ -1,6 +1,6 @@
 {
   "name": "racetagger-desktop",
-  "version": "1.1.0",
+  "version": "1.1.9",
   "description": "Professional race photography analysis tool with AI-powered race number recognition",
   "author": {
     "name": "RaceTagger Team",
@@ -35,9 +35,9 @@
     "generate-fixtures": "npx ts-node tests/scripts/generate-fixtures.ts",
     "download-test-files": "npx ts-node tests/scripts/download-test-files.ts",
     "build:linux:x64": "tsc && node scripts/validate-native-deps.js --platform=linux --arch=x64 && electron-builder --linux --x64",
-    "build:mac:x64": "tsc && node scripts/validate-native-deps.js --platform=darwin --arch=x64 && electron-builder --mac --x64",
-    "build:mac:arm64": "tsc && node scripts/validate-native-deps.js --platform=darwin --arch=arm64 && electron-builder --mac --arm64",
-    "build:mac:universal": "tsc && node scripts/validate-native-deps.js --platform=darwin --arch=arm64 && electron-builder --mac --universal",
+    "build:mac:x64": "export $(grep -E '^APPLE_' .env | xargs) && tsc && node scripts/validate-native-deps.js --platform=darwin --arch=x64 && electron-builder --mac --x64",
+    "build:mac:arm64": "export $(grep -E '^APPLE_' .env | xargs) && tsc && node scripts/validate-native-deps.js --platform=darwin --arch=arm64 && electron-builder --mac --arm64",
+    "build:mac:universal": "export $(grep -E '^APPLE_' .env | xargs) && tsc && node scripts/validate-native-deps.js --platform=darwin --arch=arm64 && electron-builder --mac --universal",
     "build:mac:all": "npm run build:mac:arm64 && npm run build:mac:x64",
     "build:win:x64": "tsc && node scripts/validate-native-deps.js --platform=win32 --arch=x64 && electron-builder --win --x64",
     "build:win:arm64": "tsc && node scripts/validate-native-deps.js --platform=win32 --arch=arm64 && electron-builder --win --arm64",
@@ -79,7 +79,9 @@
       "node_modules/simple-get/**/*",
       "node_modules/tar-fs/**/*",
       "node_modules/tunnel-agent/**/*",
-      "node_modules/raw-preview-extractor/**/*"
+      "node_modules/raw-preview-extractor/**/*",
+      "node_modules/pdf-parse/**/*",
+      "node_modules/node-ensure/**/*"
     ],
     "icon": "racetagger-logo.icns",
     "mac": {
@@ -157,6 +159,7 @@
     "node-fetch": "^3.3.2",
     "onnxruntime-node": "^1.23.2",
     "p-limit": "^3.1.0",
+    "pdf-parse": "^1.1.1",
     "piexifjs": "^1.0.6",
     "raw-preview-extractor": "file:./vendor/raw-preview-extractor",
     "sharp": "^0.34.3"
@@ -164,6 +167,7 @@
   "devDependencies": {
     "@electron/notarize": "^3.0.2",
     "@electron/rebuild": "^3.6.2",
+    "@playwright/test": "^1.49.0",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.7.2",
     "concurrently": "^8.2.2",
@@ -178,12 +182,12 @@
     "typescript": "^5.9.2"
   },
   "optionalDependencies": {
-    "@img/sharp-win32-x64": "^0.34.3",
-    "@img/sharp-win32-arm64": "^0.34.3",
-    "@img/sharp-libvips-win32-x64": "^0.34.3",
+    "@img/sharp-libvips-linux-x64": "^0.34.3",
     "@img/sharp-libvips-win32-arm64": "^0.34.3",
+    "@img/sharp-libvips-win32-x64": "^0.34.3",
     "@img/sharp-linux-x64": "^0.34.3",
-    "@img/sharp-libvips-linux-x64": "^0.34.3"
+    "@img/sharp-win32-arm64": "^0.34.3",
+    "@img/sharp-win32-x64": "^0.34.3"
   },
   "cpu": [
     "x64",

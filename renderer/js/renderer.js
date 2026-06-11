@@ -52,15 +52,17 @@ let uploading = false;
 let processedImagesCount = 0;
 let totalImagesCount = 0;
 let csvLoaded = false; // Flag per tenere traccia se un CSV è stato caricato
-let selectedModel = 'gemini-2.5-flash-lite-preview-06-17'; // Modello predefinito
+let selectedModel = 'gemini-3.1-flash-lite'; // Modello predefinito
 let selectedCategory = 'motorsport'; // Categoria predefinita
 window.selectedCategory = selectedCategory; // Expose globally for other modules
 let analysisStartTime = null;
 let analysisEndTime = null;
 
-// Preset filtering cache
-let cachedAllPresets = []; // All loaded presets (unfiltered)
-let categoryCodeToIdMap = {}; // Map category code to ID for filtering
+// Map category code → category id. Built when dynamic categories load and forwarded to
+// window.presetController so it can filter the visible preset list. The preset list itself
+// (and the selected preset) is owned exclusively by presetController — there is no
+// duplicate cache here.
+let categoryCodeToIdMap = {};
 
 // No preset warning modal callback
 let noPresetWarningCallback = null;
@@ -87,6 +89,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Initialize enhanced UX components integration
   initializeEnhancedUXIntegration();
+
+  // Initialize project selector for delivery auto-routing
+  initProjectSelector();
 
   // Load dynamic categories from database
   // NOTE: Categories will be loaded after authentication in handleLoginResult()
@@ -119,6 +124,13 @@ document.addEventListener('DOMContentLoaded', () => {
   // Folder selection
   if (folderSelectButton) {
     folderSelectButton.addEventListener('click', handleFolderSelection);
+  }
+
+  // Files selection (alternative to folder picker for Windows users
+  // who can't see files in the native folder dialog)
+  const filesSelectButton = document.getElementById('files-select-button');
+  if (filesSelectButton) {
+    filesSelectButton.addEventListener('click', handleFilesSelection);
   }
 
   // Advanced options
@@ -276,6 +288,13 @@ document.addEventListener('DOMContentLoaded', () => {
       } catch (error) {
         console.error('Error refreshing token balance:', error);
       }
+    });
+
+    // When a batch is cancelled, sync renderer.js's module-level `uploading` flag. The
+    // enhanced-progress UI resets the button, but `uploading` would otherwise stay true and
+    // re-disable Analyze the next time the user picks a folder. Covers normal runs and resumes.
+    window.api.receive('batch-cancelled', () => {
+      setUploading(false);
     });
 
     // Old parallel processing statistics removed - using unified telemetry now
@@ -642,61 +661,134 @@ function handleFolderSelection() {
   }
 }
 
+// Handle "Select Files" button — opens a native file picker that SHOWS files
+// (Windows folder picker hides files, which confuses some users). We pick the
+// parent folder of the first selected file and reuse the existing
+// `select-folder-by-path` IPC, so the rest of the pipeline is untouched.
+async function handleFilesSelection() {
+  console.log('[Renderer] handleFilesSelection called');
+  if (!window.api) {
+    console.error('[Renderer] window.api not available!');
+    return;
+  }
+
+  try {
+    const result = await window.api.invoke('dialog-show-open', {
+      properties: ['openFile', 'multiSelections'],
+      title: 'Select image files (the entire folder will be analyzed)',
+      filters: [
+        { name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp', 'nef', 'arw', 'cr2', 'cr3', 'orf', 'raw', 'rw2', 'dng'] },
+        { name: 'All Files', extensions: ['*'] }
+      ]
+    });
+
+    if (!result || result.canceled || !result.filePaths || result.filePaths.length === 0) {
+      console.log('[Renderer] File selection canceled');
+      return;
+    }
+
+    const firstFile = result.filePaths[0];
+    const lastSep = Math.max(firstFile.lastIndexOf('/'), firstFile.lastIndexOf('\\'));
+    if (lastSep < 0) {
+      console.warn('[Renderer] Could not derive parent folder from path:', firstFile);
+      showError('Could not determine the folder of the selected files');
+      return;
+    }
+    const parentFolder = firstFile.substring(0, lastSep);
+    console.log('[Renderer] Derived parent folder:', parentFolder);
+
+    const folderResult = await window.api.invoke('select-folder-by-path', parentFolder);
+    if (typeof window.handleFolderSelected === 'function') {
+      window.handleFolderSelected(folderResult);
+    }
+  } catch (err) {
+    console.error('[Renderer] handleFilesSelection error:', err);
+    showError('Error selecting files');
+  }
+}
+
 // Setup drag & drop on the folder selector area
+// Pattern mirrors the working PDF drop zone in participants-manager.js
 function setupFolderDragAndDrop() {
   const folderSelector = document.querySelector('.folder-selector-enhanced');
   if (!folderSelector) return;
-  // Avoid re-binding
+  // Avoid re-binding on the same DOM element
   if (folderSelector._dragDropInitialized) return;
   folderSelector._dragDropInitialized = true;
 
-  let dragCounter = 0;
-
-  const preventDefaults = (e) => {
+  folderSelector.addEventListener('dragenter', (e) => {
     e.preventDefault();
     e.stopPropagation();
-  };
-
-  ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(evt => {
-    folderSelector.addEventListener(evt, preventDefaults, false);
+    folderSelector.classList.add('drag-over');
   });
 
-  folderSelector.addEventListener('dragenter', () => {
-    dragCounter++;
+  folderSelector.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
     folderSelector.classList.add('drag-over');
-  }, false);
+  });
 
-  folderSelector.addEventListener('dragover', () => {
-    folderSelector.classList.add('drag-over');
-  }, false);
-
-  folderSelector.addEventListener('dragleave', () => {
-    dragCounter--;
-    if (dragCounter <= 0) {
+  folderSelector.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Only remove the highlight when the cursor truly leaves the drop zone
+    if (!folderSelector.contains(e.relatedTarget)) {
       folderSelector.classList.remove('drag-over');
-      dragCounter = 0;
     }
-  }, false);
+  });
 
-  folderSelector.addEventListener('drop', (e) => {
-    dragCounter = 0;
+  folderSelector.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
     folderSelector.classList.remove('drag-over');
 
-    const items = e.dataTransfer.items;
-    if (!items || items.length === 0) return;
+    console.log('[DragDrop] drop event fired');
 
-    // Try to get the folder path from dropped items
     const files = e.dataTransfer.files;
-    if (files.length > 0) {
-      const firstFile = files[0];
-      // In Electron, dropped files/folders have a .path property
-      const droppedPath = firstFile.path;
-      if (droppedPath && window.api) {
-        console.log('[Renderer] Folder dropped:', droppedPath);
-        window.api.send('select-folder-by-path', droppedPath);
+    if (!files || files.length === 0) {
+      console.warn('[DragDrop] No files in dataTransfer');
+      return;
+    }
+
+    console.log('[DragDrop] files[0].name:', files[0].name);
+
+    let droppedPath = null;
+
+    // Primary method: webUtils.getPathForFile() via preload contextBridge.
+    // This is the official Electron API for getting file paths when
+    // contextIsolation is enabled (File.path is undefined in main world).
+    if (window.api?.getPathForFile) {
+      try {
+        droppedPath = window.api.getPathForFile(files[0]);
+        console.log('[DragDrop] path via getPathForFile:', droppedPath);
+      } catch (err) {
+        console.warn('[DragDrop] getPathForFile failed:', err);
       }
     }
-  }, false);
+
+    // Fallback: File.path (works if contextIsolation is ever disabled)
+    if (!droppedPath && files[0].path) {
+      droppedPath = files[0].path;
+      console.log('[DragDrop] path via File.path fallback:', droppedPath);
+    }
+
+    console.log('[DragDrop] resolved droppedPath:', droppedPath);
+
+    if (!droppedPath || !window.api) {
+      console.warn('[DragDrop] Could not resolve OS path for dropped item');
+      return;
+    }
+
+    try {
+      const result = await window.api.invoke('select-folder-by-path', droppedPath);
+      console.log('[DragDrop] invoke result:', result);
+      if (typeof window.handleFolderSelected === 'function') {
+        window.handleFolderSelected(result);
+      }
+    } catch (err) {
+      console.error('[DragDrop] Error handling folder drop:', err);
+    }
+  });
 
   console.log('[Renderer] Folder drag & drop initialized');
 }
@@ -870,9 +962,9 @@ function handleModelSelection(event) {
 
   // Update the current model display
   const modelNames = {
-    'gemini-2.5-flash-lite-preview-06-17': 'FAST',
-    'gemini-2.5-flash-preview-04-17': 'BALANCED',
-    'gemini-2.5-pro-preview-05-06': 'ADVANCED'
+    'gemini-3.1-flash-lite': 'FAST',
+    'gemini-3.5-flash': 'BALANCED',
+    'gemini-3.1-pro-preview': 'ADVANCED'
   };
 
   currentModelDisplay.textContent = modelNames[selectedModel] || selectedModel;
@@ -890,28 +982,45 @@ function handleModelSelection(event) {
   }
 }
 
-// Handle category selection
+// Handle category selection (called via change event on hidden select, fired by custom dropdown or programmatic)
 function handleCategorySelection(event) {
   selectedCategory = event.target.value;
   window.selectedCategory = selectedCategory; // Expose globally for other modules
 
-  // Update the current category display (get element dynamically for SPA compatibility)
-  const categoryNames = {
-    'motorsport': 'Motorsport',
-    'running': 'Running & Cycling',
-    'other': 'Other'
-  };
-
-  const display = document.getElementById('current-category-display');
-  if (display) {
-    display.textContent = categoryNames[selectedCategory] || selectedCategory;
-  }
-
   console.log('[Renderer] Category changed to:', selectedCategory);
 
-  // Re-filter presets based on the new category
-  if (cachedAllPresets.length > 0) {
-    filterAndDisplayPresets();
+  // Sync custom dropdown trigger display (for programmatic changes from last-analysis-settings, etc.)
+  syncCustomDropdownTrigger(selectedCategory);
+
+  // Re-filter presets via the controller; it owns the preset list and emits a
+  // 'list-changed' event so the dropdown re-renders itself.
+  if (window.presetController) {
+    window.presetController.applyCategoryFilter(selectedCategory);
+  }
+}
+
+// Sync the custom dropdown trigger display with the given category code
+function syncCustomDropdownTrigger(code) {
+  const trigger = document.getElementById('custom-dropdown-trigger');
+  const menu = document.getElementById('custom-dropdown-menu');
+  if (!trigger) return;
+
+  const categorySelect = document.getElementById('category-select');
+  const name = categorySelect?.options[categorySelect.selectedIndex]?.textContent || code;
+  const emoji = getCategoryEmoji(code);
+
+  let triggerHtml = `<span class="cdd-emoji">${emoji}</span><span class="cdd-name">${name}</span>`;
+  if (proCategoryMap[code]) {
+    triggerHtml += `<span class="cdd-pro-pill">PRO</span>`;
+  }
+  triggerHtml += `<span class="cdd-chevron">&#9662;</span>`;
+  trigger.innerHTML = triggerHtml;
+
+  // Update selected state in menu
+  if (menu) {
+    menu.querySelectorAll('.cdd-option').forEach(opt => {
+      opt.classList.toggle('selected', opt.dataset.value === code);
+    });
   }
 }
 
@@ -1228,7 +1337,7 @@ async function displayImageCard(imageResult) {
   // Set up feedback confirmation listeners
   window.api.receive('feedback-saved', (result) => {
     if (result.success) {
-      feedbackStatus.textContent = 'Salvato!';
+      feedbackStatus.textContent = 'Saved!';
       feedbackStatus.className = 'feedback-status success';
     }
   });
@@ -1341,9 +1450,9 @@ async function handleUploadAndAnalyze() {
 
   // Update used model display
   const modelNames = {
-    'gemini-2.5-flash-lite-preview-06-17': 'FAST',
-    'gemini-2.5-flash-preview-04-17': 'BALANCED',
-    'gemini-2.5-pro-preview-05-06': 'ADVANCED'
+    'gemini-3.1-flash-lite': 'FAST',
+    'gemini-3.5-flash': 'BALANCED',
+    'gemini-3.1-pro-preview': 'ADVANCED'
   };
   // usedModelDisplay.textContent = modelNames[selectedModel] || selectedModel; // Removed
 
@@ -1423,31 +1532,136 @@ function openPresetGuide() {
   window.api.invoke('open-external-url', 'https://www.racetagger.cloud/blog/3-CSV-Starting-Lists-for-Race-Photography');
 }
 
+// ==================== Invalid Paths Warning Modal ====================
+
+let invalidPathsWarningCallback = null;
+
+/**
+ * Check for invalid folder paths in the selected preset before proceeding with analysis.
+ * If invalid paths found, shows a warning modal; otherwise proceeds directly.
+ */
+async function checkInvalidPathsThenProceed() {
+  const preset = window.presetController?.selected;
+  if (!preset || !preset.id) {
+    return proceedWithFolderAnalysis();
+  }
+
+  // Collect folder paths from participants (localStorage priority, then DB fields)
+  const localPaths = typeof getLocalFolderPaths === 'function' ? getLocalFolderPaths(preset.id) : {};
+  const participants = preset.participants || [];
+  const folders = preset.custom_folders || [];
+  const pathsToCheck = new Set();
+
+  // Check custom folder paths
+  for (const f of folders) {
+    const name = (typeof f === 'object' && f !== null) ? (f.name || f) : f;
+    const dbPath = (typeof f === 'object' && f !== null) ? (f.path || '') : '';
+    const resolved = localPaths[name] || dbPath;
+    if (resolved) pathsToCheck.add(resolved);
+  }
+
+  // Check participant-level folder paths
+  for (const p of participants) {
+    for (const key of ['folder_1', 'folder_2', 'folder_3']) {
+      const folderName = p[key];
+      if (!folderName) continue;
+      const pathKey = key + '_path';
+      const resolved = localPaths[folderName] || p[pathKey] || '';
+      if (resolved) pathsToCheck.add(resolved);
+    }
+  }
+
+  if (pathsToCheck.size === 0) {
+    return proceedWithFolderAnalysis();
+  }
+
+  try {
+    const result = await window.api.invoke('validate-preset-folder-paths', { paths: Array.from(pathsToCheck) });
+    if (result.success && result.data && !result.data.valid && result.data.invalidPaths.length > 0) {
+      // Show warning modal
+      return new Promise((resolve) => {
+        invalidPathsWarningCallback = (shouldContinue) => {
+          invalidPathsWarningCallback = null;
+          if (shouldContinue) {
+            proceedWithFolderAnalysis();
+          }
+          resolve();
+        };
+        showInvalidPathsWarning(result.data.invalidPaths);
+      });
+    }
+  } catch (e) {
+    console.warn('[Analysis] Error validating folder paths:', e);
+  }
+
+  return proceedWithFolderAnalysis();
+}
+
+/**
+ * Show warning modal with list of invalid folder paths
+ */
+function showInvalidPathsWarning(invalidPaths) {
+  const modal = document.getElementById('invalid-paths-warning-modal');
+  if (!modal) {
+    console.warn('[Analysis] Invalid paths modal not found, proceeding anyway');
+    if (invalidPathsWarningCallback) invalidPathsWarningCallback(true);
+    return;
+  }
+
+  const list = document.getElementById('invalid-paths-list');
+  if (list) {
+    list.innerHTML = invalidPaths.map(p =>
+      `<li><span class="path-icon">&#10060;</span> ${p}</li>`
+    ).join('');
+  }
+
+  modal.classList.add('show');
+}
+
+/**
+ * Close invalid paths warning and cancel analysis
+ */
+function closeInvalidPathsWarning() {
+  const modal = document.getElementById('invalid-paths-warning-modal');
+  if (modal) modal.classList.remove('show');
+  if (invalidPathsWarningCallback) invalidPathsWarningCallback(false);
+}
+
+/**
+ * Continue with analysis despite invalid paths
+ */
+function continueWithInvalidPaths() {
+  const modal = document.getElementById('invalid-paths-warning-modal');
+  if (modal) modal.classList.remove('show');
+  if (invalidPathsWarningCallback) invalidPathsWarningCallback(true);
+}
+
 // Handle folder analysis
 async function handleFolderAnalysis() {
-  // Check if participant preset is selected - show warning if not
-  const hasPreset = window.enhancedFileBrowser?.selectedPreset?.id;
+  // Single source of truth: PresetController. Wait for any in-flight refresh or
+  // selection IPC to settle, then read .selected. No more layered defensive
+  // reload logic — if state is wrong here, the bug is in the controller, not here.
+  if (window.presetController) {
+    await window.presetController.ready();
+  }
+  const preset = window.presetController?.selected || null;
+  const hasPreset = !!preset?.id;
   const dontShowWarning = localStorage.getItem('racetagger-no-preset-warning-dismissed') === 'true';
 
-  console.log('[Analysis] handleFolderAnalysis - hasPreset:', hasPreset, 'selectedPreset:', window.enhancedFileBrowser?.selectedPreset, 'dontShowWarning:', dontShowWarning);
+  console.log('[Analysis] handleFolderAnalysis - hasPreset:', hasPreset, 'selected:', preset);
 
   if (!hasPreset && !dontShowWarning) {
-    // Show warning modal and wait for user decision
     return new Promise((resolve) => {
       noPresetWarningCallback = (shouldContinue) => {
         noPresetWarningCallback = null;
-        if (shouldContinue) {
-          // Continue with analysis
-          proceedWithFolderAnalysis();
-        }
+        if (shouldContinue) checkInvalidPathsThenProceed();
         resolve();
       };
       showNoPresetWarning();
     });
   }
 
-  // Normal flow - proceed with analysis
-  return proceedWithFolderAnalysis();
+  return checkInvalidPathsThenProceed();
 }
 
 // Actual folder analysis logic (extracted from handleFolderAnalysis)
@@ -1585,17 +1799,26 @@ async function proceedWithFolderAnalysis() {
       }
     }
 
-    // Add participant preset configuration if available
-    const presetSelect = document.getElementById('preset-select');
-    if (presetSelect && presetSelect.value) {
-      // Get preset data from the enhanced file browser instance if available
-      if (window.enhancedFileBrowser && window.enhancedFileBrowser.selectedPreset) {
-        config.participantPreset = {
-          id: window.enhancedFileBrowser.selectedPreset.id,
-          name: window.enhancedFileBrowser.selectedPreset.name,
-          participants: window.enhancedFileBrowser.selectedPreset.participants || []
-        };
-      }
+    // Attach the participant preset to the config straight from the controller.
+    // No reload-on-the-fly safety nets here: handleFolderAnalysis already awaited
+    // presetController.ready(), so .selected is authoritative.
+    const selectedPreset = window.presetController?.selected;
+    if (selectedPreset && selectedPreset.id) {
+      config.participantPreset = {
+        id: selectedPreset.id,
+        name: selectedPreset.name,
+        participants: selectedPreset.participants || [],
+        allow_external_person_recognition: selectedPreset.allow_external_person_recognition === true,
+        // ACC-01 (Gruppe C) — series-wide sponsors to ignore in matching
+        series_sponsor_ignore: selectedPreset.series_sponsor_ignore || [],
+      };
+    }
+
+    // Add project_id if a project is selected (for delivery auto-routing)
+    const projectSelectEl = document.getElementById('project-select');
+    if (projectSelectEl && projectSelectEl.value) {
+      config.projectId = projectSelectEl.value;
+      console.log('[Analysis] Linking execution to project:', config.projectId);
     }
 
     // Save current analysis settings for next time
@@ -1858,6 +2081,99 @@ function completeUnifiedTelemetry() {
   updateUnifiedTelemetryDisplay();
 }
 
+/**
+ * Enter the live progress view for a resume that was just started from the Home screen.
+ *
+ * The resume job is already running in the main process (Home sent 'resume-analysis'
+ * and navigated here). This makes the Analysis page show activity *immediately* — so it
+ * never looks like nothing happened — until the standard unified-processing-started /
+ * image-processed events take over and drive the real counts. batch-complete then
+ * redirects to the results page as usual, exactly like a normal run.
+ *
+ * Exposed on window so router.js can call it after it rebuilds the Analysis page DOM.
+ * No-op unless Home left a `resumeInProgress` marker in sessionStorage.
+ */
+window.enterResumeProcessingView = function enterResumeProcessingView() {
+  let payload = null;
+  try { payload = JSON.parse(sessionStorage.getItem('resumeInProgress') || 'null'); } catch (_) { payload = null; }
+  if (!payload || !payload.executionId) return;
+  // One-shot: clear the marker so a later manual visit to Analysis doesn't re-trigger this.
+  sessionStorage.removeItem('resumeInProgress');
+
+  // Re-entry safety: tear down any terminal-event listeners left over from a previous resume in
+  // this session (e.g. one that was cancelled rather than completed) before wiring fresh ones,
+  // so they can't stack on the persistent IPC channel.
+  if (typeof window.__resumeFailureCleanup === 'function') {
+    try { window.__resumeFailureCleanup(); } catch (_) { /* already gone */ }
+  }
+  // Tell Home's global 'analysis-aborted' handler to stay quiet while this view is up — the
+  // Analysis screen surfaces resume failures itself, so a Home alert() would pop on the wrong screen.
+  window.__resumeViewActive = true;
+
+  // Show the same processing UI a normal run uses.
+  setUploading(true);
+
+  // Label it as a resume so the user understands it's continuing, not restarting.
+  const title = document.querySelector('#progress-container .processing-title');
+  if (title) title.textContent = 'Resuming analysis…';
+
+  // Seed the counter with this resume's remaining count for an instant, honest number;
+  // unified-processing-started arrives moments later and confirms the authoritative total.
+  const total = Number(payload.total) || 0;
+  const done = Number(payload.processed) || 0;
+  const remaining = total > done ? total - done : 0;
+  startUnifiedTelemetry(remaining);
+  updateUnifiedTelemetryDisplay();
+
+  // Scroll the progress panel into view so the user sees the analysis start right away,
+  // instead of landing at the top of the (long) config form and having to scroll down.
+  // rAF waits one frame so the just-shown panel has layout before we scroll to it.
+  const panel = document.getElementById('progress-container');
+  if (panel && typeof panel.scrollIntoView === 'function') {
+    requestAnimationFrame(() => {
+      try { panel.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+      catch (_) { panel.scrollIntoView(); }
+    });
+  }
+
+  // Wire terminal-event handling for THIS resume. Every terminal event tears our listeners down
+  // so they never leak or fire on a later unrelated run; failures additionally recover the screen.
+  if (window.api && window.api.receive) {
+    let offAbort = null;
+    let offError = null;
+    let offDone = null;
+    let offCancel = null;
+    const teardown = () => {
+      if (typeof offAbort === 'function') offAbort();
+      if (typeof offError === 'function') offError();
+      if (typeof offDone === 'function') offDone();
+      if (typeof offCancel === 'function') offCancel();
+      offAbort = offError = offDone = offCancel = null;
+      window.__resumeViewActive = false;
+      window.__resumeFailureCleanup = null;
+    };
+    const onFailure = (data) => {
+      // 'Already complete' isn't a failure — main marked the run completed, so just show results.
+      if (data && data.reason === 'resume-nothing-to-do' && payload.executionId) {
+        teardown();
+        window.location.href = `results.html?executionId=${encodeURIComponent(payload.executionId)}`;
+        return;
+      }
+      // Genuine failure (can't resume here / folder gone): drop the panel and explain inline.
+      setUploading(false);
+      if (data && data.message && typeof showError === 'function') showError(data.message);
+      teardown();
+    };
+    offAbort = window.api.receive('analysis-aborted', onFailure);
+    offError = window.api.receive('processing-error', onFailure);
+    // Success redirects to results.html (full page nav); cancel is handled by the global
+    // batch-cancelled listener. Here we only need to stop listening so nothing leaks.
+    offDone = window.api.receive('batch-complete', teardown);
+    offCancel = window.api.receive('batch-cancelled', teardown);
+    window.__resumeFailureCleanup = teardown;
+  }
+};
+
 function updateUnifiedTelemetryDisplay() {
   // Use existing telemetry elements or fall back gracefully
   const processingCount = document.getElementById('processing-count'); // Optional legacy element
@@ -2047,18 +2363,20 @@ document.addEventListener('DOMContentLoaded', () => {
 async function loadDynamicCategories(forceRefresh = false) {
   const CACHE_DURATION = 30 * 60 * 1000; // 30 minutes
 
-  // Get max supported version to include in cache key (ensures cache invalidation on app update)
-  let maxSupportedVersion = 5; // fallback default
+  // Get version info for cache key and filtering
+  let maxSupportedVersion = 5; // fallback default for edge_function_version
+  let appVersionNumber = 10000; // fallback default (v1.0.0)
   try {
     if (window.api) {
       maxSupportedVersion = await window.api.invoke('get-max-supported-edge-function-version');
+      appVersionNumber = await window.api.invoke('get-app-version-number');
     }
   } catch (e) {
-    // Could not get max supported version for cache key
+    // Could not get version info for cache key
   }
 
-  // Include version in cache key to auto-invalidate when app is updated
-  const CACHE_KEY = `racetagger_sport_categories_v${maxSupportedVersion}`;
+  // Include both versions in cache key to auto-invalidate when app is updated
+  const CACHE_KEY = `racetagger_sport_categories_v${maxSupportedVersion}_app${appVersionNumber}`;
 
   // Check sessionStorage cache first (unless forced refresh)
   if (!forceRefresh) {
@@ -2095,18 +2413,23 @@ async function loadDynamicCategories(forceRefresh = false) {
 
     if (result.success && result.data && result.data.length > 0) {
 
-      // Filter categories based on edge_function_version compatibility
+      // Filter categories based on version compatibility
       let filteredCategories = result.data;
       try {
-        const maxSupportedVersion = await window.api.invoke('get-max-supported-edge-function-version');
+        const maxSupportedEdgeFunctionVersion = await window.api.invoke('get-max-supported-edge-function-version');
+        const currentAppVersionNumber = await window.api.invoke('get-app-version-number');
 
-        const originalCount = result.data.length;
         filteredCategories = result.data.filter(category => {
-          // Categories without edge_function_version are assumed compatible (legacy V2)
-          const categoryVersion = category.edge_function_version || 2;
-          const isCompatible = categoryVersion <= maxSupportedVersion;
+          // Check 1: Edge function version support (processing pipeline compatibility)
+          const edgeFunctionVersion = category.edge_function_version || 2;
+          const isEdgeFunctionOk = edgeFunctionVersion <= maxSupportedEdgeFunctionVersion;
 
-          return isCompatible;
+          // Check 2: Minimum app version requirement (visibility control)
+          const minAppVersion = category.min_app_version || 0;
+          const isAppVersionOk = minAppVersion <= currentAppVersionNumber;
+
+          // Both checks must pass
+          return isEdgeFunctionOk && isAppVersionOk;
         });
       } catch (versionError) {
         // Could not check version compatibility, showing all categories
@@ -2129,49 +2452,78 @@ async function loadDynamicCategories(forceRefresh = false) {
   }
 }
 
-// Populate category select with dynamic data
+// Track which categories have PRO (local ONNX model) recognition
+let proCategoryMap = {};
+// Track category icons from database (code → emoji)
+let categoryIconMap = {};
+
+// Get emoji for a category code (uses DB icon, fallback to ⚡)
+function getCategoryEmoji(code) {
+  return categoryIconMap[code] || '⚡';
+}
+
+// Populate category select with dynamic data (custom dropdown + hidden native select)
 function populateCategorySelect(categories) {
   const categorySelect = document.getElementById('category-select');
-  if (!categorySelect) {
-    // Element not found - analysis page may not be loaded yet (normal with dynamic routing)
+  const dropdownMenu = document.getElementById('custom-dropdown-menu');
+  if (!categorySelect || !dropdownMenu) {
+    // Elements not found - analysis page may not be loaded yet (normal with dynamic routing)
     return;
   }
 
   // Build category code-to-id mapping for preset filtering
   categoryCodeToIdMap = {};
+  proCategoryMap = {};
+  categoryIconMap = {};
   categories.forEach(category => {
     categoryCodeToIdMap[category.code] = category.id;
+    // Track PRO categories (those with local ONNX model or active model)
+    if (category.use_local_onnx || category.active_model_id) {
+      proCategoryMap[category.code] = true;
+    }
+    // Store icon from database
+    if (category.icon) {
+      categoryIconMap[category.code] = category.icon;
+    }
   });
-  console.log('[Renderer] Built category mapping:', Object.keys(categoryCodeToIdMap).length, 'categories');
+  console.log('[Renderer] Built category mapping:', Object.keys(categoryCodeToIdMap).length, 'categories,', Object.keys(proCategoryMap).length, 'PRO');
 
-  // Clear existing options (keep current selection if possible)
+  // Hand the freshly-built code→id map to the preset controller so it can filter
+  // the visible list. Apply the current category as the active filter.
+  if (window.presetController) {
+    window.presetController.setCategoryMap(categoryCodeToIdMap);
+    window.presetController.applyCategoryFilter(selectedCategory);
+  }
+
+  // Keep current selection if possible
   const currentValue = categorySelect.value;
-  categorySelect.innerHTML = '';
 
-  // Add categories from database
-  let hasCurrentValue = false;
+  // Populate hidden native select (for .value compatibility)
+  categorySelect.innerHTML = '';
   categories.forEach(category => {
     const option = document.createElement('option');
     option.value = category.code;
-
-    // Create display text with emoji if available
-    let displayText = category.name;
-    switch(category.code) {
-      case 'motorsport':
-        displayText = `🏎️ ${category.name}`;
-        break;
-      case 'running':
-        displayText = `🏃 ${category.name}`;
-        break;
-      case 'cycling':
-        displayText = `🚴 ${category.name}`;
-        break;
-      default:
-        displayText = `⚡ ${category.name}`;
-    }
-
-    option.textContent = displayText;
+    option.textContent = category.name;
     categorySelect.appendChild(option);
+  });
+
+  // Populate custom dropdown menu
+  dropdownMenu.innerHTML = '';
+  let hasCurrentValue = false;
+  categories.forEach(category => {
+    const div = document.createElement('div');
+    div.className = 'cdd-option';
+    div.dataset.value = category.code;
+
+    const emoji = getCategoryEmoji(category.code);
+    let html = `<span class="cdd-opt-emoji">${emoji}</span><span class="cdd-opt-name">${category.name}</span>`;
+    if (proCategoryMap[category.code]) {
+      html += `<span class="cdd-opt-pro">PRO</span>`;
+    }
+    div.innerHTML = html;
+
+    div.addEventListener('click', () => selectCustomCategory(category.code));
+    dropdownMenu.appendChild(div);
 
     if (category.code === currentValue) {
       hasCurrentValue = true;
@@ -2179,21 +2531,97 @@ function populateCategorySelect(categories) {
   });
 
   // Restore previous selection or set to first category
-  if (hasCurrentValue) {
-    categorySelect.value = currentValue;
-  } else if (categories.length > 0) {
-    categorySelect.value = categories[0].code;
-    selectedCategory = categories[0].code;
+  const valueToSelect = hasCurrentValue ? currentValue : (categories.length > 0 ? categories[0].code : null);
+  if (valueToSelect) {
+    selectCustomCategory(valueToSelect, true); // silent = true, don't trigger change handler on populate
   }
 
-  // Update category display
-  if (categorySelect.value) {
-    const selectedOption = categorySelect.options[categorySelect.selectedIndex];
-    if (selectedOption && currentCategoryDisplay) {
-      currentCategoryDisplay.textContent = selectedOption.textContent.replace(/^[^\s]+\s/, ''); // Remove emoji
-    }
+  // Initialize custom dropdown click-outside listener (once)
+  initCustomDropdownListeners();
+}
+
+// Select a category in the custom dropdown and sync with hidden native select
+function selectCustomCategory(code, silent) {
+  const categorySelect = document.getElementById('category-select');
+  const trigger = document.getElementById('custom-dropdown-trigger');
+  const dropdown = document.getElementById('custom-category-dropdown');
+  const menu = document.getElementById('custom-dropdown-menu');
+  if (!categorySelect || !trigger || !menu) return;
+
+  // Update hidden select
+  categorySelect.value = code;
+
+  // Update trigger display
+  const emoji = getCategoryEmoji(code);
+  const name = categorySelect.options[categorySelect.selectedIndex]?.textContent || code;
+  let triggerHtml = `<span class="cdd-emoji">${emoji}</span><span class="cdd-name">${name}</span>`;
+  if (proCategoryMap[code]) {
+    triggerHtml += `<span class="cdd-pro-pill">PRO</span>`;
+  }
+  triggerHtml += `<span class="cdd-chevron">&#9662;</span>`;
+  trigger.innerHTML = triggerHtml;
+
+  // Update selected state in menu
+  menu.querySelectorAll('.cdd-option').forEach(opt => {
+    opt.classList.toggle('selected', opt.dataset.value === code);
+  });
+
+  // Close dropdown
+  if (dropdown) dropdown.classList.remove('open');
+
+  // Sync global state and trigger change handler (unless silent)
+  if (!silent) {
+    selectedCategory = code;
+    window.selectedCategory = selectedCategory;
+
+    // Fire synthetic change event on hidden select so all existing listeners work
+    const event = new Event('change', { bubbles: true });
+    categorySelect.dispatchEvent(event);
+  } else {
+    // Silent mode: still update global state
+    selectedCategory = code;
+    window.selectedCategory = selectedCategory;
   }
 }
+
+// Initialize custom CATEGORY dropdown open/close listeners.
+// The preset dropdown is now owned end-to-end by PresetController.bindToView(),
+// which (re-)wires its own click/keyboard handlers on every page-loaded — keeping
+// it resilient to the SPA router replacing the page DOM.
+let customDropdownInitialized = false;
+function initCustomDropdownListeners() {
+  if (customDropdownInitialized) return;
+  customDropdownInitialized = true;
+
+  // Toggle category dropdown on trigger click; close on outside click.
+  document.addEventListener('click', (e) => {
+    const catTrigger = document.getElementById('custom-dropdown-trigger');
+    const catDropdown = document.getElementById('custom-category-dropdown');
+    const catMenu = document.getElementById('custom-dropdown-menu');
+    if (!catTrigger || !catDropdown || !catMenu) return;
+    if (catTrigger.contains(e.target)) {
+      catDropdown.classList.toggle('open');
+    } else if (!catMenu.contains(e.target)) {
+      catDropdown.classList.remove('open');
+    }
+  });
+
+  // Escape closes the category dropdown.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const catDropdown = document.getElementById('custom-category-dropdown');
+    if (catDropdown && catDropdown.classList.contains('open')) {
+      catDropdown.classList.remove('open');
+      document.getElementById('custom-dropdown-trigger')?.focus();
+    }
+  });
+}
+
+// NOTE: The legacy helpers `syncCustomPresetDropdown` and `watchHiddenPresetSelect`
+// were removed. Their responsibilities (rendering the menu, keeping the trigger
+// label in sync, propagating programmatic <select>.value changes) all live inside
+// PresetController.bindToView() now. PresetController re-binds on every
+// page-loaded, so listeners can never become stale or duplicated.
 
 // Manual refresh function for categories (useful for admin/debug)
 async function refreshCategories() {
@@ -2226,139 +2654,87 @@ window.refreshCategories = refreshCategories;
 
 // Expose functions for router/dynamic page initialization
 window.handleFolderSelection = handleFolderSelection;
+window.handleFilesSelection = handleFilesSelection;
 window.handleFolderSelected = handleFolderSelected;
 window.setupFolderDragAndDrop = setupFolderDragAndDrop;
 window.toggleAdvancedOptions = toggleAdvancedOptions;
 window.loadDynamicCategories = loadDynamicCategories;
 
-/**
- * Load participant presets into the preset selector dropdown
- * Called by router when analysis page loads
- * Filters presets by the currently selected sport category
- */
-async function loadPresetsForSelector() {
-  try {
-    const presetSelect = document.getElementById('preset-select');
-    if (!presetSelect) {
-      console.log('[Renderer] preset-select element not found');
-      return;
-    }
-
-    // Check if user is admin to use appropriate endpoint
-    let isAdmin = false;
-    try {
-      const adminCheck = await window.api.invoke('auth-is-admin');
-      isAdmin = adminCheck === true || adminCheck?.isAdmin === true;
-    } catch (e) {
-      console.log('[Renderer] Admin check failed, using regular endpoint');
-    }
-
-    // Use appropriate endpoint based on admin status (same logic as participants-manager.js)
-    const channel = isAdmin
-      ? 'supabase-get-all-participant-presets-admin'
-      : 'supabase-get-participant-presets';
-
-    console.log(`[Renderer] Loading presets with channel: ${channel} (isAdmin: ${isAdmin})`);
-    const response = await window.api.invoke(channel);
-
-    // API returns { success, data } structure
-    if (!response || !response.success || !response.data) {
-      console.log('[Renderer] No presets returned from API:', response);
-      return;
-    }
-
-    // Cache all presets for filtering
-    cachedAllPresets = response.data;
-    console.log(`[Renderer] Cached ${cachedAllPresets.length} total presets`);
-
-    // Filter and display presets based on selected category
-    filterAndDisplayPresets();
-  } catch (error) {
-    console.error('[Renderer] Error loading presets for selector:', error);
-  }
+// Thin compatibility wrappers — the actual fetching and filtering live in
+// PresetController. We expose these on window because router.js + a handful of
+// older callers still invoke them by name.
+function loadPresetsForSelector() {
+  if (!window.presetController) return Promise.resolve();
+  return window.presetController.refresh();
 }
-
-/**
- * Filter cached presets by selected sport category and update the dropdown
- */
 function filterAndDisplayPresets() {
-  const presetSelect = document.getElementById('preset-select');
-  if (!presetSelect) {
-    return;
-  }
-
-  // Get the category ID for the selected category code
-  const selectedCategoryId = categoryCodeToIdMap[selectedCategory];
-
-  // Filter presets by category_id
-  let filteredPresets = cachedAllPresets;
-  if (selectedCategoryId) {
-    filteredPresets = cachedAllPresets.filter(preset => preset.category_id === selectedCategoryId);
-    console.log(`[Renderer] Filtered presets for category '${selectedCategory}' (${selectedCategoryId}): ${filteredPresets.length}/${cachedAllPresets.length}`);
-  } else {
-    console.log(`[Renderer] No category mapping for '${selectedCategory}', showing all ${cachedAllPresets.length} presets`);
-  }
-
-  // Clear existing options except first placeholder
-  while (presetSelect.options.length > 1) {
-    presetSelect.remove(1);
-  }
-
-  // Reset selection to placeholder
-  presetSelect.value = '';
-
-  // Add filtered preset options
-  filteredPresets.forEach(preset => {
-    const option = document.createElement('option');
-    option.value = preset.id;
-    const count = preset.participant_count || preset.participants?.length || 0;
-    option.textContent = `${preset.name} (${count} participants)`;
-    presetSelect.appendChild(option);
-  });
-
-  console.log(`[Renderer] Displayed ${filteredPresets.length} presets for category '${selectedCategory}'`);
+  if (!window.presetController) return;
+  window.presetController.applyCategoryFilter(selectedCategory);
 }
 
 window.loadPresetsForSelector = loadPresetsForSelector;
 window.filterAndDisplayPresets = filterAndDisplayPresets;
 
 /**
- * Initialize metadata overwrite options visibility based on preset selection
+ * Initialize project selector dropdown for delivery auto-routing.
+ * Shows the dropdown only if the user has delivery enabled, and populates with their projects.
  */
+function initProjectSelector() {
+  if (!window.api || !window.api.invoke) return;
+
+  // Check if user has delivery/projects enabled
+  window.api.invoke('delivery-get-plan-limits').then(function(result) {
+    if (!result || !result.success || !result.data) return;
+    var limits = result.data;
+    if (!limits.projects_enabled) return;
+
+    // Show the project selector section
+    var section = document.getElementById('project-selector-section');
+    if (section) section.style.display = 'block';
+
+    // Populate with user's projects
+    window.api.invoke('delivery-get-projects').then(function(projResult) {
+      if (!projResult || !projResult.success || !projResult.data) return;
+      var select = document.getElementById('project-select');
+      if (!select) return;
+
+      projResult.data.forEach(function(p) {
+        var option = document.createElement('option');
+        option.value = p.id;
+        option.textContent = p.name + (p.event_location ? ' — ' + p.event_location : '');
+        select.appendChild(option);
+      });
+    }).catch(function() {});
+  }).catch(function() {});
+}
+
+/**
+ * Show/hide the "Overwrite description" checkbox based on whether a preset is selected.
+ * Subscribes once to PresetController and reads the source of truth from there.
+ * Idempotent — safe to call from every page-loaded; the guard prevents listener leaks.
+ */
+let metadataOverwriteOptionsInitialized = false;
 function initMetadataOverwriteOptions() {
-  const descriptionOverwriteContainer = document.getElementById('description-overwrite-container');
-
-  if (!descriptionOverwriteContainer) {
-    return;
+  // Compute visibility from the controller's authoritative state. We keep this
+  // function reusable so the very first call (before bindToView populates the
+  // <select>) still does the right thing.
+  function updateVisibility() {
+    const container = document.getElementById('description-overwrite-container');
+    if (!container) return;
+    const hasPreset = !!(window.presetController && window.presetController.selected);
+    container.style.display = hasPreset ? 'block' : 'none';
   }
 
-  // Function to toggle description overwrite visibility
-  function updateDescriptionOverwriteVisibility() {
-    const presetSelect = document.getElementById('preset-select');
-    const hasPresetSelected = presetSelect && presetSelect.value && presetSelect.value !== '';
+  // Always run an initial pass so the UI matches state on (re-)entry to the page,
+  // even though the listener is only wired once.
+  updateVisibility();
 
-    if (hasPresetSelected) {
-      descriptionOverwriteContainer.style.display = 'block';
-    } else {
-      descriptionOverwriteContainer.style.display = 'none';
-    }
+  if (metadataOverwriteOptionsInitialized) return;
+  metadataOverwriteOptionsInitialized = true;
+
+  if (window.presetController) {
+    window.presetController.addEventListener('selection-changed', updateVisibility);
   }
-
-  // Listen for preset selection changes
-  window.addEventListener('presetSelected', (event) => {
-    updateDescriptionOverwriteVisibility();
-  });
-
-  // Listen for direct preset selector changes
-  const presetSelect = document.getElementById('preset-select');
-  if (presetSelect) {
-    presetSelect.addEventListener('change', () => {
-      updateDescriptionOverwriteVisibility();
-    });
-  }
-
-  // Initial visibility check
-  updateDescriptionOverwriteVisibility();
 }
 
 // Expose for router initialization

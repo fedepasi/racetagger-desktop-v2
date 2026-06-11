@@ -22,6 +22,8 @@
 .modal.show {
   display: flex;  /* Show with flexbox for centering */
   opacity: 1;
+  /* Ensure modal container can scroll if content exceeds viewport */
+  overflow-y: auto;
 }
 
 .modal-content {
@@ -152,8 +154,10 @@
   padding: 1rem;
   transition: all 0.2s ease;
   position: relative;
-  overflow: visible; /* Allow dropdown to overflow */
-  isolation: isolate; /* Create new stacking context to prevent overlap issues */
+  overflow: visible;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
 }
 
 .preset-card:hover {
@@ -167,7 +171,6 @@
   justify-content: space-between;
   align-items: flex-start;
   margin-bottom: 0.75rem;
-  overflow: visible; /* Allow dropdown to overflow */
 }
 
 .preset-title {
@@ -188,6 +191,7 @@
 
 .preset-info {
   margin-bottom: 0.75rem;
+  flex: 1;
 }
 
 .preset-category {
@@ -211,8 +215,8 @@
 .preset-stats {
   display: flex;
   gap: 1rem;
-  margin-bottom: 0.75rem;
-  padding-top: 0.75rem;
+  margin-bottom: 0;
+  padding: 0.75rem 0;
   border-top: 1px solid var(--border-color-light);
 }
 
@@ -238,7 +242,12 @@
 
 .preset-actions-bottom {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.25rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-color-light);
+  justify-content: flex-end;
+  overflow: visible;
+  position: relative;
 }
 
 /* Export Dropdown */
@@ -262,17 +271,17 @@
 .dropdown-menu {
   display: none;
   position: absolute;
-  right: 0;
-  top: calc(100% + 0.5rem);
+  left: 0;
+  bottom: calc(100% + 0.5rem);
   background: var(--surface-color);
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.3);
   min-width: 280px;
-  z-index: 9999; /* Very high to ensure it's above everything */
-  overflow: hidden; /* Only for rounded corners on items */
+  z-index: 9999;
+  overflow: hidden;
   opacity: 0;
-  transform: translateY(-10px);
+  transform: translateY(10px);
   transition: opacity 0.2s ease, transform 0.2s ease;
   pointer-events: none;
 }
@@ -330,26 +339,27 @@
   line-height: 1.3;
 }
 
-/* Participants Modal - Dynamic Flexbox Layout */
+/* Participants Modal - Block Layout for reliable scrolling */
 .participants-modal {
   max-width: 95%;
   width: 95vw;
   max-height: 95vh;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .participants-modal .modal-body {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-  /* Dynamic height: flex child that can shrink */
+  /* Block layout — natural stacking, no flex shrink/grow quirks */
+  display: block;
+  /* Fill remaining space after header/footer via flex on parent */
   flex: 1;
   min-height: 0;
-  /* Enable scrolling when content exceeds available space */
+  /* Override base .modal-body max-height to let flex parent control sizing */
+  max-height: none;
+  /* Reliable scrolling: content simply overflows and scrolls */
   overflow-y: auto;
   overflow-x: hidden;
-  /* Padding for better top accessibility */
   padding: 1.5rem;
 }
 
@@ -417,8 +427,6 @@
   grid-template-columns: 1fr 1fr; /* 50% - 50% */
   gap: 1rem;
   margin-bottom: 1rem;
-  /* Prevent shrinking to ensure fields are always accessible */
-  flex-shrink: 0;
 }
 
 @media (max-width: 1200px) {
@@ -442,10 +450,7 @@
 
 /* Participants Table */
 .participants-table-section {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
+  margin-top: 1rem;
 }
 
 .table-header {
@@ -874,7 +879,7 @@
   /* Use flexbox for internal layout */
   display: flex;
   flex-direction: column;
-  /* Allow this section to grow but cap at reasonable size */
+  /* Allow generous space for folder list visibility */
   max-height: 50vh;
   overflow-y: auto;
 }
@@ -1017,6 +1022,556 @@
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 200px;
+}
+
+/* 1.2.0 — usage badge on the merged-view folder chips. Shows how many
+   participants reference the folder. */
+.folder-chip-usage {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(34, 197, 94, 0.15);
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  color: #86efac;
+  font-size: 0.7rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Inline label shown instead of edit/remove on participant-derived
+   folders — reminds the user they edit those from inside the
+   participant modal, not here. */
+.folder-chip-readonly-hint {
+  margin-left: 6px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.16);
+  color: var(--text-secondary, #94a3b8);
+  font-size: 0.7rem;
+  font-style: italic;
+  letter-spacing: 0.02em;
+}
+
+/* ACC-01 (Gruppe C) — "Series sponsors to ignore" chip input.
+   Visually mirrors the folder chips above; chips sit in a wrap container
+   directly above the text input. */
+.sponsor-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.sponsor-chips:empty {
+  margin-bottom: 0;
+}
+
+.sponsor-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--accent-color-20);
+  color: var(--accent-color);
+  padding: 0.375rem 0.625rem;
+  border-radius: 20px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border: 1px solid var(--accent-color);
+  transition: all 0.2s ease;
+}
+
+.sponsor-chip-name {
+  display: inline-flex;
+  align-items: center;
+}
+
+.sponsor-chip-remove {
+  background: none;
+  border: none;
+  color: currentColor;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: all 0.2s ease;
+}
+
+.sponsor-chip-remove:hover {
+  background: rgba(0, 0, 0, 0.1);
+  transform: scale(1.2);
+}
+
+/* Read-only (official preset) view: input is disabled and chips can't be removed. */
+.preset-read-only .sponsor-chip-remove {
+  display: none;
+}
+
+/* 1.2.0 — chip + autocomplete UI for the per-participant folders editor */
+.folder-chips-area {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px;
+  border: 1px dashed var(--border-color, #444);
+  border-radius: 6px;
+  min-height: 42px;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.02);
+  margin-bottom: 8px;
+}
+.folder-chips-area:empty::before {
+  content: attr(data-empty-text);
+  color: var(--text-secondary, #94a3b8);
+  font-size: 0.8125rem;
+  font-style: italic;
+  opacity: 0.7;
+}
+
+.folder-chip-add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  border-radius: 16px;
+  color: #60a5fa;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.folder-chip-add-btn:hover {
+  background: rgba(59, 130, 246, 0.22);
+  border-color: #60a5fa;
+  color: #93c5fd;
+}
+
+.folder-chip-pin-btn {
+  background: transparent;
+  border: none;
+  padding: 0 2px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.15s;
+  color: inherit;
+}
+.folder-chip-pin-btn:hover {
+  opacity: 1;
+}
+.folder-chip-pin-btn[data-has-path="true"] {
+  opacity: 1;
+  color: #fbbf24;
+}
+
+/* (1.2.0 — the .folder-autocomplete-* popup styles were removed: the
+   participant Add-folder flow now reuses the existing folder-name-modal
+   instead of a custom autocomplete popup. See participants-manager.js
+   `addParticipantFolder` and `confirmAddFolder`.) */
+
+/*
+ * 1.2.0 — Per-participant Add Folder modal.
+ * Distinct from the global #folder-name-modal (which lives behind the
+ * participant edit modal in stacking order). This modal is dedicated
+ * to the participant edit flow and lets the user pick from existing
+ * preset folders OR create a new one with an optional absolute path.
+ */
+
+/* Force normal block stacking inside the body. Without this override,
+   inherited rules (the same ones that needed `#folder-name-modal
+   .modal-body { display: block }` higher up) collapse the form into
+   ridiculous narrow columns side-by-side. */
+#participant-folder-modal .modal-body {
+  display: block;
+}
+#participant-folder-modal .modal-body > .form-group {
+  display: block;
+  width: 100%;
+  margin-bottom: 1rem;
+}
+#participant-folder-modal .form-group label {
+  color: #fff;
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+}
+#participant-folder-modal .modal-body .folder-modal-tip {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  margin-top: 1rem;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  border-radius: 6px;
+  color: var(--text-secondary, #cbd5e1);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+#participant-folder-modal .modal-body .folder-modal-tip .tip-icon {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(59, 130, 246, 0.18);
+  font-size: 0.95rem;
+}
+#participant-folder-modal .modal-body .folder-modal-tip .tip-content {
+  flex: 1;
+  min-width: 0;
+}
+#participant-folder-modal .modal-body .folder-modal-tip code {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+  font-size: 0.78rem;
+  color: #93c5fd;
+}
+/* Wrap of clickable placeholder pills under the tip text. Each pill
+   inserts its `data-placeholder` value into the Folder Name input at
+   the current caret position when clicked — wired in
+   participants-manager.js (top-level click delegate). */
+.participant-folder-placeholder-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.placeholder-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(59, 130, 246, 0.45);
+  background: rgba(59, 130, 246, 0.12);
+  color: #93c5fd;
+  font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, transform 0.1s ease;
+  user-select: none;
+}
+.placeholder-pill:hover {
+  background: rgba(59, 130, 246, 0.25);
+  border-color: rgba(96, 165, 250, 0.7);
+  color: #bfdbfe;
+}
+.placeholder-pill:active {
+  transform: scale(0.96);
+}
+/* Path picker row: input takes the space, Browse and Clear stay
+   compact next to it. Same layout as the global folder-name-modal. */
+#participant-folder-modal .folder-path-picker {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+#participant-folder-modal .folder-path-picker .form-input {
+  flex: 1;
+  min-width: 0;
+}
+#participant-folder-modal .folder-path-picker .btn {
+  flex-shrink: 0;
+}
+#participant-folder-modal .form-input {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border: 2px solid var(--border-color, #334155);
+  border-radius: 6px;
+  font-size: 1rem;
+  background: var(--input-bg, #fff);
+  color: var(--text-primary, #000);
+  box-sizing: border-box;
+}
+#participant-folder-modal .form-input:focus {
+  outline: none;
+  border-color: var(--accent-color, #3b82f6);
+  box-shadow: 0 0 0 3px var(--accent-color-20, rgba(59, 130, 246, 0.2));
+}
+
+/* Edit Folder Name modal — opened from the Folder pool side-panel via the
+ * ✏️ action on each pill. Without these overrides, inherited rules collapse
+ * the two .form-group blocks into side-by-side columns (same issue solved
+ * for #folder-name-modal and #participant-folder-modal). Reusing their
+ * pattern keeps the three folder modals visually consistent. */
+#edit-folder-modal .modal-body {
+  display: block;
+}
+#edit-folder-modal .modal-body > .form-group {
+  display: block;
+  width: 100%;
+  margin-bottom: 1rem;
+}
+#edit-folder-modal .form-group label {
+  color: #fff;
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+}
+#edit-folder-modal .folder-path-picker {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+#edit-folder-modal .folder-path-picker .form-input {
+  flex: 1;
+  min-width: 0;
+}
+#edit-folder-modal .folder-path-picker .btn {
+  flex-shrink: 0;
+}
+#edit-folder-modal .form-input {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border: 2px solid var(--border-color, #334155);
+  border-radius: 6px;
+  font-size: 1rem;
+  background: var(--input-bg, #fff);
+  color: var(--text-primary, #000);
+  box-sizing: border-box;
+}
+#edit-folder-modal .form-input:focus {
+  outline: none;
+  border-color: var(--accent-color, #3b82f6);
+  box-shadow: 0 0 0 3px var(--accent-color-20, rgba(59, 130, 246, 0.2));
+}
+#edit-folder-modal .form-hint {
+  display: block;
+  margin-top: 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--text-secondary, #cbd5e1);
+  line-height: 1.5;
+}
+
+/* Live filter input above the list. Always visible — even short lists
+   are easier to scan with a filter than without one once you've used
+   it twice. The input mirrors the styling of other form-inputs but
+   compactly. */
+.participant-folder-search-row {
+  margin-bottom: 8px;
+}
+.participant-folder-search {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color, #334155);
+  border-radius: 6px;
+  background: var(--input-bg, #fff);
+  color: var(--text-primary, #000);
+  font-size: 0.875rem;
+  box-sizing: border-box;
+}
+.participant-folder-search:focus {
+  outline: none;
+  border-color: var(--accent-color, #3b82f6);
+  box-shadow: 0 0 0 3px var(--accent-color-20, rgba(59, 130, 246, 0.18));
+}
+
+/* Hint shown when the filter matches no existing folder. Offers a
+   one-click bridge to the "Create new" form below by copying the
+   typed text into the Name input. */
+.participant-folder-no-match {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px solid rgba(251, 191, 36, 0.25);
+  border-radius: 6px;
+  color: #fbbf24;
+  font-size: 0.8125rem;
+}
+.participant-folder-no-match .btn-link {
+  background: none;
+  border: none;
+  color: #93c5fd;
+  cursor: pointer;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  padding: 0;
+  text-decoration: underline;
+  white-space: nowrap;
+}
+.participant-folder-no-match .btn-link:hover {
+  color: #bfdbfe;
+}
+
+/* List of existing folders presented as clickable cards. */
+.participant-folder-existing-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 8px;
+  border: 1px solid var(--border-color, #334155);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.participant-folder-existing-list:empty::before {
+  content: attr(data-empty-text);
+  display: block;
+  padding: 12px;
+  color: var(--text-secondary, #94a3b8);
+  font-size: 0.8125rem;
+  font-style: italic;
+  text-align: center;
+}
+.participant-folder-existing-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: rgba(59, 130, 246, 0.06);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+  font-size: 0.875rem;
+  color: #e2e8f0;
+}
+.participant-folder-existing-item:hover {
+  background: rgba(59, 130, 246, 0.16);
+  border-color: rgba(59, 130, 246, 0.4);
+}
+.participant-folder-existing-item.is-already-added {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.participant-folder-existing-item.is-already-added:hover {
+  background: rgba(59, 130, 246, 0.06);
+  border-color: transparent;
+}
+.participant-folder-existing-item .folder-icon {
+  font-size: 1rem;
+}
+.participant-folder-existing-item .folder-name {
+  font-weight: 500;
+  color: #f8fafc;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.participant-folder-existing-item .folder-path {
+  font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+  font-size: 0.7rem;
+  color: var(--text-secondary, #94a3b8);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 240px;
+}
+.participant-folder-existing-item .added-badge {
+  font-size: 0.7rem;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.2);
+  color: #cbd5e1;
+}
+
+/* Divider between "pick existing" and "create new" sections. */
+.participant-folder-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 14px;
+  color: var(--text-secondary, #94a3b8);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+.participant-folder-divider::before,
+.participant-folder-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border-color, #334155);
+}
+
+/*
+ * 1.2.0 — Per-participant "Also export to the default folder" toggle.
+ * Stacked layout: row 1 = [checkbox + title + meta inline], row 2 =
+ * helper text spanning full width. Avoids any odd wrapping caused by
+ * inherited text-align centering and keeps the helper readable on
+ * narrow column widths.
+ */
+.participant-default-folder-toggle {
+  display: block;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: rgba(59, 130, 246, 0.06);
+  border: 1px solid rgba(59, 130, 246, 0.18);
+  text-align: left;
+}
+.participant-default-folder-toggle .toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.participant-default-folder-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: #3b82f6;
+  cursor: pointer;
+}
+.participant-default-folder-toggle label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  margin: 0;
+  text-align: left;
+  flex: 1;
+}
+.participant-default-folder-toggle .toggle-title {
+  font-weight: 600;
+  color: var(--text-primary, #f8fafc);
+}
+.participant-default-folder-toggle .toggle-meta {
+  color: var(--text-secondary, #94a3b8);
+  font-size: 0.8rem;
+  font-weight: 400;
+}
+.participant-default-folder-toggle .toggle-meta code,
+.participant-default-folder-toggle .toggle-hint code {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+  font-size: 0.78rem;
+  color: #93c5fd;
+}
+.participant-default-folder-toggle .toggle-hint {
+  display: block;
+  margin-top: 8px;
+  padding-left: 26px; /* indent under the checkbox to keep visual rhythm */
+  color: var(--text-secondary, #94a3b8);
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1.4;
 }
 
 /* Folder path picker row (input + Browse + Clear) */
@@ -1347,6 +1902,11 @@
   border-bottom-color: rgba(100, 116, 139, 0.3);
 }
 
+.column-header.delivery-column {
+  background: linear-gradient(135deg, rgba(6, 182, 212, 0.15) 0%, rgba(6, 182, 212, 0.05) 100%);
+  border-bottom-color: rgba(6, 182, 212, 0.3);
+}
+
 /* Column Badges */
 .column-badge {
   display: inline-flex;
@@ -1383,6 +1943,12 @@
   background: rgba(100, 116, 139, 0.2);
   color: #64748b;
   border: 1px solid rgba(100, 116, 139, 0.4);
+}
+
+.badge-delivery {
+  background: rgba(6, 182, 212, 0.2);
+  color: #06b6d4;
+  border: 1px solid rgba(6, 182, 212, 0.4);
 }
 
 .badge-icon {
@@ -1473,6 +2039,31 @@
 .form-input-matching:focus {
   border-color: #fbbf24;
   box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.15);
+}
+
+/* Delivery to field */
+.field-destination-delivery {
+  color: #06b6d4;
+  background: rgba(6, 182, 212, 0.15);
+}
+
+.form-input-delivery {
+  border-color: rgba(6, 182, 212, 0.3);
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border-width: 2px;
+  border-style: solid;
+  border-radius: 8px;
+  background: var(--bg-elevated, #1e293b);
+  color: var(--text-primary, #f1f5f9);
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.form-input-delivery:focus {
+  border-color: #06b6d4;
+  box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.15);
+  outline: none;
 }
 
 /* Enhanced Select Styling for Folder Column */
@@ -1759,8 +2350,17 @@
     color: #94a3b8;
   }
 
+  .badge-delivery {
+    background: rgba(6, 182, 212, 0.15);
+    color: #22d3ee;
+  }
+
   .column-header.face-column {
     background: linear-gradient(135deg, rgba(100, 116, 139, 0.12) 0%, rgba(100, 116, 139, 0.04) 100%);
+  }
+
+  .column-header.delivery-column {
+    background: linear-gradient(135deg, rgba(6, 182, 212, 0.12) 0%, rgba(6, 182, 212, 0.04) 100%);
   }
 
   .matching-info-box {
@@ -1918,6 +2518,28 @@
     color: #fbbf24;
     border-color: rgba(251, 191, 36, 0.3);
   }
+
+  .delivery-badge {
+    background: rgba(6, 182, 212, 0.15);
+    color: #06b6d4;
+    border-color: rgba(6, 182, 212, 0.3);
+  }
+}
+
+/* Delivery to badge in table */
+.delivery-badge {
+  display: inline-block;
+  background: #ecfeff;
+  color: #0e7490;
+  padding: 0.2rem 0.6rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  border: 1px solid #06b6d4;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Mobile responsive for edit modal */
@@ -3268,9 +3890,15 @@
   font-weight: 500;
 }
 
-/* Driver metatag input */
+/* Driver panel form labels */
 .driver-panel .form-group {
   margin-bottom: 1rem;
+}
+
+.driver-panel .form-group label {
+  color: #ffffff;
+  font-weight: 600;
+  font-size: 0.875rem;
 }
 
 .driver-panel .driver-metatag-input {
@@ -3422,3 +4050,2828 @@
     animation: none;
   }
 }
+
+/* ============================================================
+   IPTC METADATA SECTION — Preset Editor
+   ============================================================ */
+
+.iptc-metadata-section {
+  margin-bottom: 1.5rem;
+  border: 2px solid var(--border-color);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--surface-color-light);
+  transition: border-color 0.2s ease;
+}
+
+.iptc-metadata-section:hover {
+  border-color: rgba(168, 85, 247, 0.3);
+}
+
+/* Toggle Header */
+.iptc-section-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.875rem 1.25rem;
+  cursor: pointer;
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.08) 0%, rgba(168, 85, 247, 0.02) 100%);
+  border-bottom: 1px solid transparent;
+  transition: background 0.2s ease;
+  user-select: none;
+}
+
+.iptc-section-toggle:hover {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.14) 0%, rgba(168, 85, 247, 0.05) 100%);
+}
+
+.iptc-toggle-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.iptc-toggle-icon {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  transition: transform 0.2s ease;
+  width: 1rem;
+  text-align: center;
+}
+
+.iptc-toggle-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.625rem;
+  border-radius: 16px;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: rgba(168, 85, 247, 0.2);
+  color: #a855f7;
+  border: 1px solid rgba(168, 85, 247, 0.4);
+}
+
+.iptc-toggle-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.iptc-toggle-status {
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 0.125rem 0.5rem;
+  border-radius: 10px;
+}
+
+.iptc-status-inactive {
+  color: var(--text-secondary);
+  background: rgba(148, 163, 184, 0.15);
+}
+
+.iptc-status-active {
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.15);
+}
+
+.iptc-toggle-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.iptc-import-btn {
+  font-size: 0.8125rem !important;
+}
+
+/* Body */
+.iptc-section-body {
+  padding: 1.25rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.iptc-info-banner {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: rgba(168, 85, 247, 0.08);
+  border: 1px solid rgba(168, 85, 247, 0.2);
+  border-radius: 8px;
+  margin-bottom: 1.25rem;
+  font-size: 0.8125rem;
+  color: #cbd5e1;
+  line-height: 1.5;
+}
+
+.iptc-info-banner .info-text {
+  color: #cbd5e1;
+}
+
+.iptc-info-banner code {
+  background: rgba(168, 85, 247, 0.15);
+  padding: 0.125rem 0.375rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+  color: #a855f7;
+}
+
+/* Grid Layout */
+.iptc-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.iptc-editor-grid-top {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
+.iptc-editor-grid-bottom {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+/* Stacked column: two boxes vertically in one grid cell */
+.iptc-stacked-column {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.iptc-editor-column {
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.iptc-column-wide {
+  /* Already handled by grid-template-columns 2fr */
+}
+
+/* Column Header */
+.iptc-column-header {
+  padding: 0.75rem 1rem;
+  background: rgba(168, 85, 247, 0.06);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.iptc-column-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.iptc-column-checkbox input[type="checkbox"] {
+  accent-color: #a855f7;
+  width: 1rem;
+  height: 1rem;
+}
+
+/* Column Body */
+.iptc-column-body {
+  padding: 0.875rem 1rem;
+}
+
+.iptc-column-body .form-group {
+  margin-bottom: 0.875rem;
+  padding-left: 0.625rem;
+  border-left: 2px solid rgba(168, 85, 247, 0.25);
+}
+
+.iptc-column-body .form-group:last-child {
+  margin-bottom: 0;
+}
+
+/* Inline groups (radio buttons, checkboxes) and visual-tags don't need the left border */
+.iptc-column-body .form-group.form-group-inline,
+.iptc-column-body .iptc-visual-tags-option {
+  border-left: none;
+  padding-left: 0;
+}
+
+/* Nested form-groups inside row/half/third wrappers: only the parent row gets the border */
+.iptc-column-body .form-group .form-group {
+  border-left: none;
+  padding-left: 0;
+  margin-bottom: 0;
+}
+
+.iptc-column-body .form-group label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.375rem;
+  font-weight: 700;
+  color: #94a3b8;
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* IPTC inputs */
+.form-input-iptc {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1.5px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 0.8125rem;
+  background: var(--surface-color);
+  color: var(--text-primary);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.form-input-iptc:focus {
+  border-color: #a855f7;
+  box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.15);
+  outline: none;
+}
+
+.form-input-iptc::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.6;
+}
+
+.iptc-textarea {
+  resize: vertical;
+  min-height: 60px;
+  font-family: inherit;
+}
+
+/* Contenteditable template fields with inline placeholder highlighting */
+.iptc-editable-template {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-y: auto;
+  cursor: text;
+  min-height: 4.5rem;
+  line-height: 1.5;
+}
+
+.iptc-editable-template:empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-secondary);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.iptc-editable-template:focus {
+  border-color: #a855f7;
+  box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.15);
+  outline: none;
+}
+
+.iptc-editable-template .placeholder-token {
+  color: #c084fc;
+  background: rgba(168, 85, 247, 0.18);
+  padding: 0.05rem 0.25rem;
+  border-radius: 3px;
+  font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+  font-size: 0.8em;
+}
+
+/* Single-line variant (Person Shown) */
+.iptc-editable-single {
+  min-height: unset;
+  white-space: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.iptc-editable-single br {
+  display: none;
+}
+
+.iptc-editable-single * {
+  display: inline;
+}
+
+
+/* Inline form groups */
+.form-group-inline {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.form-group-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.form-group-half {
+  flex: 1;
+  margin-bottom: 0 !important;
+}
+
+.form-group-third {
+  flex: 1;
+  margin-bottom: 0 !important;
+}
+
+.checkbox-label,
+.radio-label,
+.iptc-column-body .form-group label.checkbox-label,
+.iptc-column-body .form-group label.radio-label {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.checkbox-label input,
+.radio-label input {
+  accent-color: #a855f7;
+}
+
+/* Caption / Person Shown template preview */
+.iptc-caption-preview,
+.iptc-person-preview {
+  display: none;
+  margin-top: 0.5rem;
+  font-size: 0.8125rem;
+  color: #cbd5e1;
+  line-height: 1.6;
+}
+
+.iptc-caption-preview .preview-template,
+.iptc-person-preview .preview-template {
+  margin-bottom: 0.25rem;
+}
+
+.iptc-caption-preview .preview-example,
+.iptc-person-preview .preview-example {
+  color: #94a3b8;
+  font-size: 0.75rem;
+}
+
+.iptc-caption-preview .preview-label,
+.iptc-person-preview .preview-label {
+  color: #64748b;
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-right: 0.375rem;
+}
+
+/* Placeholder tokens highlighted in previews — same style as banner codes */
+.iptc-caption-preview .placeholder-token,
+.iptc-person-preview .placeholder-token {
+  background: rgba(168, 85, 247, 0.15);
+  padding: 0.125rem 0.375rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+  color: #a855f7;
+}
+
+.iptc-caption-preview .preview-hint,
+.iptc-person-preview .preview-hint {
+  color: #64748b;
+  font-style: italic;
+  font-size: 0.75rem;
+}
+
+/* Tag input for keywords */
+.iptc-tags-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  padding: 0.5rem;
+  border: 1.5px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--surface-color);
+  min-height: 2.5rem;
+  cursor: text;
+  transition: border-color 0.2s ease;
+}
+
+.iptc-tags-container:focus-within {
+  border-color: #a855f7;
+  box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.15);
+}
+
+.iptc-tags-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.iptc-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.125rem 0.5rem;
+  background: rgba(168, 85, 247, 0.15);
+  color: #a855f7;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.iptc-tag-remove {
+  background: none;
+  border: none;
+  color: #a855f7;
+  cursor: pointer;
+  font-size: 0.875rem;
+  padding: 0;
+  line-height: 1;
+  opacity: 0.7;
+}
+
+.iptc-tag-remove:hover {
+  opacity: 1;
+}
+
+.iptc-tag-input {
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+  flex: 1;
+  min-width: 120px;
+  padding: 0.125rem 0.25rem;
+}
+
+.iptc-tag-input::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.5;
+}
+
+/* Keyword placeholder shortcut buttons */
+.iptc-keyword-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  margin-bottom: 0.375rem;
+}
+
+.iptc-keyword-shortcuts .shortcuts-label {
+  font-size: 0.6875rem;
+  color: #64748b;
+  margin-right: 0.125rem;
+}
+
+/* Template placeholder shortcuts (insert at cursor in text fields) */
+.iptc-template-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  margin-bottom: 0.375rem;
+}
+
+.template-shortcut-btn,
+.keyword-shortcut-btn {
+  background: rgba(168, 85, 247, 0.12);
+  color: #a855f7;
+  border: 1px solid rgba(168, 85, 247, 0.25);
+  border-radius: 4px;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.75rem;
+  font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.template-shortcut-btn:hover,
+.keyword-shortcut-btn:hover {
+  background: rgba(168, 85, 247, 0.25);
+  border-color: #a855f7;
+}
+
+.template-shortcut-btn:active,
+.keyword-shortcut-btn:active {
+  transform: scale(0.95);
+}
+
+.keyword-shortcut-btn.shortcut-added {
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+  border-color: rgba(34, 197, 94, 0.3);
+}
+
+/* Per-car repeat block button — distinct turquoise tint to signal that this
+   is a STRUCTURAL action (wraps a section) rather than a placeholder insertion.
+   Differentiates it visually from the other quick-add buttons that just insert
+   text at the cursor. */
+.template-shortcut-btn.template-shortcut-btn-block {
+  background: rgba(20, 184, 166, 0.12);
+  color: #14b8a6;
+  border-color: rgba(20, 184, 166, 0.3);
+  font-weight: 600;
+}
+
+.template-shortcut-btn.template-shortcut-btn-block:hover {
+  background: rgba(20, 184, 166, 0.22);
+  border-color: #14b8a6;
+}
+
+/* Multi-pilot preview line — slightly emphasized to draw the user's eye when
+   they're previewing a [[ ]] template, so they immediately spot how the block
+   expands across multiple pilots. */
+.iptc-caption-preview .preview-example-multi,
+.iptc-person-preview .preview-example-multi {
+  margin-top: 0.25rem;
+  padding-top: 0.25rem;
+  border-top: 1px dashed rgba(148, 163, 184, 0.2);
+  color: #cbd5e1;
+}
+
+.iptc-caption-preview .preview-example-multi .preview-label,
+.iptc-person-preview .preview-example-multi .preview-label {
+  color: #14b8a6;
+}
+
+.iptc-caption-preview .preview-example-hint,
+.iptc-person-preview .preview-example-hint {
+  margin-top: 0.25rem;
+  padding-top: 0.25rem;
+  border-top: 1px dashed rgba(148, 163, 184, 0.2);
+}
+
+/* Visual tags feature card in Keywords section */
+.iptc-visual-tags-option {
+  margin-top: 0.75rem;
+  padding: 0.625rem 0.75rem;
+  border-radius: 0.5rem;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.08) 0%, rgba(168, 85, 247, 0.1) 100%);
+  border: 1px solid rgba(139, 92, 246, 0.25);
+}
+
+.visual-tags-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.visual-tags-toggle input[type="checkbox"] {
+  accent-color: #8b5cf6;
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+}
+
+.visual-tags-label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: #c4b5fd;
+  letter-spacing: 0.01em;
+}
+
+.visual-tags-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.5rem;
+  margin-left: 1.5rem;
+}
+
+.visual-tag-badge {
+  font-size: 0.625rem;
+  font-weight: 500;
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  background: rgba(139, 92, 246, 0.15);
+  color: #a78bfa;
+  border: 1px solid rgba(139, 92, 246, 0.2);
+  letter-spacing: 0.03em;
+  text-transform: lowercase;
+}
+
+/* Field destination labels in IPTC — reuse existing but purple theme */
+.iptc-column-body .field-destination {
+  font-size: 0.625rem;
+  font-weight: 500;
+  color: #a855f7;
+  background: rgba(168, 85, 247, 0.1);
+  padding: 0.0625rem 0.375rem;
+  border-radius: 8px;
+  font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+/* ===== IPTC Behavior Options ===== */
+
+.iptc-behavior-options {
+  margin-top: 1.25rem;
+  padding: 1rem 1.25rem;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.05), rgba(168, 85, 247, 0.05));
+  border: 1px solid rgba(99, 102, 241, 0.15);
+  border-radius: 8px;
+}
+
+.iptc-behavior-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #94a3b8;
+  margin: 0 0 0.875rem 0;
+}
+
+.iptc-behavior-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+}
+
+.iptc-behavior-option {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.iptc-behavior-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.iptc-behavior-name {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.iptc-behavior-select {
+  max-width: 300px;
+}
+
+.iptc-behavior-option .form-hint {
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+  margin-top: 0.125rem;
+}
+
+/* Responsive */
+@media (max-width: 1400px) {
+  .iptc-editor-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .iptc-editor-grid-top {
+    grid-template-columns: 1fr 1fr;
+  }
+  .iptc-editor-grid-bottom {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .iptc-editor-grid,
+  .iptc-editor-grid-top,
+  .iptc-editor-grid-bottom {
+    grid-template-columns: 1fr;
+  }
+  .iptc-section-toggle {
+    flex-direction: column;
+    gap: 0.5rem;
+    align-items: flex-start;
+  }
+  .iptc-toggle-right {
+    align-self: flex-end;
+  }
+  .iptc-behavior-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ===== PRESET FOLDER PATH WARNING BADGE ===== */
+
+.preset-path-warning {
+  display: block;
+  padding: 0.5rem 0.75rem;
+  margin-top: 0.5rem;
+  background: rgba(234, 179, 8, 0.12);
+  border: 1px solid rgba(234, 179, 8, 0.3);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  color: #ca8a04;
+  cursor: default;
+}
+
+.preset-path-warning__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.preset-path-warning .warning-icon {
+  font-size: 1rem;
+  flex-shrink: 0;
+  line-height: 1.2;
+}
+
+.preset-path-warning__summary {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  line-height: 1.35;
+}
+
+.preset-path-warning__summary strong {
+  font-weight: 600;
+}
+
+.preset-path-warning__chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(234, 179, 8, 0.22);
+  border: 1px solid rgba(234, 179, 8, 0.35);
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: #92400e;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preset-path-warning__chip--more {
+  background: rgba(234, 179, 8, 0.08);
+  color: #ca8a04;
+  font-style: italic;
+}
+
+.preset-path-warning__toggle {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.5rem;
+  background: transparent;
+  border: 1px solid rgba(234, 179, 8, 0.35);
+  border-radius: 4px;
+  color: #ca8a04;
+  font-size: 0.72rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+
+.preset-path-warning__toggle:hover {
+  background: rgba(234, 179, 8, 0.18);
+}
+
+.preset-path-warning__toggle-icon {
+  font-size: 0.65rem;
+  line-height: 1;
+}
+
+.preset-path-warning__details {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.preset-path-warning__details[hidden] {
+  display: none;
+}
+
+.preset-path-warning__item {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  background: rgba(234, 179, 8, 0.08);
+  border-left: 2px solid rgba(234, 179, 8, 0.45);
+  border-radius: 3px;
+}
+
+.preset-path-warning__item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.preset-path-warning__locate {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.55rem;
+  background: rgba(234, 179, 8, 0.22);
+  border: 1px solid rgba(234, 179, 8, 0.45);
+  border-radius: 4px;
+  color: #92400e;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.12s ease;
+}
+
+.preset-path-warning__locate:hover {
+  background: rgba(234, 179, 8, 0.35);
+}
+
+.preset-path-warning__locate:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+.preset-path-warning__name {
+  font-weight: 600;
+  color: #92400e;
+  font-size: 0.78rem;
+}
+
+.preset-path-warning__path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  color: #78350f;
+  word-break: break-all;
+  background: transparent;
+  padding: 0;
+}
+
+.preset-card.preset-paths-warning {
+  border-color: rgba(234, 179, 8, 0.4);
+}
+
+/* ==================== Face Recognition Status Indicator ==================== */
+
+.face-status-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+
+.face-status-dot.status-green {
+  background-color: #22c55e;
+  box-shadow: 0 0 4px rgba(34, 197, 94, 0.5);
+}
+
+.face-status-dot.status-yellow {
+  background-color: #eab308;
+  box-shadow: 0 0 4px rgba(234, 179, 8, 0.5);
+}
+
+.face-status-dot.status-grey {
+  background-color: #94a3b8;
+}
+
+/* ==================== v1.1.4 — Preset Participant Toggle ==================== */
+/* Soft-disable UI: per-row toggle switch + inactive-row styling + summary pill.
+ * Keep colours consistent with existing badges (.category-badge, .face-status-dot). */
+
+/* Toggle switch */
+.active-toggle {
+  display: inline-block;
+  position: relative;
+  width: 36px;
+  height: 20px;
+  cursor: pointer;
+}
+.active-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.active-toggle-slider {
+  position: absolute;
+  inset: 0;
+  background: #94a3b8;
+  border-radius: 20px;
+  transition: background .15s ease;
+}
+.active-toggle-slider::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform .15s ease;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+}
+.active-toggle input:checked + .active-toggle-slider {
+  background: #22c55e;
+}
+.active-toggle input:checked + .active-toggle-slider::before {
+  transform: translateX(16px);
+}
+.active-toggle input:disabled + .active-toggle-slider {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.active-toggle input:focus-visible + .active-toggle-slider {
+  outline: 2px solid rgba(59, 130, 246, 0.6);
+  outline-offset: 2px;
+}
+
+/* Inactive row — greyed out + strikethrough-ish */
+.participant-row-inactive {
+  opacity: 0.55;
+}
+.participant-row-inactive td:not(:first-child) {
+  text-decoration: line-through;
+  text-decoration-color: rgba(148, 163, 184, 0.6);
+}
+
+/* Summary pill in table header */
+.active-participants-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: 12px;
+}
+.active-count-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: rgba(34, 197, 94, 0.10);
+  border: 1px solid rgba(34, 197, 94, 0.30);
+  border-radius: 999px;
+  color: #16a34a;
+  font-size: 12px;
+  font-weight: 600;
+}
+.active-count-pill .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 4px rgba(34, 197, 94, 0.6);
+}
+.active-count-pill.has-disabled {
+  background: rgba(234, 179, 8, 0.12);
+  border-color: rgba(234, 179, 8, 0.35);
+  color: #ca8a04;
+}
+.active-count-pill.has-disabled .dot {
+  background: #eab308;
+  box-shadow: 0 0 4px rgba(234, 179, 8, 0.6);
+}
+
+/* Link-style reset button in the header */
+.btn.btn-link {
+  background: transparent;
+  border: none;
+  color: var(--accent-primary, #3b82f6);
+  text-decoration: underline;
+  padding: 4px 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.btn.btn-link:hover {
+  color: var(--accent-hover, #2563eb);
+}
+
+/* v1.1.4 — Inactive driver panel inside the participant edit modal */
+.driver-panel-inactive {
+  opacity: 0.55;
+}
+.driver-panel-inactive .driver-panel-title {
+  text-decoration: line-through;
+  text-decoration-color: rgba(148, 163, 184, 0.6);
+}
+.driver-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.driver-active-toggle {
+  margin-left: auto;
+}
+
+/* ===== Preset Save Progress Overlay ===== */
+.preset-save-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px) saturate(160%);
+  -webkit-backdrop-filter: blur(6px) saturate(160%);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 3000;
+  animation: presetSaveFadeIn 160ms ease-out;
+}
+.preset-save-overlay.visible {
+  display: flex;
+}
+.preset-save-card {
+  width: 92%;
+  max-width: 460px;
+  background: var(--bg-light, #1f2530);
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+  border-radius: 14px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+  padding: 28px 28px 24px;
+  color: var(--text-primary, #e6eaf2);
+  text-align: center;
+}
+.preset-save-icon {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.preset-save-icon .spinner-ring {
+  width: 48px;
+  height: 48px;
+  border: 4px solid rgba(125, 211, 252, 0.18);
+  border-top-color: var(--accent, #38bdf8);
+  border-radius: 50%;
+  animation: presetSaveSpin 0.9s linear infinite;
+}
+.preset-save-icon .check-mark,
+.preset-save-icon .error-mark {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 30px;
+  font-weight: 600;
+  color: #fff;
+  animation: presetSavePop 250ms ease-out;
+}
+.preset-save-icon .check-mark {
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  box-shadow: 0 8px 24px rgba(34, 197, 94, 0.35);
+}
+.preset-save-icon .error-mark {
+  background: linear-gradient(135deg, #ef4444, #b91c1c);
+  box-shadow: 0 8px 24px rgba(239, 68, 68, 0.35);
+}
+.preset-save-title {
+  font-size: 17px;
+  font-weight: 600;
+  margin: 0 0 6px;
+  letter-spacing: 0.2px;
+}
+.preset-save-message {
+  font-size: 13px;
+  color: var(--text-secondary, #94a3b8);
+  margin: 0 0 16px;
+  min-height: 18px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+.preset-save-progress-track {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+.preset-save-progress-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #38bdf8, #6366f1);
+  transition: width 220ms ease-out;
+}
+.preset-save-progress-fill.success {
+  background: linear-gradient(90deg, #22c55e, #16a34a);
+  width: 100% !important;
+}
+.preset-save-progress-fill.error {
+  background: linear-gradient(90deg, #ef4444, #b91c1c);
+  width: 100% !important;
+}
+.preset-save-percent {
+  font-size: 12px;
+  color: var(--text-secondary, #94a3b8);
+  letter-spacing: 0.3px;
+  margin-bottom: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.preset-save-actions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+.preset-save-actions button {
+  background: var(--accent, #38bdf8);
+  color: #0b1220;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 22px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 120ms ease;
+}
+.preset-save-actions button:hover {
+  filter: brightness(1.08);
+}
+.preset-save-actions.hidden {
+  display: none;
+}
+@keyframes presetSaveSpin {
+  to { transform: rotate(360deg); }
+}
+@keyframes presetSaveFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes presetSavePop {
+  0% { transform: scale(0.6); opacity: 0; }
+  60% { transform: scale(1.08); opacity: 1; }
+  100% { transform: scale(1); }
+}
+
+
+/* ============================================================================
+ * PR3v2 — V1 design: bulk folder assignment + auto-rule editor
+ * ============================================================================
+ *
+ * Replaces the always-visible split-view of the previous PR3 with the V1
+ * pattern: slide-in side panels from the right, a rich sticky bulk-action
+ * bar above the table, removable inline folder pills, and a filter row
+ * with search + Team filter + Folder filter + Auto-rule trigger.
+ *
+ * Visual tokens taken from the design canvas (palette, radii, shadows).
+ * Defined as new variables prefixed `--v1-` so they don't collide with the
+ * legacy `--accent-color`, `--bg-card`, etc. used elsewhere in the app.
+ *
+ * Two slide-in panels share the same container layout but are offset on
+ * z-index so the auto-rule editor sits above the assign panel when both
+ * are momentarily mounted (the JS only opens one at a time, but defensive
+ * styling keeps it visually correct if the user trips a race).
+ *
+ * See PLAN_BULK_FOLDER_ASSIGN.md (PR3v2) for the design rationale.
+ */
+
+/* ----- V1 design tokens (additive, don't override legacy ones) -------------*/
+
+:root {
+  --v1-accent:        #3b82f6;
+  --v1-accent-hover:  #2563eb;
+  --v1-accent-soft:   rgba(59, 130, 246, 0.18);
+  --v1-accent-bar:    rgba(59, 130, 246, 0.14);
+  --v1-accent-border: rgba(59, 130, 246, 0.4);
+  --v1-amber:         #f59e0b;
+  --v1-amber-soft:    rgba(245, 158, 11, 0.18);
+  --v1-amber-border:  rgba(245, 158, 11, 0.4);
+  --v1-amber-text:    #fcd34d;
+  --v1-purple:        #a855f7;
+  --v1-purple-soft:   rgba(168, 85, 247, 0.04);
+  --v1-purple-border: rgba(168, 85, 247, 0.25);
+  --v1-bg-modal:      #111827;
+  --v1-bg-surface:    #1a2233;
+  --v1-bg-elevated:   #1f2940;
+  --v1-bg-row-alt:    rgba(0, 0, 0, 0.15);
+  --v1-text:          #f1f5f9;
+  --v1-text-secondary:#cbd5e1;
+  --v1-text-muted:    #94a3b8;
+  --v1-text-faint:    #64748b;
+  --v1-border:        #2a3650;
+  --v1-border-light:  #3a4663;
+  --v1-border-faint:  rgba(58, 70, 99, 0.5);
+  --v1-radius-sm:     6px;
+  --v1-radius:        8px;
+  --v1-shadow-panel:  -12px 0 32px rgba(0, 0, 0, 0.35);
+  --v1-mono:          ui-monospace, 'SF Mono', Menlo, monospace;
+  --v1-side-panel-w:  380px;
+}
+
+/* ----- Filter row (search + chip filters + auto-rule trigger) --------------*/
+
+.bulk-filter-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.bulk-filter-search {
+  position: relative;
+  flex: 1;
+  min-width: 220px;
+}
+
+.bulk-filter-search input {
+  width: 100%;
+  padding: 8px 10px 8px 36px;
+  background: var(--input-bg, var(--v1-bg-surface));
+  border: 1px solid var(--border-color, var(--v1-border));
+  border-radius: var(--v1-radius);
+  color: var(--text-primary, var(--v1-text));
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.bulk-filter-search input:focus {
+  border-color: var(--v1-accent);
+  box-shadow: 0 0 0 3px var(--v1-accent-soft);
+}
+
+.bulk-filter-search-icon {
+  position: absolute;
+  top: 50%;
+  left: 12px;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: var(--v1-text-faint);
+}
+
+.filter-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--input-bg, var(--v1-bg-surface));
+  border: 1px solid var(--border-color, var(--v1-border));
+  border-radius: var(--v1-radius);
+  color: var(--text-primary, var(--v1-text));
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+}
+
+.filter-pill:hover {
+  border-color: var(--v1-border-light);
+}
+
+.filter-pill .filter-pill-label {
+  color: var(--v1-text-muted);
+}
+
+.filter-pill .filter-pill-value {
+  font-weight: 500;
+}
+
+.btn-auto-rule {
+  border-style: dashed !important;
+  /* Persistent amber tint so the dashed pill reads at a glance instead of
+   * disappearing into the dark surface — the design reads sharper on a real
+   * screen than in JSX inline styles suggest. */
+  background: rgba(245, 158, 11, 0.10) !important;
+  color: #fde68a !important;
+  border-color: rgba(245, 158, 11, 0.55) !important;
+  font-weight: 600 !important;
+}
+
+.btn-auto-rule svg {
+  color: #fbbf24;
+}
+
+.btn-auto-rule:hover {
+  background: rgba(245, 158, 11, 0.20) !important;
+  border-color: rgba(245, 158, 11, 0.75) !important;
+  color: #fef3c7 !important;
+}
+
+.btn-auto-rule:hover svg {
+  color: #fcd34d;
+}
+
+/* ----- Sticky bulk action bar ----------------------------------------------*/
+
+.bulk-action-bar-v1 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--v1-accent-bar);
+  border: 1px solid var(--v1-accent-border);
+  border-radius: var(--v1-radius) var(--v1-radius) 0 0;
+  padding: 10px 14px;
+  margin-bottom: -1px;   /* sit flush against the table top */
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.bulk-action-bar-v1.is-hidden {
+  display: none;
+}
+
+.bulk-action-bar-v1 .selection-badge {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--v1-accent);
+  color: white;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.bulk-action-bar-v1 .selection-label {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.bulk-action-bar-v1 .selection-numbers {
+  color: var(--v1-text-faint);
+  font-size: 12px;
+  font-family: var(--v1-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.bulk-action-bar-v1 .spacer {
+  flex: 1;
+  min-width: 4px;
+}
+
+/* ----- Bulk action buttons --------------------------------------------------*/
+/* These rules intentionally override .btn / .btn-sm defaults (which carry
+   min-height: 44px and a transparent base) so the bar reads as a compact,
+   dark-themed toolbar — not a row of beige 44px-tall buttons. */
+.bulk-action-bar-v1 .bulk-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  border-radius: var(--v1-radius-sm);
+  border: 1px solid var(--v1-border-light);
+  background: var(--v1-bg-elevated);
+  color: var(--v1-text);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+  box-shadow: none;
+  transform: none;
+}
+
+.bulk-action-bar-v1 .bulk-btn:hover {
+  background: #2a3551;
+  border-color: #4a587a;
+  color: var(--v1-text);
+  transform: none;
+  box-shadow: none;
+}
+
+.bulk-action-bar-v1 .bulk-btn:active {
+  background: #1a2238;
+}
+
+.bulk-action-bar-v1 .bulk-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--v1-accent-soft);
+  border-color: var(--v1-accent);
+}
+
+/* Primary action ("Assign folder…") — solid blue, white text. */
+.bulk-action-bar-v1 .bulk-btn.btn-primary {
+  background: var(--v1-accent);
+  border-color: var(--v1-accent);
+  color: #ffffff;
+}
+
+.bulk-action-bar-v1 .bulk-btn.btn-primary:hover {
+  background: var(--v1-accent-hover);
+  border-color: var(--v1-accent-hover);
+  color: #ffffff;
+}
+
+/* Specifically target Activate / Deactivate to give them a state-tinted
+   border on hover — affirmative green for activate, muted red for deactivate. */
+.bulk-action-bar-v1 #bulk-activate-btn:hover {
+  border-color: rgba(34, 197, 94, 0.6);
+  color: #86efac;
+}
+
+.bulk-action-bar-v1 #bulk-deactivate-btn:hover {
+  border-color: rgba(239, 68, 68, 0.55);
+  color: #fca5a5;
+}
+
+.bulk-action-bar-v1 .bulk-btn-icon {
+  flex: 0 0 auto;
+  display: block;
+  width: 14px;
+  height: 14px;
+  opacity: 0.9;
+}
+
+.bulk-action-bar-v1 .bulk-btn.btn-primary .bulk-btn-icon {
+  opacity: 1;
+}
+
+/* Subtle separator before the "Clear selection" button to visually
+   detach it from the destructive/state actions. */
+.bulk-action-bar-v1 .bulk-btn-clear {
+  margin-left: 6px;
+  position: relative;
+}
+
+.bulk-action-bar-v1 .bulk-btn-clear::before {
+  content: "";
+  position: absolute;
+  left: -6px;
+  top: 20%;
+  bottom: 20%;
+  width: 1px;
+  background: var(--v1-accent-border);
+  opacity: 0.6;
+}
+
+/* Hidden state for context-aware buttons (Activate/Deactivate). */
+.bulk-action-bar-v1 .bulk-btn.is-hidden {
+  display: none;
+}
+
+/* Mobile/touch override at the top of this file forces .btn/.btn-sm to
+   48px tall — defeat that for the bulk bar so the toolbar stays compact
+   regardless of viewport. */
+@media (max-width: 768px) {
+  .bulk-action-bar-v1 .bulk-btn {
+    min-height: 32px;
+    height: 32px;
+    font-size: 13px;
+    padding: 0 12px;
+  }
+}
+
+/* ----- Selection checkbox column -------------------------------------------*/
+
+.row-select-th-v1,
+.row-select-td-v1 {
+  width: 38px;
+  text-align: center;
+  padding: 8px 0 !important;
+}
+
+.row-select-input-v1 {
+  cursor: pointer;
+  accent-color: var(--v1-accent);
+  width: 16px;
+  height: 16px;
+}
+
+.row-select-input-v1:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+/* highlight selected rows in V1 blue */
+.participants-table tr.row-selected-v1 {
+  background: var(--v1-accent-soft) !important;
+}
+
+/* zebra rows for visual rhythm */
+.participants-table tr.zebra-alt {
+  background: var(--v1-bg-row-alt);
+}
+
+/* ----- Folder chips on each row (removable + add) --------------------------*/
+
+.folder-chip-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.folder-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--v1-accent-soft);
+  color: #93c5fd;
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.folder-chip-remove {
+  cursor: pointer;
+  opacity: 0.6;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0 2px;
+  background: none;
+  border: none;
+  color: inherit;
+}
+
+.folder-chip-remove:hover {
+  opacity: 1;
+}
+
+.folder-chip-add {
+  background: transparent;
+  color: var(--v1-text-muted);
+  border: 1px dashed var(--v1-border-light);
+  cursor: pointer;
+  font-style: italic;
+}
+
+.folder-chip-add:hover {
+  border-color: var(--v1-accent);
+  color: var(--v1-accent);
+}
+
+/* ----- Number plate (mono, plate-styled #) ---------------------------------*/
+
+.num-plate-v1 {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 22px;
+  padding: 0 6px;
+  background: var(--v1-bg-elevated);
+  border: 1px solid var(--v1-border-light);
+  border-radius: 4px;
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--v1-text);
+  font-family: var(--v1-mono);
+}
+
+/* ----- Slide-in side panels (assign + auto-rule, share base styling) -------*/
+
+/* The panel is `position: absolute` inside `.preset-editor-stage` — a flex
+ * container that lives BETWEEN the modal-header and modal-footer. That gives
+ * the panel exact, automatic vertical bounds without magic-number top/bottom
+ * insets. Earlier iterations used `position: fixed` with hardcoded 52px/64px
+ * insets, which broke the moment the modal-header or modal-footer changed
+ * height (the panel would overlap them visibly).
+ *
+ * The previous iteration before that used `position: absolute` directly inside
+ * the scrolling `.modal-body`, which made the panel scroll up out of view as
+ * the user scrolled the participants list. Putting the panel at the SAME
+ * level as `.modal-body` (both children of `.preset-editor-stage`) is the
+ * fix: the panel doesn't scroll with the body, and it doesn't overlap the
+ * header/footer. */
+.slide-panel {
+  position: absolute;
+  top: 0;
+  /* Full-height panel: spans the entire stage vertically (header to footer).
+   * `.slide-panel-body { flex: 1; overflow-y: auto }` fills the available
+   * space and keeps `.slide-panel-footer` (Done) pinned at the bottom. */
+  bottom: 0;
+  right: 0;
+  width: var(--v1-side-panel-w);
+  /* Slightly more elevated than the modal-body so the panel reads as a
+   * separate surface rather than blending into the background. */
+  background: #131c2e;
+  border-left: 2px solid var(--v1-border-light);
+  /* Bottom edge finisher: now that the panel is content-driven height it can
+   * end mid-modal, so the bottom is a visible edge — give it the same border
+   * weight as the left side so the panel reads as a finished card and not
+   * a clipped strip. */
+  border-bottom: 2px solid var(--v1-border-light);
+  border-bottom-left-radius: var(--v1-radius);
+  transform: translateX(100%);
+  transition: transform 0.25s ease;
+  display: flex;
+  flex-direction: column;
+  box-shadow: none;
+  /* Must beat .participants-table th's z-index: 10 (sticky column headers).
+   * Without this the sticky header strip "stamps through" the panel body —
+   * very visible when scope='selection' because the row of column labels
+   * crashes into "Tap a folder to assign · N available". */
+  z-index: 20;
+}
+
+.slide-panel.is-open {
+  transform: translateX(0);
+  box-shadow: var(--v1-shadow-panel);
+}
+
+/* Defensive: keep the panel locked to the right edge of the stage. Some
+ * specific selectors (e.g. responsive @media rules or future overrides)
+ * could otherwise reposition it accidentally. */
+#preset-editor-modal .slide-panel {
+  right: 0;
+  left: auto;
+  margin: 0;
+  box-sizing: border-box;
+}
+
+.slide-panel-auto-rule {
+  z-index: 2051;   /* above the assign panel if both ever mounted */
+}
+
+.slide-panel-header {
+  padding: 16px 18px;
+  /* Subtle elevated header so it stands out from the body. */
+  background: rgba(59, 130, 246, 0.06);
+  border-bottom: 1px solid var(--v1-border-light);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.slide-panel-header-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.slide-panel-header-title {
+  font-weight: 600;
+  font-size: 15px;
+  color: #ffffff;
+  letter-spacing: -0.01em;
+}
+
+.slide-panel-header-sub {
+  color: var(--v1-text-secondary);
+  font-size: 12px;
+  font-family: var(--v1-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 2px;
+}
+
+.slide-panel-close {
+  background: transparent;
+  border: none;
+  color: var(--v1-text-secondary);
+  cursor: pointer;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 20px;
+  line-height: 1;
+  font-weight: 400;
+}
+
+.slide-panel-close:hover {
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+}
+
+.slide-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  /* Prevent pill content (especially the new pool-mode "is-manageable" pill
+   * with white-space: nowrap) from overflowing the panel horizontally and
+   * pushing the panel layout off-center. */
+  overflow-x: hidden;
+  padding: 16px;
+  min-width: 0;
+}
+
+/* The filter input inside the panel — increase contrast against the elevated
+ * panel bg, and give it a clear focus ring so the user always knows where
+ * keystrokes are going. */
+.slide-panel-body input[type="text"] {
+  background: #0b1220 !important;
+  border: 1px solid var(--v1-border-light) !important;
+  color: var(--v1-text) !important;
+}
+
+.slide-panel-body input[type="text"]::placeholder {
+  color: #94a3b8;
+}
+
+.slide-panel-body input[type="text"]:focus {
+  border-color: var(--v1-accent) !important;
+  box-shadow: 0 0 0 3px var(--v1-accent-soft);
+  outline: none;
+}
+
+/* Empty-state message — the "No folders defined yet" line. */
+.slide-panel-body .assign-folder-grid > div {
+  color: var(--v1-text-secondary) !important;
+  font-style: normal !important;
+  line-height: 1.55;
+}
+
+.slide-panel-footer {
+  padding: 12px 16px;
+  border-top: 1px solid var(--v1-border-light);
+  background: rgba(15, 23, 42, 0.4);
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.slide-panel-footer .btn {
+  background: var(--v1-bg-elevated);
+  border: 1px solid var(--v1-border-light);
+  color: var(--v1-text);
+}
+
+.slide-panel-footer .btn:hover {
+  background: var(--v1-accent);
+  border-color: var(--v1-accent);
+  color: white;
+}
+
+/* The panel is now a pure overlay (it overlays the right portion of the
+ * modal-body). We no longer shift modal-body's padding-right when the panel
+ * opens — that was creating an empty corridor that read as a "second
+ * sidebar" because its background didn't match the panel's. */
+
+/* ----- Assign panel — folder pool list with counts -------------------------*/
+
+.assign-folder-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.assign-folder-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--v1-bg-surface);
+  color: var(--v1-text);
+  border: 1px solid var(--v1-border-light);
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+  user-select: none;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.assign-folder-pill:hover {
+  border-color: var(--v1-accent);
+}
+
+.assign-folder-pill.has-some {
+  background: var(--v1-accent-soft);
+  border-color: var(--v1-accent-border);
+}
+
+.assign-folder-pill.has-all {
+  background: var(--v1-accent);
+  color: white;
+  border-color: var(--v1-accent);
+}
+
+.assign-folder-pill .count-fraction {
+  font-size: 10px;
+  opacity: 0.75;
+  font-family: var(--v1-mono);
+}
+
+.assign-mode-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid var(--v1-border);
+  border-radius: var(--v1-radius);
+  font-size: 13px;
+  color: var(--v1-text);
+}
+
+.assign-mode-block label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+  transition: background 0.12s;
+}
+
+.assign-mode-block label:hover {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.assign-mode-block input[type="radio"] {
+  accent-color: var(--v1-accent);
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+/* ============================================================================
+ * V1 design — Inline "+ New folder" form inside the Assign side panel
+ * ============================================================================
+ * Collapsed: a dashed primary CTA below the folder pool. Expanded: a compact
+ * card with name + optional path + Browse, and Cancel / Create buttons. When
+ * there's an active selection the trigger label hints "auto-assigns to N";
+ * the submit copy reads "Create & assign" instead of "Create folder".
+ */
+
+.assign-folder-pill.is-readonly {
+  cursor: default;
+  opacity: 0.85;
+}
+
+.assign-folder-pill.is-readonly:hover {
+  border-color: var(--v1-border-light);
+}
+
+/* Pool-mode pill: rectangular card with name, path, usage badge, and
+ * edit/remove actions. The container itself is not clickable — only the
+ * inner buttons trigger actions. Used by renderAssignSidePanel() when
+ * the panel is opened without a participant selection.
+ *
+ * IMPORTANT: pills must fit the side-panel width (380px) — if they
+ * overflow horizontally, the panel layout gets pushed off-center. The
+ * grid uses align-items: stretch to lock each pill to the panel width,
+ * and the pill flex children are configured so .pill-path shrinks first. */
+.assign-folder-grid-pool {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.assign-folder-pill.is-manageable {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 8px 12px;
+  border-radius: var(--v1-radius-sm);
+  background: var(--v1-bg-surface);
+  border: 1px solid var(--v1-border);
+  cursor: default;
+  font-size: 13px;
+  color: var(--v1-text);
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.assign-folder-pill.is-manageable:hover {
+  border-color: var(--v1-border-light);
+}
+
+.assign-folder-pill.is-manageable .pill-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.assign-folder-pill.is-manageable .pill-name {
+  font-weight: 600;
+  font-size: 13px;
+  flex-shrink: 0;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assign-folder-pill.is-manageable .pill-path {
+  font-size: 11px;
+  color: var(--v1-text-muted);
+  font-family: var(--v1-mono);
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assign-folder-pill.is-manageable .pill-path.is-empty {
+  font-style: italic;
+  opacity: 0.55;
+  font-family: inherit;
+}
+
+.assign-folder-pill.is-manageable .pill-usage {
+  font-size: 11px;
+  color: var(--v1-text-muted);
+  background: var(--v1-bg-elevated);
+  padding: 2px 6px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.assign-folder-pill.is-manageable .pill-action {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  opacity: 0.7;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--v1-text);
+  transition: background 0.12s, opacity 0.12s;
+}
+
+.assign-folder-pill.is-manageable .pill-action:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.assign-folder-pill.is-manageable .pill-action.is-danger {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.assign-folder-pill.is-manageable .pill-action.is-danger:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+.inline-create-folder-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  margin: 4px 0 18px;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px dashed rgba(59, 130, 246, 0.5);
+  border-radius: var(--v1-radius);
+  color: #93c5fd;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.inline-create-folder-trigger:hover {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: var(--v1-accent);
+  color: #bfdbfe;
+}
+
+.inline-create-folder-trigger svg {
+  flex-shrink: 0;
+}
+
+.inline-create-folder-hint {
+  font-weight: 500;
+  color: var(--v1-text-muted);
+}
+
+.inline-create-folder-form {
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid var(--v1-accent-border);
+  border-radius: var(--v1-radius);
+  padding: 12px;
+  margin: 4px 0 18px;
+}
+
+.inline-create-folder-form-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--v1-text);
+}
+
+.inline-create-folder-form-header svg {
+  color: #93c5fd;
+}
+
+.inline-create-folder-autobadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: var(--v1-accent-soft);
+  color: #93c5fd;
+  border: 1px solid var(--v1-accent-border);
+}
+
+.inline-create-folder-cancel {
+  background: transparent;
+  border: none;
+  color: var(--v1-text-muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 16px;
+  line-height: 1;
+  border-radius: 4px;
+}
+
+.inline-create-folder-cancel:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+}
+
+.inline-create-folder-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--v1-text-secondary);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.inline-create-folder-input {
+  width: 100%;
+  padding: 7px 10px;
+  background: #0b1220;
+  border: 1px solid var(--v1-border-light);
+  border-radius: var(--v1-radius-sm);
+  color: var(--v1-text);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+
+.inline-create-folder-input::placeholder {
+  color: var(--v1-text-faint);
+}
+
+.inline-create-folder-input:focus {
+  border-color: var(--v1-accent);
+  box-shadow: 0 0 0 3px var(--v1-accent-soft);
+}
+
+.inline-create-folder-path-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.inline-create-folder-path-row .inline-create-folder-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.inline-create-folder-browse {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: var(--v1-bg-elevated);
+  border: 1px solid var(--v1-border-light);
+  border-radius: var(--v1-radius-sm);
+  color: #93c5fd;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.inline-create-folder-browse:hover {
+  background: var(--v1-accent);
+  border-color: var(--v1-accent);
+  color: white;
+}
+
+.inline-create-folder-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.inline-create-folder-actions .btn[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+
+.assign-section-label {
+  font-size: 11px;
+  /* Boost from muted (#94a3b8) to secondary (#cbd5e1) so the section
+   * dividers in the side panel actually read at a glance. */
+  color: var(--v1-text-secondary);
+  margin-bottom: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+}
+
+/* ----- Auto-rule editor — rule cards stacked vertically --------------------*/
+
+.rule-card {
+  background: var(--v1-bg-surface);
+  border: 1px solid var(--v1-border);
+  border-radius: var(--v1-radius);
+  padding: 12px;
+  margin-bottom: 10px;
+}
+
+.rule-card.is-disabled {
+  background: transparent;
+  border-color: var(--v1-border-faint);
+  opacity: 0.55;
+}
+
+.rule-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.rule-card-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--v1-text);
+}
+
+.rule-match-count {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 500;
+  border-radius: 999px;
+  background: var(--v1-amber-soft);
+  color: var(--v1-amber-text);
+  white-space: nowrap;
+}
+
+.rule-card-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.rule-card .input,
+.rule-card .select {
+  width: 100%;
+  padding: 5px 8px;
+  font-size: 12px;
+  background: var(--input-bg, var(--v1-bg-modal));
+  border: 1px solid var(--border-color, var(--v1-border));
+  border-radius: var(--v1-radius-sm);
+  color: var(--text-primary, var(--v1-text));
+  outline: none;
+  font-family: inherit;
+}
+
+.rule-card .input:focus,
+.rule-card .select:focus {
+  border-color: var(--v1-accent);
+}
+
+.rule-card-target {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rule-card-target-label {
+  color: var(--v1-text-muted);
+  font-size: 11px;
+}
+
+.rule-toggle {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  background: var(--v1-bg-elevated);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s;
+  border: none;
+  flex-shrink: 0;
+}
+
+.rule-toggle.on {
+  background: #22c55e;
+}
+
+.rule-toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: white;
+  transition: transform 0.15s;
+}
+
+.rule-toggle.on::after {
+  transform: translateX(16px);
+}
+
+.rule-add-cta {
+  border: 1px dashed var(--v1-border-light);
+  border-radius: var(--v1-radius);
+  padding: 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--v1-text-muted);
+  cursor: pointer;
+  background: transparent;
+  width: 100%;
+  font-family: inherit;
+}
+
+.rule-add-cta:hover {
+  border-color: var(--v1-accent);
+  color: var(--v1-accent);
+}
+
+/* ----- Mobile / narrow modal fallback --------------------------------------*/
+
+/* Below ~960px the side panel takes the full modal width; the assign action
+ * still works but the user has to dismiss the panel to see the table again.
+ * PR5 will swap to a centered modal at this width — for now this keeps the
+ * panel reachable rather than hiding it. */
+@media (max-width: 960px) {
+  .slide-panel {
+    width: 100%;
+  }
+}
+
+/* end PR3v2 styles */
+
+/* ============================================================================
+ * PR3v2 polish — full-viewport modal + V1 styling on top fields
+ * ============================================================================
+ *
+ * Resolves four feedback items from Federico's first review of V1:
+ *   1. The slide-in side panel was escaping the modal because nothing in the
+ *      ancestor chain had `position: relative`. Fixed by making the modal
+ *      itself full-viewport and the modal-body the positioning context.
+ *   2. Top-section inputs (Preset Name, Description, Sport Category) were
+ *      using the legacy light-on-white styling — now overridden with V1
+ *      dark palette so the page reads as one coherent design.
+ *   3. The legacy "Personalize your Folder Organization" right panel is
+ *      hidden — its role (folder pool + creation) is now fully owned by
+ *      the new slide-in side panel and the filter row.
+ *   4. The Edit Participant Preset modal effectively becomes a full-screen
+ *      page: no backdrop blur, no centering, no scale animation. Cleaner
+ *      mental model for users + side panel has room to breathe.
+ *
+ * Scoped strictly to `#preset-editor-modal` so OTHER modals in the app
+ * (csv-import, json-import, pdf-import, participant-edit, etc.) keep their
+ * existing styling.
+ */
+
+/* Full-viewport: no centering, no padding, no backdrop blur. The modal
+ * fills the whole window. */
+#preset-editor-modal {
+  background: var(--v1-bg-deep, #0a0e1a);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  align-items: stretch;
+  justify-content: stretch;
+  padding: 0;
+}
+
+#preset-editor-modal.show .participants-modal {
+  position: relative;
+  transform: none;
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  max-height: none;
+  border-radius: 0;
+  border: none;
+  box-shadow: none;
+  display: flex;
+  flex-direction: column;
+}
+
+/* `.preset-editor-stage` is a flex container sitting between the modal-header
+ * and modal-footer. It hosts the scrollable `.modal-body` plus the slide-in
+ * side panels as siblings, so the panels can be `position: absolute` with
+ * top:0 / bottom:0 cleanly bounded by the stage's edges. No magic-number
+ * insets, no overlap with header/footer when their heights change. */
+#preset-editor-modal .preset-editor-stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  /* Without min-width: 0 a flex child defaults to min-width: auto, which
+   * is its content size. If the modal-body contains a wide table, the
+   * stage can grow beyond 100vw and the right-anchored .slide-panel ends
+   * up off-center (visually "shifted left" relative to the viewport).
+   * Locking min-width: 0 keeps the stage at 100vw and the panel snapped
+   * to the right edge. */
+  min-width: 0;
+  width: 100%;
+  position: relative;
+  display: flex;
+  overflow: hidden;
+}
+
+#preset-editor-modal .modal-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  max-height: none;
+  padding: 24px 32px;
+  overflow-y: auto;
+}
+
+/* Modal header — sit at the top of the full-viewport modal with V1
+ * tokens, no rounded corners, no gradient. */
+#preset-editor-modal .modal-header {
+  background: var(--v1-bg-modal);
+  border-bottom: 1px solid var(--v1-border);
+  border-radius: 0;
+  padding: 14px 32px;
+  flex-shrink: 0;
+}
+
+#preset-editor-modal .modal-header h2 {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--v1-text);
+  letter-spacing: -0.01em;
+}
+
+/* Hide the legacy folder organization right panel — its role is now
+ * fully covered by the new slide-in side panel + filter row. */
+#preset-editor-modal .folder-organization-section {
+  display: none !important;
+}
+
+/* Top section now spans full width since the right pane is gone. */
+#preset-editor-modal .preset-header-row {
+  grid-template-columns: 1fr !important;
+  display: block !important;
+}
+
+#preset-editor-modal .preset-info-section {
+  max-width: 720px;
+  margin-bottom: 0;
+}
+
+/* ---- V1 styling on top-section inputs/labels ----------------------------*/
+
+#preset-editor-modal .modal-body .form-group input[type="text"],
+#preset-editor-modal .modal-body .form-group input[type="email"],
+#preset-editor-modal .modal-body .form-group input[type="search"],
+#preset-editor-modal .modal-body .form-group select,
+#preset-editor-modal .modal-body .form-group textarea,
+#preset-editor-modal .modal-body .form-group .form-control,
+#preset-editor-modal .modal-body input#preset-name,
+#preset-editor-modal .modal-body input#preset-description,
+#preset-editor-modal .modal-body select#preset-sport-category {
+  background: var(--v1-bg-modal) !important;
+  border: 1px solid var(--v1-border) !important;
+  color: var(--v1-text) !important;
+  border-radius: var(--v1-radius-sm) !important;
+  font-size: 13px !important;
+  padding: 8px 10px !important;
+  font-family: inherit !important;
+}
+
+#preset-editor-modal .modal-body .form-group input[type="text"]:focus,
+#preset-editor-modal .modal-body .form-group select:focus,
+#preset-editor-modal .modal-body .form-group textarea:focus,
+#preset-editor-modal .modal-body .form-group .form-control:focus,
+#preset-editor-modal .modal-body input#preset-name:focus,
+#preset-editor-modal .modal-body input#preset-description:focus,
+#preset-editor-modal .modal-body select#preset-sport-category:focus {
+  border-color: var(--v1-accent) !important;
+  box-shadow: 0 0 0 3px var(--v1-accent-soft) !important;
+  outline: none !important;
+}
+
+/* Form labels — uppercase compact V1 style */
+#preset-editor-modal .modal-body .form-group label {
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  color: var(--v1-text-muted) !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.04em !important;
+  margin-bottom: 4px !important;
+  display: block !important;
+}
+
+/* Form hints (small italic helper text below inputs) */
+#preset-editor-modal .modal-body .form-hint {
+  color: var(--v1-text-faint) !important;
+  font-size: 11px !important;
+  margin-top: 4px !important;
+}
+
+/* Modal footer — V1 dark border, no gradient */
+#preset-editor-modal .modal-footer {
+  background: var(--v1-bg-modal);
+  border-top: 1px solid var(--v1-border);
+  border-radius: 0;
+  padding: 14px 32px;
+  flex-shrink: 0;
+}
+
+/* (No padding-right shift on the table region — the side panel is an
+ * overlay confined to `.preset-editor-stage` and doesn't push content.) */
+
+/* end PR3v2 polish styles */
+
+/* ============================================================================
+ * V1 design — Preset summary strip + collapsible details
+ * ============================================================================
+ * Compact 3-cell strip (Preset / Sport / Active) with a divider between cells
+ * and an "Edit details" toggle on the right. Clicking the toggle reveals the
+ * full editable form below (preset-header-row), which is hidden by default
+ * when reading an existing preset and shown by default when creating a new
+ * one. Matches the pattern from `Racetagger Bulk Folder.html` v1.jsx lines
+ * 90–110.
+ */
+
+#preset-editor-modal .preset-summary-strip {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  background: var(--v1-bg-surface);
+  border: 1px solid var(--v1-border);
+  border-radius: var(--v1-radius);
+  padding: 14px 18px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+#preset-editor-modal .preset-summary-cell {
+  min-width: 0;
+}
+
+#preset-editor-modal .preset-summary-label {
+  font-size: 11px;
+  color: var(--v1-text-muted);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin-bottom: 2px;
+  font-weight: 600;
+}
+
+#preset-editor-modal .preset-summary-value {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--v1-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 360px;
+}
+
+#preset-editor-modal .preset-summary-cell:nth-child(1) .preset-summary-value {
+  font-size: 14px;
+}
+
+#preset-editor-modal .preset-summary-cell:nth-child(3) .preset-summary-value,
+#preset-editor-modal .preset-summary-cell:nth-child(5) .preset-summary-value {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+#preset-editor-modal .preset-summary-divider {
+  width: 1px;
+  height: 32px;
+  background: var(--v1-border);
+  flex-shrink: 0;
+}
+
+#preset-editor-modal .preset-summary-spacer {
+  flex: 1;
+  min-width: 0;
+}
+
+#preset-editor-modal #preset-edit-details-btn {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+#preset-editor-modal #preset-edit-details-btn.is-active {
+  background: var(--v1-bg-elevated);
+  border-color: var(--v1-border-light);
+  color: var(--v1-text);
+}
+
+/* The legacy preset-header-row keeps its existing layout when expanded —
+ * we only manage its visibility via [hidden] on the wrapper. */
+#preset-editor-modal .preset-header-row[hidden] {
+  display: none !important;
+}
+
+/* ============================================================================
+ * V1 design — IPTC PRO accordion (purple-themed, compact)
+ * ============================================================================
+ * Overrides the legacy heavy gradient styling with a flat purple-tinted
+ * surface (alpha 0.04 fill, alpha 0.25 border) matching v1.jsx lines 113–131.
+ * The chevron rotates 90° on open. Scoped strictly to #preset-editor-modal
+ * so the preset list page (and any future IPTC surface) is not affected.
+ */
+
+#preset-editor-modal .iptc-metadata-section {
+  border: 1px solid rgba(168, 85, 247, 0.25);
+  border-radius: var(--v1-radius);
+  background: rgba(168, 85, 247, 0.04);
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+
+#preset-editor-modal .iptc-metadata-section:hover {
+  border-color: rgba(168, 85, 247, 0.35);
+}
+
+#preset-editor-modal .iptc-section-toggle {
+  background: transparent;
+  padding: 12px 16px;
+  border-bottom: none;
+}
+
+#preset-editor-modal .iptc-section-toggle:hover {
+  background: rgba(168, 85, 247, 0.06);
+}
+
+#preset-editor-modal .iptc-toggle-left {
+  gap: 10px;
+}
+
+#preset-editor-modal .iptc-toggle-icon {
+  color: #a855f7;
+  font-size: 11px;
+  width: auto;
+}
+
+#preset-editor-modal .iptc-toggle-badge {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: var(--v1-purple-soft);
+  color: #d8b4fe;
+  border: 1px solid var(--v1-purple-border);
+  text-transform: none;
+}
+
+#preset-editor-modal .iptc-toggle-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--v1-text);
+}
+
+#preset-editor-modal .iptc-toggle-status {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+#preset-editor-modal .iptc-status-inactive {
+  background: var(--v1-bg-surface);
+  color: var(--v1-text-muted);
+  border: 1px solid var(--v1-border);
+}
+
+#preset-editor-modal .iptc-status-active {
+  background: rgba(34, 197, 94, 0.18);
+  color: #86efac;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+/* Compact import button on the right of the IPTC header */
+#preset-editor-modal .iptc-import-btn {
+  background: var(--v1-bg-surface);
+  border: 1px solid var(--v1-border);
+  color: var(--v1-text-secondary);
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+#preset-editor-modal .iptc-import-btn:hover {
+  background: var(--v1-bg-elevated);
+  border-color: var(--v1-border-light);
+  color: var(--v1-text);
+}
+
+/* ============================================================================
+ * V1 design — Participants section header
+ * ============================================================================
+ * Title + active count pill on the left, primary actions on the right.
+ * Matches v1.jsx lines 134–144.
+ */
+
+#preset-editor-modal .table-header-v1 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+#preset-editor-modal .table-header-title-v1 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--v1-text);
+}
+
+#preset-editor-modal .table-header-v1 .active-participants-summary {
+  margin-left: 0;
+}
+
+#preset-editor-modal .table-header-spacer {
+  flex: 1;
+  min-width: 0;
+}
+
+#preset-editor-modal .table-header-v1 .table-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+#preset-editor-modal .table-header-v1 .table-actions .btn {
+  padding: 7px 13px;
+  font-size: 13px;
+  border-radius: var(--v1-radius);
+}
+
+#preset-editor-modal .table-header-v1 .table-actions .btn-sm {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+#preset-editor-modal .btn-clear-all-v1 {
+  width: 32px;
+  height: 32px;
+  padding: 0 !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--v1-text-muted);
+  background: var(--v1-bg-surface);
+  border: 1px solid var(--v1-border);
+}
+
+#preset-editor-modal .btn-clear-all-v1:hover {
+  color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+/* ============================================================================
+ * V1 design — Row action buttons (image / edit-amber / delete-red)
+ * ============================================================================
+ * 30×30 square icon buttons centered in the Actions column. Edit fills with
+ * amber, Delete fills with red. Matches v1.jsx lines 272–284.
+ */
+
+#preset-editor-modal .row-actions-td-v1 {
+  padding: 8px 12px !important;
+  text-align: center;
+}
+
+#preset-editor-modal .row-actions-v1 {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+}
+
+#preset-editor-modal .btn-icon-v1 {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--v1-bg-surface);
+  border: 1px solid var(--v1-border);
+  border-radius: var(--v1-radius);
+  color: var(--v1-text-secondary);
+  cursor: pointer;
+  transition: all 0.12s ease;
+  flex-shrink: 0;
+  font-family: inherit;
+}
+
+#preset-editor-modal .btn-icon-v1:hover {
+  background: var(--v1-bg-elevated);
+  border-color: var(--v1-border-light);
+  color: var(--v1-text);
+}
+
+#preset-editor-modal .btn-icon-v1 svg {
+  display: block;
+}
+
+#preset-editor-modal .btn-icon-v1-amber {
+  background: var(--v1-amber);
+  border-color: var(--v1-amber);
+  color: white;
+}
+
+#preset-editor-modal .btn-icon-v1-amber:hover {
+  background: #d97706;
+  border-color: #d97706;
+  color: white;
+}
+
+#preset-editor-modal .btn-icon-v1-red {
+  background: #ef4444;
+  border-color: #ef4444;
+  color: white;
+}
+
+#preset-editor-modal .btn-icon-v1-red:hover {
+  background: #dc2626;
+  border-color: #dc2626;
+  color: white;
+}
+
+/* ============================================================================
+ * V1 design — Number cell (mono bold, no plate box) + Category pill
+ * ============================================================================
+ * The design renders the participant number as plain mono bold 14px text,
+ * not as a plate. We override the legacy `.num-plate-v1` (which previously
+ * rendered a small box) when inside the preset editor modal, and recolor
+ * `.category-badge` to match the design's `.pill` blue accent-soft style.
+ */
+
+#preset-editor-modal .num-plate-v1 {
+  background: transparent;
+  border: none;
+  padding: 0;
+  min-width: 0;
+  height: auto;
+  font-weight: 700;
+  font-size: 14px;
+  font-family: var(--v1-mono);
+  color: var(--v1-text);
+}
+
+#preset-editor-modal .category-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: var(--v1-accent-soft);
+  color: #93c5fd;
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  text-transform: none;
+  white-space: nowrap;
+}
+
+/* ============================================================================
+ * V1 design — Footer padding shifts in step with the side panel
+ * ============================================================================
+ * The side panel is now an overlay confined to `.preset-editor-stage` (the
+ * area between modal-header and modal-footer), so it doesn't physically push
+ * any of the modal chrome — neither modal-body nor modal-footer needs a
+ * padding-right shift. The footer keeps its full width and Save / Cancel
+ * stay where they belong.
+ */

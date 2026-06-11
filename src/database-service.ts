@@ -1,7 +1,8 @@
-import * as crypto from 'crypto';
+﻿import * as crypto from 'crypto';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CONFIG, DEBUG_MODE } from './config';
 import { authService } from './auth-service'; // Per ottenere user_id
+import { safeSend } from './ipc/context';
 
 // --- Supabase Client Initialization ---
 // Inizializza il client Supabase direttamente invece di aspettare la chiamata lazy
@@ -40,6 +41,7 @@ export interface Execution {
   category?: string; // Sport category (motorsport, running, altro)
   sport_category_id?: string | null; // UUID - FK to sport_categories table
   execution_settings?: Record<string, any>; // Execution configuration (JSONB)
+  source_folder?: string | null; // Local filesystem path of source folder (for R2 HD upload)
 }
 
 // Interfacce per sistema preset partecipanti
@@ -59,8 +61,13 @@ export interface PresetParticipantDriver {
   participant_id?: string;
   driver_name: string;
   driver_metatag?: string | null;
+  driver_nationality?: string | null;
   driver_order: number;
   created_at?: string;
+  // v1.1.4 â€” Preset Participant Toggle: soft-disable flag. When false, this
+  // driver is excluded from AI matching (face recognition, name matching)
+  // but kept in the preset so the user can re-enable it without re-entry.
+  is_active?: boolean;
 }
 
 export interface PresetParticipant {
@@ -70,17 +77,31 @@ export interface PresetParticipant {
   preset_participant_drivers?: PresetParticipantDriver[];
   nome?: string; // Legacy CSV fallback (single name from CSV import)
   squadra?: string;
+  car_model?: string;        // Vehicle model (RB20, Ferrari 296 GT3, etc.) â€” {car_model} in IPTC templates
   sponsors?: string[]; // Array di sponsor
   metatag?: string;
   categoria?: string;        // Category (GT3, F1, MotoGP, etc.)
   plate_number?: string;     // License plate for future car recognition
-  folder_1?: string;         // Custom folder 1
-  folder_2?: string;         // Custom folder 2
-  folder_3?: string;         // Custom folder 3
-  folder_1_path?: string;    // Absolute filesystem path for folder 1
-  folder_2_path?: string;    // Absolute filesystem path for folder 2
-  folder_3_path?: string;    // Absolute filesystem path for folder 3
+  // 1.2.0+ canonical: array of {name, path?} objects, no length limit.
+  // Populated by normalizeParticipantPresetFolders() at fetch time. Legacy
+  // folder_1/2/3 columns below are kept dual-written for 1.1.4 backward
+  // compatibility. See POST-1.1.4-BACKLOG.md for the full strategy.
+  folders?: { name: string; path?: string }[];
+  // âš ï¸ Legacy columns (pre-1.2.0) â€” do NOT read these directly in business
+  // logic. Always go through `participant.folders[]` (already normalized
+  // at fetch). They exist solely so 1.1.4 clients keep working.
+  folder_1?: string;         // Custom folder 1 (legacy slot 1)
+  folder_2?: string;         // Custom folder 2 (legacy slot 2)
+  folder_3?: string;         // Custom folder 3 (legacy slot 3)
+  folder_1_path?: string;    // Absolute path (legacy slot 1)
+  folder_2_path?: string;    // Absolute path (legacy slot 2)
+  folder_3_path?: string;    // Absolute path (legacy slot 3)
+  delivery_to_client_id?: string | null; // FK to projects (client) for auto-delivery routing
   created_at?: string;
+  // v1.1.4 â€” Preset Participant Toggle: soft-disable flag. When false, the
+  // entire participant (car/crew) is excluded from AI matching (numero, livrea,
+  // faces) but kept in the preset for reversibility. Defaults TRUE on the DB.
+  is_active?: boolean;
 }
 
 // --- Helper per ottenere l'ID utente corrente ---
@@ -131,14 +152,14 @@ async function withRetry<T>(
   throw lastError || new Error(`${operationName} failed after ${maxRetries} attempts`);
 }
 
-// --- Helper per verificare se l'utente è autenticato e ha un token valido ---
+// --- Helper per verificare se l'utente Ã¨ autenticato e ha un token valido ---
 async function ensureAuthenticated(): Promise<boolean> {
   const authState = authService.getAuthState();
   if (!authState.isAuthenticated || !authState.session) {
     return false;
   }
 
-  // Verifica se il token è scaduto
+  // Verifica se il token Ã¨ scaduto
   if (authState.session.expires_at) {
     const expiresAt = new Date(authState.session.expires_at);
     const now = new Date();
@@ -195,7 +216,13 @@ export async function createExecutionOnline(executionData: Omit<Execution, 'id' 
   const userId = getCurrentUserId();
   if (!userId) throw new Error('User not authenticated.');
 
-  const { data, error } = await supabase
+  // FIX: Always use the authenticated client for execution creation.
+  // The module-level `supabase` variable starts as anon key client and only gets updated
+  // when getSupabaseClient() is called. Without this, INSERT may fail with RLS violation
+  // (code 42501) since executions table has RLS enabled with user-based policies.
+  const client = getSupabaseClient();
+
+  const { data, error } = await client
     .from('executions')
     .insert([{ ...executionData, user_id: userId }])
     .select()
@@ -204,7 +231,6 @@ export async function createExecutionOnline(executionData: Omit<Execution, 'id' 
   if (error) throw error;
   if (!data) throw new Error('Failed to create execution: no data returned.');
 
-  // cacheExecutionLocal(data as Execution); // TODO: Implementare caching
   return data as Execution;
 }
 
@@ -212,7 +238,9 @@ export async function getExecutionByIdOnline(id: string): Promise<Execution | nu
   const userId = getCurrentUserId();
   if (!userId) throw new Error('User not authenticated.');
 
-  const { data, error } = await supabase
+  const client = getSupabaseClient(); // FIX: Use authenticated client
+
+  const { data, error } = await client
     .from('executions')
     .select('*')
     .eq('id', id)
@@ -223,7 +251,6 @@ export async function getExecutionByIdOnline(id: string): Promise<Execution | nu
     if (error.code === 'PGRST116') return null;
     throw error;
   }
-  // if (data) cacheExecutionLocal(data as Execution); // TODO: Implementare caching
   return data as Execution | null;
 }
 
@@ -231,26 +258,97 @@ export async function updateExecutionOnline(id: string, executionUpdateData: Par
   const userId = getCurrentUserId();
   if (!userId) throw new Error('User not authenticated.');
 
-  const { data, error } = await supabase
+  const client = getSupabaseClient(); // FIX: Use authenticated client
+
+  const { data, error } = await client
     .from('executions')
     .update(executionUpdateData)
     .eq('id', id)
     .eq('user_id', userId)
     .select()
     .single();
-  
+
   if (error) throw error;
   if (!data) throw new Error('Failed to update execution or execution not found.');
 
-  // cacheExecutionLocal(data as Execution); // TODO: Implementare caching
   return data as Execution;
+}
+
+/**
+ * Recover analysis executions interrupted ON THIS DEVICE: runs left stuck as `processing`
+ * (or `running`) because the app was closed/crashed mid-batch before they could finalize.
+ * Left alone such a row is a zombie â€” it looks like work still in progress. We flip it to
+ * `failed` so it stops looking active and surfaces as "Interrupted".
+ *
+ * The caller passes `locallyIncompleteIds`: execution ids it has PROVEN are interrupted
+ * here, because a local `exec_<id>.jsonl` exists that started but never logged completion.
+ * That file is on THIS machine and the process has since restarted, so the run died here â€”
+ * it cannot still be live. (A run live in the CURRENT session is excluded by the caller's
+ * boot-time guard, and survives a laptop sleep because the same process resumes it: its id
+ * is never in this list.) `running` is included because the local JSONL is written before
+ * the processor upserts the row from `running` to `processing`, so a very-early interruption
+ * can leave it `running`.
+ *
+ * Deliberately there is NO reservation-based recovery for runs we CANNOT prove locally
+ * (other device / reinstall / deleted local log). A token reservation can be `auto_finalized`
+ * by the TTL cron while a run is still genuinely live (e.g. the laptop slept past the 30-min
+ * TTL floor, and small batches never refresh `updated_at` mid-run), so reservation status is
+ * NOT a safe liveness signal and must never drive a `failed` write. Those runs are instead
+ * surfaced as "Interrupted" by the home page's display-only staleness heuristic â€” no DB write,
+ * no risk of clobbering a live run.
+ *
+ * Best-effort and non-throwing; fired-and-forgotten from the home-open handler.
+ *
+ * @returns the number of executions actually marked failed (0 on any error / nothing to do).
+ */
+export async function reconcileOrphanExecutions(userId?: string, locallyIncompleteIds?: string[]): Promise<number> {
+  const uid = userId ?? getCurrentUserId();
+  if (!uid) return 0;
+
+  const ids = Array.isArray(locallyIncompleteIds)
+    ? Array.from(new Set(locallyIncompleteIds.filter((x): x is string => typeof x === 'string' && x.length > 0)))
+    : [];
+  if (ids.length === 0) return 0;
+
+  try {
+    const client = getSupabaseClient();
+    // The status + deleted_at guards keep this idempotent and ensure we only ever flip a row
+    // that is genuinely still mid-flight (never one that finalized in the meantime). .select()
+    // returns the rows actually updated, so the count reflects real writes.
+    const { data: updated, error: updErr } = await client
+      .from('executions')
+      .update({
+        status: 'failed',
+        error_summary: { reason: 'interrupted_local', recovered_at: new Date().toISOString() },
+        updated_at: new Date().toISOString(),
+      })
+      .in('id', ids)
+      .eq('user_id', uid)
+      .in('status', ['processing', 'running'])
+      .is('deleted_at', null)
+      .select('id');
+    if (updErr) {
+      console.warn('[OrphanReconcile] Failed to mark interrupted executions (non-fatal):', updErr.message);
+      return 0;
+    }
+    const marked = updated?.length ?? 0;
+    if (marked > 0) {
+      console.log(`[OrphanReconcile] Marked ${marked} interrupted execution(s) as failed for user ${uid}`);
+    }
+    return marked;
+  } catch (err) {
+    console.warn('[OrphanReconcile] Reconcile error (non-fatal):', err instanceof Error ? err.message : err);
+    return 0;
+  }
 }
 
 export async function deleteExecutionOnline(id: string): Promise<void> {
   const userId = getCurrentUserId();
   if (!userId) throw new Error('User not authenticated.');
 
-  const { error } = await supabase
+  const client = getSupabaseClient(); // FIX: Use authenticated client
+
+  const { error } = await client
     .from('executions')
     .delete()
     .eq('id', id)
@@ -599,7 +697,7 @@ export async function saveExecutionSettings(settings: Omit<ExecutionSettings, 'i
   } catch (error) {
     console.error('[DB] Error saving execution settings:', error);
     // Non lanciamo l'errore per non bloccare l'execution principale
-    // Il tracciamento è facoltativo
+    // Il tracciamento Ã¨ facoltativo
     throw error;
   }
 }
@@ -670,10 +768,10 @@ export async function getUserSettingsAnalytics(userId?: string): Promise<any> {
     const analytics = {
       total_executions: data.length,
       
-      // Modelli AI più usati
+      // Modelli AI piÃ¹ usati
       most_used_models: getMostUsedValues(data, 'ai_model'),
       
-      // Categorie sport più usate
+      // Categorie sport piÃ¹ usate
       most_used_categories: getMostUsedValues(data, 'sport_category'),
       
       // Strategie metadati preferite
@@ -685,7 +783,7 @@ export async function getUserSettingsAnalytics(userId?: string): Promise<any> {
       // Livelli ottimizzazione preferiti
       preferred_optimization_levels: getMostUsedValues(data, 'optimization_level'),
       
-      // Percentuali utilizzo funzionalità
+      // Percentuali utilizzo funzionalitÃ 
       feature_usage_rates: {
         resize_enabled: calculateUsageRate(data, 'resize_enabled'),
         parallel_processing: calculateUsageRate(data, 'parallel_processing_enabled'),
@@ -714,7 +812,7 @@ export async function getUserSettingsAnalytics(userId?: string): Promise<any> {
 }
 
 /**
- * Helper per calcolare i valori più usati
+ * Helper per calcolare i valori piÃ¹ usati
  */
 function getMostUsedValues(data: any[], field: string, limit: number = 5): { value: string; count: number; percentage: number }[] {
   const counts: { [key: string]: number } = {};
@@ -738,7 +836,7 @@ function getMostUsedValues(data: any[], field: string, limit: number = 5): { val
 }
 
 /**
- * Helper per calcolare il tasso di utilizzo di una funzionalità
+ * Helper per calcolare il tasso di utilizzo di una funzionalitÃ 
  */
 function calculateUsageRate(data: any[], field: string): number {
   if (data.length === 0) return 0;
@@ -882,6 +980,7 @@ export interface SportCategory {
   is_active?: boolean;
   display_order?: number;
   edge_function_version?: number;
+  min_app_version?: number;        // Minimum app version number to display this category (0 = all)
   created_at?: string;
   updated_at?: string;
   temporal_config?: {
@@ -907,6 +1006,23 @@ export interface SportCategory {
   };
   scene_classifier_enabled?: boolean;     // Enable ONNX scene classifier to skip crowd/irrelevant scenes
   save_segmentation_masks?: boolean;      // Save full RLE mask data in JSONL logs for debugging/training
+  use_local_onnx?: boolean;              // Use local ONNX model for detection (PRO recognition)
+  active_model_id?: string;              // UUID FK to model_registry - active ONNX model for this category
+  recognition_method?: string;           // Detection method type (e.g., 'onnx', 'cloud')
+  recognition_config?: {
+    maxResults: number;
+    minConfidence: number;
+    confidenceDecayFactor: number;
+    relativeConfidenceGap: number;
+    focusMode: string;
+    ignoreBackground: boolean;
+    prioritizeForeground: boolean;
+  };
+  sharpness_filter_config?: {
+    enabled: boolean;
+    dominanceRatio: number;
+    debug: boolean;
+  };
 }
 
 // A custom folder can be a simple name string or an object with name + optional absolute path
@@ -930,6 +1046,20 @@ export interface ParticipantPresetSupabase {
   usage_count?: number;
   participants?: PresetParticipantSupabase[];
   sport_categories?: SportCategory;
+  is_official?: boolean;
+  iptc_metadata?: any;  // PresetIptcMetadata stored as JSONB
+  person_shown_template?: string | null;  // Template for IPTC PersonInImage field (e.g. "{name} {team} {car_model}")
+
+  // Issue #104: When true, Gemini is allowed to identify persons outside the
+  // preset participant list (team principals, VIPs, celebrities). Results go
+  // into a separate `otherPeople[]` field in the V6 response, never into
+  // `drivers[]`. Default false = strict preset-only mode.
+  allow_external_person_recognition?: boolean;
+
+  // ACC-01 (Gruppe C): per-preset list of series-wide sponsor brands (Michelin,
+  // Rolex â€¦) the SmartMatcher excludes from SPONSOR evidence before scoring.
+  // Stored JSONB; empty array = no filtering. Reads pick it up via select('*').
+  series_sponsor_ignore?: string[];
 }
 
 export interface PresetParticipantSupabase {
@@ -943,16 +1073,32 @@ export interface PresetParticipantSupabase {
   sponsor?: string;
   metatag?: string;
   plate_number?: string;     // License plate for car recognition
+  // 1.2.0+ canonical folder array â€” see PresetParticipantSupabase note above.
+  folders?: { name: string; path?: string }[];
+  // 1.2.0 â€” when true (default), photos of this participant go to BOTH
+  // the custom folders[] above AND the default pattern-based folder
+  // (e.g. {number}). When false, custom folders REPLACE the default
+  // (legacy 1.1.4 behavior). Per-participant override; both the
+  // FolderOrganizer (analysis time) and Export & IPTC honor it.
+  include_default_folder?: boolean;
+  // âš ï¸ Legacy slots â€” kept for 1.1.4 backward compatibility, do not read
+  // directly. Always use `folders[]` after normalization.
   folder_1?: string;
   folder_2?: string;
   folder_3?: string;
   folder_1_path?: string;    // Absolute filesystem path for folder 1
   folder_2_path?: string;    // Absolute filesystem path for folder 2
   folder_3_path?: string;    // Absolute filesystem path for folder 3
+  delivery_to_client_id?: string | null; // FK to projects (client) for auto-delivery routing
   custom_fields?: any;
   sort_order?: number;
   created_at?: string;
   face_photo_count?: number; // Cached count of face photos
+  // v1.1.4 â€” Preset Participant Toggle: soft-disable flag mirrored from the
+  // Supabase row. Consumers MUST filter on is_active !== false before feeding
+  // the participant into smart-matcher / prompt-builder.
+  is_active?: boolean;
+  updated_at?: string; // Added in migration 20260417130000 alongside is_active
 }
 
 /**
@@ -995,6 +1141,36 @@ let categoriesCache: SportCategory[] = [];
 let presetsCache: ParticipantPresetSupabase[] = [];
 let cacheLastUpdated: number = 0;
 let cacheIncludesInactive: boolean = false; // Track if cache includes inactive categories (admin mode)
+
+// BUG-02 â€” preset ids whose ownership has been verified this app session.
+// The per-row save path (upsertSinglePresetParticipantSupabase) fires once per
+// "Save & Next", so memoizing the ownership SELECT here avoids paying +1
+// round-trip on every keystroke-fast save. RLS is the real backstop on the
+// write itself; this is only a redundant courtesy check we don't want to repeat.
+const verifiedOwnedPresetIds = new Set<string>();
+
+/**
+ * Invalidate the presets cache so next fetch returns fresh data from Supabase.
+ * Used after learned data is saved to preset_participants.
+ */
+export function invalidatePresetsCache(): void {
+  presetsCache = [];
+  cacheLastUpdated = 0;
+  console.log('[Cache] Presets cache invalidated');
+}
+
+/**
+ * Clear ALL in-memory caches (categories + presets + timestamps).
+ * Used on explicit logout to make sure the next login starts with fresh data
+ * and never reuses the previous user's cached state.
+ */
+export function clearAllCaches(): void {
+  categoriesCache = [];
+  presetsCache = [];
+  cacheLastUpdated = 0;
+  cacheIncludesInactive = false;
+  console.log('[Cache] All in-memory caches cleared (logout)');
+}
 
 /**
  * Cache all Supabase data at app startup
@@ -1044,6 +1220,12 @@ export async function cacheSupabaseData(): Promise<void> {
           ...preset,
           participants: preset.preset_participants || []
         }));
+        // 1.2.0 â€” normalize folders[] eagerly at startup pre-warm so the
+        // cache is already in canonical shape by the time any consumer
+        // reads it. Without this, the very first cache-hit fetch returns
+        // un-normalized data, and the lazy-migration UPDATEs never fire
+        // for presets that are touched only via the cache.
+        presetsCache.forEach(p => normalizeParticipantPresetFolders(p));
         console.log('[Cache] Cached', presetsCache.length, 'presets with participants');
       }
     } else {
@@ -1233,6 +1415,179 @@ export async function createParticipantPresetSupabase(presetData: Omit<Participa
  * Get user participant presets from Supabase
  * @param includeAllForAdmin - If true and user is admin, returns all presets (not just user's own)
  */
+// ============================================================================
+// FOLDER NORMALIZATION (1.1.4 â†’ 1.2.0 compatibility layer)
+// ============================================================================
+//
+// Background:
+//   Pre-1.2.0 stored a participant's custom folders in three rigid columns
+//   (folder_1/2/3 + folder_*_path). 1.2.0 introduces a canonical jsonb
+//   array `folders` with no length limit. Migration is purely additive
+//   in SQL â€” no backfill â€” so the 1.1.4 column stays as the source of
+//   truth for clients that don't know about `folders`. This function
+//   reconciles the two representations every time a preset is fetched
+//   from the DB (or read from cache, before being handed to a 1.2.0
+//   consumer).
+//
+// Three states per participant:
+//
+//   1. lazy migration â€” folders[] empty + at least one legacy column
+//      populated. Happens to (a) every participant the first time this
+//      function sees them post-migration, (b) any new participant a
+//      1.1.4 client creates after migration. We rebuild folders[] from
+//      legacy and remember the row in `needsUpdate` so we can push the
+//      consolidation to the DB once for the whole preset.
+//
+//   2. drift â€” folders[] populated but its first three entries differ
+//      from the legacy columns. Signal: a 1.1.4 client modified the
+//      legacy columns after our last 1.2.0 write. We rebuild folders[]
+//      as `[legacy[0..2], ...folders[3..]]` (legacy wins for slots
+//      0/1/2, anything beyond is preserved from folders[]) and queue a
+//      DB push.
+//
+//   3. steady state â€” folders[] populated and first three entries match
+//      legacy. Nothing to do, return as-is.
+//
+// After processing all participants, if any of them needed an update we
+// fire-and-forget a single `UPDATE` for each (parallelized via
+// Promise.all but not awaited) so the consumer call returns immediately.
+// This means the very next fetch will hit the steady-state branch and
+// the lazy migration is a one-shot per row.
+//
+// Consumers (Export & IPTC, FolderOrganizer, the 1.2.0 preset editor)
+// only ever read participant.folders[]. They have no awareness that
+// folder_1/2/3 exist. Single source of truth, single point of test.
+// ============================================================================
+
+interface ParticipantFolderEntry {
+  name: string;
+  path?: string;
+}
+
+/**
+ * Compare legacy slots vs the first three entries of folders[].
+ * Returns true if they describe the same three folders in the same order.
+ */
+function legacyMatchesFirstThree(
+  participant: PresetParticipantSupabase,
+  folders: ParticipantFolderEntry[]
+): boolean {
+  const legacyTriple: Array<ParticipantFolderEntry | null> = [
+    participant.folder_1?.trim()
+      ? { name: participant.folder_1.trim(), path: participant.folder_1_path?.trim() || undefined }
+      : null,
+    participant.folder_2?.trim()
+      ? { name: participant.folder_2.trim(), path: participant.folder_2_path?.trim() || undefined }
+      : null,
+    participant.folder_3?.trim()
+      ? { name: participant.folder_3.trim(), path: participant.folder_3_path?.trim() || undefined }
+      : null,
+  ];
+  const firstThree: Array<ParticipantFolderEntry | null> = [
+    folders[0] || null,
+    folders[1] || null,
+    folders[2] || null,
+  ];
+  for (let i = 0; i < 3; i++) {
+    const a = legacyTriple[i];
+    const b = firstThree[i];
+    if (!a && !b) continue;
+    if (!a || !b) return false;
+    if (a.name !== b.name) return false;
+    if ((a.path || undefined) !== (b.path || undefined)) return false;
+  }
+  return true;
+}
+
+/**
+ * Build a folders[] array from the legacy folder_1/2/3 columns.
+ * Skips slots whose name is empty after trim.
+ */
+function foldersFromLegacy(participant: PresetParticipantSupabase): ParticipantFolderEntry[] {
+  const out: ParticipantFolderEntry[] = [];
+  if (participant.folder_1?.trim()) {
+    out.push({ name: participant.folder_1.trim(), path: participant.folder_1_path?.trim() || undefined });
+  }
+  if (participant.folder_2?.trim()) {
+    out.push({ name: participant.folder_2.trim(), path: participant.folder_2_path?.trim() || undefined });
+  }
+  if (participant.folder_3?.trim()) {
+    out.push({ name: participant.folder_3.trim(), path: participant.folder_3_path?.trim() || undefined });
+  }
+  return out;
+}
+
+/**
+ * Reconcile folders[] vs legacy folder_1/2/3 across all participants of a
+ * preset. Mutates `participant.folders` in place where needed. Schedules
+ * a fire-and-forget DB consolidation for every participant whose state
+ * changed. Safe to call on already-normalized presets (becomes a no-op).
+ */
+export function normalizeParticipantPresetFolders(preset: ParticipantPresetSupabase | null | undefined): void {
+  if (!preset || !Array.isArray(preset.participants) || preset.participants.length === 0) return;
+
+  const needsUpdate: Array<{ id: string; folders: ParticipantFolderEntry[] }> = [];
+
+  for (const participant of preset.participants) {
+    const existing: ParticipantFolderEntry[] = Array.isArray(participant.folders)
+      ? participant.folders.filter((f: any) => f && typeof f === 'object' && typeof f.name === 'string' && f.name.trim() !== '')
+      : [];
+    const fromLegacy = foldersFromLegacy(participant);
+
+    let canonical: ParticipantFolderEntry[];
+    let stateChanged = false;
+
+    if (existing.length === 0 && fromLegacy.length > 0) {
+      // Lazy migration â€” never normalized before, take legacy as-is.
+      canonical = fromLegacy;
+      stateChanged = true;
+    } else if (existing.length > 0 && !legacyMatchesFirstThree(participant, existing)) {
+      // Drift â€” a 1.1.4 client wrote to legacy after our last write.
+      // Treat legacy as authoritative for slots 0/1/2, preserve the
+      // tail (folders beyond the third) that 1.1.4 cannot represent.
+      const tail = existing.slice(3);
+      canonical = [...fromLegacy, ...tail];
+      stateChanged = true;
+    } else {
+      // Steady state.
+      canonical = existing;
+    }
+
+    participant.folders = canonical;
+
+    if (stateChanged && participant.id) {
+      needsUpdate.push({ id: participant.id, folders: canonical });
+    }
+  }
+
+  if (needsUpdate.length > 0) {
+    // Fire-and-forget: don't block the read on the consolidation write.
+    // Each row is updated independently because Supabase's `update` filtered
+    // by `eq('id', ...)` is the simplest path and we typically have a
+    // small number of rows that need consolidation per fetch (often 0 for
+    // already-migrated presets). Errors are logged but never thrown.
+    Promise.allSettled(
+      needsUpdate.map(({ id, folders }) =>
+        supabase
+          .from('preset_participants')
+          .update({ folders })
+          .eq('id', id)
+          .then(({ error }: any) => {
+            if (error) {
+              console.warn(`[DB] Background folder consolidation failed for participant ${id}:`, error.message);
+            }
+          })
+      )
+    ).catch(() => {
+      // Promise.allSettled never rejects, but safe-guard anyway.
+    });
+
+    if (DEBUG_MODE) {
+      console.log(`[DB] Background-consolidating folders for ${needsUpdate.length} participant(s) of preset "${preset.name}"`);
+    }
+  }
+}
+
 export async function getUserParticipantPresetsSupabase(includeAllForAdmin: boolean = false): Promise<ParticipantPresetSupabase[]> {
   try {
     const userId = getCurrentUserId();
@@ -1254,12 +1609,19 @@ export async function getUserParticipantPresetsSupabase(includeAllForAdmin: bool
       // In admin mode, return all cached presets without filtering
       if (includeAllForAdmin) {
         const result = ensureParticipants(presetsCache);
+        // 1.2.0 â€” normalize on the cache hit path too. Idempotent: if the
+        // cache entry was already normalized on a previous call, this is
+        // a steady-state O(1) check. Without this, presets cached by an
+        // earlier app session (or by the startup pre-warm) would never
+        // get their `folders[]` populated.
+        result.forEach(p => normalizeParticipantPresetFolders(p));
         console.log('[DB] Returning cached presets (admin mode):', result.length);
         return result;
       }
       // For regular users, filter by ownership or public access
       const filtered = presetsCache.filter(p => p.user_id === userId || p.is_public);
       const result = ensureParticipants(filtered);
+      result.forEach(p => normalizeParticipantPresetFolders(p));
       console.log('[DB] Returning cached presets (filtered):', result.length, 'of', presetsCache.length);
       return result;
     }
@@ -1279,6 +1641,7 @@ export async function getUserParticipantPresetsSupabase(includeAllForAdmin: bool
             id,
             driver_name,
             driver_metatag,
+            driver_nationality,
             driver_order,
             created_at
           )
@@ -1324,6 +1687,10 @@ export async function getUserParticipantPresetsSupabase(includeAllForAdmin: bool
     // Update cache only if we got results OR if cache was empty
     // This prevents overwriting valid cache with empty results due to timing issues
     if (mappedData.length > 0 || presetsCache.length === 0) {
+      // Reconcile legacy folder_1/2/3 vs canonical folders[] for every
+      // preset before they hit the cache + downstream consumers. Idempotent
+      // so the cache hit path can call it again safely.
+      mappedData.forEach(p => normalizeParticipantPresetFolders(p));
       presetsCache = mappedData;
       cacheLastUpdated = Date.now();
       console.log('[DB] Cache updated with', mappedData.length, 'presets');
@@ -1361,21 +1728,24 @@ export async function getParticipantPresetByIdSupabase(presetId: string): Promis
     }
 
     // Check cache first - look for either participants or preset_participants
-    console.log('[DB Reload] 🔵 getParticipantPresetByIdSupabase called for preset', presetId);
+    console.log('[DB Reload] ðŸ”µ getParticipantPresetByIdSupabase called for preset', presetId);
     const cached = presetsCache.find(p => p.id === presetId);
     if (cached) {
       const cachedParticipants = cached.participants || (cached as any).preset_participants;
       if (cachedParticipants && cachedParticipants.length > 0) {
-        console.log(`[DB Reload] 📦 CACHE HIT - Returning cached preset with ${cachedParticipants.length} participants`);
+        console.log(`[DB Reload] ðŸ“¦ CACHE HIT - Returning cached preset with ${cachedParticipants.length} participants`);
         // Ensure participants property is set for UI compatibility
         if (!cached.participants) {
           cached.participants = cachedParticipants;
         }
+        // Idempotent â€” if the cached preset was already normalized on a
+        // previous fetch this becomes a no-op steady-state pass.
+        normalizeParticipantPresetFolders(cached);
         return cached;
       }
     }
 
-    console.log('[DB Reload] 🌐 CACHE MISS - Fetching fresh data from Supabase with drivers included');
+    console.log('[DB Reload] ðŸŒ CACHE MISS - Fetching fresh data from Supabase with drivers included');
 
     // Use authenticated client from authService for RLS policy compliance
     const authenticatedClient = authService.getSupabaseClient();
@@ -1391,6 +1761,7 @@ export async function getParticipantPresetByIdSupabase(presetId: string): Promis
             id,
             driver_name,
             driver_metatag,
+            driver_nationality,
             driver_order,
             created_at
           )
@@ -1409,13 +1780,16 @@ export async function getParticipantPresetByIdSupabase(presetId: string): Promis
     if (data) {
       data.participants = data.preset_participants || [];
       const participantsWithDrivers = data.participants.filter((p: any) => p.preset_participant_drivers?.length > 0);
-      console.log(`[DB Reload] ✅ Loaded preset with ${data.participants.length} participants from Supabase`);
-      console.log(`[DB Reload] 🚗 ${participantsWithDrivers.length} participants have driver records`);
+      console.log(`[DB Reload] âœ… Loaded preset with ${data.participants.length} participants from Supabase`);
+      console.log(`[DB Reload] ðŸš— ${participantsWithDrivers.length} participants have driver records`);
       if (participantsWithDrivers.length > 0) {
         console.log('[DB Reload] Driver details:', participantsWithDrivers.map((p: any) =>
           `#${p.numero}: ${p.preset_participant_drivers?.length} drivers`
         ).join(', '));
       }
+      // Reconcile legacy folder_1/2/3 vs canonical folders[] before any
+      // 1.2.0 consumer reads this preset. See normalizeParticipantPresetFolders.
+      normalizeParticipantPresetFolders(data);
     }
 
     return data;
@@ -1427,20 +1801,67 @@ export async function getParticipantPresetByIdSupabase(presetId: string): Promis
 }
 
 /**
+ * Dual-write helper: derive the legacy folder_1/2/3 + folder_*_path columns
+ * from a participant's canonical folders[] array, so 1.1.4 clients keep
+ * seeing the first three folders. Mutates and returns the same record.
+ *
+ * Folders beyond the third position are 1.2.0-exclusive (1.1.4 has no slots
+ * for them). When folders[] is empty/missing, the legacy columns are
+ * cleared. When the caller already set the legacy columns explicitly
+ * (e.g. legacy code path from 1.1.4 UI we haven't migrated yet), we leave
+ * them alone â€” only override when folders[] is the source of truth.
+ *
+ * See POST-1.1.4-BACKLOG.md for the full strategy.
+ */
+function applyDualWriteFolders<T extends Partial<PresetParticipantSupabase>>(record: T): T {
+  if (!Array.isArray(record.folders)) {
+    // Caller didn't set folders[] â€” assume they're using the legacy
+    // path, leave folder_1/2/3 alone.
+    return record;
+  }
+
+  const cleaned = record.folders.filter(
+    (f: any) => f && typeof f === 'object' && typeof f.name === 'string' && f.name.trim() !== ''
+  ) as Array<{ name: string; path?: string }>;
+
+  // Always rewrite folders[] with the cleaned subset â€” this is what gets
+  // persisted as the canonical source.
+  (record as any).folders = cleaned;
+
+  // Derive legacy slots from the first three entries. Slots beyond the
+  // cleaned length are explicitly cleared so we don't leak stale data
+  // from a previous save.
+  (record as any).folder_1 = cleaned[0]?.name ?? null;
+  (record as any).folder_2 = cleaned[1]?.name ?? null;
+  (record as any).folder_3 = cleaned[2]?.name ?? null;
+  (record as any).folder_1_path = cleaned[0]?.path ?? null;
+  (record as any).folder_2_path = cleaned[1]?.path ?? null;
+  (record as any).folder_3_path = cleaned[2]?.path ?? null;
+
+  return record;
+}
+
+/**
  * Save preset participants to Supabase
  */
 export async function savePresetParticipantsSupabase(presetId: string, participants: Omit<PresetParticipantSupabase, 'id' | 'created_at'>[]): Promise<PresetParticipantSupabase[]> {
+  const sendProgress = (stage: string, percent: number, message: string, extra?: Record<string, unknown>) => {
+    safeSend('preset-save-progress', { presetId, stage, percent, message, ...extra });
+  };
+
   try {
-    console.log('[DB Save] 🔵 START savePresetParticipantsSupabase:', {
+    console.log('[DB Save] ðŸ”µ START savePresetParticipantsSupabase:', {
       presetId,
       participantCount: participants.length,
       participantNumbers: participants.map(p => p.numero).join(', ')
     });
+    sendProgress('start', 2, `Starting save of ${participants.length} participantsâ€¦`, { total: participants.length });
 
     const userId = getCurrentUserId();
     if (!userId) throw new Error('User not authenticated');
 
     // Verify preset ownership
+    sendProgress('verify', 8, 'Verifying preset accessâ€¦');
     const { data: preset, error: presetError } = await supabase
       .from('participant_presets')
       .select('id, user_id')
@@ -1461,23 +1882,24 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
       throw new Error('Access denied: preset belongs to another user');
     }
 
-    // ⚠️ CRITICAL FIX: Replace "nuclear delete" with intelligent UPSERT
+    // âš ï¸ CRITICAL FIX: Replace "nuclear delete" with intelligent UPSERT
     // This preserves existing participant IDs and their associated drivers/photos
-    console.log('[DB Save] 🔄 UPSERT mode: preserving existing participant IDs');
+    console.log('[DB Save] ðŸ”„ UPSERT mode: preserving existing participant IDs');
 
     // Get current participants from database
+    sendProgress('fetch', 18, 'Loading current participantsâ€¦');
     const { data: currentInDb, error: fetchError } = await supabase
       .from('preset_participants')
       .select('id, numero')
       .eq('preset_id', presetId);
 
     if (fetchError) {
-      console.error('[DB Save] ❌ Error fetching current participants:', fetchError);
+      console.error('[DB Save] âŒ Error fetching current participants:', fetchError);
       throw fetchError;
     }
 
     const currentIds = new Set((currentInDb || []).map(p => p.id));
-    console.log('[DB Save] 📋 Current participants in DB:', currentInDb?.length || 0, 'records');
+    console.log('[DB Save] ðŸ“‹ Current participants in DB:', currentInDb?.length || 0, 'records');
 
     // Separate participants into existing (have IDs) vs new (no IDs)
     const existingParticipants = participants.filter(p => (p as any).id);
@@ -1487,56 +1909,85 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
     // Find participants to delete (in DB but not in current list)
     const toDelete = [...currentIds].filter(id => !keepIds.has(id));
 
-    console.log('[DB Save] 📊 Operation breakdown:', {
+    console.log('[DB Save] ðŸ“Š Operation breakdown:', {
       update: existingParticipants.length,
       insert: newParticipants.length,
       delete: toDelete.length
     });
+    sendProgress('analyze', 28,
+      `Update ${existingParticipants.length} Â· Insert ${newParticipants.length} Â· Delete ${toDelete.length}`,
+      { update: existingParticipants.length, insert: newParticipants.length, delete: toDelete.length }
+    );
 
     let savedParticipants: PresetParticipantSupabase[] = [];
 
     // 1. UPDATE existing participants (preserves IDs and associated data)
+    // Bulk UPSERT in a single round-trip instead of N sequential UPDATE calls.
     if (existingParticipants.length > 0) {
-      console.log('[DB Save] 🔄 Updating', existingParticipants.length, 'existing participants');
-      for (const participant of existingParticipants) {
-        const { id, ...participantData } = participant as any;
-        console.log(`[DB Save]   ↻ Updating participant #${participantData.numero} (ID: ${id?.substring(0, 8)}...)`);
+      console.log('[DB Save] ðŸ”„ Bulk-upserting', existingParticipants.length, 'existing participants');
+      sendProgress('update', 40, `Updating ${existingParticipants.length} participantsâ€¦`);
 
-        const { data: updated, error: updateError } = await supabase
-          .from('preset_participants')
-          .update({ ...participantData, preset_id: presetId })
-          .eq('id', id)
-          .select()
-          .single();
+      const updatePayload = existingParticipants.map(p => {
+        const data: any = { ...(p as any), preset_id: presetId };
+        // Dual-write: when the caller provided canonical folders[], also populate
+        // the legacy folder_1/2/3 columns so 1.1.4 clients see a valid subset.
+        applyDualWriteFolders(data);
+        return data;
+      });
 
-        if (updateError) {
-          console.error(`[DB Save] ❌ Error updating participant ${id}:`, updateError);
-          throw updateError;
-        }
+      const { data: updated, error: updateError } = await supabase
+        .from('preset_participants')
+        .upsert(updatePayload, { onConflict: 'id' })
+        .select();
 
-        if (updated) {
-          savedParticipants.push(updated);
-        }
+      if (updateError) {
+        console.error('[DB Save] âŒ Error bulk-updating participants:', updateError);
+        throw updateError;
       }
-      console.log('[DB Save] ✅ Updated', existingParticipants.length, 'participants');
+
+      if (updated) {
+        savedParticipants.push(...updated);
+      }
+      console.log('[DB Save] âœ… Updated', existingParticipants.length, 'participants in 1 round-trip');
     }
 
     // 2. INSERT new participants
     if (newParticipants.length > 0) {
-      console.log('[DB Save] 💾 Inserting', newParticipants.length, 'new participants');
+      sendProgress('insert', 60, `Inserting ${newParticipants.length} new participantsâ€¦`);
+      console.log('[DB Save] ðŸ’¾ Inserting', newParticipants.length, 'new participants');
+      const insertPayload = newParticipants.map(p => {
+        const { id, created_at, ...cleanData } = p as any;
+        // FIX #78: Explicitly remove id and created_at to ensure Postgres uses DEFAULT gen_random_uuid()
+        // Edge case: if id was null/undefined, destructuring removes it from cleanData,
+        // but an extra safety delete ensures no serialization quirk sends null to Postgres
+        const record: any = { ...cleanData, preset_id: presetId };
+        delete record.id;
+        delete record.created_at;
+        // Dual-write: derive legacy folder_1/2/3 from canonical folders[]
+        // when the caller used the new shape. See applyDualWriteFolders.
+        applyDualWriteFolders(record);
+        return record;
+      });
+
+      // Log first record shape for debugging (omit actual data values)
+      if (insertPayload.length > 0) {
+        console.log('[DB Save] ðŸ“‹ Insert record keys:', Object.keys(insertPayload[0]).join(', '),
+          '| has id?', 'id' in insertPayload[0]);
+      }
+
       const { data: insertedData, error: insertError } = await supabase
         .from('preset_participants')
-        .insert(newParticipants.map(p => ({ ...p, preset_id: presetId })))
+        .insert(insertPayload)
         .select();
 
       if (insertError) {
-        console.error('[DB Save] ❌ Error inserting participants:', insertError);
+        console.error('[DB Save] âŒ Error inserting participants:', insertError);
         throw insertError;
       }
 
       if (insertedData) {
         savedParticipants.push(...insertedData);
-        console.log('[DB Save] ✅ Inserted', insertedData.length, 'participants with new IDs:',
+        console.log('[DB Save] âœ… Inserted', insertedData.length, 'participants with new IDs:',
           insertedData.map(p => `#${p.numero} (${p.id?.substring(0, 8) || 'no-id'}...)`).join(', ')
         );
       }
@@ -1544,17 +1995,18 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
 
     // 3. DELETE removed participants (surgical delete, not nuclear)
     if (toDelete.length > 0) {
-      console.log('[DB Save] 🗑️  Deleting', toDelete.length, 'removed participants');
+      sendProgress('delete', 75, `Removing ${toDelete.length} obsolete participantsâ€¦`);
+      console.log('[DB Save] ðŸ—‘ï¸  Deleting', toDelete.length, 'removed participants');
       const { error: deleteError } = await supabase
         .from('preset_participants')
         .delete()
         .in('id', toDelete);
 
       if (deleteError) {
-        console.error('[DB Save] ❌ Error deleting participants:', deleteError);
+        console.error('[DB Save] âŒ Error deleting participants:', deleteError);
         // Don't throw - deletes are less critical than updates/inserts
       } else {
-        console.log('[DB Save] ✅ Deleted', toDelete.length, 'participants');
+        console.log('[DB Save] âœ… Deleted', toDelete.length, 'participants');
       }
     }
 
@@ -1568,19 +2020,20 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
       console.error('[DB] Error updating preset timestamp:', updateError);
     }
 
-    // ⚠️ CRITICAL FIX: Invalidate cache to force reload with complete driver data
-    console.log('[DB Save] 🧹 Invalidating cache for preset', presetId);
+    // âš ï¸ CRITICAL FIX: Invalidate cache to force reload with complete driver data
+    console.log('[DB Save] ðŸ§¹ Invalidating cache for preset', presetId);
     const cacheIndex = presetsCache.findIndex(p => p.id === presetId);
     if (cacheIndex !== -1) {
       presetsCache.splice(cacheIndex, 1);
-      console.log('[DB Save] ✅ Removed preset from cache');
+      console.log('[DB Save] âœ… Removed preset from cache');
     }
     cacheLastUpdated = 0;
 
-    // ⚠️ NEW: Reload preset with complete driver data
+    // âš ï¸ NEW: Reload preset with complete driver data
     // savedParticipants from UPSERT doesn't include preset_participant_drivers
     // Do fresh query with drivers included to return complete data
-    console.log('[DB Save] 🔄 Reloading preset with complete driver data');
+    sendProgress('reload', 88, 'Reloading complete driver dataâ€¦');
+    console.log('[DB Save] ðŸ”„ Reloading preset with complete driver data');
     const { data: reloadedPreset, error: reloadError } = await supabase
       .from('participant_presets')
       .select(`
@@ -1594,25 +2047,405 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
       .single();
 
     if (reloadError) {
-      console.error('[DB Save] ⚠️  Error reloading preset (returning basic data):', reloadError);
+      console.error('[DB Save] âš ï¸  Error reloading preset (returning basic data):', reloadError);
       // Fall back to returning what we have
-      console.log('[DB Save] 🟢 COMPLETE savePresetParticipantsSupabase - returning', savedParticipants.length, 'participants (basic data)');
+      console.log('[DB Save] ðŸŸ¢ COMPLETE savePresetParticipantsSupabase - returning', savedParticipants.length, 'participants (basic data)');
+      sendProgress('complete', 100, `Saved ${savedParticipants.length} participants`, { count: savedParticipants.length });
       return savedParticipants;
     }
 
     if (reloadedPreset?.participants) {
-      console.log('[DB Save] ✅ Reloaded', reloadedPreset.participants.length, 'participants with complete driver data');
-      console.log('[DB Save] 🟢 COMPLETE savePresetParticipantsSupabase - returning complete data with drivers');
+      console.log('[DB Save] âœ… Reloaded', reloadedPreset.participants.length, 'participants with complete driver data');
+      console.log('[DB Save] ðŸŸ¢ COMPLETE savePresetParticipantsSupabase - returning complete data with drivers');
+      sendProgress('complete', 100, `Saved ${reloadedPreset.participants.length} participants`, { count: reloadedPreset.participants.length });
       return reloadedPreset.participants;
     }
 
-    console.log('[DB Save] 🟢 COMPLETE savePresetParticipantsSupabase - returning', savedParticipants.length, 'participants');
+    console.log('[DB Save] ðŸŸ¢ COMPLETE savePresetParticipantsSupabase - returning', savedParticipants.length, 'participants');
+    sendProgress('complete', 100, `Saved ${savedParticipants.length} participants`, { count: savedParticipants.length });
     return savedParticipants;
 
   } catch (error) {
     console.error('[DB] Error saving preset participants to Supabase:', error);
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    safeSend('preset-save-progress', { presetId, stage: 'error', percent: 100, message, error: message });
     throw error;
   }
+}
+
+/**
+ * BUG-02 â€” persist a SINGLE preset participant immediately.
+ *
+ * The participant-editor's "Save & Next" / "Save Changes" buttons used to only
+ * mutate the in-memory list; nothing reached the DB until the preset-level
+ * "Save Preset". A crash or a stray Escape mid-session lost every edit. This is
+ * the narrow write that backs the new per-row persist: ONE row, upsert-or-insert,
+ * no delete-diff, no touching of sibling rows.
+ *
+ * Deliberately NOT a thin wrapper over savePresetParticipantsSupabase:
+ *   - It must NEVER run the delete-diff. The bulk path deletes DB rows absent
+ *     from the in-memory array, which would commit CSV/PDF-merge "remove"
+ *     results before the user reviews them (the documented merge gate).
+ *   - It must NOT bump participant_presets.updated_at â€” that stays owned by the
+ *     preset-level Save (Federico's default).
+ * It otherwise mirrors the bulk path field-for-field: applyDualWriteFolders for
+ * legacy 1.1.4 folder slots, FIX #78 id/created_at stripping on insert, and the
+ * exact same presetsCache invalidation so an analysis started within the 30s TTL
+ * never reads a stale roster.
+ *
+ * Ownership is verified once per preset per app session (memoized in
+ * verifiedOwnedPresetIds); RLS is the real backstop on the write.
+ */
+export async function upsertSinglePresetParticipantSupabase(
+  presetId: string,
+  participant: Partial<PresetParticipantSupabase> & { id?: string }
+): Promise<PresetParticipantSupabase> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+  if (!presetId) throw new Error('presetId is required');
+
+  const supabase = getSupabaseClient();
+
+  // Ownership check â€” memoized for the session so fast repeated saves don't
+  // each pay a round-trip. Mirrors savePresetParticipantsSupabase's check.
+  if (!verifiedOwnedPresetIds.has(presetId)) {
+    const { data: preset, error: presetError } = await supabase
+      .from('participant_presets')
+      .select('id, user_id')
+      .eq('id', presetId)
+      .single();
+
+    if (presetError) {
+      console.error('[DB UpsertOne] preset lookup failed:', presetError);
+      throw new Error(`Preset lookup failed: ${presetError.message}`);
+    }
+    if (!preset) {
+      throw new Error(`Preset ${presetId} not found`);
+    }
+    if (preset.user_id !== userId) {
+      console.error(`[DB UpsertOne] user mismatch: preset.user_id=${preset.user_id}, userId=${userId}`);
+      throw new Error('Access denied: preset belongs to another user');
+    }
+    verifiedOwnedPresetIds.add(presetId);
+  }
+
+  // Build the row. Dual-write derives the legacy folder_1/2/3(+_path) columns
+  // from the canonical folders[] for 1.1.4 clients. We deliberately do NOT set
+  // sort_order (the bulk path omits it too).
+  const record: any = { ...participant, preset_id: presetId };
+  applyDualWriteFolders(record);
+
+  let saved: PresetParticipantSupabase | null = null;
+
+  if (participant.id) {
+    // Update-or-insert by primary key. The row already exists â†’ this resolves
+    // to an UPDATE, preserving the id and its associated drivers/photos.
+    const { data, error } = await supabase
+      .from('preset_participants')
+      .upsert([record], { onConflict: 'id' })
+      .select()
+      .single();
+    if (error) {
+      console.error('[DB UpsertOne] upsert failed:', error);
+      throw error;
+    }
+    saved = data as PresetParticipantSupabase;
+  } else {
+    // FIX #78: strip id/created_at so Postgres uses DEFAULT gen_random_uuid().
+    delete record.id;
+    delete record.created_at;
+    const { data, error } = await supabase
+      .from('preset_participants')
+      .insert(record)
+      .select()
+      .single();
+    if (error) {
+      console.error('[DB UpsertOne] insert failed:', error);
+      throw error;
+    }
+    saved = data as PresetParticipantSupabase;
+  }
+
+  // Invalidate the presets cache exactly like the bulk path, so a subsequent
+  // analysis (or list read) within the 30s TTL doesn't serve a stale roster.
+  const cacheIndex = presetsCache.findIndex(p => p.id === presetId);
+  if (cacheIndex !== -1) {
+    presetsCache.splice(cacheIndex, 1);
+  }
+  cacheLastUpdated = 0;
+
+  return saved;
+}
+
+// ============================================================================
+// Bulk folder assignment (PR2 â€” foundation for the split-view UI in PR3)
+// ============================================================================
+
+/**
+ * Result shape for bulkAssignFoldersSupabase. Per-row reporting lets the
+ * renderer surface partial success when one of N participants fails RLS or
+ * a transient network blip while the others go through.
+ */
+export interface BulkAssignFoldersResult {
+  ok: number;
+  failed: { id: string; error: string }[];
+  /** Folder names from the input that didn't exist in the preset's
+   *  custom_folders pool. The handler refuses these silently â€” surfacing
+   *  them lets the UI show a clear "create folder X first" hint. */
+  unknownFolderNames: string[];
+}
+
+/**
+ * Pure helper: compute the new folders[] array for a single participant given
+ * their current folders, the requested folder objects (already resolved to
+ * {name, path}), and the merge mode. Extracted so it can be unit-tested in
+ * isolation without a Supabase mock.
+ *
+ * Append mode: keep existing folders, add only those whose name is not
+ * already present (case-insensitive name comparison). Path on the existing
+ * entry wins â€” we don't overwrite a path the user may have customised.
+ *
+ * Replace mode: drop everything, set to exactly the requested folders in the
+ * given order.
+ */
+export function computeFolderUpdate(
+  currentFolders: { name: string; path?: string }[] | undefined | null,
+  requestedFolders: { name: string; path?: string }[],
+  mode: 'append' | 'replace'
+): { name: string; path?: string }[] {
+  if (mode === 'replace') {
+    // Defensive copy + filter to drop blanks.
+    return requestedFolders
+      .filter((f) => f && typeof f.name === 'string' && f.name.trim() !== '')
+      .map((f) => ({ name: f.name.trim(), ...(f.path ? { path: f.path } : {}) }));
+  }
+
+  // Append: case-insensitive dedup against existing names.
+  const existing = (Array.isArray(currentFolders) ? currentFolders : []).filter(
+    (f) => f && typeof f.name === 'string' && f.name.trim() !== ''
+  );
+  const existingKeys = new Set(existing.map((f) => f.name.trim().toLowerCase()));
+  const merged: { name: string; path?: string }[] = existing.map((f) => ({
+    name: f.name.trim(),
+    ...(f.path ? { path: f.path } : {})
+  }));
+
+  for (const f of requestedFolders) {
+    if (!f || typeof f.name !== 'string') continue;
+    const trimmed = f.name.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (existingKeys.has(key)) continue;
+    existingKeys.add(key);
+    merged.push({ name: trimmed, ...(f.path ? { path: f.path } : {}) });
+  }
+  return merged;
+}
+
+/**
+ * Atomically assign one or more folder names to many preset participants in a
+ * single Supabase round-trip. Used by the bulk-edit UI (PR3) and by the
+ * auto-assign rules engine (PR4).
+ *
+ * Folder names are looked up in the preset's `custom_folders` pool to attach
+ * the canonical filesystem path. Names not found in the pool are reported in
+ * `unknownFolderNames` and skipped â€” the caller is expected to surface them
+ * as a "create folder first" hint rather than failing the whole request.
+ *
+ * The legacy folder_1/2/3 columns are kept dual-written via the existing
+ * `applyDualWriteFolders` helper so 1.1.4 clients reading the same DB still
+ * see a valid first-three subset.
+ *
+ * @param presetId         UUID of the participant_presets row.
+ * @param participantIds   UUIDs of the preset_participants rows to mutate.
+ *                         Must all belong to `presetId`; foreign IDs are
+ *                         filtered out and reported in `failed`.
+ * @param folderNames      Folder names to assign (lookup against the preset's
+ *                         custom_folders pool).
+ * @param mode             'append' merges with existing folders, 'replace'
+ *                         overwrites them. Append is the default for safety
+ *                         and is what PR3's UI defaults to.
+ * @throws when the user is unauthenticated, the preset doesn't exist, or
+ *         RLS rejects the read.
+ */
+export async function bulkAssignFoldersSupabase(
+  presetId: string,
+  participantIds: string[],
+  folderNames: string[],
+  mode: 'append' | 'replace'
+): Promise<BulkAssignFoldersResult> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+
+  if (!presetId) throw new Error('presetId is required');
+  if (mode !== 'append' && mode !== 'replace') {
+    throw new Error(`Invalid mode: ${mode} (expected 'append' or 'replace')`);
+  }
+
+  // Empty target set â†’ no-op, return clean result so callers don't have to
+  // special-case it before invoking us.
+  if (!Array.isArray(participantIds) || participantIds.length === 0) {
+    return { ok: 0, failed: [], unknownFolderNames: [] };
+  }
+
+  const authenticatedClient = authService.getSupabaseClient();
+
+  // 1. Verify preset ownership and load custom_folders pool. The same query
+  //    serves two purposes: ownership check (404/403 if the user doesn't own
+  //    the preset) and folder-name â†’ path lookup table for the assignment.
+  const { data: preset, error: presetError } = await authenticatedClient
+    .from('participant_presets')
+    .select('id, user_id, custom_folders')
+    .eq('id', presetId)
+    .single();
+
+  if (presetError) {
+    console.error('[DB BulkAssign] preset lookup failed:', presetError);
+    throw new Error(`Preset lookup failed: ${presetError.message}`);
+  }
+  if (!preset) {
+    throw new Error(`Preset ${presetId} not found`);
+  }
+  if (preset.user_id !== userId) {
+    console.error(`[DB BulkAssign] user mismatch: preset.user_id=${preset.user_id}, userId=${userId}`);
+    throw new Error('Access denied: preset belongs to another user');
+  }
+
+  // 2. Resolve folder names â†’ {name, path} objects via the preset's pool.
+  //    Unknown names are reported back to the caller, not thrown â€” this lets
+  //    the UI show "Folder X doesn't exist yet, create it first" inline.
+  const pool: { name: string; path?: string }[] = Array.isArray(preset.custom_folders)
+    ? (preset.custom_folders as any[]).filter(
+        (f) => f && typeof f === 'object' && typeof f.name === 'string'
+      )
+    : [];
+  const poolByName = new Map<string, { name: string; path?: string }>();
+  for (const f of pool) {
+    poolByName.set(f.name.trim().toLowerCase(), { name: f.name.trim(), path: f.path });
+  }
+
+  const requestedFolders: { name: string; path?: string }[] = [];
+  const unknownFolderNames: string[] = [];
+  for (const raw of folderNames || []) {
+    if (typeof raw !== 'string') continue;
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    const resolved = poolByName.get(trimmed.toLowerCase());
+    if (resolved) {
+      requestedFolders.push(resolved);
+    } else {
+      unknownFolderNames.push(trimmed);
+    }
+  }
+
+  // Replace mode with no resolvable folders is a legitimate "clear all
+  // folders for these participants" action and proceeds. Append mode with
+  // nothing resolvable is a no-op â€” we return early to avoid an UPSERT that
+  // would just rewrite the same values.
+  if (mode === 'append' && requestedFolders.length === 0) {
+    return { ok: 0, failed: [], unknownFolderNames };
+  }
+
+  // 3. Load current folders for the target participants. The .in() filter
+  //    plus the preset_id check is our defense-in-depth: even if the caller
+  //    passes a participant ID from another preset, we don't touch it.
+  const { data: currentRows, error: currentError } = await authenticatedClient
+    .from('preset_participants')
+    .select('id, folders')
+    .eq('preset_id', presetId)
+    .in('id', participantIds);
+
+  if (currentError) {
+    console.error('[DB BulkAssign] current participants lookup failed:', currentError);
+    throw new Error(`Participant lookup failed: ${currentError.message}`);
+  }
+
+  const currentById = new Map<string, { folders?: { name: string; path?: string }[] }>();
+  for (const row of currentRows || []) {
+    currentById.set(row.id, { folders: (row as any).folders });
+  }
+
+  // Participants requested but not found under this preset â†’ reported as
+  // failures rather than silently dropped. Either RLS hid them, or the
+  // caller passed a stale or cross-preset ID.
+  const failed: { id: string; error: string }[] = [];
+  for (const id of participantIds) {
+    if (!currentById.has(id)) {
+      failed.push({ id, error: 'Participant not found in this preset' });
+    }
+  }
+
+  // 4. Build per-row UPDATE patches. We can't use Supabase `.upsert(...)`
+  //    here: PostgreSQL's `INSERT ... ON CONFLICT DO UPDATE` validates
+  //    NOT NULL constraints on the INSERT side BEFORE the conflict resolves
+  //    to UPDATE, so omitting `numero` (NOT NULL) blows up with a constraint
+  //    violation even though every row already exists. UPDATE doesn't have
+  //    that problem â€” unspecified columns are simply preserved.
+  //
+  //    Each row goes through applyDualWriteFolders so the legacy
+  //    folder_1/2/3 columns stay in sync for 1.1.4 clients.
+  const patches = (currentRows || []).map((row) => {
+    const newFolders = computeFolderUpdate(
+      (row as any).folders,
+      requestedFolders,
+      mode
+    );
+    const patch: any = { folders: newFolders };
+    applyDualWriteFolders(patch);
+    return { id: row.id, patch };
+  });
+
+  if (patches.length === 0) {
+    return { ok: 0, failed, unknownFolderNames };
+  }
+
+  // 5. Run the UPDATEs in parallel â€” one round-trip per participant, but
+  //    Supabase pools connections so the wall-clock cost is dominated by
+  //    network latency, not query count. Per-row error reporting lets the
+  //    renderer surface partial failure (RLS deny, transient network blip).
+  let okCount = 0;
+  await Promise.all(
+    patches.map(async ({ id, patch }) => {
+      const { error: updateError } = await authenticatedClient
+        .from('preset_participants')
+        .update(patch)
+        .eq('id', id)
+        .eq('preset_id', presetId); // defense-in-depth: never touch other presets
+      if (updateError) {
+        console.error(`[DB BulkAssign] update failed for participant ${id}:`, updateError);
+        failed.push({ id, error: updateError.message });
+      } else {
+        okCount += 1;
+      }
+    })
+  );
+
+  if (okCount === 0 && failed.length > 0) {
+    throw new Error(`Bulk folder assignment failed: ${failed[0].error}`);
+  }
+
+  // 6. Cache invalidation â€” without this, a subsequent read inside the 30s
+  //    TTL window would return stale folders. Mirrors the pattern used by
+  //    togglePresetParticipantActive et al.
+  invalidatePresetCacheEntry(presetId);
+
+  // Bump preset updated_at so cache-by-timestamp consumers can detect it.
+  await authenticatedClient
+    .from('participant_presets')
+    .update({ updated_at: new Date().toISOString() })
+    .eq('id', presetId);
+
+  console.log(
+    `[DB BulkAssign] âœ… ${okCount} participants Ã— ${requestedFolders.length} folders (${mode})` +
+    (failed.length > 0 ? ` Â· ${failed.length} failed` : '') +
+    (unknownFolderNames.length > 0 ? ` Â· skipped unknown names: ${unknownFolderNames.join(', ')}` : '')
+  );
+
+  return {
+    ok: okCount,
+    failed,
+    unknownFolderNames
+  };
 }
 
 /**
@@ -1641,11 +2474,11 @@ export async function updatePresetLastUsedSupabase(presetId: string): Promise<vo
 /**
  * Update participant preset details in Supabase
  */
-export async function updateParticipantPresetSupabase(presetId: string, updateData: Partial<Pick<ParticipantPresetSupabase, 'name' | 'description' | 'category_id' | 'custom_folders'>>): Promise<void> {
-  try {
-    const userId = getCurrentUserId();
-    if (!userId) throw new Error('User not authenticated');
+export async function updateParticipantPresetSupabase(presetId: string, updateData: Partial<Pick<ParticipantPresetSupabase, 'name' | 'description' | 'category_id' | 'custom_folders' | 'iptc_metadata' | 'allow_external_person_recognition' | 'series_sponsor_ignore'>>): Promise<void> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
 
+  await withRetry(async () => {
     const { error } = await supabase
       .from('participant_presets')
       .update({
@@ -1665,11 +2498,7 @@ export async function updateParticipantPresetSupabase(presetId: string, updateDa
     if (cacheIndex !== -1) {
       presetsCache[cacheIndex] = { ...presetsCache[cacheIndex], ...updateData, updated_at: new Date().toISOString() };
     }
-
-  } catch (error) {
-    console.error('[DB] Error updating participant preset in Supabase:', error);
-    throw error;
-  }
+  }, 'updateParticipantPreset', 3, 1000);
 }
 
 /**
@@ -1702,16 +2531,448 @@ export async function deleteParticipantPresetSupabase(presetId: string): Promise
   }
 }
 
+// ============================================================================
+// PRESET PARTICIPANT TOGGLE (v1.1.4) â€” soft-disable API
+// ----------------------------------------------------------------------------
+// Four entry points the renderer / IPC layer uses to flip is_active on
+// preset_participants and preset_participant_drivers without deleting data.
+//
+// Authorisation is enforced by Supabase RLS (policy restricts UPDATE to
+// `participant_presets.user_id = auth.uid() AND is_official = false`). The
+// client-side checks below are UX-only: a public/official preset cannot be
+// toggled, so we short-circuit before the network call to give a clear error.
+//
+// Every successful mutation invalidates:
+//   - `presetsCache` entry for the affected preset (so subsequent reads
+//     reflect the new state)
+//   - `cacheLastUpdated` (force re-fetch on next list call)
+// The edge-function `preset-loader` cache is warm-instance only and will
+// expire on its own; callers that need immediate server-side effect should
+// also invalidate via the dedicated admin RPC (future work, not v1.1.4).
+// ============================================================================
+
 /**
- * Duplicate an official preset for the current user
- * Creates a personal copy of an official preset that the user can customize
+ * Invalidate the local preset cache entry for a given preset so the next read
+ * goes back to Supabase. Small wrapper used by the toggle mutators below.
+ */
+function invalidatePresetCacheEntry(presetId: string): void {
+  const idx = presetsCache.findIndex(p => p.id === presetId);
+  if (idx !== -1) {
+    presetsCache.splice(idx, 1);
+  }
+  cacheLastUpdated = 0;
+}
+
+/**
+ * Toggle the `is_active` flag on a single preset participant.
+ *
+ * @param participantId UUID of the preset_participants row.
+ * @param isActive New value. `false` = excluded from AI matching; `true` = default/re-enable.
+ * @throws when the user is unauthenticated or RLS rejects the update
+ *         (which happens for public/official presets â€” callers should treat
+ *         that as a UX "read-only" signal and prompt the user to duplicate).
+ */
+export async function togglePresetParticipantActive(
+  participantId: string,
+  isActive: boolean
+): Promise<PresetParticipantSupabase> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+
+  const authenticatedClient = authService.getSupabaseClient();
+
+  // Use .select('*, participant_presets!inner(user_id, is_official)') so RLS
+  // gives us a deterministic error instead of a silent 0-row update when the
+  // preset is public/official.
+  const { data, error } = await authenticatedClient
+    .from('preset_participants')
+    .update({ is_active: isActive })
+    .eq('id', participantId)
+    .select('*, participant_presets!inner(id, user_id, is_official)')
+    .single();
+
+  if (error) {
+    console.error('[DB] togglePresetParticipantActive failed:', error);
+    throw error;
+  }
+
+  const presetId = (data as any)?.preset_id;
+  if (presetId) invalidatePresetCacheEntry(presetId);
+
+  console.log(`[DB] Participant ${participantId} is_active â†’ ${isActive}`);
+  return data as PresetParticipantSupabase;
+}
+
+/**
+ * Toggle the `is_active` flag on a single driver inside a multi-driver
+ * participant (e.g. WEC endurance crews).
+ *
+ * Note: disabling the last active driver in a crew does NOT automatically
+ * disable the parent participant â€” that's a UI-layer concern and the caller
+ * should surface a warning ("all drivers disabled, car will still be
+ * matched by numero/livrea"). Keeping the two flags independent lets the
+ * user disable just face recognition for one pilot without affecting the
+ * whole car's number/livery matching.
+ */
+export async function togglePresetDriverActive(
+  driverId: string,
+  isActive: boolean
+): Promise<PresetParticipantDriver> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+
+  const authenticatedClient = authService.getSupabaseClient();
+
+  const { data, error } = await authenticatedClient
+    .from('preset_participant_drivers')
+    .update({ is_active: isActive })
+    .eq('id', driverId)
+    .select('*, preset_participants!inner(preset_id, participant_presets!inner(id, user_id, is_official))')
+    .single();
+
+  if (error) {
+    console.error('[DB] togglePresetDriverActive failed:', error);
+    throw error;
+  }
+
+  // Navigate the joined structure to find the preset id for cache invalidation
+  const presetId = (data as any)?.preset_participants?.preset_id;
+  if (presetId) invalidatePresetCacheEntry(presetId);
+
+  console.log(`[DB] Driver ${driverId} is_active â†’ ${isActive}`);
+  return data as PresetParticipantDriver;
+}
+
+/**
+ * Bulk-toggle is_active for many participants of the same preset in one round
+ * trip. Used by the "Disable all from team X" / "Re-enable all" UI action.
+ *
+ * @param presetId UUID of the participant_presets row the IDs must belong to.
+ *   Passed separately so we can narrow the UPDATE â€” RLS still verifies
+ *   ownership via the preset â€” and so the server can reject cross-preset IDs
+ *   injected by a rogue payload.
+ * @param participantIds UUIDs of preset_participants rows to update. Must all
+ *   belong to `presetId`.
+ * @param isActive New value to apply to every row.
+ * @returns the number of rows actually updated.
+ */
+export async function bulkSetPresetParticipantsActive(
+  presetId: string,
+  participantIds: string[],
+  isActive: boolean
+): Promise<number> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+  if (!Array.isArray(participantIds) || participantIds.length === 0) return 0;
+
+  const authenticatedClient = authService.getSupabaseClient();
+
+  const { data, error } = await authenticatedClient
+    .from('preset_participants')
+    .update({ is_active: isActive })
+    .eq('preset_id', presetId)
+    .in('id', participantIds)
+    .select('id');
+
+  if (error) {
+    console.error('[DB] bulkSetPresetParticipantsActive failed:', error);
+    throw error;
+  }
+
+  invalidatePresetCacheEntry(presetId);
+  const updated = Array.isArray(data) ? data.length : 0;
+  console.log(`[DB] Bulk set is_active=${isActive} on ${updated}/${participantIds.length} participants of preset ${presetId}`);
+  return updated;
+}
+
+/**
+ * Bulk set `include_default_folder` on many participants of the same
+ * preset in one round-trip. Used by the "Also export to default folder"
+ * checkbox in the Assign Folder side panel â€” when the user changes the
+ * value there, the new state is applied to every selected participant
+ * as part of the same action.
+ *
+ * Same shape & semantics as bulkSetPresetParticipantsActive above:
+ *   - presetId narrows the UPDATE so cross-preset IDs are rejected.
+ *   - RLS on preset_participants still gates by preset ownership.
+ *   - Invalidates the preset cache so the next read sees the new flags.
+ *
+ * @returns the number of rows actually updated.
+ */
+export async function bulkSetPresetParticipantsIncludeDefaultFolder(
+  presetId: string,
+  participantIds: string[],
+  includeDefaultFolder: boolean
+): Promise<number> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+  if (!Array.isArray(participantIds) || participantIds.length === 0) return 0;
+
+  const authenticatedClient = authService.getSupabaseClient();
+
+  const { data, error } = await authenticatedClient
+    .from('preset_participants')
+    .update({ include_default_folder: includeDefaultFolder })
+    .eq('preset_id', presetId)
+    .in('id', participantIds)
+    .select('id');
+
+  if (error) {
+    console.error('[DB] bulkSetPresetParticipantsIncludeDefaultFolder failed:', error);
+    throw error;
+  }
+
+  invalidatePresetCacheEntry(presetId);
+  const updated = Array.isArray(data) ? data.length : 0;
+  console.log(
+    `[DB] Bulk set include_default_folder=${includeDefaultFolder} on ${updated}/${participantIds.length} ` +
+    `participants of preset ${presetId}`
+  );
+  return updated;
+}
+
+/**
+ * Reset every participant and every driver of a preset back to is_active = true.
+ *
+ * This is the "Ripristina tutti" action in the editor header: it's one
+ * confirmation away from undoing every soft-disable. We deliberately do NOT
+ * require the caller to list IDs â€” the operation is scoped to `presetId` and
+ * RLS keeps it constrained to presets owned by the current user.
+ */
+export async function resetPresetActiveStates(presetId: string): Promise<{
+  participantsReset: number;
+  driversReset: number;
+}> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+
+  const authenticatedClient = authService.getSupabaseClient();
+
+  // 1. Reset participants
+  const { data: partData, error: partErr } = await authenticatedClient
+    .from('preset_participants')
+    .update({ is_active: true })
+    .eq('preset_id', presetId)
+    .eq('is_active', false) // no-op rows skipped â€” cheaper + updated_at stays clean
+    .select('id');
+
+  if (partErr) {
+    console.error('[DB] resetPresetActiveStates (participants) failed:', partErr);
+    throw partErr;
+  }
+
+  // 2. Reset drivers. Need to scope by participant_id IN (SELECT id FROM
+  //    preset_participants WHERE preset_id = $1). Supabase-js does not support
+  //    subselects here, so fetch the participant id list first.
+  const { data: allPartIds, error: idsErr } = await authenticatedClient
+    .from('preset_participants')
+    .select('id')
+    .eq('preset_id', presetId);
+  if (idsErr) {
+    console.error('[DB] resetPresetActiveStates (fetch participant ids) failed:', idsErr);
+    throw idsErr;
+  }
+  const partIds = (allPartIds || []).map((r: any) => r.id).filter(Boolean);
+
+  let driversReset = 0;
+  if (partIds.length > 0) {
+    const { data: drvData, error: drvErr } = await authenticatedClient
+      .from('preset_participant_drivers')
+      .update({ is_active: true })
+      .in('participant_id', partIds)
+      .eq('is_active', false)
+      .select('id');
+    if (drvErr) {
+      console.error('[DB] resetPresetActiveStates (drivers) failed:', drvErr);
+      throw drvErr;
+    }
+    driversReset = Array.isArray(drvData) ? drvData.length : 0;
+  }
+
+  invalidatePresetCacheEntry(presetId);
+  const participantsReset = Array.isArray(partData) ? partData.length : 0;
+  console.log(`[DB] Reset preset ${presetId}: ${participantsReset} participants + ${driversReset} drivers re-enabled`);
+  return { participantsReset, driversReset };
+}
+
+// ============================================================================
+// IPTC METADATA PROFILE MANAGEMENT
+// ============================================================================
+
+/**
+ * Get the IPTC metadata profile for a preset
+ */
+export async function getPresetIptcMetadata(presetId: string): Promise<any | null> {
+  try {
+    const userId = getCurrentUserId();
+    if (!userId) throw new Error('User not authenticated');
+
+    const authenticatedClient = authService.getSupabaseClient();
+
+    const { data, error } = await authenticatedClient
+      .from('participant_presets')
+      .select('iptc_metadata')
+      .eq('id', presetId)
+      .or(`user_id.eq.${userId},is_public.eq.true,is_official.eq.true`)
+      .single();
+
+    if (error) {
+      console.error('[DB] Error getting IPTC metadata:', error);
+      return null;
+    }
+
+    return data?.iptc_metadata || null;
+  } catch (error) {
+    console.error('[DB] Error getting IPTC metadata:', error);
+    throw error;
+  }
+}
+
+/**
+ * Save/update the IPTC metadata profile for a preset
+ */
+export async function savePresetIptcMetadata(presetId: string, iptcMetadata: any): Promise<void> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+
+  await withRetry(async () => {
+    const { error } = await supabase
+      .from('participant_presets')
+      .update({
+        iptc_metadata: iptcMetadata,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', presetId)
+      .eq('user_id', userId);
+
+    if (error) {
+      console.error('[DB] Error saving IPTC metadata:', error);
+      throw error;
+    }
+
+    // Update cache if available
+    const cacheIndex = presetsCache.findIndex(p => p.id === presetId);
+    if (cacheIndex !== -1) {
+      presetsCache[cacheIndex] = {
+        ...presetsCache[cacheIndex],
+        iptc_metadata: iptcMetadata,
+        updated_at: new Date().toISOString()
+      };
+    }
+  }, 'savePresetIptcMetadata', 3, 1000);
+}
+
+// ============================================================================
+// ACCOUNT-LEVEL DEFAULT IPTC TEMPLATE (UX-04)
+// ============================================================================
+// Stored in public.user_iptc_templates (owner-only RLS). The template is the
+// PresetIptcMetadata shape MINUS the per-preset behavior overrides
+// (writingTiming / faceScope). It is copied into new presets and used as the
+// Export & IPTC fallback â€” precedence is always preset profile > user default.
+//
+// IMPORTANT: every read/write here uses authService.getSupabaseClient() (the
+// authenticated client), so auth.uid() resolves and RLS accepts the row.
+
+/**
+ * Get the current user's default IPTC template, or null if none is configured.
+ * Tolerant by design (mirrors getPresetIptcMetadata): logs and returns null on
+ * error so the caller can silently fall back to an empty form.
+ */
+export async function getUserDefaultIptcTemplate(): Promise<any | null> {
+  try {
+    const userId = getCurrentUserId();
+    if (!userId) return null;
+
+    const authenticatedClient = authService.getSupabaseClient();
+
+    const { data, error } = await authenticatedClient
+      .from('user_iptc_templates')
+      .select('template')
+      .eq('user_id', userId)
+      .eq('is_default', true)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[DB] Error getting default IPTC template:', error);
+      return null;
+    }
+
+    return data?.template ?? null;
+  } catch (error) {
+    console.error('[DB] Error getting default IPTC template:', error);
+    return null;
+  }
+}
+
+/**
+ * Save (or clear) the current user's default IPTC template.
+ *
+ * - `template === null` deletes the existing default row.
+ * - Otherwise it updates the existing default row, or inserts one if none
+ *   exists yet (the DB defaults cover name/is_default).
+ *
+ * supabase-js `upsert` cannot target the partial unique index
+ * (user_iptc_templates_one_default), so this uses update-then-insert.
+ */
+export async function saveUserDefaultIptcTemplate(template: any | null): Promise<void> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+
+  await withRetry(async () => {
+    const authenticatedClient = authService.getSupabaseClient();
+
+    // Clear: delete the default row (Settings â†’ "Clear").
+    if (template === null) {
+      const { error } = await authenticatedClient
+        .from('user_iptc_templates')
+        .delete()
+        .eq('user_id', userId)
+        .eq('is_default', true);
+
+      if (error) {
+        console.error('[DB] Error clearing default IPTC template:', error);
+        throw error;
+      }
+      return;
+    }
+
+    // Update the existing default row.
+    const { data: updated, error: updateError } = await authenticatedClient
+      .from('user_iptc_templates')
+      .update({ template, updated_at: new Date().toISOString() })
+      .eq('user_id', userId)
+      .eq('is_default', true)
+      .select('id');
+
+    if (updateError) {
+      console.error('[DB] Error updating default IPTC template:', updateError);
+      throw updateError;
+    }
+
+    // No default row yet â†’ insert one (name/is_default fall back to DB defaults).
+    if (!updated || updated.length === 0) {
+      const { error: insertError } = await authenticatedClient
+        .from('user_iptc_templates')
+        .insert({ user_id: userId, template });
+
+      if (insertError) {
+        console.error('[DB] Error inserting default IPTC template:', insertError);
+        throw insertError;
+      }
+    }
+  }, 'saveUserDefaultIptcTemplate', 3, 1000);
+}
+
+/**
+ * Duplicate any preset for the current user
+ * Creates a personal copy of a preset (official or user-owned) that the user can customize
  */
 export async function duplicateOfficialPresetSupabase(sourcePresetId: string): Promise<ParticipantPresetSupabase> {
   try {
     const userId = getCurrentUserId();
     if (!userId) throw new Error('User not authenticated');
 
-    // Get the source preset (must be official)
+    // Get the source preset (official or user-owned)
     const { data: sourcePreset, error: sourceError } = await supabase
       .from('participant_presets')
       .select(`
@@ -1719,20 +2980,28 @@ export async function duplicateOfficialPresetSupabase(sourcePresetId: string): P
         preset_participants(*)
       `)
       .eq('id', sourcePresetId)
-      .eq('is_official', true)
       .single();
 
     if (sourceError || !sourcePreset) {
-      throw new Error('Source preset not found or is not an official preset');
+      throw new Error('Source preset not found');
     }
 
-    // Create the new preset (personal copy)
+    // Create the new preset (personal copy).
+    // Carry over the preset-level profile fields too â€” without these the copy
+    // silently lost the curated IPTC Pro profile, the PersonInImage template and
+    // the external-recognition flag, leaving the photographer to rebuild them.
     const newPreset = await createParticipantPresetSupabase({
       user_id: userId,
       name: `${sourcePreset.name} (My Copy)`,
-      description: sourcePreset.description || `Duplicated from Official RT Preset: ${sourcePreset.name}`,
+      description: sourcePreset.description || `Duplicated from: ${sourcePreset.name}`,
       category_id: sourcePreset.category_id,
-      custom_folders: sourcePreset.custom_folders || []
+      custom_folders: sourcePreset.custom_folders || [],
+      iptc_metadata: sourcePreset.iptc_metadata ?? null,
+      person_shown_template: sourcePreset.person_shown_template ?? null,
+      allow_external_person_recognition: sourcePreset.allow_external_person_recognition ?? false,
+      // ACC-01 (Gruppe C): keep the curated series-sponsor ignore list when
+      // duplicating an official preset so the copy starts pre-seeded.
+      series_sponsor_ignore: sourcePreset.series_sponsor_ignore || []
     });
 
     // Copy participants
@@ -1795,6 +3064,24 @@ export async function duplicateOfficialPresetSupabase(sourcePresetId: string): P
 export async function importParticipantsFromCSVSupabase(csvData: any[], presetName: string, categoryId?: string): Promise<ParticipantPresetSupabase> {
   const supabase = authService.getSupabaseClient();
 
+  // Defensive guard: refuse to create a preset where no row has a race
+  // number. Surfaces the failure before SmartMatcher silently misses every
+  // photo. Mirrors the frontend parseCSV guard so this function is safe to
+  // call from any importer path.
+  if (csvData.length > 0) {
+    const rowsWithNumero = csvData.filter(r =>
+      (r.numero || r.Number || r.number || r.race_number || r.bib || '').toString().trim() !== ''
+    ).length;
+    if (rowsWithNumero === 0) {
+      const sampleKeys = Object.keys(csvData[0] || {}).slice(0, 12).join(', ');
+      throw new Error(
+        `CSV import failed: 0 of ${csvData.length} rows have a race number. ` +
+        `Detected columns: [${sampleKeys}]. ` +
+        `Expected one of: numero, Number, number, race_number, or Bib.`
+      );
+    }
+  }
+
   const preset = await createParticipantPresetSupabase({
     user_id: getCurrentUserId() || '',
     name: presetName,
@@ -1805,13 +3092,14 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
   const participants: Omit<PresetParticipantSupabase, 'id' | 'created_at'>[] = csvData.map((row, index) => {
     const participant = {
       preset_id: preset.id!,
-      numero: row.numero || row.Number || '',
-      nome: row.nome || row.Driver || '',
-      categoria: row.categoria || row.Category || '',
+      numero: row.numero || row.Number || row.number || row.race_number || row.bib || '',
+      nome: row.nome || row.Driver || row.driver || row.Person || row.person || row.Name || row.name || '',
+      categoria: row.categoria || row.Category || row.category || row.class || row.Class || '',
       squadra: row.squadra || row.team || row.Team || '',
-      sponsor: row.sponsor || row.Sponsors || '',
+      sponsor: row.sponsor || row.Sponsors || row.sponsors || '',
       metatag: row.metatag || row.Metatag || '',
-      plate_number: row.plate_number || row.Plate_Number || '',
+      plate_number: row.plate_number || row.Plate_Number || row.plate || row.Plate || '',
+      car_model: row.car_model || row.Car_Model || '',
       folder_1: row.folder_1 || row.Folder_1 || '',
       folder_2: row.folder_2 || row.Folder_2 || '',
       folder_3: row.folder_3 || row.Folder_3 || '',
@@ -1822,7 +3110,7 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
       custom_fields: {
         // Store any additional CSV fields
         ...Object.keys(row).reduce((acc, key) => {
-          const knownFields = ['numero', 'Number', 'nome', 'Driver', 'categoria', 'Category', 'squadra', 'team', 'Team', 'sponsor', 'Sponsors', 'metatag', 'Metatag', 'plate_number', 'Plate_Number', 'folder_1', 'Folder_1', 'folder_2', 'Folder_2', 'folder_3', 'Folder_3', 'folder_1_path', 'Folder_1_Path', 'folder_2_path', 'Folder_2_Path', 'folder_3_path', 'Folder_3_Path', '_Driver_IDs', '_driver_ids', '_Driver_Metatags', '_driver_metatags'];
+          const knownFields = ['numero', 'Number', 'number', 'race_number', 'bib', 'Bib', 'nome', 'Driver', 'driver', 'Person', 'person', 'Name', 'name', 'categoria', 'Category', 'category', 'class', 'Class', 'squadra', 'team', 'Team', 'sponsor', 'Sponsors', 'sponsors', 'metatag', 'Metatag', 'plate_number', 'Plate_Number', 'plate', 'Plate', 'folder_1', 'Folder_1', 'folder_2', 'Folder_2', 'folder_3', 'Folder_3', 'folder_1_path', 'Folder_1_Path', 'folder_2_path', 'Folder_2_Path', 'folder_3_path', 'Folder_3_Path', '_Driver_IDs', '_driver_ids', '_Driver_Metatags', '_driver_metatags', '_Driver_Nationalities', '_driver_nationalities', 'car_model', 'Car_Model', 'nationality', 'Nationality'];
           if (!knownFields.includes(key)) {
             acc[key] = row[key];
           }
@@ -1844,6 +3132,7 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
     // Check for driver ID preservation columns (case-insensitive)
     const driverIdsRaw = row._Driver_IDs || row._driver_ids || '';
     const driverMetatagsRaw = row._Driver_Metatags || row._driver_metatags || '';
+    const driverNationalitiesRaw = row._Driver_Nationalities || row._driver_nationalities || '';
     const driverNamesRaw = row.nome || row.Driver || '';
 
     // Parse driver names (comma-separated)
@@ -1853,12 +3142,14 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
       // PRESERVE MODE: CSV has driver IDs - reuse them
       const ids = driverIdsRaw.split('|').map((s: string) => s.trim()).filter(Boolean);
       const metatags = driverMetatagsRaw ? driverMetatagsRaw.split('|').map((s: string) => s.trim()) : [];
+      const nationalities = driverNationalitiesRaw ? driverNationalitiesRaw.split('|').map((s: string) => s.trim()) : [];
 
       const driversToCreate = driverNames.map((name: string, idx: number) => ({
         id: ids[idx] || crypto.randomUUID(), // Reuse ID or generate new
         participant_id: savedParticipant.id,
         driver_name: name,
         driver_metatag: metatags[idx] || null,
+        driver_nationality: nationalities[idx] || null,
         driver_order: idx,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
@@ -1871,11 +3162,16 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
 
     } else if (driverNames.length > 1) {
       // LEGACY MODE: No IDs in CSV - create new drivers
+      // Check for nationality column (Nationality or _Driver_Nationalities)
+      const nationalityRaw = row.Nationality || row.nationality || '';
+      const legacyNationalities = driverNationalitiesRaw ? driverNationalitiesRaw.split('|').map((s: string) => s.trim()) : [];
+
       const driversToCreate = driverNames.map((name: string, idx: number) => ({
         id: crypto.randomUUID(),
         participant_id: savedParticipant.id,
         driver_name: name,
         driver_metatag: null,
+        driver_nationality: legacyNationalities[idx] || (idx === 0 ? nationalityRaw : null) || null,
         driver_order: idx,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
@@ -1884,6 +3180,26 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
       await supabase.from('preset_participant_drivers').insert(driversToCreate);
 
       console.log(`[DB] CSV Import: Created ${driversToCreate.length} new drivers for participant ${savedParticipant.numero}`);
+    } else if (driverNames.length === 1) {
+      // SINGLE DRIVER: Still check for nationality to preserve
+      const nationalityRaw = row.Nationality || row.nationality || '';
+      const singleNationality = driverNationalitiesRaw ? driverNationalitiesRaw.split('|')[0]?.trim() : nationalityRaw;
+
+      if (singleNationality) {
+        const driverToCreate = {
+          id: crypto.randomUUID(),
+          participant_id: savedParticipant.id,
+          driver_name: driverNames[0],
+          driver_metatag: null,
+          driver_nationality: singleNationality || null,
+          driver_order: 0,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
+
+        await supabase.from('preset_participant_drivers').insert([driverToCreate]);
+        console.log(`[DB] CSV Import: Created single driver with nationality for participant ${savedParticipant.numero}`);
+      }
     }
   }
 
@@ -2636,6 +3952,9 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
     }> = [];
 
     // 1. Get all participants with their direct face photos (backward compatibility)
+    // v1.1.4 â€” Preset Participant Toggle: exclude soft-disabled participants so
+    // their face descriptors are NOT loaded into the recognizer's memory
+    // vector. This is the critical cut for "disable an entire car/crew".
     const { data: participants, error: participantsError } = await authenticatedClient
       .from('preset_participants')
       .select(`
@@ -2643,6 +3962,7 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
         numero,
         nome,
         squadra,
+        is_active,
         preset_participant_face_photos!participant_id (
           id,
           photo_url,
@@ -2654,7 +3974,8 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
           detection_confidence
         )
       `)
-      .eq('preset_id', presetId);
+      .eq('preset_id', presetId)
+      .eq('is_active', true);
 
     if (participantsError) {
       console.error('[DB] Error loading preset face descriptors (participants):', participantsError);
@@ -2702,15 +4023,22 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
 
     if (participantIds.length > 0) {
       // 2b. Get drivers for these participants (no join on preset_participants needed)
+      // v1.1.4 â€” also exclude soft-disabled drivers so their face descriptors
+      // aren't added to the recognizer. Belt-and-braces: participant_id is
+      // already filtered to active participants above, but a driver can be
+      // disabled individually while the parent crew stays active (endurance).
       const { data: drivers, error: driversError } = await authenticatedClient
         .from('preset_participant_drivers')
         .select(`
           id,
           driver_name,
           driver_metatag,
-          participant_id
+          driver_nationality,
+          participant_id,
+          is_active
         `)
-        .in('participant_id', participantIds);
+        .in('participant_id', participantIds)
+        .eq('is_active', true);
 
       if (driversError) {
         console.error('[DB] Error loading preset drivers:', driversError);
@@ -2822,3 +4150,854 @@ export async function getPresetParticipantFacePhotoCount(targetId: string, isDri
   }
 }
 
+// ==================== PROJECTS ====================
+
+export async function createProject(data: any) {
+  const client = getSupabaseClient();
+  const userId = authService.getCurrentUserId();
+  if (!userId) throw new Error('Not authenticated');
+
+  // Auto-generate client_slug from name if not provided
+  const clientName = data.client_name || data.name || 'client';
+  if (!data.client_slug) {
+    data.client_slug = generateSlug(clientName) + '-' + Math.random().toString(36).substring(2, 6);
+  }
+
+  const { data: result, error } = await client.from('projects').insert({ ...data, user_id: userId }).select().single();
+  if (error) throw new Error(error.message);
+  return result;
+}
+
+export async function getUserProjects() {
+  const client = getSupabaseClient();
+  const userId = authService.getCurrentUserId();
+  if (!userId) throw new Error('Not authenticated');
+  const { data, error } = await client
+    .from('projects')
+    .select('*, galleries!galleries_project_id_fkey(id, title, slug, status)')
+    .eq('user_id', userId)
+    .eq('status', 'active')
+    .order('created_at', { ascending: false });
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+export async function getProjectById(id: string) {
+  const client = getSupabaseClient();
+  const { data, error } = await client
+    .from('projects')
+    .select('*, galleries!galleries_project_id_fkey(id, title, slug, status, total_views, total_downloads, event_date, season), delivery_rules(*, galleries(title, slug))')
+    .eq('id', id)
+    .single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+export async function updateProject(id: string, updateData: any) {
+  const client = getSupabaseClient();
+  const { data, error } = await client
+    .from('projects')
+    .update({ ...updateData, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+export async function deleteProject(id: string) {
+  const client = getSupabaseClient();
+  const { error } = await client.from('projects').update({ status: 'deleted' }).eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+// ==================== GALLERIES (from desktop) ====================
+
+export async function createGallery(data: any) {
+  const client = getSupabaseClient();
+  const userId = authService.getCurrentUserId();
+  if (!userId) throw new Error('Not authenticated');
+  const slug = data.slug || (data.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') + '-' + Math.random().toString(36).substring(2, 10));
+  const { data: result, error } = await client
+    .from('galleries')
+    .insert({ ...data, slug, user_id: userId, status: 'draft' })
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return result;
+}
+
+export async function getUserGalleries() {
+  const client = getSupabaseClient();
+  const userId = authService.getCurrentUserId();
+  if (!userId) throw new Error('Not authenticated');
+  const { data, error } = await client
+    .from('galleries')
+    .select('id, title, slug, status, gallery_type, access_type, project_id, total_views, total_downloads, created_at')
+    .eq('user_id', userId)
+    .neq('status', 'suspended')
+    .order('created_at', { ascending: false });
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+// ==================== DELIVERY RULES ====================
+
+export async function createDeliveryRule(data: any) {
+  const client = getSupabaseClient();
+  const { data: result, error } = await client.from('delivery_rules').insert(data).select().single();
+  if (error) throw new Error(error.message);
+  return result;
+}
+
+export async function getDeliveryRulesForProject(projectId: string) {
+  const client = getSupabaseClient();
+  const { data, error } = await client
+    .from('delivery_rules')
+    .select('*, galleries(title, slug)')
+    .eq('project_id', projectId)
+    .order('priority', { ascending: false });
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+export async function updateDeliveryRule(id: string, updateData: any) {
+  const client = getSupabaseClient();
+  const { data, error } = await client
+    .from('delivery_rules')
+    .update({ ...updateData, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+export async function deleteDeliveryRule(id: string) {
+  const client = getSupabaseClient();
+  const { error } = await client.from('delivery_rules').delete().eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+// ==================== SYNC DELIVERY RULES FROM PRESET ====================
+
+/**
+ * Sync delivery rules from preset participant "delivery_to_client_id" associations.
+ *
+ * For each participant that has a delivery_to_client_id set:
+ * - Finds the client (project) and its default gallery
+ * - Creates/updates an auto-generated delivery rule with source_type='preset_auto'
+ * - Removes stale auto-generated rules for participants that no longer have a delivery_to_client_id
+ *
+ * This is called after saving a preset's participants.
+ */
+export async function syncDeliveryRulesFromPreset(presetId: string): Promise<{ created: number; updated: number; deleted: number }> {
+  const client = getSupabaseClient();
+
+  // 1. Get all participants for this preset with delivery_to_client_id set
+  // v1.1.4 â€” Exclude soft-disabled participants: a disabled participant
+  // should not have delivery rules generated, and existing auto-rules for
+  // disabled participants become "stale" and get cleaned up by step 5.
+  const { data: participants, error: pErr } = await client
+    .from('preset_participants')
+    .select('id, numero, nome, squadra, categoria, delivery_to_client_id, is_active')
+    .eq('preset_id', presetId)
+    .eq('is_active', true);
+
+  if (pErr) throw new Error(`Failed to load preset participants: ${pErr.message}`);
+
+  // 2. Get existing auto-generated rules for this preset
+  const { data: existingRules, error: rErr } = await client
+    .from('delivery_rules')
+    .select('id, source_participant_id, project_id, gallery_id, match_criteria')
+    .eq('source_preset_id', presetId)
+    .eq('source_type', 'preset_auto');
+
+  if (rErr) throw new Error(`Failed to load existing auto-rules: ${rErr.message}`);
+
+  const existingByParticipant = new Map<string, any>();
+  (existingRules || []).forEach((r: any) => {
+    if (r.source_participant_id) existingByParticipant.set(r.source_participant_id, r);
+  });
+
+  // 3. Get all clients (projects) that have galleries, grouped by project
+  const participantsWithDelivery = (participants || []).filter((p: any) => p.delivery_to_client_id);
+  const clientIds = [...new Set(participantsWithDelivery.map((p: any) => p.delivery_to_client_id))];
+
+  // Get default galleries for each client
+  const clientGalleryMap = new Map<string, string>();
+  if (clientIds.length > 0) {
+    for (const clientId of clientIds) {
+      // First try default_gallery_id, then fall back to first gallery
+      const { data: project } = await client
+        .from('projects')
+        .select('id, default_gallery_id')
+        .eq('id', clientId)
+        .single();
+
+      if (project?.default_gallery_id) {
+        clientGalleryMap.set(clientId as string, project.default_gallery_id);
+      } else {
+        // Get first active gallery for this client
+        const { data: galleries } = await client
+          .from('galleries')
+          .select('id')
+          .eq('project_id', clientId)
+          .neq('status', 'suspended')
+          .order('created_at', { ascending: true })
+          .limit(1);
+
+        if (galleries && galleries.length > 0) {
+          clientGalleryMap.set(clientId as string, galleries[0].id);
+        }
+      }
+    }
+  }
+
+  let created = 0;
+  let updated = 0;
+  let deleted = 0;
+
+  // 4. Create/update rules for participants with delivery_to_client_id
+  for (const p of participantsWithDelivery) {
+    const galleryId = clientGalleryMap.get(p.delivery_to_client_id);
+    if (!galleryId) continue; // No gallery available for this client yet
+
+    // Build match criteria from participant data
+    const matchCriteria: any = {};
+    if (p.numero) matchCriteria.numbers = [p.numero];
+    if (p.squadra) matchCriteria.teams = [p.squadra];
+    if (p.nome) matchCriteria.participants = [p.nome];
+
+    const existingRule = existingByParticipant.get(p.id);
+
+    if (existingRule) {
+      // Update existing rule
+      const { error: uErr } = await client
+        .from('delivery_rules')
+        .update({
+          gallery_id: galleryId,
+          project_id: p.delivery_to_client_id,
+          match_criteria: matchCriteria,
+          rule_name: `Auto: #${p.numero || ''} ${p.nome || p.squadra || ''}`.trim(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', existingRule.id);
+      if (!uErr) updated++;
+      existingByParticipant.delete(p.id); // Mark as processed
+    } else {
+      // Create new rule
+      const { error: cErr } = await client
+        .from('delivery_rules')
+        .insert({
+          project_id: p.delivery_to_client_id,
+          gallery_id: galleryId,
+          rule_name: `Auto: #${p.numero || ''} ${p.nome || p.squadra || ''}`.trim(),
+          match_criteria: matchCriteria,
+          priority: 0,
+          is_active: true,
+          source_type: 'preset_auto',
+          source_participant_id: p.id,
+          source_preset_id: presetId,
+        });
+      if (!cErr) created++;
+    }
+  }
+
+  // 5. Delete stale auto-generated rules (participant no longer has delivery_to)
+  const staleRuleIds = [...existingByParticipant.values()].map((r: any) => r.id);
+  if (staleRuleIds.length > 0) {
+    const { error: dErr } = await client
+      .from('delivery_rules')
+      .delete()
+      .in('id', staleRuleIds);
+    if (!dErr) deleted = staleRuleIds.length;
+  }
+
+  console.log(`[Delivery] Synced rules from preset ${presetId}: created=${created}, updated=${updated}, deleted=${deleted}`);
+  return { created, updated, deleted };
+}
+
+// ==================== GALLERY IMAGES ====================
+
+export async function addImagesToGallery(galleryId: string, images: any[]) {
+  const client = getSupabaseClient();
+  const rows = images.map((img: any) => ({ gallery_id: galleryId, ...img }));
+  const { error } = await client.from('gallery_images').upsert(rows, { onConflict: 'gallery_id,image_id' });
+  if (error) throw new Error(error.message);
+}
+
+// ==================== AUTO-ROUTING ====================
+
+export async function autoRouteImagesToGalleries(projectId: string, executionId: string) {
+  const client = getSupabaseClient();
+
+  // Get delivery rules for project
+  const { data: rules } = await client
+    .from('delivery_rules')
+    .select('*')
+    .eq('project_id', projectId)
+    .eq('is_active', true)
+    .order('priority', { ascending: false });
+
+  if (!rules || rules.length === 0) return { routed: 0, unmatched: 0 };
+
+  // Get images + analysis for this execution
+  const { data: images } = await client
+    .from('images')
+    .select('id, analysis_results(recognized_number), visual_tags(participant_name, participant_team)')
+    .eq('execution_id', executionId);
+
+  if (!images) return { routed: 0, unmatched: 0 };
+
+  let routed = 0;
+  let unmatched = 0;
+  const inserts: any[] = [];
+
+  for (const img of images) {
+    const ar = Array.isArray((img as any).analysis_results) ? (img as any).analysis_results[0] : (img as any).analysis_results;
+    const vt = Array.isArray((img as any).visual_tags) ? (img as any).visual_tags[0] : (img as any).visual_tags;
+    const number = ar?.recognized_number || '';
+    const team = vt?.participant_team || '';
+    const name = vt?.participant_name || '';
+    let matched = false;
+
+    for (const rule of rules) {
+      const mc = rule.match_criteria || {};
+      const matchesNumber = (mc as any).numbers?.includes(number);
+      const matchesTeam = (mc as any).teams?.some((t: string) => team.toLowerCase().includes(t.toLowerCase()));
+      const matchesParticipant = (mc as any).participants?.some((p: string) => name.toLowerCase().includes(p.toLowerCase()));
+
+      if (matchesNumber || matchesTeam || matchesParticipant) {
+        inserts.push({
+          gallery_id: rule.gallery_id,
+          image_id: img.id,
+          execution_id: executionId,
+          delivery_rule_id: rule.id,
+          match_type: 'auto',
+          recognized_numbers: number ? [number] : [],
+          participant_name: name,
+          participant_team: team,
+        });
+        matched = true;
+        routed++;
+      }
+    }
+    if (!matched) unmatched++;
+  }
+
+  if (inserts.length > 0) {
+    for (let i = 0; i < inserts.length; i += 100) {
+      await client.from('gallery_images').upsert(inserts.slice(i, i + 100), { onConflict: 'gallery_id,image_id' });
+    }
+  }
+
+  // Count distinct galleries that received photos
+  const galleriesHit = new Set(inserts.map(i => i.gallery_id));
+
+  return { routed, unmatched, galleriesCount: galleriesHit.size };
+}
+
+// ==================== USER PLAN LIMITS ====================
+
+export async function getUserPlanLimits() {
+  const client = getSupabaseClient();
+  const userId = authService.getCurrentUserId();
+  if (!userId) throw new Error('Not authenticated');
+
+  // Check feature_flags first (per-user overrides)
+  const { data: flags } = await client
+    .from('feature_flags')
+    .select('feature_name, is_enabled')
+    .eq('user_id', userId);
+
+  const flagMap: Record<string, boolean> = {};
+  (flags || []).forEach((f: any) => { flagMap[f.feature_name] = f.is_enabled; });
+
+  // Check subscription plan limits
+  const { data: sub } = await client
+    .from('subscriptions')
+    .select('subscription_plans(limits)')
+    .eq('user_id', userId)
+    .eq('status', 'active')
+    .maybeSingle();
+
+  const planLimits = (sub as any)?.subscription_plans?.limits || {};
+
+  return {
+    gallery_enabled: flagMap['gallery_enabled'] ?? planLimits.gallery_enabled ?? false,
+    delivery_enabled: flagMap['delivery_enabled'] ?? planLimits.delivery_enabled ?? false,
+    projects_enabled: flagMap['projects_enabled'] ?? planLimits.projects_enabled ?? false,
+    r2_storage_enabled: flagMap['r2_storage_enabled'] ?? planLimits.r2_storage_enabled ?? false,
+    face_recognition_enabled: flagMap['face_recognition_enabled'] ?? planLimits.face_recognition_enabled ?? false,
+    r2_storage_max_gb: planLimits.r2_storage_max_gb ?? 0,
+    gallery_max_galleries: planLimits.gallery_max_galleries ?? 3,
+  };
+}
+
+// ==================== GALLERY UPDATES ====================
+
+export async function updateGallery(id: string, updateData: any) {
+  const client = getSupabaseClient();
+  console.log('[DB] updateGallery called:', id, JSON.stringify(updateData));
+  const { data, error } = await client
+    .from('galleries')
+    .update({ ...updateData, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) {
+    console.error('[DB] updateGallery error:', error.message, error.details, error.hint);
+    throw new Error(error.message);
+  }
+  console.log('[DB] updateGallery result:', data?.id, 'status:', data?.status);
+  return data;
+}
+
+export async function deleteGallery(id: string) {
+  const client = getSupabaseClient();
+  const { error } = await client.from('galleries').update({ status: 'suspended' }).eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * Get all galleries not yet assigned to any client (project_id is null).
+ */
+export async function getUnlinkedGalleries() {
+  const client = getSupabaseClient();
+  const userId = authService.getCurrentUserId();
+  if (!userId) throw new Error('Not authenticated');
+  const { data, error } = await client
+    .from('galleries')
+    .select('id, title, slug, status, gallery_type, access_type, created_at')
+    .eq('user_id', userId)
+    .is('project_id', null)
+    .neq('status', 'suspended')
+    .order('created_at', { ascending: false });
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+/**
+ * Link an existing gallery to a client (project) by setting its project_id.
+ */
+export async function linkGalleryToProject(galleryId: string, projectId: string) {
+  const client = getSupabaseClient();
+  const { data, error } = await client
+    .from('galleries')
+    .update({ project_id: projectId, updated_at: new Date().toISOString() })
+    .eq('id', galleryId)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+// ==================== SEND EXECUTION TO GALLERY ====================
+
+export async function sendExecutionToGallery(galleryId: string, executionId: string) {
+  const client = getSupabaseClient();
+
+  // Step 1: Get image IDs for this execution (fast, indexed query)
+  const { data: images, error: imgError } = await client
+    .from('images')
+    .select('id')
+    .eq('execution_id', executionId);
+
+  if (imgError) throw new Error(imgError.message);
+  if (!images || images.length === 0) return { added: 0 };
+
+  const imageIds = images.map((img: any) => img.id);
+
+  // Step 2: Get analysis_results and visual_tags separately (uses indexes)
+  const [arResult, vtResult] = await Promise.all([
+    client.from('analysis_results').select('image_id, recognized_number').in('image_id', imageIds),
+    client.from('visual_tags').select('image_id, participant_name, participant_team').in('image_id', imageIds),
+  ]);
+
+  // Build lookup maps
+  const arMap: Record<string, string> = {};
+  if (arResult.data) {
+    arResult.data.forEach((ar: any) => { if (ar.recognized_number) arMap[ar.image_id] = ar.recognized_number; });
+  }
+  const vtMap: Record<string, { name: string; team: string }> = {};
+  if (vtResult.data) {
+    vtResult.data.forEach((vt: any) => { vtMap[vt.image_id] = { name: vt.participant_name || '', team: vt.participant_team || '' }; });
+  }
+
+  const rows = imageIds.map((imgId: string) => {
+    const number = arMap[imgId] || '';
+    const vt = vtMap[imgId];
+    return {
+      gallery_id: galleryId,
+      image_id: imgId,
+      execution_id: executionId,
+      match_type: 'manual',
+      recognized_numbers: number ? [number] : [],
+      participant_name: vt?.name || '',
+      participant_team: vt?.team || '',
+    };
+  });
+
+  // Upsert in chunks of 100
+  let added = 0;
+  for (let i = 0; i < rows.length; i += 100) {
+    const chunk = rows.slice(i, i + 100);
+    const { error } = await client.from('gallery_images').upsert(chunk, { onConflict: 'gallery_id,image_id' });
+    if (!error) added += chunk.length;
+  }
+
+  return { added };
+}
+
+// ==================== GET USER EXECUTIONS (for gallery send dropdown) ====================
+
+export async function getUserRecentExecutions() {
+  const client = getSupabaseClient();
+  const userId = authService.getCurrentUserId();
+  if (!userId) throw new Error('Not authenticated');
+  const { data, error } = await client
+    .from('executions')
+    .select('id, name, execution_at, status, processed_images, project_id, source_folder')
+    .eq('user_id', userId)
+    .in('status', ['completed', 'completed_with_errors'])
+    .order('execution_at', { ascending: false })
+    .limit(20);
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+// ==================== GET EXECUTIONS LINKED TO A GALLERY ====================
+
+export async function getGalleryExecutions(galleryId: string) {
+  const client = getSupabaseClient();
+
+  // Get distinct execution_ids from gallery_images for this gallery
+  const { data, error } = await client
+    .from('gallery_images')
+    .select('execution_id')
+    .eq('gallery_id', galleryId)
+    .not('execution_id', 'is', null);
+
+  if (error) throw new Error(error.message);
+  if (!data || data.length === 0) return [];
+
+  // Get unique execution IDs
+  const executionIds = [...new Set(data.map((row: any) => row.execution_id))];
+
+  // Fetch execution details
+  const { data: executions, error: execError } = await client
+    .from('executions')
+    .select('id, name, execution_at, processed_images, project_id')
+    .in('id', executionIds)
+    .order('execution_at', { ascending: false });
+
+  if (execError) throw new Error(execError.message);
+
+  // Count images per execution in this gallery
+  const countMap: Record<string, number> = {};
+  data.forEach((row: any) => {
+    countMap[row.execution_id] = (countMap[row.execution_id] || 0) + 1;
+  });
+
+  return (executions || []).map((exec: any) => ({
+    ...exec,
+    gallery_image_count: countMap[exec.id] || 0,
+  }));
+}
+
+// ==================== R2 UPLOAD: Get images needing upload for an execution ====================
+
+export async function getImagesForR2Upload(executionId: string) {
+  const client = getSupabaseClient();
+  const { data, error } = await client
+    .from('images')
+    .select('id, original_filename, storage_path, original_file_size')
+    .eq('execution_id', executionId)
+    .or('original_upload_status.is.null,original_upload_status.eq.pending,original_upload_status.eq.failed');
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+export async function markImagesUploadQueued(imageIds: string[]) {
+  const client = getSupabaseClient();
+  for (let i = 0; i < imageIds.length; i += 100) {
+    const chunk = imageIds.slice(i, i + 100);
+    await client.from('images').update({ original_upload_status: 'queued' }).in('id', chunk);
+  }
+}
+
+// ==================== R2 UPLOAD: Detailed status for an execution ====================
+
+export async function getR2UploadStatus(executionId: string) {
+  const client = getSupabaseClient();
+
+  // Get counts per status
+  const { data: images, error } = await client
+    .from('images')
+    .select('id, original_filename, original_upload_status, original_storage_provider, original_storage_path, original_file_size')
+    .eq('execution_id', executionId);
+
+  if (error) throw new Error(error.message);
+  if (!images) return { total: 0, completed: 0, failed: 0, queued: 0, pending: 0, images: [] };
+
+  const stats = {
+    total: images.length,
+    completed: 0,
+    failed: 0,
+    queued: 0,
+    pending: 0,
+    images: images.map((img: any) => ({
+      id: img.id,
+      filename: img.original_filename,
+      status: img.original_upload_status || 'pending',
+      provider: img.original_storage_provider,
+      r2_path: img.original_storage_path,
+      file_size: img.original_file_size,
+    })),
+  };
+
+  for (const img of images) {
+    const status = img.original_upload_status || 'pending';
+    if (status === 'completed') stats.completed++;
+    else if (status === 'failed') stats.failed++;
+    else if (status === 'queued') stats.queued++;
+    else stats.pending++;
+  }
+
+  return stats;
+}
+
+// Reset stuck queued/failed images back to pending so they can be retried
+export async function resetR2UploadStatus(executionId: string, resetStatuses: string[] = ['queued', 'failed']) {
+  const client = getSupabaseClient();
+  const conditions = resetStatuses.map(s => `original_upload_status.eq.${s}`).join(',');
+  const { data, error } = await client
+    .from('images')
+    .update({ original_upload_status: 'pending', original_storage_provider: null, original_storage_path: null })
+    .eq('execution_id', executionId)
+    .or(conditions)
+    .select('id');
+  if (error) throw new Error(error.message);
+  return { reset: data?.length || 0 };
+}
+
+// Update source_folder for an execution (manual repair)
+export async function updateExecutionSourceFolder(executionId: string, sourceFolder: string) {
+  const client = getSupabaseClient();
+  const { error } = await client
+    .from('executions')
+    .update({ source_folder: sourceFolder })
+    .eq('id', executionId);
+  if (error) throw new Error(error.message);
+}
+
+// ==================== FEATURE INTEREST SURVEYS ====================
+
+export async function submitFeatureInterestSurvey(data: { responses: any; comment: string | null; feature_area?: string }) {
+  const client = getSupabaseClient();
+  const userId = authService.getCurrentUserId();
+  if (!userId) throw new Error('Not authenticated');
+  const featureArea = data.feature_area || 'delivery_gallery';
+  const { error } = await client.from('feature_interest_surveys').upsert(
+    {
+      user_id: userId,
+      feature_area: featureArea,
+      responses: data.responses,
+      comment: data.comment,
+      submitted_at: new Date().toISOString(),
+    },
+    { onConflict: 'user_id,feature_area' }
+  );
+  if (error) throw new Error(error.message);
+}
+
+export async function checkFeatureInterestSurvey(featureArea?: string): Promise<{ submitted: boolean }> {
+  const client = getSupabaseClient();
+  const userId = authService.getCurrentUserId();
+  if (!userId) throw new Error('Not authenticated');
+  const { data } = await client
+    .from('feature_interest_surveys')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('feature_area', featureArea || 'delivery_gallery')
+    .maybeSingle();
+  return { submitted: !!data };
+}
+
+// ==================== CLIENT USERS (AUTHENTICATION) ====================
+
+/**
+ * Create a client user for gallery/portal access.
+ * Password is hashed client-side before sending to the database.
+ */
+export async function createClientUser(data: {
+  project_id: string;
+  username?: string;
+  password_hash?: string;
+  display_name?: string;
+  email?: string;
+  status?: string;
+  invite_token?: string;
+  invite_token_expires_at?: string;
+  is_active?: boolean;
+}) {
+  const client = getSupabaseClient();
+  // Auto-generate username from email if not provided
+  if (!data.username && data.email) {
+    data.username = data.email.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '-');
+  }
+  const { data: result, error } = await client
+    .from('client_users')
+    .insert(data)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return result;
+}
+
+export async function getClientUsersForProject(projectId: string) {
+  const client = getSupabaseClient();
+  const { data, error } = await client
+    .from('client_users')
+    .select('id, project_id, username, display_name, email, is_active, status, last_login_at, invite_token_expires_at, created_at')
+    .eq('project_id', projectId)
+    .order('created_at', { ascending: true });
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+export async function updateClientUser(id: string, updateData: any) {
+  const client = getSupabaseClient();
+  const { data, error } = await client
+    .from('client_users')
+    .update({ ...updateData, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+export async function deleteClientUser(id: string) {
+  const client = getSupabaseClient();
+  const { error } = await client.from('client_users').delete().eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+// ==================== CLIENT SLUG / SHAREABLE LINKS ====================
+
+/**
+ * Generate a URL-friendly slug from a client name.
+ * Ensures uniqueness by appending a random suffix if needed.
+ */
+function generateSlug(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // Remove accents
+    .replace(/[^a-z0-9]+/g, '-')     // Replace non-alphanumeric with hyphens
+    .replace(/^-+|-+$/g, '')          // Trim leading/trailing hyphens
+    .substring(0, 50);
+}
+
+/**
+ * Set or regenerate the client_slug for a project.
+ * Used for client portal shareable links: /c/{client_slug}
+ */
+export async function setClientSlug(projectId: string, clientName: string): Promise<string> {
+  const client = getSupabaseClient();
+  let slug = generateSlug(clientName);
+
+  // Check uniqueness, append random suffix if needed
+  const { data: existing } = await client
+    .from('projects')
+    .select('id')
+    .eq('client_slug', slug)
+    .neq('id', projectId)
+    .maybeSingle();
+
+  if (existing) {
+    slug = `${slug}-${Math.random().toString(36).substring(2, 6)}`;
+  }
+
+  const { data, error } = await client
+    .from('projects')
+    .update({ client_slug: slug, updated_at: new Date().toISOString() })
+    .eq('id', projectId)
+    .select('client_slug')
+    .single();
+
+  if (error) throw new Error(error.message);
+  return data.client_slug;
+}
+
+// ==================== CLIENT INVITE EMAIL ====================
+
+/**
+ * Send invite email to a client user.
+ * Fetches project info for the email template, then delegates to email-service.
+ */
+export async function sendClientInviteEmail(params: {
+  clientUserId: string;
+  email: string;
+  displayName: string;
+  inviteToken: string;
+  projectId: string;
+}) {
+  // Import here to avoid circular deps
+  const { sendClientInviteEmailViaBrevo } = await import('./email-service');
+
+  // Get project info for the email (client name, photographer name)
+  const project = await getProjectById(params.projectId);
+  const projectName = project?.client_name || project?.name || 'Client Portal';
+
+  return sendClientInviteEmailViaBrevo({
+    recipientEmail: params.email,
+    recipientName: params.displayName,
+    inviteToken: params.inviteToken,
+    clientName: projectName,
+    portalSlug: project?.client_slug || '',
+  });
+}
+
+/**
+ * Resend invitation: generate new token + send email.
+ */
+export async function resendClientInvite(clientUserId: string) {
+  const client = getSupabaseClient();
+
+  // Get the client user
+  const { data: user, error: fetchError } = await client
+    .from('client_users')
+    .select('id, project_id, email, display_name, status')
+    .eq('id', clientUserId)
+    .single();
+  if (fetchError || !user) throw new Error('Client user not found');
+  if (user.status !== 'invited') throw new Error('User is already registered');
+
+  // Generate new token
+  const crypto = require('crypto');
+  const newToken = crypto.randomBytes(16).toString('hex');
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  // Update token in DB
+  const { error: updateError } = await client
+    .from('client_users')
+    .update({
+      invite_token: newToken,
+      invite_token_expires_at: expiresAt,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', clientUserId);
+  if (updateError) throw new Error(updateError.message);
+
+  // Send email
+  return sendClientInviteEmail({
+    clientUserId,
+    email: user.email!,
+    displayName: user.display_name || 'User',
+    inviteToken: newToken,
+    projectId: user.project_id,
+  });
+}

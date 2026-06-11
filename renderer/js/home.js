@@ -39,6 +39,23 @@ function initializeHomePage() {
 
   // Check if we need to navigate to a specific section from results page
   checkNavigationIntent();
+
+  // Surface resume/analysis abort notices (e.g. "already complete", "can't resume on this
+  // device"). The main process sends these on 'analysis-aborted'. Registered once.
+  if (window.api && window.api.receive && !window.__analysisAbortedWired) {
+    window.__analysisAbortedWired = true;
+    window.api.receive('analysis-aborted', (data) => {
+      // When a resume is showing its live view on the Analysis screen, that screen surfaces the
+      // abort itself (inline message, or redirect to results if the run was already complete) —
+      // don't also pop a Home alert() on the wrong screen.
+      if (window.__resumeViewActive) return;
+      const msg = (data && data.message) ? data.message : 'The analysis could not be started.';
+      // Refresh the list so a now-completed/failed run reflects its new state.
+      try { loadRecentExecutions(); } catch (_) {}
+      // eslint-disable-next-line no-alert
+      alert(msg);
+    });
+  }
 }
 
 /**
@@ -163,7 +180,91 @@ async function loadRecentExecutions() {
 }
 
 /**
- * Render recent executions cards
+ * Human-readable sport label with emoji.
+ * Intentionally forgiving — handles the handful of codes the desktop app actually produces
+ * and otherwise falls back to a title-cased version of whatever is stored.
+ */
+function formatSportCategory(raw) {
+  if (!raw) return '🏁 Sport';
+  const key = String(raw).toLowerCase();
+  const table = {
+    motorsport:       '🏎️ Motorsport',
+    cycling:          '🚴 Cycling',
+    running:          '🏃 Running',
+    'running-cycling':'🚴 Running & Cycling',
+    triathlon:        '🏊 Triathlon',
+    motorcycle:       '🏍️ Motorcycle',
+    karting:          '🏎️ Karting',
+    horse:            '🐎 Horse Racing',
+    skiing:           '⛷️ Skiing',
+    generic:          '🏁 Generic'
+  };
+  if (table[key]) return table[key];
+  return '🏁 ' + (raw.charAt(0).toUpperCase() + raw.slice(1));
+}
+
+/**
+ * Compose the delivery-badge HTML for a single execution, gated on the
+ * per-user feature flags we got back from the IPC handler.
+ * Returns an empty string when the user has no delivery features active
+ * (so the row stays clean rather than showing "N/A" pills).
+ */
+function renderDeliveryBadges(exec) {
+  const d = exec.delivery;
+  if (!d) return '';
+  const flags = d.featureFlags || {};
+  const badges = [];
+
+  // --- Gallery badge ---
+  if (flags.gallery_enabled) {
+    const galleries = Array.isArray(d.galleries) ? d.galleries : [];
+    if (galleries.length === 0) {
+      badges.push(`<span class="badge-delivery none" title="Not yet delivered to any gallery">📂 Not delivered</span>`);
+    } else if (galleries.length === 1) {
+      const g = galleries[0];
+      const title = g.title || 'Gallery';
+      badges.push(
+        `<span class="badge-delivery ok" data-gallery-id="${escapeHtml(g.id || '')}" title="Delivered to ${escapeHtml(title)} (${g.count} photos)">✓ ${escapeHtml(title)}</span>`
+      );
+    } else {
+      const names = galleries.slice(0, 3).map(g => g.title).join(', ');
+      badges.push(
+        `<span class="badge-delivery ok" title="Delivered to: ${escapeHtml(names)}">✓ ${galleries.length} galleries</span>`
+      );
+    }
+  }
+
+  // --- HD (R2) badge ---
+  if (flags.r2_storage_enabled) {
+    const hd = d.hd || 'none';
+    switch (hd) {
+      case 'uploaded':
+        badges.push(`<span class="badge-delivery ok" title="All ${d.hdTotal} originals uploaded">✓ HD ready</span>`);
+        break;
+      case 'uploading':
+      case 'pending':
+      case 'queued':
+        badges.push(`<span class="badge-delivery progress" title="HD upload in progress (${d.hdCount}/${d.hdTotal})"><span class="spin-dot"></span> HD uploading</span>`);
+        break;
+      case 'failed':
+        badges.push(`<span class="badge-delivery failed" title="HD upload failed">✕ HD failed</span>`);
+        break;
+      case 'partial':
+        badges.push(`<span class="badge-delivery partial" title="Some originals uploaded (${d.hdCount}/${d.hdTotal})">◐ HD partial</span>`);
+        break;
+      case 'none':
+      default:
+        // No-op: don't clutter the row with "HD not uploaded" for every execution.
+        // The gallery-less case above already communicates "no delivery happened".
+        break;
+    }
+  }
+
+  return badges.length ? `<span class="delivery-badges">${badges.join('')}</span>` : '';
+}
+
+/**
+ * Render recent executions as compact rows (.card-b).
  */
 function renderRecentExecutions(executions) {
   const container = document.getElementById('recent-executions-list');
@@ -183,38 +284,484 @@ function renderRecentExecutions(executions) {
       ? Math.round((exec.imagesWithNumbers / exec.totalImages) * 100)
       : 0;
 
+    // Title falls back to a sensible default when the user hasn't renamed the execution.
+    const hasCustomName = !!(exec.executionName && String(exec.executionName).trim());
+    const displayName = hasCustomName
+      ? exec.executionName
+      : `${formatSportCategory(exec.sportCategory).replace(/^\S+\s/, '')} — ${formattedDate}`;
+    const titleClass = hasCustomName ? 'title' : 'title is-default';
+
+    const preset = exec.participantPreset;
+    const presetLabel = preset && preset.name
+      ? `🎯 ${escapeHtml(preset.name)}${preset.participantCount ? ` (${preset.participantCount})` : ''}`
+      : '';
+
+    const sportLabel = escapeHtml(formatSportCategory(exec.sportCategory));
+
+    const folderPath = exec.folderPath ? escapeHtml(exec.folderPath) : '';
+    const folderLine = folderPath
+      ? `<div class="folder-line">
+           <span class="folder-icon">📂</span>
+           <span class="folder-path" title="${folderPath}">${folderPath}</span>
+           ${renderDeliveryBadges(exec)}
+         </div>`
+      : (renderDeliveryBadges(exec)
+          ? `<div class="folder-line">${renderDeliveryBadges(exec)}</div>`
+          : '');
+
+    const statusLabel = exec.status === 'completed' ? 'Completed'
+      : exec.status === 'completed_with_errors' ? 'Completed'
+      : exec.status === 'processing' ? 'Processing'
+      : exec.status === 'failed' ? 'Failed'
+      : 'Pending';
+
+    // Side badge precedence:
+    //  - interrupted (local OR cloud): the run stopped before finishing → amber "⚠ Interrupted"
+    //  - cloud-only but completed elsewhere (another device / reinstall) → blue "☁ Cloud"
+    //  - otherwise → the normal status pill
+    const interruptedBadge = `<span class="status-pill" style="background:rgba(245,158,11,0.15);color:#f59e0b;border:1px solid rgba(245,158,11,0.35);" title="This analysis was interrupted before it finished. Re-run it to complete.">⚠ Interrupted</span>`;
+    const cloudBadge = `<span class="status-pill" style="background:rgba(99,179,237,0.15);color:#63b3ed;border:1px solid rgba(99,179,237,0.3);" title="Local data not available. This analysis was completed on another device or local files were removed. Re-running the analysis will restore full functionality.">☁ Cloud</span>`;
+    // 'completed_with_errors' has no dedicated pill style — render it green like 'completed'
+    // (its label is already "Completed") so it isn't an uncolored pill.
+    const pillClass = exec.status === 'completed_with_errors' ? 'completed' : (exec.status || 'pending');
+    const sideBadge = exec.interrupted ? interruptedBadge
+      : exec.cloudOnly ? cloudBadge
+      : `<span class="status-pill ${escapeHtml(pillClass)}">${statusLabel}</span>`;
+    // Rows with no complete, usable local result: cloud-only OR interrupted.
+    const noLocalResult = exec.cloudOnly || exec.interrupted;
+
     return `
-      <div class="execution-card" onclick="openExecutionResults('${exec.id}')">
-        <div class="execution-header">
-          <span class="execution-category">${escapeHtml(exec.sportCategory)}</span>
-          <span class="execution-status ${exec.status}">${exec.status}</span>
+      <div class="card-b${exec.cloudOnly ? ' card-b-cloud-only' : ''}" data-execution-id="${escapeHtml(exec.id)}" ${exec.cloudOnly ? 'data-cloud-only="true"' : ''}${exec.interrupted ? ` data-interrupted="true" data-total="${Number(exec.totalImages) || 0}" data-processed="${Number(exec.processedImages) || 0}"` : ''}>
+        <div class="card-b-main">
+          <div class="title-row">
+            <span class="${titleClass}" data-role="title">${escapeHtml(displayName)}</span>
+            ${noLocalResult ? '' : `<button class="rename-btn" data-role="rename" title="Rename analysis" aria-label="Rename analysis">✏️</button>`}
+          </div>
+          <div class="meta-line">
+            <span>${escapeHtml(formattedDate)}</span>
+            <span class="sep">·</span>
+            <span>${sportLabel}</span>
+            ${presetLabel ? `<span class="sep">·</span><span class="preset-chip">${presetLabel}</span>` : ''}
+          </div>
+          ${exec.interrupted
+            ? `<div class="folder-line" style="font-size:11px;color:var(--text-muted,#94a3b8);">⚠️ Interrupted before finishing${(exec.processedImages && exec.totalImages) ? ` — ${exec.processedImages} of ${exec.totalImages} photos analyzed` : ''} · re-run to complete</div>`
+            : exec.cloudOnly
+                ? `<div class="folder-line" style="font-size:11px;color:var(--text-muted,#94a3b8);">📡 Local data unavailable — completed on another device or after reinstall</div>`
+                : folderLine}
         </div>
-        <div class="execution-date">${formattedDate}</div>
-        <div class="execution-stats">
-          <div class="execution-stat">
-            <span class="execution-stat-value">${exec.totalImages}</span>
-            <span class="execution-stat-label">Photos</span>
+        <div class="card-b-side">
+          <div class="mini-stats">
+            <div class="mini-stat">
+              <span class="mini-stat-value">${exec.totalImages}</span>
+              <span class="mini-stat-label">Photos</span>
+            </div>
+            <div class="mini-stat">
+              <span class="mini-stat-value">${noLocalResult ? '—' : exec.imagesWithNumbers}</span>
+              <span class="mini-stat-label">Detected</span>
+            </div>
+            <div class="mini-stat">
+              <span class="mini-stat-value success-rate">${noLocalResult ? '—' : successRate + '%'}</span>
+              <span class="mini-stat-label">Success</span>
+            </div>
           </div>
-          <div class="execution-stat">
-            <span class="execution-stat-value">${exec.imagesWithNumbers}</span>
-            <span class="execution-stat-label">Detected</span>
-          </div>
-          <div class="execution-stat">
-            <span class="execution-stat-value">${successRate}%</span>
-            <span class="execution-stat-label">Success</span>
-          </div>
+          ${sideBadge}
+          <button class="delete-execution-btn" data-role="delete" title="Remove from history" aria-label="Remove from history">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </button>
         </div>
-        <button class="execution-view-btn" onclick="event.stopPropagation(); openExecutionResults('${exec.id}')">
-          View Results
-        </button>
       </div>
     `;
   }).join('');
+
+  // Wire up click handlers on each row:
+  //   - click row     → open results
+  //   - click ✏️      → enter inline rename mode
+  //   - click a badge → (reserved) suppress row click so the badge can navigate later
+  container.querySelectorAll('.card-b').forEach((row) => {
+    const executionId = row.dataset.executionId;
+
+    row.addEventListener('click', (e) => {
+      // If user clicked the rename button, the delete button, or an already-open input, ignore.
+      const target = e.target;
+      if (target.closest('[data-role="rename"]') || target.closest('[data-role="rename-input"]')) return;
+      if (target.closest('[data-role="delete"]')) return;
+      if (target.closest('.badge-delivery')) {
+        // Reserved: in the future, clicking a gallery badge can navigate to the gallery
+        // detail page. For now we just prevent the row click from firing.
+        e.stopPropagation();
+        return;
+      }
+      // LOCAL interrupted run (has the partial JSONL on this device) → offer Resume: the app
+      // can skip the already-analyzed photos and charge only the rest.
+      if (row.dataset.interrupted === 'true' && row.dataset.cloudOnly !== 'true') {
+        showInterruptedModal(executionId, Number(row.dataset.total) || 0, Number(row.dataset.processed) || 0);
+        return;
+      }
+      // Cloud-only rows (completed elsewhere, OR interrupted with no local data) have no usable
+      // local JSONL — Resume can't be done safely here, so show the informational cloud modal.
+      if (row.dataset.cloudOnly === 'true') {
+        showCloudOnlyModal(executionId);
+        return;
+      }
+      openExecutionResults(executionId);
+    });
+
+    const renameBtn = row.querySelector('[data-role="rename"]');
+    if (renameBtn) {
+      renameBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        enterRenameMode(row, executionId);
+      });
+    }
+
+    const deleteBtn = row.querySelector('[data-role="delete"]');
+    if (deleteBtn) {
+      deleteBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        // Title (after escapeHtml is harmless here — we just need a label for the modal).
+        const titleEl = row.querySelector('[data-role="title"]');
+        const labelText = titleEl ? titleEl.textContent : 'this analysis';
+        confirmDeleteExecution(row, executionId, labelText);
+      });
+    }
+  });
+}
+
+/**
+ * Show a small confirmation modal before removing an analysis from the
+ * local Home view. On confirm: invoke the IPC handler, then animate the row
+ * out. On error: re-enable the button and show an inline notice.
+ *
+ * Built ad-hoc (no shared confirm helper exists in the renderer yet) but
+ * follows the same overlay+card pattern feedback-modal.js uses elsewhere
+ * so the visual style stays consistent.
+ */
+function confirmDeleteExecution(row, executionId, labelText) {
+  // Reuse if a previous modal is still in the DOM (defensive).
+  const existing = document.getElementById('delete-execution-modal');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'delete-execution-modal';
+  overlay.className = 'delete-modal-overlay';
+  overlay.innerHTML = `
+    <div class="delete-modal" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title">
+      <h3 id="delete-modal-title" class="delete-modal-title">Remove this analysis?</h3>
+      <p class="delete-modal-body">
+        <strong>${escapeHtml(labelText || 'This analysis')}</strong> will be removed from your history.
+        The original photos on your computer are not affected.
+      </p>
+      <div class="delete-modal-actions">
+        <button type="button" class="delete-modal-btn delete-modal-btn-cancel" data-role="cancel">Cancel</button>
+        <button type="button" class="delete-modal-btn delete-modal-btn-confirm" data-role="confirm">Remove</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const cleanup = () => {
+    overlay.remove();
+    document.removeEventListener('keydown', onKey);
+  };
+
+  const onKey = (ev) => {
+    if (ev.key === 'Escape') {
+      ev.preventDefault();
+      cleanup();
+    }
+  };
+  document.addEventListener('keydown', onKey);
+
+  // Click outside the dialog dismisses (matches feedback modal behaviour).
+  overlay.addEventListener('click', (ev) => {
+    if (ev.target === overlay) cleanup();
+  });
+
+  overlay.querySelector('[data-role="cancel"]').addEventListener('click', cleanup);
+
+  const confirmBtn = overlay.querySelector('[data-role="confirm"]');
+  confirmBtn.addEventListener('click', async () => {
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = 'Removing…';
+    try {
+      const result = await window.api.invoke('delete-local-execution', executionId);
+      if (result && result.success) {
+        // Animate the row out, then remove it from the DOM. If the row no
+        // longer exists (user navigated away), this is a no-op.
+        cleanup();
+        if (row && row.parentNode) {
+          row.style.transition = 'opacity 180ms ease, transform 180ms ease';
+          row.style.opacity = '0';
+          row.style.transform = 'translateX(-8px)';
+          setTimeout(() => {
+            if (row.parentNode) row.parentNode.removeChild(row);
+            // If the list is now empty, re-render the empty state.
+            const container = document.getElementById('recent-executions-list');
+            if (container && container.children.length === 0) {
+              container.innerHTML = `
+                <div class="empty-executions">
+                  <div class="empty-executions-icon">📷</div>
+                  <h3>No analyses yet</h3>
+                  <p>Start your first analysis to see your history here</p>
+                </div>
+              `;
+            }
+          }, 200);
+        }
+      } else {
+        const msg = (result && result.error) || 'Could not remove this analysis.';
+        showDeleteModalError(overlay, msg);
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Remove';
+      }
+    } catch (err) {
+      console.error('[Home] delete-local-execution failed:', err);
+      showDeleteModalError(overlay, 'Could not remove this analysis. Please try again.');
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = 'Remove';
+    }
+  });
+
+  // Focus the cancel button by default (safer than the destructive action).
+  setTimeout(() => {
+    const cancelBtn = overlay.querySelector('[data-role="cancel"]');
+    if (cancelBtn) cancelBtn.focus();
+  }, 0);
+}
+
+function showDeleteModalError(overlay, message) {
+  let err = overlay.querySelector('.delete-modal-error');
+  if (!err) {
+    err = document.createElement('p');
+    err.className = 'delete-modal-error';
+    overlay.querySelector('.delete-modal-body').insertAdjacentElement('afterend', err);
+  }
+  err.textContent = message;
+}
+
+/**
+ * Swap the title <span> for an editable <input> and wire up Enter/Esc/blur.
+ */
+function enterRenameMode(row, executionId) {
+  const titleEl = row.querySelector('[data-role="title"]');
+  const renameBtn = row.querySelector('[data-role="rename"]');
+  if (!titleEl) return;
+
+  const currentText = titleEl.textContent;
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = currentText;
+  input.maxLength = 120;
+  input.className = 'rename-input';
+  input.setAttribute('data-role', 'rename-input');
+  input.setAttribute('aria-label', 'Rename analysis');
+
+  titleEl.replaceWith(input);
+  if (renameBtn) renameBtn.style.display = 'none';
+
+  input.focus();
+  input.select();
+
+  let finalized = false;
+  const restore = (newText, isDefault) => {
+    if (finalized) return;
+    finalized = true;
+    const span = document.createElement('span');
+    span.className = isDefault ? 'title is-default' : 'title';
+    span.setAttribute('data-role', 'title');
+    span.textContent = newText;
+    input.replaceWith(span);
+    if (renameBtn) renameBtn.style.display = '';
+  };
+
+  const commit = async () => {
+    const trimmed = input.value.trim();
+    if (!trimmed || trimmed === currentText) {
+      // No-op: restore previous value with original default-ness.
+      restore(currentText, titleEl.classList.contains('is-default'));
+      return;
+    }
+    try {
+      const result = await window.api.invoke('rename-execution', executionId, trimmed);
+      if (result && result.success) {
+        restore(trimmed, false);
+      } else {
+        console.warn('[Home] rename-execution failed:', result);
+        restore(currentText, titleEl.classList.contains('is-default'));
+      }
+    } catch (err) {
+      console.error('[Home] rename-execution error:', err);
+      restore(currentText, titleEl.classList.contains('is-default'));
+    }
+  };
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      commit();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      restore(currentText, titleEl.classList.contains('is-default'));
+    }
+  });
+
+  input.addEventListener('blur', () => {
+    commit();
+  });
 }
 
 /**
  * Open execution results in the dedicated results page
  */
+/**
+ * Modal for a "☁ Cloud" run — one whose local data isn't on this device (reinstall, another
+ * device, or a deleted/corrupt local file). The results are backed up in the cloud, so we offer
+ * to RESTORE: download the original analysis log back onto this computer so the run becomes a
+ * normal local analysis again — no re-analyzing, no credits. Copy follows support-voice.md:
+ * lead with what we can do, own the limit honestly (restoring brings back results, not the
+ * original photos), no false promises, "credits" not "tokens".
+ */
+function showCloudOnlyModal(executionId) {
+  const existing = document.getElementById('cloud-only-modal');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'cloud-only-modal';
+  overlay.className = 'delete-modal-overlay';
+  overlay.innerHTML = `
+    <div class="delete-modal" role="dialog" aria-modal="true" aria-labelledby="cloud-only-title">
+      <h3 id="cloud-only-title" class="delete-modal-title">☁ Backed up in the cloud</h3>
+      <p class="delete-modal-body" data-role="body">
+        The results of this analysis are safely backed up in the cloud. We can bring them back to
+        this computer so you can view them again — no re-analyzing, and no credits.<br><br>
+        One thing to know: re-organizing into folders or exporting still needs the original photos
+        on this computer. Restoring brings back the results, not the photos themselves.
+      </p>
+      <div class="delete-modal-actions">
+        <button type="button" class="delete-modal-btn delete-modal-btn-cancel" data-role="close">Close</button>
+        <button type="button" class="delete-modal-btn delete-modal-btn-confirm" data-role="restore">Restore from cloud</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const cleanup = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+  overlay.addEventListener('click', (ev) => { if (ev.target === overlay) cleanup(); });
+  overlay.querySelector('[data-role="close"]').addEventListener('click', cleanup);
+
+  const restoreBtn = overlay.querySelector('[data-role="restore"]');
+  const body = overlay.querySelector('[data-role="body"]');
+
+  if (!executionId || !window.api || !window.api.invoke) {
+    // Can't restore without an id / IPC — degrade to an info-only modal.
+    if (restoreBtn) restoreBtn.remove();
+  } else {
+    restoreBtn.addEventListener('click', async () => {
+      restoreBtn.disabled = true;
+      restoreBtn.textContent = 'Restoring…';
+      try {
+        const res = await window.api.invoke('restore-execution-from-cloud', executionId);
+        if (res && res.success) {
+          // The log is back on disk — the row becomes a normal completed analysis on refresh.
+          cleanup();
+          if (typeof loadRecentExecutions === 'function') { try { loadRecentExecutions(); } catch (_) {} }
+          return;
+        }
+        if (res && (res.code === 'no_cloud_copy' || res.code === 'incomplete_backup')) {
+          // Be honest — there's nothing complete to restore. Don't leave a button that can't work.
+          if (body) {
+            body.textContent = res.code === 'incomplete_backup'
+              ? "The cloud copy of this analysis is from a run that didn't finish, so there's nothing complete to bring back. To get full results, re-run it on the same folder — re-running costs credits."
+              : "We couldn't find a cloud backup for this analysis — it looks like it never finished uploading, so there's nothing to bring back. To get these results you'd have to re-run it on the same folder, and re-running costs credits.";
+          }
+          restoreBtn.remove();
+          return;
+        }
+        // Something else went wrong — let the user try again.
+        if (body) body.textContent = (res && res.error) ? res.error : "Couldn't restore right now — check your connection and try again.";
+        restoreBtn.disabled = false;
+        restoreBtn.textContent = 'Restore from cloud';
+      } catch (_) {
+        if (body) body.textContent = "Couldn't restore right now — check your connection and try again.";
+        restoreBtn.disabled = false;
+        restoreBtn.textContent = 'Restore from cloud';
+      }
+    });
+  }
+
+  function onKey(ev) {
+    if (ev.key === 'Escape') { ev.preventDefault(); cleanup(); }
+  }
+  document.addEventListener('keydown', onKey);
+}
+
+/**
+ * Show a modal for an analysis that was interrupted before it finished. Offers to RESUME:
+ * the app re-analyzes only the photos that weren't done yet and charges only for those —
+ * it does NOT re-process (or re-charge) the part already completed. Copy follows
+ * support-voice.md (plain language, own the problem, "credits" not "tokens").
+ */
+function showInterruptedModal(executionId, totalImages = 0, processedImages = 0) {
+  const existing = document.getElementById('interrupted-modal');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'interrupted-modal';
+  overlay.className = 'delete-modal-overlay';
+  overlay.innerHTML = `
+    <div class="delete-modal" role="dialog" aria-modal="true" aria-labelledby="interrupted-title">
+      <h3 id="interrupted-title" class="delete-modal-title">⚠ Analysis Interrupted</h3>
+      <p class="delete-modal-body" data-role="body">
+        This analysis stopped before it finished, so the folders aren't organized yet.
+        You can pick up right where it left off — only the photos that weren't analyzed yet
+        will be processed, and you'll only be charged for those. The part already done is kept.
+      </p>
+      <div class="delete-modal-actions">
+        <button type="button" class="delete-modal-btn delete-modal-btn-cancel" data-role="close">Close</button>
+        <button type="button" class="delete-modal-btn delete-modal-btn-confirm" data-role="resume">Resume analysis</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const cleanup = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+  overlay.addEventListener('click', (ev) => { if (ev.target === overlay) cleanup(); });
+  overlay.querySelector('[data-role="close"]').addEventListener('click', cleanup);
+
+  const resumeBtn = overlay.querySelector('[data-role="resume"]');
+  resumeBtn.addEventListener('click', () => {
+    if (!executionId || !window.api || !window.api.send) { cleanup(); return; }
+    // Hand the Analysis screen the context it needs to show live progress the moment it
+    // loads (the resume's remaining count), so the user sees activity right away instead
+    // of a screen that looks like nothing happened.
+    try {
+      sessionStorage.setItem('resumeInProgress', JSON.stringify({
+        executionId,
+        total: Number(totalImages) || 0,
+        processed: Number(processedImages) || 0,
+      }));
+    } catch (_) { /* sessionStorage unavailable — the page falls back to event-driven counts */ }
+    // Start the resume in the main process…
+    window.api.send('resume-analysis', { executionId });
+    cleanup();
+    // …then open the Analysis screen so progress shows in the usual place. When the run
+    // finishes, the global batch-complete handler redirects to the results page as normal.
+    if (window.router && typeof window.router.navigate === 'function') {
+      window.router.navigate('/analysis');
+    } else {
+      window.location.hash = '#/analysis';
+    }
+  });
+
+  function onKey(ev) {
+    if (ev.key === 'Escape') { ev.preventDefault(); cleanup(); }
+  }
+  document.addEventListener('keydown', onKey);
+}
+
 window.openExecutionResults = function(executionId) {
   console.log('[Home] Opening execution results:', executionId);
   // Navigate to results page with execution ID

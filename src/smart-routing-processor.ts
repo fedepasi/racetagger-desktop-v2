@@ -6,7 +6,7 @@
  * selects the most efficient processing path.
  *
  * Pipeline routing:
- * - racing_action   -> car pipeline (RF-DETR / Gemini)
+ * - racing_action   -> car pipeline (local-onnx / Gemini)
  * - portrait_paddock -> face pipeline (future: face recognition)
  * - podium_celebration -> face pipeline (multi-face)
  * - garage_pitlane  -> hybrid (car + face parallel)
@@ -19,7 +19,7 @@ import { SceneClassifier, SceneClassificationResult, SceneCategory } from './sce
  * Pipeline types that images can be routed to
  */
 export enum PipelineType {
-  CAR = 'car',           // Race number recognition (RF-DETR, Gemini)
+  CAR = 'car',           // Race number recognition (local-onnx, Gemini)
   FACE = 'face',         // Face recognition (future)
   HYBRID = 'hybrid',     // Both car and face processing
   SKIP = 'skip',         // No AI analysis needed

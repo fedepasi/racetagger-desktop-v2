@@ -52,6 +52,13 @@ export type BatchProcessConfig = {
   presetId?: string;
   presetName?: string;
   useSmartMatcher?: boolean;
+  /**
+   * When set, this run RESUMES an interrupted execution instead of creating a new one:
+   * the same execution id is reused, already-analyzed images (read from the existing local
+   * JSONL) are skipped, and ONLY the remaining images are processed and charged. The local
+   * JSONL is appended to (not overwritten) and finalized so the result covers the full set.
+   */
+  resumeExecutionId?: string;
   folderOrganization?: {
     enabled: boolean;
     destinationPath: string;
@@ -98,6 +105,46 @@ export type HandlerError = {
 };
 
 export type HandlerResult<T> = HandlerSuccess<T> | HandlerError;
+
+// ==================== Preset Participants (single-row persist, BUG-02) ====================
+
+/**
+ * Payload for the `supabase-upsert-preset-participant` channel — one participant
+ * row persisted immediately from the participant editor ("Save & Next" / "Save
+ * Changes"). Field set mirrors the per-row mapping built in
+ * participants-manager.js → buildParticipantSavePayload(), which in turn mirrors
+ * savePreset's bulk mapping field-for-field (the two MUST stay in lockstep).
+ *
+ * `id` present → upsert (UPDATE the existing row by primary key).
+ * `id` absent  → insert (Postgres assigns a fresh uuid; FIX #78 applies).
+ */
+export interface SinglePresetParticipantPayload {
+  id?: string;
+  numero: string;
+  nome?: string;
+  categoria?: string;
+  squadra?: string;
+  plate_number?: string;
+  sponsor?: string;
+  metatag?: string;
+  // 1.2.0 canonical folder array — drives the dual-write at the DB layer.
+  folders?: { name: string; path?: string }[];
+  include_default_folder?: boolean;
+  // Legacy folder slots — only forwarded when folders[] is absent.
+  folder_1?: string;
+  folder_2?: string;
+  folder_3?: string;
+  folder_1_path?: string;
+  folder_2_path?: string;
+  folder_3_path?: string;
+  delivery_to_client_id?: string | null;
+  is_active?: boolean;
+}
+
+export interface UpsertPresetParticipantParams {
+  presetId: string;
+  participant: SinglePresetParticipantPayload;
+}
 
 // ==================== File Extensions ====================
 

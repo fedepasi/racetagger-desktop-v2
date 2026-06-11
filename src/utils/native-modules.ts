@@ -16,6 +16,7 @@ export interface ImageProcessor {
   jpeg(options?: any): ImageProcessor;
   png(options?: any): ImageProcessor;
   webp(options?: any): ImageProcessor;
+  withMetadata(): ImageProcessor;
   toBuffer(): Promise<Buffer>;
   metadata(): Promise<{ width?: number; height?: number; format?: string; orientation?: number }>;
 }
@@ -209,6 +210,11 @@ class SharpProcessor implements ImageProcessor {
 
   webp(options?: any): ImageProcessor {
     this.sharpInstance = this.sharpInstance.webp(options);
+    return this;
+  }
+
+  withMetadata(): ImageProcessor {
+    this.sharpInstance = this.sharpInstance.withMetadata();
     return this;
   }
 

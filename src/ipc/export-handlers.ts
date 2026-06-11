@@ -160,6 +160,7 @@ export function registerExportHandlers(): void {
         car_model?: string;
         nationality?: string;
         categoria?: string;
+        is_active?: boolean;
       };
     }>;
     destinationIds?: string[];
@@ -220,7 +221,11 @@ export function registerExportHandlers(): void {
           squadra: imageData.participant.squadra || imageData.participant.team,
           car_model: imageData.participant.car_model,
           nationality: imageData.participant.nationality,
-          categoria: imageData.participant.categoria
+          categoria: imageData.participant.categoria,
+          // Carry the soft-disable flag through to the export processor so
+          // it can short-circuit subfolder/rename/metadata for disabled
+          // participants. See ExportDestinationProcessor.exportToDestinations.
+          is_active: imageData.participant.is_active
         } : undefined;
 
         const result = await exportDestinationProcessor.exportToDestinations(

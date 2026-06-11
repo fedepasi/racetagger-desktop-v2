@@ -21,9 +21,14 @@
               <span class="folder-icon">📂</span>
               Select Images Folder
             </label>
-            <button id="folder-select-button" class="btn btn-secondary folder-btn">
-              📂 Select Folder
-            </button>
+            <div class="folder-btn-group" style="display: flex; gap: 8px; flex-wrap: wrap;">
+              <button id="folder-select-button" class="btn btn-secondary folder-btn">
+                📂 Select Folder
+              </button>
+              <button id="files-select-button" class="btn btn-secondary folder-btn" title="Select one or more image files — the entire folder containing them will be analyzed">
+                🖼️ Select Files
+              </button>
+            </div>
             <div class="form-text folder-hint folder-drop-hint">or drag & drop a folder here</div>
             <div id="selected-folder" class="form-text folder-selected"></div>
             <div id="image-count" class="form-text folder-hint">No images selected</div>
@@ -37,16 +42,25 @@
               <span class="category-icon">🏎️</span>
               Sport Category
             </label>
-            <select class="form-control category-control" id="category-select">
-              <option value="motorsport">🏎️ Motorsport</option>
-              <option value="running">🏃 Running & Cycling</option>
-              <option value="other">⚡ Other Sports</option>
+            <!-- Hidden native select for value storage & compatibility -->
+            <select class="form-control category-control" id="category-select" style="display:none;">
+              <option value="motorsport">Motorsport</option>
+              <option value="running">Running & Cycling</option>
+              <option value="other">Other Sports</option>
             </select>
+            <!-- Custom visual dropdown with rich HTML support -->
+            <div class="custom-category-dropdown" id="custom-category-dropdown">
+              <button type="button" class="custom-dropdown-trigger" id="custom-dropdown-trigger">
+                <span class="cdd-emoji">🏎️</span>
+                <span class="cdd-name">Motorsport</span>
+                <span class="cdd-chevron">&#9662;</span>
+              </button>
+              <div class="custom-dropdown-menu" id="custom-dropdown-menu">
+                <!-- Options populated dynamically by JS -->
+              </div>
+            </div>
             <div class="form-text category-hint">
               Choose sport type for better AI recognition
-            </div>
-            <div class="form-text category-current">
-              <strong>Current:</strong> <span id="current-category-display">Motorsport</span>
             </div>
           </div>
         </div>
@@ -59,9 +73,20 @@
               <span class="preset-icon">🎯</span>
               Participant Preset
             </label>
-            <select class="form-control preset-control" id="preset-select">
-              <option value="">🎯 Enhance Recognition Accuracy</option>
+            <!-- Hidden native select for value storage & compatibility -->
+            <select class="form-control preset-control" id="preset-select" style="display:none;">
+              <option value="">Enhance Recognition Accuracy</option>
             </select>
+            <!-- Custom visual dropdown (cross-platform consistent rendering) -->
+            <div class="custom-preset-dropdown" id="custom-preset-dropdown">
+              <button type="button" class="custom-preset-trigger" id="custom-preset-trigger">
+                <span class="cpd-name">Enhance Recognition Accuracy</span>
+                <span class="cpd-chevron">&#9662;</span>
+              </button>
+              <div class="custom-preset-menu" id="custom-preset-menu">
+                <!-- Options populated dynamically by JS -->
+              </div>
+            </div>
             <div class="form-text preset-hint">
               Load participant data for precise race number matching and sponsor detection
             </div>
@@ -82,14 +107,26 @@
       </div>
     </div>
 
+    <!-- PROJECT SELECTOR: Link execution to a project for auto-delivery -->
+    <div id="project-selector-section" style="display: none; margin-bottom: 16px;">
+      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+        <span style="font-size: 16px;">📦</span>
+        <label for="project-select" style="color: var(--text-secondary, #ccc); font-size: 13.5px; font-weight: 600;">Link to Project (optional)</label>
+      </div>
+      <select id="project-select" style="width: 100%; padding: 8px 12px; background: var(--bg-dark, #1a1a2e); border: 1px solid var(--border-color, #333); border-radius: 8px; color: var(--text-primary, #fff); font-size: 14px;">
+        <option value="">No project — standalone analysis</option>
+      </select>
+      <div style="color: var(--text-muted, #888); font-size: 11px; margin-top: 4px;">
+        When linked to a project, photos will be auto-routed to galleries via delivery rules after analysis.
+      </div>
+    </div>
+
     <!-- FOLDER ORGANIZATION: Available as post-analysis action -->
-    <div id="folder-organization-section" class="folder-organization-section mb-md">
-      <div class="info-box" style="display: flex; align-items: center; gap: 0.75rem; padding: 1rem;">
-        <span class="info-icon">📁</span>
-        <div class="info-text">
-          <strong>Folder Organization</strong> is available after analysis.
-          Review your results, make any corrections, then organize photos into folders from the results page.
-        </div>
+    <div id="folder-organization-section" class="info-box mb-md" style="display: flex; align-items: center; gap: 1rem; padding: 1.1rem 1.25rem; background: rgba(234, 179, 8, 0.08); border: 1.5px solid rgba(234, 179, 8, 0.35); border-radius: 10px;">
+      <span class="info-icon" style="font-size: 26px; filter: drop-shadow(0 0 4px rgba(234, 179, 8, 0.4));">📁</span>
+      <div class="info-text" style="color: var(--text-secondary, #ccc); font-size: 13.5px; line-height: 1.55;">
+        <strong style="color: #facc15; font-size: 14.5px;">Folder Organization</strong> is available after analysis.
+        Review your results, make any corrections, then organize photos into folders from the results page.
       </div>
     </div>
 
