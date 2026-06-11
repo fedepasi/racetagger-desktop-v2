@@ -53,6 +53,31 @@ interface FaceRecognitionResult {
   matchingTimeMs: number;
   totalTimeMs: number;
   error?: string;
+  /** Always-on observability block (persisted to JSONL + analysis_results.raw_response)
+   *  so the portal can show face confidence even when no match was accepted. */
+  telemetry?: FaceRecognitionTelemetry;
+}
+
+/** Face telemetry persisted per image whenever face recognition runs (or is
+ *  strategically skipped while enabled). Powers the portal's always-visible
+ *  face data — measurement baseline for the face-primary (option B) work. */
+interface FaceRecognitionTelemetry {
+  /** Why face rec didn't run despite the category having it enabled */
+  skipped?: 'vehicles_only_scene';
+  context?: 'portrait' | 'action' | 'podium' | 'auto';
+  facesDetected?: number;
+  matchedCount?: number;
+  detectionTimeMs?: number;
+  matchingTimeMs?: number;
+  /** Per-face outcome incl. below-threshold best candidate */
+  faces?: Array<{
+    faceIndex: number;
+    matched: boolean;
+    personName?: string;
+    score: number;
+    metric: 'cosine' | 'euclidean';
+    threshold: number;
+  }>;
 }
 import { consentService } from './consent-service';
 import {
@@ -862,7 +887,15 @@ class UnifiedImageWorker extends EventEmitter {
           matches: [],
           detectionTimeMs: onnxResult.detectionTimeMs,
           matchingTimeMs: 0,
-          totalTimeMs: Date.now() - startTime
+          totalTimeMs: Date.now() - startTime,
+          telemetry: {
+            context,
+            facesDetected: 0,
+            matchedCount: 0,
+            detectionTimeMs: onnxResult.detectionTimeMs,
+            matchingTimeMs: 0,
+            faces: []
+          }
         };
       }
 
@@ -884,7 +917,8 @@ class UnifiedImageWorker extends EventEmitter {
         }
       }
 
-      const personMatches = faceRecognitionProcessor.matchEmbeddings(embeddings, context as FaceContext);
+      const { matches: personMatches, outcomes: faceOutcomes } =
+        faceRecognitionProcessor.matchEmbeddingsDetailed(embeddings, context as FaceContext);
       const matchingTimeMs = Date.now() - matchStartTime;
 
       // Convert to bridge-compatible format
@@ -919,7 +953,22 @@ class UnifiedImageWorker extends EventEmitter {
         matches,
         detectionTimeMs: onnxResult.detectionTimeMs,
         matchingTimeMs,
-        totalTimeMs: Date.now() - startTime
+        totalTimeMs: Date.now() - startTime,
+        telemetry: {
+          context,
+          facesDetected: onnxResult.faces.length,
+          matchedCount: faceOutcomes.filter(o => o.matched).length,
+          detectionTimeMs: onnxResult.detectionTimeMs,
+          matchingTimeMs,
+          faces: faceOutcomes.map(o => ({
+            faceIndex: o.faceIndex,
+            matched: o.matched,
+            personName: o.personName,
+            score: Math.round(o.score * 1000) / 1000,
+            metric: o.metric,
+            threshold: o.threshold
+          }))
+        }
       };
 
       if (result.matches.length > 0) {
@@ -3552,6 +3601,9 @@ class UnifiedImageWorker extends EventEmitter {
         segmentationForStrategy || undefined
       );
       let faceRecognitionResult: FaceRecognitionResult | null = null;
+      // Always-persisted face observability block (undefined when the category
+      // has face recognition disabled or no descriptors are loaded).
+      let faceTelemetry: FaceRecognitionTelemetry | undefined;
 
       // STEP 3: Perform face recognition if strategy dictates
       workerLog.info(`[RecogStrategy] useFaceRecognition=${recognitionStrategy.useFaceRecognition}, useNumberRecognition=${recognitionStrategy.useNumberRecognition}, context=${recognitionStrategy.context} for ${imageFile.fileName}`);
@@ -3563,6 +3615,7 @@ class UnifiedImageWorker extends EventEmitter {
         );
         const matchedCount = faceRecognitionResult?.matches?.filter(m => m.matched).length || 0;
         workerLog.info(`[FaceRecogResult] success=${faceRecognitionResult?.success}, totalMatches=${faceRecognitionResult?.matches?.length || 0}, matchedFaces=${matchedCount} for ${imageFile.fileName}`);
+        faceTelemetry = faceRecognitionResult?.telemetry;
 
         // Persist face matches into the per-image cache so findIntelligentMatches()
         // can feed them to SmartMatcher as FACE_MATCH evidence. Only keep matches
@@ -3584,6 +3637,12 @@ class UnifiedImageWorker extends EventEmitter {
         }
       } else {
         workerLog.info(`Face recognition DISABLED (segmentation detected only vehicles)`);
+        // Record the strategic skip only when face rec is actually available
+        // for this batch (category enabled + descriptors loaded) — absence of
+        // the block means "face recognition not in play at all".
+        if (this.faceRecognitionEnabled) {
+          faceTelemetry = { skipped: 'vehicles_only_scene' };
+        }
       }
 
       // Check if we should skip number recognition (portrait/podium scenes)
@@ -4303,6 +4362,8 @@ class UnifiedImageWorker extends EventEmitter {
               imageSize: analysisResult.imageSize || undefined,
               visualTags: visualTagsResult?.tags || undefined,
               temporalContext: temporalContextLog,
+              // Always-on face observability (matched AND below-threshold outcomes)
+              faceRecognition: faceTelemetry,
               enrichedByDesktop: true,
               enrichedAt: new Date().toISOString()
             },
@@ -4354,6 +4415,8 @@ class UnifiedImageWorker extends EventEmitter {
         segmentationPreprocessing: analysisResult.segmentationPreprocessing || undefined,
         // Visual tags extracted by AI (if enabled)
         visualTags: visualTagsResult?.tags || undefined,
+        // Always-on face observability (matched AND below-threshold outcomes)
+        faceRecognition: faceTelemetry,
         // Backward compatibility - use first vehicle as primary
         primaryVehicle: vehicles.length > 0 ? vehicles[0] : undefined,
         // Scene classification (ONNX) — only populated when sport_categories.scene_classifier_enabled = true.
