@@ -4,6 +4,16 @@
 
 ### ✨ Features
 
+- **Visual tagging — calendar-anchor grounding**: the desktop now forwards
+  `preset_name`, `sport_category`, and the photo's EXIF `photo_taken_at` + GPS
+  coordinates to the `visualTagging` edge function at every invoke site (standard,
+  crop+context, ONNX, face-recognition, scene-skip and sequential fallback). The
+  edge function (already live) uses these to look up `event_calendar` and ground
+  `location_tags` against the real event, reducing location hallucinations (e.g.
+  NBR 24h photos tagged as Le Mans — issue #159). All fields are optional; when
+  absent the edge function falls back to vanilla Gemini, so there's no regression.
+  No schema/migration changes. (PR #198)
+
 - **Bulk folder assignment — backend (IPC + DB layer)**: adds `bulkAssignFoldersSupabase`
   with append/replace modes, per-row UPDATE chains (avoids NOT NULL upsert constraint),
   dual-write to legacy `folder_1/2/3` columns, unknown-folder reporting, cache
