@@ -22,6 +22,17 @@ export const DEBUG_MODE = !isPackaged && process.env.DEBUG_MODE === 'true';
 // =============================================================================
 export const SEND_PRESET_TO_AI = process.env.RACETAGGER_SEND_PRESET_TO_AI !== 'false';
 
+// =============================================================================
+// DB EXECUTION FALLBACK (#184 Phase 1 — cross-device read) — OFF by default.
+// When ON, opening an execution whose local JSONL is missing reconstructs its
+// event stream from the Supabase DB so the review gallery still renders
+// (cross-device / reinstall / lost local file). Ships DARK: with the flag off
+// the behavior is identical to today (missing local JSONL → empty gallery).
+// Enable for testing with RACETAGGER_DB_EXECUTION_FALLBACK=true in .env.
+// Online-only by policy (see CLAUDE.md → Offline Capability Policy).
+// =============================================================================
+export const ENABLE_DB_EXECUTION_FALLBACK = process.env.RACETAGGER_DB_EXECUTION_FALLBACK === 'true';
+
 // Function to get configuration values
 function getConfigValue(envVar: string, productionKey: keyof typeof PRODUCTION_CONFIG): string {
   if (isPackaged) {
