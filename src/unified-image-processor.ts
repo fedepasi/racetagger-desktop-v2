@@ -5854,10 +5854,52 @@ class UnifiedImageWorker extends EventEmitter {
       // Store all matches for further processing
       csvMatch = csvMatches;
     } else if (faceMatchedCsvEntries.length > 0) {
-      // No AI analysis results, but face recognition found matches — use them directly
-      log.info(`[FaceRecognition→Metadata] No AI analysis results, using ${faceMatchedCsvEntries.length} face-only match(es)`);
-      csvMatch = faceMatchedCsvEntries;
-      const keywords = this.buildMetatag([], faceMatchedCsvEntries);
+      // FACE FALLBACK (2026-06-11): AI returned 0 results but face recognition
+      // matched. Previously these entries only fed metadata/keywords and the
+      // photo looked EMPTY in the results UI. Now we synthesize full result
+      // entries (same pattern as the temporal backfill below):
+      //   face >= trust  → 'matched'   (it would have qualified for face-only)
+      //   face <  trust  → 'needs_review' (pre-filled suggestion, user confirms)
+      const faceTrust = this.getFaceTrustThreshold();
+      const fallbackVehicles: any[] = [];
+      const enrichedEntries = faceMatchedCsvEntries.map((fe: any) => {
+        const sim = typeof fe.confidence === 'number' ? fe.confidence : 0;
+        const status: 'matched' | 'needs_review' = sim >= faceTrust ? 'matched' : 'needs_review';
+        const personName = (fe.entry ? getPrimaryDriverName(fe.entry) : undefined) || fe.entry?.nome || String(fe.matchedNumber ?? '');
+        const reason =
+          `Face fallback: AI returned 0 results; face match "${personName}" ` +
+          `(cosine ${sim.toFixed(2)} ${sim >= faceTrust ? '>=' : '<'} trust ${faceTrust}) ` +
+          `${status === 'matched' ? 'accepted as match' : 'kept as needs_review suggestion'}.`;
+        log.info(`[FaceFallback] ${imageFile.fileName}: ${reason}`);
+
+        fallbackVehicles.push({
+          raceNumber: fe.matchedNumber != null ? String(fe.matchedNumber) : null,
+          drivers: fe.entry ? getParticipantDriverNames(fe.entry) : [],
+          teamName: fe.entry?.squadra || fe.entry?.team || null,
+          otherText: [],
+          confidence: sim,
+          modelSource: 'face_recognition_fallback'
+        });
+
+        return {
+          ...fe,
+          matchType: 'face_fallback',
+          smartMatch: {
+            score: 0,
+            confidence: sim,
+            evidenceCount: 1,
+            multipleHighScores: false,
+            resolvedByOverride: false,
+            matchStatus: status,
+            reasoning: [reason],
+            alternativeCandidates: []
+          }
+        };
+      });
+
+      analysisResult.analysis = fallbackVehicles;
+      csvMatch = enrichedEntries;
+      const keywords = this.buildMetatag(fallbackVehicles, enrichedEntries);
       description = keywords && keywords.length > 0 ? keywords.join(', ') : null;
     } else if (
       // TEMPORAL BACKFILL: When YOLO detected a vehicle but AI returned 0 results,
