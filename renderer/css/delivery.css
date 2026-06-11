@@ -1,0 +1,336 @@
+/*
+ * delivery.css — visual foundation for the redesigned Delivery page.
+ *
+ * Brand-aligned (brand-manual.md / brand-voice.md): one blue #1a9ee0, the
+ * four-colour functional system, JetBrains Mono + tnum for every number, the
+ * livery-stripe motif (3px coloured top border on cards), flat surfaces, no
+ * gradients, no emoji. Built on the existing desktop-theme.css tokens so it
+ * matches the rest of the app and migrates cleanly with any future theme work.
+ *
+ * Component classes are prefixed `dl-` and only used inside the Delivery page.
+ */
+
+:root {
+  /* Functional palette (status === livery-stripe colour) */
+  --dl-blue: var(--accent-primary, #1a9ee0);
+  --dl-amber: var(--accent-warning, #f59e0b);
+  --dl-green: var(--accent-success, #10b981);
+  --dl-purple: #a78bfa;
+
+  --dl-blue-bg: rgba(26, 158, 224, 0.14);
+  --dl-amber-bg: rgba(245, 158, 11, 0.14);
+  --dl-green-bg: rgba(16, 185, 129, 0.14);
+  --dl-purple-bg: rgba(167, 139, 250, 0.14);
+  --dl-neutral-bg: rgba(148, 163, 184, 0.12);
+
+  --dl-blue-bd: rgba(26, 158, 224, 0.40);
+}
+
+/* ── The number rule: numbers are the product → always mono + tabular ── */
+.dl-num {
+  font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  font-feature-settings: 'tnum';
+  font-variant-numeric: tabular-nums;
+}
+
+/* Mono uppercase eyebrow / section label */
+.dl-eyebrow {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--text-muted, #6b7592);
+}
+
+/* ── Buttons ───────────────────────────────────────────────────────── */
+.dl-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+  white-space: nowrap;
+}
+.dl-btn svg { width: 15px; height: 15px; flex-shrink: 0; }
+.dl-btn--primary { background: var(--dl-blue); color: #fff; padding: 9px 16px; }
+.dl-btn--primary:hover { opacity: 0.9; }
+.dl-btn--ghost {
+  background: var(--bg-light, #243049);
+  color: var(--text-primary, #f1f4fa);
+  border-color: var(--border-light, #3a4666);
+  padding: 8px 13px;
+  font-weight: 500;
+  font-size: 12px;
+}
+.dl-btn--ghost:hover { border-color: var(--dl-blue); }
+.dl-btn--danger {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--accent-danger, #ef4444);
+  border-color: rgba(239, 68, 68, 0.30);
+  padding: 8px 13px;
+  font-weight: 500;
+  font-size: 12px;
+}
+.dl-btn--danger:hover { background: rgba(239, 68, 68, 0.18); }
+.dl-btn--sm { padding: 5px 11px; font-size: 11px; }
+
+/* ── Cards (gallery / client) with livery-stripe top border ───────────── */
+.dl-card {
+  background: var(--bg-card, #1e293b);
+  border: 1px solid var(--border-color, #334155);
+  border-radius: 12px;
+  overflow: hidden;            /* keep the stripe flush inside rounded corners */
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.dl-card:hover { border-color: var(--dl-blue); }
+.dl-card__stripe { height: 3px; width: 100%; }
+.dl-card__stripe--blue { background: var(--dl-blue); }
+.dl-card__stripe--amber { background: var(--dl-amber); }
+.dl-card__stripe--green { background: var(--dl-green); }
+.dl-card__stripe--purple { background: var(--dl-purple); }
+.dl-card__body { padding: 14px 15px 13px; }
+.dl-card__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary, #f1f4fa);
+  margin: 0;
+}
+.dl-card__url {
+  font-size: 11px;
+  color: var(--text-muted, #6b7592);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dl-card__stats {
+  display: flex;
+  gap: 14px;
+  font-size: 12px;
+  color: var(--text-secondary, #9aa5bd);
+}
+.dl-card__stats b { color: var(--text-primary, #f1f4fa); font-weight: 700; }
+
+/* ── Status pill (Live / Draft) ───────────────────────────────────────── */
+.dl-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 999px;
+  line-height: 1;
+}
+.dl-pill__dot { width: 6px; height: 6px; border-radius: 50%; }
+.dl-pill--live { background: var(--dl-green-bg); color: var(--dl-green); }
+.dl-pill--live .dl-pill__dot { background: var(--dl-green); }
+.dl-pill--draft { background: var(--dl-amber-bg); color: var(--dl-amber); }
+.dl-pill--draft .dl-pill__dot { background: var(--dl-amber); }
+
+/* ── Chips (access type, HD status, client tag) ───────────────────────── */
+.dl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  line-height: 1;
+}
+.dl-chip svg { width: 13px; height: 13px; }
+.dl-chip--neutral { background: var(--bg-light, #243049); color: var(--text-secondary, #9aa5bd); }
+.dl-chip--dim { background: var(--bg-light, #243049); color: var(--text-muted, #6b7592); }
+.dl-chip--green { background: var(--dl-green-bg); color: var(--dl-green); }
+.dl-chip--amber { background: var(--dl-amber-bg); color: var(--dl-amber); }
+.dl-chip--blue { background: var(--dl-blue-bg); color: var(--dl-blue); }
+
+/* ── Primary "create" band (one primary action on the page) ──────────── */
+.dl-create-band {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: var(--bg-medium, #15263a);
+  border: 1px solid var(--dl-blue-bd);
+  border-radius: 12px;
+  padding: 16px 18px;
+}
+.dl-create-band__icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  background: var(--dl-blue-bg);
+  color: var(--dl-blue);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.dl-create-band__icon svg { width: 22px; height: 22px; }
+.dl-create-band__text { flex: 1; min-width: 0; }
+.dl-create-band__title { font-size: 14px; font-weight: 600; color: var(--text-primary, #f1f4fa); }
+.dl-create-band__sub { font-size: 12px; color: var(--text-secondary, #9aa5bd); margin-top: 2px; }
+
+/* ── Section header (title + count + actions) ─────────────────────────── */
+.dl-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.dl-section-head__left { display: flex; align-items: baseline; gap: 8px; }
+.dl-section-head__title { font-size: 15px; font-weight: 600; color: var(--text-primary, #f1f4fa); }
+.dl-section-head__count { font-size: 13px; color: var(--text-muted, #6b7592); font-weight: 500; }
+
+/* ── Responsive card grid ─────────────────────────────────────────────── */
+.dl-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+/* ── Empty / first-run state ──────────────────────────────────────────── */
+.dl-empty {
+  border: 1px dashed var(--border-light, #3a4666);
+  border-radius: 14px;
+  padding: 30px 24px;
+  text-align: center;
+}
+.dl-empty__icon {
+  width: 54px;
+  height: 54px;
+  border-radius: 14px;
+  background: var(--dl-blue-bg);
+  color: var(--dl-blue);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 14px;
+}
+.dl-empty__icon svg { width: 27px; height: 27px; }
+.dl-empty__title { font-size: 16px; font-weight: 600; margin-bottom: 6px; color: var(--text-primary, #f1f4fa); }
+.dl-empty__sub {
+  font-size: 13px;
+  color: var(--text-secondary, #9aa5bd);
+  max-width: 380px;
+  margin: 0 auto 18px;
+  line-height: 1.5;
+}
+.dl-steps { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 24px; }
+.dl-step {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: var(--bg-card, #1e293b);
+  border: 1px solid var(--border-color, #334155);
+  border-radius: 10px;
+  padding: 9px 13px;
+  font-size: 12px;
+  color: var(--text-secondary, #9aa5bd);
+}
+.dl-step__n {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+}
+.dl-step__n--blue { background: var(--dl-blue-bg); color: var(--dl-blue); }
+.dl-step__n--amber { background: var(--dl-amber-bg); color: var(--dl-amber); }
+.dl-step__n--green { background: var(--dl-green-bg); color: var(--dl-green); }
+
+/* ── Transfer activity strip (demoted HD-uploads status) ──────────────── */
+.dl-transfer {
+  background: var(--bg-dark, #0b1222);
+  border: 1px solid var(--border-color, #334155);
+  border-radius: 12px;
+  padding: 12px 16px;
+}
+.dl-transfer__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 9px;
+}
+.dl-progress {
+  flex: 1;
+  height: 5px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.dl-progress__bar { height: 100%; background: var(--dl-blue); border-radius: 6px; transition: width 0.4s ease; }
+
+/* ── Timing-tower stat strip (gallery detail) ─────────────────────────── */
+.dl-stat-tower {
+  display: flex;
+  background: #0a0a0a;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.dl-stat-tower__cell { flex: 1; padding: 12px 14px; text-align: center; border-right: 1px solid #2a2a2a; }
+.dl-stat-tower__cell:last-child { border-right: none; }
+.dl-stat-tower__val { font-size: 22px; font-weight: 700; margin-top: 3px; }
+.dl-stat-tower__val--blue { color: var(--dl-blue); }
+.dl-stat-tower__val--green { color: var(--dl-green); }
+.dl-stat-tower__val--plain { color: var(--text-primary, #f1f4fa); }
+
+/* ── Segmented control (access type) ──────────────────────────────────── */
+.dl-seg {
+  display: flex;
+  gap: 5px;
+  background: var(--bg-dark, #0b1222);
+  border: 1px solid var(--border-color, #334155);
+  border-radius: 9px;
+  padding: 4px;
+}
+.dl-seg__opt {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary, #9aa5bd);
+  padding: 7px 12px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.dl-seg__opt:hover { color: var(--text-primary, #f1f4fa); }
+.dl-seg__opt.is-active { background: var(--dl-blue); color: #fff; font-weight: 600; }
+.dl-seg__opt svg { width: 14px; height: 14px; }
+
+/* ── Clients strip (optional grouping) ────────────────────────────────── */
+.dl-client-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-card, #1e293b);
+  border: 1px solid var(--border-color, #334155);
+  border-radius: 8px;
+  padding: 6px 11px;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+.dl-client-chip:hover { border-color: var(--dl-blue); }
+.dl-client-chip__avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+}

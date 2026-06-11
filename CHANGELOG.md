@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### 🎨 Brand
+
+- **Delivery page redesign — foundation (Phase A)**: introduces a canonical app-wide toast
+  (`renderer/js/toast.js`, `window.showToast`) — flat and brand-aligned (`#1a9ee0` + the
+  four-colour functional palette), stacks top-right, dismiss-on-click, auto-dismiss. Replaces
+  the gradient toast that was trapped inside `results-delivery.js`'s IIFE, so callers that
+  check `typeof showToast === 'function'` (`settings.js`, `preset-face-manager.js`) now resolve
+  it. Adds `renderer/css/delivery.css` with the redesign's component foundation (livery-stripe
+  cards, mono+tnum numbers, status pills, chips, primary create-band, empty/first-run state,
+  transfer-activity strip, timing-tower stats, segmented control). Both wired into `index.html`.
+  CSS/JS only — no logic changes.
+
 ## [1.1.10] - 2026-06-11
 
 ### 🎨 Brand
