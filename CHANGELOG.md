@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.1.10] - 2026-06-11
+
 ### 🎨 Brand
 
 - **Desktop brand tokens — accent colour + monospace font**: replaces the deprecated blue
