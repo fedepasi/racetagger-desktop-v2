@@ -3253,7 +3253,7 @@ class UnifiedImageWorker extends EventEmitter {
                   skipVisualTagsResult = await this.invokeVisualTagging(skipStoragePath, {
                     imageId: skipImageId,
                     analysis: []
-                  });
+                  }, this.buildVisualTaggingAnchor(processor, imageFile.originalPath));
                   if (skipVisualTagsResult) {
                     workerLog.info(`[SceneSkip] Visual tags extracted: ${Object.values(skipVisualTagsResult.tags).flat().length} tags`);
                   }
