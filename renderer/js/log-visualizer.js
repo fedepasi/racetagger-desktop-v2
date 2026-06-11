@@ -1368,9 +1368,17 @@ class LogVisualizer {
         // Try Supabase URLs as fallback when local files are missing
         if (result.supabaseUrl) {
           console.log(`[LogVisualizer] Using Supabase fallback for ${fileName}: ${result.supabaseUrl}`);
-          await this.loadImageWithIPC(imgElement, result.supabaseUrl);
-          this.preloadedImages.add(fileName);
-          return;
+          try {
+            await this.loadImageWithIPC(imgElement, result.supabaseUrl);
+            this.preloadedImages.add(fileName);
+            return;
+          } catch (serverError) {
+            // Local copy missing AND server copy gone → archived by the retention
+            // sweep. Show the "archived" placeholder instead of hiding the card.
+            this.failedImages.add(fileName);
+            this.applyArchivedPlaceholder(imgElement);
+            return;
+          }
         }
 
         // Try other thumbnail generation methods
@@ -1518,6 +1526,30 @@ class LogVisualizer {
    */
   getPlaceholderUrl() {
     return 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjgwIiBoZWlnaHQ9IjI4MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZjVmNWY1Ii8+PGNpcmNsZSBjeD0iNTAlIiBjeT0iNTAlIiByPSIyMCIgZmlsbD0iI2RkZCIgb3BhY2l0eT0iMC42Ii8+PHRleHQgeD0iNTAlIiB5PSI2NSUiIGZvbnQtZmFtaWx5PSJBcmlhbCwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+TG9hZGluZy4uLjwvdGV4dD48L3N2Zz4=';
+  }
+
+  /**
+   * Placeholder shown when a server image is gone (archived by the storage
+   * retention sweep). Calm "Photo archived / Original safe on your disk" card.
+   */
+  getArchivedImagePlaceholder() {
+    return 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyODAiIGhlaWdodD0iMjgwIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZjVmNWY1Ii8+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTE2LDkyKSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjYzRjNGM0IiBzdHJva2Utd2lkdGg9IjIuNSIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHJlY3QgeD0iMiIgeT0iMTAiIHdpZHRoPSI0NCIgaGVpZ2h0PSIzMCIgcng9IjMiLz48cmVjdCB4PSItMiIgeT0iMiIgd2lkdGg9IjUyIiBoZWlnaHQ9IjEwIiByeD0iMiIvPjxsaW5lIHgxPSIxOCIgeTE9IjIyIiB4Mj0iMzAiIHkyPSIyMiIvPjwvZz48dGV4dCB4PSI1MCUiIHk9IjYzJSIgZm9udC1mYW1pbHk9IkFyaWFsLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjE1IiBmaWxsPSIjN2E3YTdhIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj5QaG90byBhcmNoaXZlZDwvdGV4dD48dGV4dCB4PSI1MCUiIHk9IjcxJSIgZm9udC1mYW1pbHk9IkFyaWFsLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjExLjUiIGZpbGw9IiNhOGE4YTgiIHRleHQtYW5jaG9yPSJtaWRkbGUiPk9yaWdpbmFsIHNhZmUgb24geW91ciBkaXNrPC90ZXh0Pjwvc3ZnPg==';
+  }
+
+  /**
+   * A server (Supabase) image failed to load. Because the local copy was already
+   * missing (the server URL is only the last-resort fallback), the object has
+   * almost certainly been removed by the storage-retention sweep. Show a calm
+   * "archived" placeholder instead of a broken/hidden image — the analysis data
+   * (numbers, matches) is unaffected and the photographer still holds the
+   * original on their own disk. Per the Offline Capability Policy: fail clearly.
+   */
+  applyArchivedPlaceholder(imgElement) {
+    if (!imgElement) return;
+    imgElement.src = this.getArchivedImagePlaceholder();
+    imgElement.title = 'Photo archived — your original is safe on your own disk';
+    imgElement.classList.add('lv-archived-image');
+    imgElement.style.opacity = '1';
   }
 
   /**
@@ -2995,6 +3027,11 @@ class LogVisualizer {
         // Hide loading indicator even on error
         if (loadingDiv) {
           loadingDiv.style.display = 'none';
+        }
+        // Server image gone (local already missing) → archived by the retention
+        // sweep. Show the "archived" placeholder instead of a broken image.
+        if (newImg.src && newImg.src.includes('/storage/v1/object/')) {
+          this.applyArchivedPlaceholder(img);
         }
         this.logImageError(result.fileName, new Error('Gallery image load failed'), 'gallery');
       };
