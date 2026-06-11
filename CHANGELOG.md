@@ -65,6 +65,21 @@
 
 ### 🐛 Fixes
 
+- **R2 HD delivery now actually confirms uploads (no more silent failure)**: when
+  delivering with the HD toggle on, photos were PUT to R2 but the follow-up confirm
+  call to the `r2-signed-url` Edge Function always failed silently, so
+  `original_upload_status` stayed `NULL` while the photographer saw "success". Two
+  bugs in `r2-upload-service.ts`: (1) the confirm POST sent `uploads:` but the Edge
+  Function reads `body.confirmations`, so confirm 400'd every time; (2) the response
+  was only logged under `DEBUG_MODE` and never thrown, and the item was marked
+  `completed` *before* confirm ran. Now the request uses the correct
+  `confirmations` key, a non-2xx confirm response is always logged (`console.error`)
+  and throws, items are finalized as `completed` only **after** a successful confirm,
+  and a failed confirm marks them `failed` and emits an `upload-progress`/`upload-error`
+  IPC event so the UI reflects the error. `src/r2-upload-service.ts` only; no token
+  logic / schema touched. (The Edge Function is being updated in parallel to accept
+  both keys.)
+
 - **Backlog-autopilot workflows now use the real `error_reports` column names**: the
   sweep and implement workflows queried PostgREST with columns that don't exist
   (`occurrence_count`, `last_seen`, `user_count`…) instead of the real ones
