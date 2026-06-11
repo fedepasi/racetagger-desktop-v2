@@ -1,4 +1,4 @@
-/* FOLDER ORGANIZATION: Styling for folder organization features (now public) */
+﻿/* FOLDER ORGANIZATION: Styling for folder organization features (now public) */
 
 /* Public feature badge styling */
 .public-feature-badge {
@@ -44,8 +44,8 @@
 
 /* Folder organization section styling (now public) */
 .folder-organization-section {
-  border: 2px solid rgba(59, 130, 246, 0.3);
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.08) 0%, rgba(99, 102, 241, 0.05) 100%);
+  border: 2px solid rgba(26, 158, 224, 0.3);
+  background: linear-gradient(135deg, rgba(26, 158, 224, 0.08) 0%, rgba(99, 102, 241, 0.05) 100%);
   border-radius: 8px;
   padding: 16px;
   position: relative;
@@ -105,12 +105,12 @@
 }
 
 .radio-group .radio-option:hover {
-  border-color: #3b82f6;
-  box-shadow: 0 2px 8px rgba(59,130,246,0.15);
+  border-color: #1a9ee0;
+  box-shadow: 0 2px 8px rgba(26, 158, 224, 0.15);
 }
 
 .radio-group .radio-option input[type="radio"]:checked + .radio-content {
-  color: #3b82f6;
+  color: #1a9ee0;
 }
 
 /* Ensure radio titles are readable in admin sections */
@@ -122,7 +122,7 @@
 }
 
 .radio-group .radio-option input[type="radio"]:checked ~ * {
-  border-color: #3b82f6;
+  border-color: #1a9ee0;
 }
 
 /* Warning styling for move option */
@@ -158,8 +158,8 @@
 
 /* Organization warning */
 .organization-warning {
-  background: rgba(59, 130, 246, 0.08);
-  border: 1px solid rgba(59, 130, 246, 0.3);
+  background: rgba(26, 158, 224, 0.08);
+  border: 1px solid rgba(26, 158, 224, 0.3);
   border-radius: 6px;
   padding: 12px;
   display: flex;

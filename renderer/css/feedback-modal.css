@@ -1,4 +1,4 @@
-/* ==================== Feedback FAB ==================== */
+﻿/* ==================== Feedback FAB ==================== */
 
 .feedback-fab-wrapper {
   position: fixed;
@@ -218,8 +218,8 @@ body:has(.feedback-modal-overlay[style*="display: flex"]) .feedback-fab-wrapper 
 }
 
 .feedback-tab.active {
-  color: var(--accent-primary, #3b82f6);
-  border-bottom-color: var(--accent-primary, #3b82f6);
+  color: var(--accent-primary, #1a9ee0);
+  border-bottom-color: var(--accent-primary, #1a9ee0);
 }
 
 /* ---- Body ---- */
@@ -265,8 +265,8 @@ body:has(.feedback-modal-overlay[style*="display: flex"]) .feedback-fab-wrapper 
 .feedback-form-group input[type="text"]:focus,
 .feedback-form-group textarea:focus {
   outline: none;
-  border-color: var(--accent-primary, #3b82f6);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  border-color: var(--accent-primary, #1a9ee0);
+  box-shadow: 0 0 0 3px rgba(26, 158, 224, 0.1);
 }
 
 .feedback-form-group input.feedback-input-error,
@@ -335,7 +335,7 @@ body:has(.feedback-modal-overlay[style*="display: flex"]) .feedback-fab-wrapper 
 }
 
 .feedback-btn-primary {
-  background: var(--accent-primary, #3b82f6);
+  background: var(--accent-primary, #1a9ee0);
   color: #ffffff;
 }
 
@@ -392,7 +392,7 @@ body:has(.feedback-modal-overlay[style*="display: flex"]) .feedback-fab-wrapper 
 }
 
 .feedback-result a {
-  color: var(--accent-primary, #3b82f6);
+  color: var(--accent-primary, #1a9ee0);
   text-decoration: none;
   font-size: 13px;
 }
@@ -437,13 +437,13 @@ body:has(.feedback-modal-overlay[style*="display: flex"]) .feedback-fab-wrapper 
 
 /* Feature: blue — constructive, forward-looking */
 .feedback-type-banner--feature {
-  background: rgba(59, 130, 246, 0.07);
-  border-color: rgba(59, 130, 246, 0.2);
+  background: rgba(26, 158, 224, 0.07);
+  border-color: rgba(26, 158, 224, 0.2);
   color: var(--text-secondary, #64748b);
 }
 
 .feedback-type-banner--feature .feedback-type-banner-icon {
-  color: var(--accent-primary, #3b82f6);
+  color: var(--accent-primary, #1a9ee0);
   flex-shrink: 0;
   margin-top: 1px;
 }
