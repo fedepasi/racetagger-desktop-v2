@@ -36,6 +36,13 @@ export interface MatchingConfig {
     nameSimilarity: number;      // Minimum similarity for fuzzy name matching
     lowOcrConfidence: number;    // Threshold for low OCR confidence
     strongNonNumberEvidence: number; // Threshold for strong non-number evidence
+    // Face-recognition TRUST threshold (cosine), distinct from the per-context
+    // MATCH threshold (0.50): a face match >= trust is confident enough to
+    // (a) take the face-only path and skip Gemini, and (b) force needs_review
+    // when it contradicts the number-based winner. Optional — use sites
+    // default to 0.6 when unset. Configurable per category via
+    // matching_config.thresholds.faceTrustThreshold.
+    faceTrustThreshold?: number;
   };
   multiEvidenceBonus: number;    // Bonus multiplier for multiple evidence types
   // AF-point scoring: when enabled and an AF point is available + reliable,
@@ -110,7 +117,8 @@ export class SportConfig {
             clearWinner: category.matching_config.thresholds?.clearWinner || 30,
             nameSimilarity: category.matching_config.thresholds?.nameSimilarity || 0.75,
             lowOcrConfidence: category.matching_config.thresholds?.lowOcrConfidence || 0.6,
-            strongNonNumberEvidence: category.matching_config.thresholds?.strongNonNumberEvidence || 80
+            strongNonNumberEvidence: category.matching_config.thresholds?.strongNonNumberEvidence || 80,
+            faceTrustThreshold: category.matching_config.thresholds?.faceTrustThreshold
           },
           multiEvidenceBonus: category.matching_config.multiEvidenceBonus || 0.2,
           enableAfPointScoring: category.matching_config.enableAfPointScoring === true,
@@ -150,6 +158,7 @@ export class SportConfig {
       nameSimilarity?: number;
       lowOcrConfidence?: number;
       strongNonNumberEvidence?: number;
+      faceTrustThreshold?: number;
     };
     multiEvidenceBonus?: number;
     enableAfPointScoring?: boolean;
@@ -177,7 +186,8 @@ export class SportConfig {
         clearWinner: matchingConfig.thresholds?.clearWinner ?? existingConfig.thresholds.clearWinner,
         nameSimilarity: matchingConfig.thresholds?.nameSimilarity ?? existingConfig.thresholds.nameSimilarity,
         lowOcrConfidence: matchingConfig.thresholds?.lowOcrConfidence ?? existingConfig.thresholds.lowOcrConfidence,
-        strongNonNumberEvidence: matchingConfig.thresholds?.strongNonNumberEvidence ?? existingConfig.thresholds.strongNonNumberEvidence
+        strongNonNumberEvidence: matchingConfig.thresholds?.strongNonNumberEvidence ?? existingConfig.thresholds.strongNonNumberEvidence,
+        faceTrustThreshold: matchingConfig.thresholds?.faceTrustThreshold ?? existingConfig.thresholds.faceTrustThreshold
       },
       multiEvidenceBonus: matchingConfig.multiEvidenceBonus ?? existingConfig.multiEvidenceBonus,
       enableAfPointScoring: matchingConfig.enableAfPointScoring ?? existingConfig.enableAfPointScoring,

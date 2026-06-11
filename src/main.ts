@@ -1564,6 +1564,12 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
       // The actual results array will be sent after processBatch() completes at line 1460
     });
 
+    // Non-fatal batch warnings (e.g. face recognition unavailable for this
+    // batch). The renderer shows a banner; processing continues normally.
+    unifiedImageProcessor.on('processingWarning', (warning: { code: string; message: string; recoverable: boolean }) => {
+      safeSend('processing-warning', warning);
+    });
+
     // Listen for uploaded images to cache their Supabase URLs (for RAW thumbnails)
     unifiedImageProcessor.on('image-uploaded', (data: { originalFileName: string; publicUrl: string }) => {
       // We need to find the original file path for this filename

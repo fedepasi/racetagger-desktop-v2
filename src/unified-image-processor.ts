@@ -402,6 +402,11 @@ class UnifiedImageWorker extends EventEmitter {
   // Face Recognition (ONNX-based: YuNet detection + AuraFace embedding)
   private faceRecognitionEnabled: boolean = false;
   private faceDescriptorsLoaded: boolean = false;
+  // Set when the category wants face rec but initialization FAILED (network,
+  // model download, ONNX): the batch runs without face rec and the processor
+  // surfaces this to the user (fail loud, not silent). Read via
+  // getFaceRecognitionInitError() by initializeWorkerPool().
+  public faceRecognitionInitError: string | null = null;
   private _dimMismatchWarned: boolean = false;
   // RAW preview calibration strategy (set by processor from calibration results)
   private rawPreviewStrategies: Map<string, RawPreviewStrategy> = new Map();
@@ -668,6 +673,9 @@ class UnifiedImageWorker extends EventEmitter {
 
       const participantIds = participants.map((p: any) => p.id);
       let totalCount = 0;
+      // Track failed sub-queries: a network error must NOT read as "0
+      // descriptors" (that silently disabled face rec for the whole batch).
+      let anyQueryFailed = false;
 
       // 1. Count participant-level face photos (linked via participant_id)
       const { count: participantPhotoCount, error: fError } = await this.supabase
@@ -678,6 +686,7 @@ class UnifiedImageWorker extends EventEmitter {
 
       if (fError) {
         log.warn(`[FaceRecognition] Pre-check participant photos query failed: ${fError.message}`);
+        anyQueryFailed = true;
       } else {
         totalCount += participantPhotoCount ?? 0;
       }
@@ -698,15 +707,39 @@ class UnifiedImageWorker extends EventEmitter {
 
         if (dfError) {
           log.warn(`[FaceRecognition] Pre-check driver photos query failed: ${dfError.message}`);
+          anyQueryFailed = true;
         } else {
           totalCount += driverPhotoCount ?? 0;
         }
       }
 
+      // A zero produced by failed queries is "unknown", not "empty preset" —
+      // return -1 so initializeFaceRecognition proceeds to the full load
+      // (whose failure is surfaced loudly) instead of silently disabling.
+      if (totalCount === 0 && anyQueryFailed) {
+        return -1;
+      }
       return totalCount;
     } catch (err: any) {
       log.warn(`[FaceRecognition] Pre-check error: ${err.message || err}`);
       return -1;
+    }
+  }
+
+  /**
+   * Face-recognition TRUST threshold (cosine) for this category: the bar a
+   * face match must clear to take the face-only path (skip Gemini). Stricter
+   * than the per-context MATCH threshold (0.50). Configurable per category via
+   * sport_categories.matching_config.thresholds.faceTrustThreshold; default 0.6.
+   */
+  private getFaceTrustThreshold(): number {
+    try {
+      const mc: any = this.currentSportCategory?.matching_config;
+      const cfg = typeof mc === 'string' ? JSON.parse(mc) : mc;
+      const v = cfg?.thresholds?.faceTrustThreshold;
+      return typeof v === 'number' && v > 0 && v <= 1 ? v : 0.6;
+    } catch {
+      return 0.6;
     }
   }
 
@@ -754,7 +787,8 @@ class UnifiedImageWorker extends EventEmitter {
       const onnxProcessor = FaceRecognitionOnnxProcessor.getInstance();
       const onnxInitOk = await onnxProcessor.initialize();
       if (!onnxInitOk) {
-        log.warn('Face recognition: ONNX pipeline failed to initialize (YuNet not loaded) - disabling');
+        this.faceRecognitionInitError = 'ONNX pipeline failed to initialize (YuNet detector not loaded)';
+        log.error(`Face recognition: ${this.faceRecognitionInitError} — batch will run WITHOUT face recognition`);
         this.faceRecognitionEnabled = false;
         return;
       }
@@ -765,9 +799,11 @@ class UnifiedImageWorker extends EventEmitter {
       // for analysis (offline policy), so a missing model = disable, not pretend.
       const embedderReady = await onnxProcessor.ensureEmbedderReady();
       if (!embedderReady) {
-        log.warn(
-          'Face recognition: AuraFace embedder not available (offline or model download failed) — ' +
-          'disabling face recognition for this run instead of returning silent zero-matches.'
+        const reason = onnxProcessor.getEmbedderLoadError();
+        this.faceRecognitionInitError =
+          `AuraFace embedder not available${reason ? ` (${reason})` : ' (offline or model download failed)'}`;
+        log.error(
+          `Face recognition: ${this.faceRecognitionInitError} — batch will run WITHOUT face recognition`
         );
         this.faceRecognitionEnabled = false;
         return;
@@ -787,12 +823,23 @@ class UnifiedImageWorker extends EventEmitter {
         this.faceDescriptorsLoaded = true;
         this.faceDescriptorCount = descriptorCount;
         log.info(`Face recognition initialized with ${descriptorCount} descriptors`);
+      } else if (preCheckCount > 0) {
+        // Pre-check saw descriptors but the load produced none — data/transport
+        // inconsistency, not an empty preset. Surface it.
+        this.faceRecognitionInitError =
+          `descriptor load returned 0 but pre-check counted ${preCheckCount} — possible network/data issue`;
+        log.error(`Face recognition: ${this.faceRecognitionInitError} — batch will run WITHOUT face recognition`);
+        this.faceRecognitionEnabled = false;
       } else {
         log.info(`No face descriptors in preset - face recognition disabled`);
         this.faceRecognitionEnabled = false;
       }
-    } catch (error) {
-      log.warn(`Face recognition initialization failed:`, error);
+    } catch (error: any) {
+      // loadFromPreset now rethrows on network/DB failure (fail loud): the
+      // category asked for face rec, descriptors exist, but we couldn't load
+      // them. Record the reason so the processor can tell the user.
+      this.faceRecognitionInitError = `descriptor load failed: ${error?.message || error}`;
+      log.error(`Face recognition initialization failed — batch will run WITHOUT face recognition:`, error);
       this.faceRecognitionEnabled = false;
     }
   }
@@ -3649,9 +3696,27 @@ class UnifiedImageWorker extends EventEmitter {
 
       // Check if we should skip number recognition (portrait/podium scenes)
       if (!recognitionStrategy.useNumberRecognition && faceRecognitionResult?.success) {
-        // For portrait/podium scenes, we only use face recognition IF we found matches
-        const matchedDrivers = faceRecognitionResult.matches
-          .filter(m => m.matched)
+        // FACE-PRIMARY POLICY (2026-06-11): the face-only path (skip Gemini)
+        // requires the TRUST threshold (default 0.60, configurable via
+        // matching_config.thresholds.faceTrustThreshold), which is stricter
+        // than the per-context MATCH threshold (0.50). Matches in the
+        // [match, trust) band are NOT confident enough to skip Gemini: they
+        // fall through to AI analysis and contribute as FACE_MATCH evidence
+        // in SmartMatcher instead ("face incerta → Gemini decide").
+        const faceTrustThreshold = this.getFaceTrustThreshold();
+        const trustedMatches = faceRecognitionResult.matches
+          .filter(m => m.matched && typeof m.similarity === 'number' && m.similarity >= faceTrustThreshold);
+        const belowTrustCount = faceRecognitionResult.matches.filter(
+          m => m.matched && (typeof m.similarity !== 'number' || m.similarity < faceTrustThreshold)
+        ).length;
+        if (belowTrustCount > 0) {
+          workerLog.info(
+            `[FaceOnlyPath] ${belowTrustCount} face match(es) below trust threshold ${faceTrustThreshold} ` +
+            `for ${imageFile.fileName} — falling through to AI analysis (face stays as SmartMatcher evidence)`
+          );
+        }
+
+        const matchedDrivers = trustedMatches
           .map(m => ({
             raceNumber: m.driverInfo?.raceNumber || null,
             drivers: m.driverInfo?.driverName ? [m.driverInfo.driverName] : [],
@@ -3662,7 +3727,7 @@ class UnifiedImageWorker extends EventEmitter {
 
         // FIX: Only use face-only results if we actually found matches
         // Otherwise, fall through to AI analysis for number recognition
-        workerLog.info(`[FaceOnlyPath] matchedDrivers=${matchedDrivers.length}, useNumberRecognition=${recognitionStrategy.useNumberRecognition} for ${imageFile.fileName}`);
+        workerLog.info(`[FaceOnlyPath] matchedDrivers=${matchedDrivers.length} (trust>=${faceTrustThreshold}), useNumberRecognition=${recognitionStrategy.useNumberRecognition} for ${imageFile.fileName}`);
         if (matchedDrivers.length > 0) {
           const processingTimeMs = Date.now() - startTime;
           workerLog.info(`Face-only recognition: ${matchedDrivers.length} drivers identified for ${imageFile.fileName}`);
@@ -10245,6 +10310,30 @@ export class UnifiedImageProcessor extends EventEmitter {
     // Share the adaptive upload semaphore with all workers
     for (const worker of this.workerPool) {
       worker.setUploadSemaphore(this.uploadSemaphore);
+    }
+
+    // FAIL LOUD (2026-06-11): if the category wanted face recognition but a
+    // worker couldn't initialize it (network during descriptor load, model
+    // download failure, ONNX init), tell the user ONCE instead of silently
+    // running the whole batch without face rec. The batch still proceeds —
+    // face rec is auxiliary — but the user must know it's off.
+    const faceInitError = this.workerPool.find(w => w.faceRecognitionInitError)?.faceRecognitionInitError;
+    if (faceInitError) {
+      const warning = {
+        code: 'face_recognition_unavailable',
+        message: `Face recognition is OFF for this batch: ${faceInitError}`,
+        recoverable: true
+      };
+      console.error(`[WorkerPool] ⚠️ ${warning.message}`);
+      this.emit('processingWarning', warning);
+      errorTelemetryService.reportCriticalError({
+        errorType: 'onnx_model',
+        severity: 'warning',
+        error: new Error(`Face recognition unavailable for batch: ${faceInitError}`),
+        executionId: this.config.executionId,
+        batchPhase: 'face_recognition_init',
+        categoryName: this.config.category
+      });
     }
 
     console.log(`[WorkerPool] ✅ Pool initialized with ${this.workerPool.length} workers (ONNX loaded once per worker, upload semaphore shared)`);

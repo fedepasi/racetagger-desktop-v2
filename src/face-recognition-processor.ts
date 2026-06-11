@@ -726,8 +726,12 @@ export class FaceRecognitionProcessor {
       console.log(`[FaceRecognition] Loaded ${storedDescriptors.length} face descriptors from preset ${presetId}`);
       return storedDescriptors.length;
     } catch (error) {
+      // FAIL LOUD (2026-06-11): a network/DB failure here used to return 0,
+      // indistinguishable from a genuinely empty preset — the batch then ran
+      // without face recognition and the user was never told. Rethrow so the
+      // caller (initializeFaceRecognition) can surface the failure.
       console.error('[FaceRecognition] Failed to load from preset:', error);
-      return 0;
+      throw error instanceof Error ? error : new Error(String(error));
     }
   }
 

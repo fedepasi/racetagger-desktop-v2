@@ -259,6 +259,12 @@ class EnhancedProgressTracker {
         this.showError(data.error);
       });
 
+      // Non-fatal batch warnings (e.g. face recognition unavailable for this
+      // batch): persistent banner, processing continues normally.
+      window.api.receive('processing-warning', (data) => {
+        this.showWarning(data.message);
+      });
+
       window.api.receive('processing-paused', () => {
         this.setPaused(true);
       });
@@ -772,7 +778,33 @@ class EnhancedProgressTracker {
       document.getElementById('progress-main-card').classList.remove('error');
     }, 3000);
   }
-  
+
+  // Persistent non-fatal warning banner (stays for the whole batch, unlike
+  // showStatusMessage which auto-removes after 4s). Used e.g. when face
+  // recognition could not initialize and the batch runs without it.
+  showWarning(message) {
+    const container = document.getElementById('status-messages-area');
+    if (!container) return;
+
+    // One banner per message text (avoid duplicates on repeated events)
+    const existing = container.querySelector('.batch-warning-banner');
+    if (existing && existing.dataset.message === message) return;
+
+    const banner = document.createElement('div');
+    banner.className = 'batch-warning-banner';
+    banner.dataset.message = message;
+    banner.style.cssText = [
+      'display:flex', 'align-items:center', 'gap:8px',
+      'background:#fef3c7', 'color:#92400e', 'border:1px solid #f59e0b',
+      'border-radius:8px', 'padding:10px 14px', 'margin:8px 0',
+      'font-size:13px', 'font-weight:500'
+    ].join(';');
+    banner.innerHTML = `<span>⚠️</span><span></span>`;
+    banner.querySelectorAll('span')[1].textContent = message;
+
+    container.appendChild(banner);
+  }
+
   showStatusMessage(message, type = 'info') {
     const container = document.getElementById('status-messages-area');
     
