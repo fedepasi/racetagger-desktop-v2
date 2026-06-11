@@ -245,46 +245,29 @@ async function downloadImage(url: string, destPath: string): Promise<boolean> {
 }
 
 /**
- * Generate face descriptor using face-api.js
- * Note: In production, this would use the FaceRecognitionProcessor
- * For this script, we use a simplified approach
+ * Generate face descriptor using ONNX pipeline (YuNet + AuraFace v1)
+ * Returns 512-dim L2-normalized embedding.
+ *
+ * Note: This replaces the old face-api.js + canvas approach.
  */
 async function generateDescriptor(imagePath: string): Promise<number[] | null> {
-  // Import face-api.js and canvas
-  const faceapi = require('face-api.js');
-  const canvas = require('canvas');
-  const { Canvas, Image, ImageData, loadImage, createCanvas } = canvas;
-
-  // Patch face-api.js
-  faceapi.env.monkeyPatch({ Canvas, Image, ImageData });
-
-  // Load models
-  const modelsPath = path.join(__dirname, '..', 'src', 'assets', 'models', 'face-api');
-
-  if (!faceapi.nets.ssdMobilenetv1.isLoaded) {
-    await faceapi.nets.ssdMobilenetv1.loadFromDisk(modelsPath);
-    await faceapi.nets.faceLandmark68Net.loadFromDisk(modelsPath);
-    await faceapi.nets.faceRecognitionNet.loadFromDisk(modelsPath);
-  }
-
   try {
-    // Load image
-    const img = await loadImage(imagePath);
-    const canvasImg = createCanvas(img.width, img.height);
-    const ctx = canvasImg.getContext('2d');
-    ctx.drawImage(img, 0, 0);
+    const { FaceRecognitionOnnxProcessor } = require('../src/face-recognition-onnx-processor');
+    const processor = FaceRecognitionOnnxProcessor.getInstance();
+    await processor.initialize();
 
-    // Detect face
-    const detection = await faceapi
-      .detectSingleFace(canvasImg, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
-      .withFaceLandmarks()
-      .withFaceDescriptor();
+    const result = await processor.detectAndEmbed(imagePath);
 
-    if (!detection) {
+    if (!result.success || result.faces.length === 0) {
       return null;
     }
 
-    return Array.from(detection.descriptor);
+    const face = result.faces[0];
+    if (face.embedding && face.embedding.length === 512) {
+      return Array.from(face.embedding);
+    }
+
+    return null;
   } catch (error) {
     console.error('Error generating descriptor:', error);
     return null;

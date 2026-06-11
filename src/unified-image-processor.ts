@@ -28,8 +28,32 @@ import { ModelManager, getModelManager, ModelStatus } from './model-manager';
 import { GenericSegmenter, getGenericSegmenter, SegmentationResult, GenericSegmenterOutput } from './generic-segmenter';
 import { parseSegmentationConfig, getDefaultModelId } from './yolo-model-registry';
 import { createComponentLogger } from './utils/logger';
-import { getFaceDetectionBridge, FaceRecognitionResult } from './face-detection-bridge';
+import { FaceRecognitionOnnxProcessor, FaceRecognitionOnnxResult, FaceWithEmbedding } from './face-recognition-onnx-processor';
+import { faceRecognitionProcessor, FaceContext, PersonMatch } from './face-recognition-processor';
 import { SyntheticPresetBuilder } from './matching/synthetic-preset-builder';
+
+// Bridge-compatible result type for face recognition (replaces old face-detection-bridge)
+interface FaceRecognitionResult {
+  success: boolean;
+  matches: Array<{
+    matched: boolean;
+    driverInfo?: {
+      driverId: string;
+      driverName: string;
+      teamName: string;
+      raceNumber: string;
+      /** Provenance of the matched descriptor — drives FACE_MATCH evidence
+       *  weighting in SmartMatcher (global face DB vs per-preset upload). */
+      source?: 'global' | 'preset';
+    };
+    similarity: number;
+    faceIndex: number;
+  }>;
+  detectionTimeMs: number;
+  matchingTimeMs: number;
+  totalTimeMs: number;
+  error?: string;
+}
 import { consentService } from './consent-service';
 import {
   extractCropContext,
@@ -350,9 +374,10 @@ class UnifiedImageWorker extends EventEmitter {
   private genericSegmenterLoaded: boolean = false;
   // Cache for segmentation results (avoid running segmentation twice per image)
   private cachedSegmentationResults: SegmentedDetection[] | null = null;
-  // Face Recognition (browser-based detection via IPC bridge)
+  // Face Recognition (ONNX-based: YuNet detection + AuraFace embedding)
   private faceRecognitionEnabled: boolean = false;
   private faceDescriptorsLoaded: boolean = false;
+  private _dimMismatchWarned: boolean = false;
   // RAW preview calibration strategy (set by processor from calibration results)
   private rawPreviewStrategies: Map<string, RawPreviewStrategy> = new Map();
   private faceDescriptorCount: number = 0;
@@ -598,35 +623,71 @@ class UnifiedImageWorker extends EventEmitter {
   }
 
   /**
-   * PERFORMANCE: Quick check of how many face descriptors are stored for the
-   * given preset. Returning 0 lets us skip the heavy face-api.js initialization
-   * (saves 200-500ms per session); returning -1 means the query failed and the
-   * caller should proceed with full initialization as a safe fallback.
-   *
-   * Counts photos in preset_participant_face_photos joined via preset_participants
-   * for the preset.
+   * PERFORMANCE: Quick check descriptor count before full initialization.
+   * Queries the database for the number of face descriptors (512-dim or 128-dim)
+   * in the given preset. Returns 0 if none, >0 if found, -1 on error.
    */
   private async checkPresetDescriptorCount(presetId: string): Promise<number> {
     try {
-      const { count, error } = await this.supabase
-        .from('preset_participant_face_photos')
-        .select('id, preset_participants!inner(preset_id)', { count: 'exact', head: true })
-        .eq('preset_participants.preset_id', presetId);
+      // Query through preset_participants → preset_participant_face_photos
+      // Photos can be linked via participant_id OR via driver_id (through preset_participant_drivers)
+      const { data: participants, error: pError } = await this.supabase
+        .from('preset_participants')
+        .select('id')
+        .eq('preset_id', presetId);
 
-      if (error) {
-        log.warn(`[FaceRec] Pre-check descriptor count query failed: ${error.message} — proceeding with full init`);
-        return -1;
+      if (pError || !participants || participants.length === 0) {
+        if (pError) log.warn(`[FaceRecognition] Pre-check participants query failed: ${pError.message}`);
+        return participants?.length === 0 ? 0 : -1;
       }
-      return count ?? 0;
-    } catch (err) {
-      log.warn(`[FaceRec] Pre-check descriptor count threw — proceeding with full init`, err);
+
+      const participantIds = participants.map((p: any) => p.id);
+      let totalCount = 0;
+
+      // 1. Count participant-level face photos (linked via participant_id)
+      const { count: participantPhotoCount, error: fError } = await this.supabase
+        .from('preset_participant_face_photos')
+        .select('id', { count: 'exact', head: true })
+        .in('participant_id', participantIds)
+        .or('face_descriptor_512.not.is.null,face_descriptor.not.is.null');
+
+      if (fError) {
+        log.warn(`[FaceRecognition] Pre-check participant photos query failed: ${fError.message}`);
+      } else {
+        totalCount += participantPhotoCount ?? 0;
+      }
+
+      // 2. Count driver-level face photos (linked via driver_id through preset_participant_drivers)
+      const { data: drivers, error: dError } = await this.supabase
+        .from('preset_participant_drivers')
+        .select('id')
+        .in('participant_id', participantIds);
+
+      if (!dError && drivers && drivers.length > 0) {
+        const driverIds = drivers.map((d: any) => d.id);
+        const { count: driverPhotoCount, error: dfError } = await this.supabase
+          .from('preset_participant_face_photos')
+          .select('id', { count: 'exact', head: true })
+          .in('driver_id', driverIds)
+          .or('face_descriptor_512.not.is.null,face_descriptor.not.is.null');
+
+        if (dfError) {
+          log.warn(`[FaceRecognition] Pre-check driver photos query failed: ${dfError.message}`);
+        } else {
+          totalCount += driverPhotoCount ?? 0;
+        }
+      }
+
+      return totalCount;
+    } catch (err: any) {
+      log.warn(`[FaceRecognition] Pre-check error: ${err.message || err}`);
       return -1;
     }
   }
 
   /**
    * Initialize Face Recognition for driver identification
-   * Uses face-api.js in renderer (via IPC bridge) for detection + main process matching
+   * Uses ONNX pipeline (YuNet detection + AuraFace embedding) in main process.
    *
    * Face descriptors are loaded ONLY from the participant preset.
    * Each preset has its own face recognition database.
@@ -660,14 +721,40 @@ class UnifiedImageWorker extends EventEmitter {
       }
 
       if (preCheckCount > 0) {
-        log.info(`Face recognition: ${preCheckCount} descriptors found, initializing bridge...`);
+        log.info(`Face recognition: ${preCheckCount} descriptors found, initializing ONNX pipeline...`);
       }
       // If -1 (error), proceed with full initialization (safe fallback)
 
-      await getFaceDetectionBridge().initialize();
+      // Initialize ONNX face recognition processor (YuNet + AuraFace)
+      const onnxProcessor = FaceRecognitionOnnxProcessor.getInstance();
+      const onnxInitOk = await onnxProcessor.initialize();
+      if (!onnxInitOk) {
+        log.warn('Face recognition: ONNX pipeline failed to initialize (YuNet not loaded) - disabling');
+        this.faceRecognitionEnabled = false;
+        return;
+      }
+      // Ensure AuraFace embedder is loaded (may not have loaded during initialize
+      // if the model was still downloading). FAIL CLEARLY if it can't load: without
+      // the embedder, detection still runs but every embedding is empty, producing
+      // zero matches with NO error — a silent failure. The app is online-required
+      // for analysis (offline policy), so a missing model = disable, not pretend.
+      const embedderReady = await onnxProcessor.ensureEmbedderReady();
+      if (!embedderReady) {
+        log.warn(
+          'Face recognition: AuraFace embedder not available (offline or model download failed) — ' +
+          'disabling face recognition for this run instead of returning silent zero-matches.'
+        );
+        this.faceRecognitionEnabled = false;
+        return;
+      }
+      const onnxStatus = onnxProcessor.getStatus();
+      log.info(`Face recognition: ONNX pipeline initialized (detector: ${onnxStatus.detectorLoaded}, embedder: ${onnxStatus.embedderLoaded})`);
+
+      // Initialize matching processor
+      await faceRecognitionProcessor.initialize();
 
       // Load face descriptors from the participant preset
-      const descriptorCount = await getFaceDetectionBridge().loadDescriptorsForPreset(this.config.presetId);
+      const descriptorCount = await faceRecognitionProcessor.loadFromPreset(this.config.presetId);
       log.info(`Face recognition: Loaded ${descriptorCount} descriptors from preset ${this.config.presetId}`);
 
       if (descriptorCount > 0) {
@@ -762,11 +849,84 @@ class UnifiedImageWorker extends EventEmitter {
     }
 
     try {
-      const result = await getFaceDetectionBridge().detectAndMatch(imagePath, context);
-      if (result.success && result.matches.length > 0) {
-        const matchedCount = result.matches.filter((m: any) => m.matched).length;
+      const startTime = Date.now();
+
+      // Step 1: Detect faces + generate embeddings via ONNX (main process)
+      const onnxProcessor = FaceRecognitionOnnxProcessor.getInstance();
+      const onnxResult = await onnxProcessor.detectAndEmbed(imagePath);
+
+      if (!onnxResult.success || onnxResult.faces.length === 0) {
+        log.info(`[FaceRecognition] No faces detected in image (detection: ${onnxResult.detectionTimeMs}ms)`);
+        return {
+          success: true,
+          matches: [],
+          detectionTimeMs: onnxResult.detectionTimeMs,
+          matchingTimeMs: 0,
+          totalTimeMs: Date.now() - startTime
+        };
+      }
+
+      log.info(`[FaceRecognition] Detected ${onnxResult.faces.length} face(s), generating embeddings...`);
+
+      // Step 2: Match embeddings against loaded descriptors
+      const matchStartTime = Date.now();
+      const embeddings = onnxResult.faces
+        .filter(f => f.embedding && f.embedding.length > 0)
+        .map(f => ({ faceIndex: f.faceIndex, embedding: f.embedding }));
+
+      // Warn once about dimension mismatch (512-dim AuraFace vs 128-dim face-api.js)
+      if (embeddings.length > 0 && !this._dimMismatchWarned) {
+        const storedDim = faceRecognitionProcessor.getDescriptorDimension();
+        const queryDim = embeddings[0].embedding.length;
+        if (storedDim > 0 && storedDim !== queryDim) {
+          log.warn(`[FaceRecognition] ⚠️  Dimension mismatch: stored descriptors are ${storedDim}-dim but AuraFace generates ${queryDim}-dim. Re-upload face photos to generate 512-dim descriptors.`);
+          this._dimMismatchWarned = true;
+        }
+      }
+
+      const personMatches = faceRecognitionProcessor.matchEmbeddings(embeddings, context as FaceContext);
+      const matchingTimeMs = Date.now() - matchStartTime;
+
+      // Convert to bridge-compatible format
+      const matches: FaceRecognitionResult['matches'] = personMatches.map((pm: PersonMatch) => ({
+        matched: true,
+        driverInfo: {
+          driverId: pm.personId,
+          driverName: pm.personName,
+          teamName: pm.team,
+          raceNumber: pm.carNumber,
+          // Propagate provenance so the FACE_MATCH evidence downstream can tell
+          // a global-DB match from a per-preset one (was silently lost → always 'preset').
+          source: pm.source
+        },
+        similarity: pm.confidence,
+        faceIndex: pm.faceIndex
+      }));
+
+      // Add unmatched faces
+      for (let i = 0; i < onnxResult.faces.length; i++) {
+        if (!matches.some(m => m.faceIndex === i)) {
+          matches.push({
+            matched: false,
+            similarity: 0,
+            faceIndex: i
+          });
+        }
+      }
+
+      const result: FaceRecognitionResult = {
+        success: true,
+        matches,
+        detectionTimeMs: onnxResult.detectionTimeMs,
+        matchingTimeMs,
+        totalTimeMs: Date.now() - startTime
+      };
+
+      if (result.matches.length > 0) {
+        const matchedCount = result.matches.filter(m => m.matched).length;
         log.info(`Face recognition: ${matchedCount}/${result.matches.length} faces matched in ${result.totalTimeMs}ms`);
       }
+
       return result;
     } catch (error) {
       log.warn('Face recognition failed:', error);
@@ -1197,8 +1357,8 @@ class UnifiedImageWorker extends EventEmitter {
     try {
       const startTime = Date.now();
 
-      // PERFORMANCE: Timeout segmentation to prevent hanging (30s max)
-      const SEGMENTATION_TIMEOUT_MS = 30000;
+      // PERFORMANCE: Timeout segmentation to prevent hanging (15s max, reduced from 30s)
+      const SEGMENTATION_TIMEOUT_MS = 15000;
       const result: GenericSegmenterOutput = await Promise.race([
         this.genericSegmenter.detect(imageBuffer),
         new Promise<GenericSegmenterOutput>((_, reject) =>
@@ -3353,7 +3513,7 @@ class UnifiedImageWorker extends EventEmitter {
       }
 
       // ============================================
-      // Fase 2.8: Determine Recognition Strategy based on Scene + Segmentation
+      // Fase 2.7: Segmentation for Recognition Strategy
       // ============================================
       phaseStart = Date.now();
 
@@ -3379,6 +3539,12 @@ class UnifiedImageWorker extends EventEmitter {
           segmentationForStrategy = null;
         }
       }
+      timing['2.7_segmentationStrategy'] = Date.now() - phaseStart;
+
+      // ============================================
+      // Fase 2.8: Face Recognition (ONNX - YuNet + AuraFace)
+      // ============================================
+      phaseStart = Date.now();
 
       // STEP 2: Determine recognition strategy (using segmentation results if available)
       const recognitionStrategy = this.getRecognitionStrategy(
@@ -3388,12 +3554,15 @@ class UnifiedImageWorker extends EventEmitter {
       let faceRecognitionResult: FaceRecognitionResult | null = null;
 
       // STEP 3: Perform face recognition if strategy dictates
+      workerLog.info(`[RecogStrategy] useFaceRecognition=${recognitionStrategy.useFaceRecognition}, useNumberRecognition=${recognitionStrategy.useNumberRecognition}, context=${recognitionStrategy.context} for ${imageFile.fileName}`);
       if (recognitionStrategy.useFaceRecognition) {
         workerLog.info(`Face recognition enabled for ${sceneClassification?.category || 'unknown'} scene`);
         faceRecognitionResult = await this.performFaceRecognition(
           uploadReadyPath,
           recognitionStrategy.context
         );
+        const matchedCount = faceRecognitionResult?.matches?.filter(m => m.matched).length || 0;
+        workerLog.info(`[FaceRecogResult] success=${faceRecognitionResult?.success}, totalMatches=${faceRecognitionResult?.matches?.length || 0}, matchedFaces=${matchedCount} for ${imageFile.fileName}`);
 
         // Persist face matches into the per-image cache so findIntelligentMatches()
         // can feed them to SmartMatcher as FACE_MATCH evidence. Only keep matches
@@ -3432,6 +3601,7 @@ class UnifiedImageWorker extends EventEmitter {
 
         // FIX: Only use face-only results if we actually found matches
         // Otherwise, fall through to AI analysis for number recognition
+        workerLog.info(`[FaceOnlyPath] matchedDrivers=${matchedDrivers.length}, useNumberRecognition=${recognitionStrategy.useNumberRecognition} for ${imageFile.fileName}`);
         if (matchedDrivers.length > 0) {
           const processingTimeMs = Date.now() - startTime;
           workerLog.info(`Face-only recognition: ${matchedDrivers.length} drivers identified for ${imageFile.fileName}`);
@@ -3442,6 +3612,7 @@ class UnifiedImageWorker extends EventEmitter {
           // Write metadata from face recognition matches
           for (const match of matchedDrivers) {
             const raceNumber = match.raceNumber;
+            workerLog.info(`[FaceOnlyMeta] Writing metadata for raceNumber="${raceNumber}", drivers=${JSON.stringify(match.drivers)}, participantsData.length=${this.participantsData.length}`);
 
             // Find participant in preset data
             const participant = this.participantsData.length > 0
@@ -3450,6 +3621,8 @@ class UnifiedImageWorker extends EventEmitter {
                   String(p.number) === String(raceNumber)
                 )
               : null;
+
+            workerLog.info(`[FaceOnlyMeta] Participant lookup: raceNumber="${raceNumber}" → ${participant ? `FOUND (numero=${participant.numero}, nome=${participant.nome}, metatag=${participant.metatag || 'none'})` : 'NOT FOUND'}`);
 
             // Write metatag to XMP:Description if available
             if (participant?.metatag) {
@@ -3697,6 +3870,7 @@ class UnifiedImageWorker extends EventEmitter {
       // ============================================
       // Fase 3 & 4: Analysis (Local ONNX, Crop-Context V6, or Standard Cloud API)
       // ============================================
+      workerLog.info(`[FlowTrace] Reached AI analysis phase for ${imageFile.fileName} (faceRecognitionResult=${faceRecognitionResult ? `{success:${faceRecognitionResult.success}, matches:${faceRecognitionResult.matches?.length || 0}, matched:${faceRecognitionResult.matches?.filter(m => m.matched).length || 0}}` : 'null'})`);
       phaseStart = Date.now();
       let analysisResult: any;
       let storagePath: string | null = null;
@@ -3948,7 +4122,8 @@ class UnifiedImageWorker extends EventEmitter {
         uploadReadyPath,
         processor,
         temporalContext,
-        visualTagsResult
+        visualTagsResult,
+        faceRecognitionResult
       );
       timing['6_smartMatcher'] = Date.now() - phaseStart;
 
@@ -5387,7 +5562,8 @@ class UnifiedImageWorker extends EventEmitter {
     processedImagePath: string,
     processor?: UnifiedImageProcessor,
     temporalContext?: { imageTimestamp: ImageTimestamp; temporalNeighbors: ImageTimestamp[] } | null,
-    visualTags?: { tags: any; usage: any } | null
+    visualTags?: { tags: any; usage: any } | null,
+    faceRecognitionResult?: FaceRecognitionResult | null
   ): Promise<{
     analysis: any[];
     csvMatch: any | null;
@@ -5397,6 +5573,45 @@ class UnifiedImageWorker extends EventEmitter {
   }> {
     let csvMatch: any = null;
     let description: string | null = null;
+
+    // DEBUG: Log what processAnalysisResults receives
+    log.info(`[processAnalysisResults] Called for ${imageFile.fileName}: faceRecognitionResult=${faceRecognitionResult ? `present(success=${faceRecognitionResult.success}, matches=${faceRecognitionResult.matches?.length || 0}, matchedFaces=${faceRecognitionResult.matches?.filter(m => m.matched).length || 0})` : 'NULL'}, analysisResult.analysis=${analysisResult?.analysis?.length || 0} items`);
+
+    // Merge face recognition matches into csvMatches
+    // This ensures face-matched participants are included in metadata even when number recognition also runs
+    const faceMatchedCsvEntries: any[] = [];
+    if (faceRecognitionResult?.success && faceRecognitionResult.matches) {
+      const matchedFaces = faceRecognitionResult.matches.filter(m => m.matched && m.driverInfo);
+      log.info(`[FaceRecognition→Metadata] Processing ${matchedFaces.length} face match(es) for merge (total matches in result: ${faceRecognitionResult.matches.length})`);
+      for (const faceMatch of matchedFaces) {
+        const raceNumber = faceMatch.driverInfo?.raceNumber;
+        const driverName = faceMatch.driverInfo?.driverName;
+        log.info(`[FaceRecognition→Metadata] Looking up: raceNumber="${raceNumber}", driverName="${driverName}" in ${this.participantsData.length} participants`);
+
+        // Find matching participant in preset data
+        const participant = this.participantsData.find((p: any) =>
+          (raceNumber && (String(p.numero) === String(raceNumber) || String(p.number) === String(raceNumber))) ||
+          (driverName && (
+            (p.nome && p.nome.includes(driverName)) ||
+            (p.drivers && p.drivers.some((d: any) => d.nome?.includes(driverName)))
+          ))
+        );
+
+        if (participant) {
+          faceMatchedCsvEntries.push({
+            entry: participant,
+            matchedNumber: raceNumber || participant.numero,
+            confidence: faceMatch.similarity,
+            matchedBy: 'face_recognition'
+          });
+          log.info(`[FaceRecognition→Metadata] ✅ Face match merged: ${driverName} → participant #${participant.numero}`);
+        } else {
+          log.warn(`[FaceRecognition→Metadata] ❌ No participant found for raceNumber="${raceNumber}", driverName="${driverName}"`);
+        }
+      }
+    } else if (faceRecognitionResult) {
+      log.info(`[FaceRecognition→Metadata] No face matches to merge (success=${faceRecognitionResult.success}, matches=${faceRecognitionResult.matches?.length || 0})`);
+    }
 
     if (analysisResult.analysis && analysisResult.analysis.length > 0) {
       // Sanitize garbage race numbers from AI responses before any matching
@@ -5441,7 +5656,31 @@ class UnifiedImageWorker extends EventEmitter {
       }
 
       // Enhanced intelligent matching using SmartMatcher with temporal context for ALL vehicles
-      const csvMatches = await this.findIntelligentMatches(analysisResult.analysis, imageFile, processor, temporalContext);
+      let csvMatches = await this.findIntelligentMatches(analysisResult.analysis, imageFile, processor, temporalContext);
+
+      // Merge face recognition matches (avoid duplicates by race number)
+      if (faceMatchedCsvEntries.length > 0) {
+        const existingNumbers = new Set(
+          (Array.isArray(csvMatches) ? csvMatches : csvMatches ? [csvMatches] : [])
+            .filter((m: any) => m?.entry?.numero)
+            .map((m: any) => String(m.entry.numero))
+        );
+
+        for (const faceEntry of faceMatchedCsvEntries) {
+          if (!existingNumbers.has(String(faceEntry.entry.numero))) {
+            if (Array.isArray(csvMatches)) {
+              csvMatches.push(faceEntry);
+            } else if (csvMatches) {
+              csvMatches = [csvMatches, faceEntry];
+            } else {
+              csvMatches = [faceEntry];
+            }
+            log.info(`[FaceRecognition→Metadata] Added face-only match for #${faceEntry.entry.numero} (not found by number recognition)`);
+          } else {
+            log.info(`[FaceRecognition→Metadata] Skipping #${faceEntry.entry.numero} - already matched by number recognition`);
+          }
+        }
+      }
 
       // Costruisci i keywords usando la logica esistente (utilizzeremo tutti i matches)
       const keywords = this.buildMetatag(analysisResult.analysis, csvMatches);
@@ -5449,6 +5688,12 @@ class UnifiedImageWorker extends EventEmitter {
 
       // Store all matches for further processing
       csvMatch = csvMatches;
+    } else if (faceMatchedCsvEntries.length > 0) {
+      // No AI analysis results, but face recognition found matches — use them directly
+      log.info(`[FaceRecognition→Metadata] No AI analysis results, using ${faceMatchedCsvEntries.length} face-only match(es)`);
+      csvMatch = faceMatchedCsvEntries;
+      const keywords = this.buildMetatag([], faceMatchedCsvEntries);
+      description = keywords && keywords.length > 0 ? keywords.join(', ') : null;
     } else if (
       // TEMPORAL BACKFILL: When YOLO detected a vehicle but AI returned 0 results,
       // check temporal neighbors for a high-confidence match and create a needs_review entry.
@@ -5575,6 +5820,12 @@ class UnifiedImageWorker extends EventEmitter {
           // If no match and using preset, vehicle was filtered out - don't include in csvMatch
         }
 
+        // Preserve face recognition matches appended beyond the analysis array
+        for (let i = originalAnalysis.length; i < csvMatch.length; i++) {
+          if (csvMatch[i]?.matchedBy === 'face_recognition' && csvMatch[i]?.entry) {
+            filteredCsvMatch.push(csvMatch[i]);
+          }
+        }
       }
     }
 

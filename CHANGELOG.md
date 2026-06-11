@@ -4,6 +4,19 @@
 
 ### ✨ Features
 
+- **Face recognition — AuraFace v1 ONNX engine (backend, flag-off)**: rewrites the
+  face-recognition engine to run entirely in the main process — YuNet (detection) +
+  AuraFace v1 512-dim embeddings (cosine matching) via onnxruntime-node, replacing the
+  renderer-side face-api.js/canvas path. Ships **disabled**: gated by two DB flags
+  (`sport_categories.face_recognition_enabled` per category + per-user
+  `face_recognition_enabled`), both default-off. Hardened for production: AuraFace
+  downloads via the app's authenticated Supabase client (was a broken process.env path
+  that hit the wrong project in packaged builds), streamed to disk with atomic
+  promotion + size check (no ~500MB RAM peak, no "sticky" corrupt file), and disables
+  cleanly with a log when the model/embedder can't load instead of returning silent
+  zero-matches. Includes 18 unit tests (YuNet decoding, cosine matching, model-missing
+  behavior). UI remains "Coming Soon"; the in-app face panel is a follow-up.
+
 - **Visual tagging — calendar-anchor grounding**: the desktop now forwards
   `preset_name`, `sport_category`, and the photo's EXIF `photo_taken_at` + GPS
   coordinates to the `visualTagging` edge function at every invoke site (standard,

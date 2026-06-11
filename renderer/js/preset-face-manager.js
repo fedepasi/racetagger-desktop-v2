@@ -349,46 +349,10 @@ class PresetFaceManager {
       let faceDescriptor = null;
       let detectionConfidence = null;
 
-      if (this.faceDetector) {
-        try {
-          // Ensure face detector is initialized (models loaded)
-          if (!this.faceDetector.isInitialized) {
-            console.log('[PresetFaceManager] Initializing face detector...');
-            const initResult = await this.faceDetector.initialize();
-            if (!initResult.success) {
-              console.warn('[PresetFaceManager] Face detector initialization failed:', initResult.error);
-            }
-          }
-
-          if (this.faceDetector.isInitialized) {
-            // Pass base64 data URL directly - _loadImage handles data URLs
-            const detectionStart = performance.now();
-            const result = await this.faceDetector.detectSingleFace(base64Data);
-            const detectionTime = (performance.now() - detectionStart).toFixed(0);
-
-            if (result.success && result.face) {
-              faceDescriptor = Array.from(result.face.descriptor);
-              detectionConfidence = result.face.confidence;
-              console.log(`[PresetFaceManager] Face detected in ${detectionTime}ms - confidence: ${(detectionConfidence * 100).toFixed(1)}%`);
-            } else if (result.success && !result.face) {
-              // No face detected - ask user if they want to continue
-              console.log(`[PresetFaceManager] No face detected in ${detectionTime}ms`);
-              const confirmed = await this.confirmNoFaceDetected();
-              if (!confirmed) {
-                this.isUploading = false;
-                this.updateUploadButton(false);
-                return;
-              }
-            } else {
-              console.warn('[PresetFaceManager] Face detection error:', result.error);
-            }
-          }
-        } catch (detectionError) {
-          console.warn('[PresetFaceManager] Face detection failed, continuing without descriptor:', detectionError);
-        }
-      } else {
-        console.log('[PresetFaceManager] Face detector not available, uploading without descriptor');
-      }
+      // Face detection now runs in main process via ONNX (YuNet + AuraFace)
+      // The preset-face-upload-photo handler will detect faces and generate
+      // 512-dim embeddings automatically. No renderer-side detection needed.
+      console.log('[PresetFaceManager] Face detection will run in main process (ONNX)');
 
       // Upload to backend
       const uploadParams = {
@@ -564,13 +528,15 @@ class PresetFaceManager {
     }
 
     // Detection confidence indicator
-    if (photo.face_descriptor && photo.detection_confidence) {
+    const hasDescriptor = photo.face_descriptor_512 || photo.face_descriptor;
+    const descriptorType = photo.face_descriptor_512 ? '512-dim' : (photo.face_descriptor ? '128-dim' : null);
+    if (hasDescriptor && photo.detection_confidence) {
       const confidence = document.createElement('div');
       confidence.className = 'confidence-indicator';
-      confidence.title = `Face detected (${Math.round(photo.detection_confidence * 100)}% confidence)`;
+      confidence.title = `Face detected (${Math.round(photo.detection_confidence * 100)}% confidence, ${descriptorType})`;
       confidence.innerHTML = '&#10003;'; // Checkmark
       card.appendChild(confidence);
-    } else if (!photo.face_descriptor) {
+    } else if (!hasDescriptor) {
       const noFace = document.createElement('div');
       noFace.className = 'no-face-indicator';
       noFace.title = 'No face detected in this photo';

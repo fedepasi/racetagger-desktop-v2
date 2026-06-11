@@ -1257,6 +1257,211 @@ Livello 3 (completo): Revert migration
 
 ---
 
+### 3.12 Sequence Tracking & Visual Re-Identification
+
+**Feature ID**: FT-2026-ST01 | **Versione Target**: v1.1.0 → v1.2.0 (implementazione progressiva)
+**Priorita**: ALTA — Differenziazione competitiva critica | **Target completamento**: Fine 2026
+**Data Proposta**: 16 Febbraio 2026 | **Review Tecnica**: 17 Febbraio 2026
+
+**Problema**: In una sequenza burst di 15 foto dello stesso soggetto, il numero e leggibile solo in 2-3 frame. Le restanti 12-13 foto restano senza match: 15-30% delle foto per evento (300-600 su 2000) richiedono tagging manuale.
+
+**Soluzione**: Propagare automaticamente l'identita di un soggetto a tutte le foto di una sequenza burst, sfruttando il Temporal Clustering gia esistente. Validazione progressiva con visual fingerprinting e Re-ID locale.
+
+**Concetto chiave**: "Se in un burst il numero e leggibile in 1 sola foto, il sistema propaga l'identita a tutto il burst."
+
+```
+UNIFIED IMAGE PROCESSOR (esistente)
+        |
+        v
+FASE 1: ANALISI STANDARD (esistente)
+  Per ogni foto:
+    1. AI Recognition (Gemini/RF-DETR) → numero + bbox
+    2. Smart Matching → participant match
+    3. Temporal Clustering → gruppo burst
+  Output: alcune foto con match, altre senza
+        |
+        v
+FASE 2: SEQUENCE TRACKING (NUOVA — Post-processing)
+  Per ogni cluster temporale:
+
+  2a. IDENTITY PROPAGATION (v1.1.0)
+      - Se almeno 1 foto nel cluster ha match → propaga a tutte
+      - GUARDIA: propagare SOLO se cluster ha soggetto dominante
+        (>70% dei match puntano allo stesso partecipante)
+        Se cluster conflittuale → NON propagare
+      - Confidence: originale * 0.85
+
+  2b. VISUAL RE-ID (v1.1.5)
+      - Estrai visual fingerprint per ogni bbox (color histogram + position)
+      - Confronta fingerprints intra-cluster per validare propagazione
+      - Peso position alto (0.40) — piu stabile del colore in burst
+
+  2c. CROSS-CLUSTER LINKING (v1.2.0+)
+      - Collega cluster diversi dello stesso soggetto
+      - Es: auto #42 in curva 1 e in curva 3
+      - Usa Re-ID embeddings (DINOv2 o MobileNetV3) per collegare
+```
+
+**Foundation gia esistente**:
+- Temporal Clustering (v1.0.5+)
+- Bounding Boxes V3/V4 (Gemini + RF-DETR)
+- Smart Matching con OCR correction e fuzzy matching
+- JSONL Logging per post-processing
+- ONNX Runtime gia in produzione
+
+#### Fase 2a: Identity Propagation (v1.1.0 — Quick Win)
+
+Zero costi API. Solo post-processing locale su temporal clusters.
+
+```typescript
+for (const cluster of temporalClusters) {
+  const photosWithMatch = cluster.photos.filter(p => p.hasParticipantMatch);
+  const photosWithoutMatch = cluster.photos.filter(p => !p.hasParticipantMatch);
+
+  if (photosWithMatch.length > 0 && photosWithoutMatch.length > 0) {
+    // GUARDIA: verifica soggetto dominante unico
+    const matchCounts = countByParticipant(photosWithMatch);
+    const dominantMatch = getTopMatch(matchCounts);
+    const dominanceRatio = dominantMatch.count / photosWithMatch.length;
+
+    if (dominanceRatio < 0.70) continue; // Cluster conflittuale — skip
+
+    const bestMatch = getMostConfidentMatch(
+      photosWithMatch.filter(p => p.participant === dominantMatch.participant)
+    );
+
+    for (const photo of photosWithoutMatch) {
+      photo.propagatedMatch = {
+        participant: bestMatch.participant,
+        confidence: bestMatch.confidence * 0.85,
+        source: 'SEQUENCE_PROPAGATION',
+        sourcePhotoId: bestMatch.photoId,
+        clusterSize: cluster.photos.length,
+        clusterMatchRate: photosWithMatch.length / cluster.photos.length,
+        dominanceRatio: dominanceRatio
+      };
+    }
+  }
+}
+```
+
+- Accuratezza attesa: 90-95%
+- Rischio principale: cluster multi-soggetto → mitigato da guardia dominanceRatio >= 70%
+- Costo: ZERO
+
+#### Fase 2b: Visual Re-Identification (v1.1.5 — Color Histogram + Position)
+
+Validazione visiva intra-cluster. Processing locale con Sharp.js.
+
+```typescript
+function extractVisualFingerprint(image: Buffer, bbox: BoundingBox): VisualFingerprint {
+  const croppedRegion = cropToBbox(image, bbox);
+  return {
+    colorHistogram: computeColorHistogram(croppedRegion, 16),
+    aspectRatio: bbox.width / bbox.height,
+    relativePosition: { x: bbox.x / 100, y: bbox.y / 100 },
+    dominantColors: extractTopColors(croppedRegion, 5)
+  };
+}
+
+function visualSimilarity(a: VisualFingerprint, b: VisualFingerprint): number {
+  const colorSim = histogramIntersection(a.colorHistogram, b.colorHistogram);
+  const positionSim = 1 - euclideanDistance(a.relativePosition, b.relativePosition);
+  const aspectSim = 1 - Math.abs(a.aspectRatio - b.aspectRatio);
+
+  // Peso position alto: in burst la posizione e piu stabile del colore
+  // (illuminazione ombra/sole e motion blur distorcono i colori)
+  return colorSim * 0.45 + positionSim * 0.40 + aspectSim * 0.15;
+}
+```
+
+**Nota review tecnica**: I pesi vanno tarati su dataset reali con condizioni di luce diverse. In motorsport le livree cambiano illuminazione drasticamente tra ombra e sole. Prevedere +1 settimana di tuning.
+
+#### Fase 2c: DINOv2/MobileNetV3 Re-ID + Cross-Cluster (v1.2.0)
+
+ONNX embedding extraction locale per cross-cluster linking.
+
+**Nota review tecnica**: Bundle +50-100MB con DINOv2. Alternativa: MobileNetV3 (~15MB) copre ~80% del valore. Decisione da prendere dopo risultati reali della Fase 2b — se color histogram + position gia porta al 90%+, il modello pesante potrebbe non giustificare la complessita.
+
+#### Effort & Timeline
+
+| Fase | Effort | Target Release |
+|------|--------|----------------|
+| **Fase 1: Identity Propagation** | 8-10 giorni | v1.1.0 — Mar-Apr 2026 |
+| **Fase 2: Visual Fingerprinting** | 12-16 giorni (incluso +1 sett tuning) | v1.1.5 — Mag-Giu 2026 |
+| **Fase 3: DINOv2/Cross-Cluster** | 13-18 giorni | v1.2.0 — Q3-Q4 2026 |
+
+#### Costi Operativi
+
+| Fase | API | CPU overhead | Bundle | Note |
+|------|-----|-------------|--------|------|
+| Fase 1 | €0 | Trascurabile | +0 | Solo post-processing locale |
+| Fase 2 | €0 | +5-10% | +0 | Sharp.js gia presente |
+| Fase 3 | €0 | ~200ms/img | +15-100MB | Da valutare post-Fase 2 |
+
+#### UX — Tipi di Match
+
+| Icona | Tipo | Confidence | Descrizione |
+|-------|------|------------|-------------|
+| ✅ | Match Diretto | 85-100% | Numero riconosciuto dall'AI nella foto |
+| 🔗 | Match Propagato | 75-95% | Propagato da altra foto della stessa sequenza |
+| 🔍 | Match Re-ID | 65-85% | Soggetto riconosciuto visivamente |
+| ❓ | Nessun Match | — | Nessun numero, nessuna sequenza |
+
+#### Impostazioni Utente
+
+- Conservativa: solo burst stretto (<500ms)
+- Bilanciata: burst + sequenze (<2000ms) — default
+- Aggressiva: include cross-cluster linking
+
+#### KPI di Successo
+
+| KPI | Baseline | Target F1 | Target F2 | Target F3 |
+|-----|----------|-----------|-----------|-----------|
+| Match rate complessivo | 70-85% | 85-92% | 90-95% | 95-99% |
+| Foto recuperate/evento | 0 | 150-300 | 200-400 | 300-500 |
+| Correzioni manuali/evento | 50-150 | 20-60 | 10-30 | <10 |
+| Tempo post-processing | 1-3 ore | 30-60 min | 15-30 min | <15 min |
+| False positive rate | N/A | <5% | <3% | <1% |
+
+#### Rischi e Mitigazioni
+
+| Rischio | Prob | Impatto | Mitigazione |
+|---------|------|---------|-------------|
+| Propagazione errata (2+ soggetti nel burst) | Media | Alto | Guardia dominanceRatio >= 70% + validazione bbox |
+| False positive cross-cluster (livree simili) | Media | Medio | Threshold alto, review manuale facoltativa |
+| Color histogram inaffidabile con luce variabile | Media | Medio | Peso alto su position (0.40), tuning per sport |
+| Aumento dimensione app (ONNX + modello) | Certa (F3) | Basso | Download on-demand o MobileNetV3 leggero |
+| Performance su batch grandi | Bassa | Medio | Post-processing asincrono, caching |
+
+#### Dipendenze
+
+| Feature | Stato | Necessaria Per |
+|---------|-------|----------------|
+| Temporal Clustering | ✅ Completata | Fase 1 |
+| Bounding Boxes V3/V4 | ✅ Completata | Fase 2 |
+| Smart Matching | ✅ Completata | Fase 1 |
+| ONNX Runtime | ✅ In produzione | Fase 3 |
+| RF-DETR Integration | ✅ Completata | Fase 2b |
+
+#### Note Strategiche
+
+**Posizionamento Marketing**: "RaceTagger non si limita a leggere i numeri — riconosce i soggetti. Anche quando il numero non e visibile, RaceTagger sa chi c'e nella foto." Sposta la percezione da "OCR tool" a "AI photography assistant".
+
+**Revenue Impact**: Con 29 utenti attivi, l'impatto immediato e sulla retention (ridurre churn), non sull'upsell. La feature diventa driver di conversione a 50+ utenti attivi. Potenziale upsell come feature premium per piani Professional+.
+
+**Estensione Video**: La Fase 2c apre la porta al video analysis (tracking soggetti tra frame video). Nuovo mercato: videografi motorsport. Nuovo prodotto: "RaceTagger Video" o add-on premium.
+
+**Quick Win**: La Fase 1 e implementabile in ~2 settimane con ZERO costi. Alto impatto / basso effort → prioritizzare nella prossima sprint.
+
+**Files coinvolti principali**:
+- `src/unified-image-processor.ts` — post-processing step
+- `src/matching/temporal-clustering.ts` — propagation logic
+- `renderer/pages/analysis.html` — UI indicatore match type
+- `src/utils/analysis-logger.ts` — JSONL logging propagazione
+
+---
+
 ## 4. Prioritizzazione
 
 ### Matrice Impatto/Effort
@@ -1281,81 +1486,85 @@ EFF │                    │                    │ EFFORT
                     LOW IMPACT
 ```
 
-### Stack Rank (Priorità Business)
+### Stack Rank (Priorita Business) — Aggiornato Feb 2026
 
 | # | Feature | Rationale |
 |---|---------|-----------|
-| 1 | **D2P Sales** | Revenue game-changer |
-| 2 | **On-Device AI** | Differenziazione tecnica |
-| 3 | **Face Recognition (AuraFace)** | Feature già implementata, sblocca valore immediato |
-| 4 | **API Platform** | Enable ecosystem |
-| 5 | **Real-Time Mode** | Premium feature |
-| 6 | **Auto-Culling** | Time saver, quick win |
-| 7 | **Multi-Sport** | Market expansion |
-| 8 | **Mobile App** | Field workflow |
-| 9 | **Multi-Photographer** | Team support |
-| 10 | **Video Analysis** | Content expansion |
-| 11 | **B2B Dashboard** | Enterprise sales |
+| 1 | **Sequence Tracking (Fase 1)** | Quick win: zero costi, +15% recovery, 2 settimane |
+| 2 | **D2P Sales** | Revenue game-changer |
+| 3 | **On-Device AI** | Differenziazione tecnica |
+| 4 | **Face Recognition (AuraFace)** | Feature gia implementata, sblocca valore immediato |
+| 5 | **Sequence Tracking (Fase 2-3)** | Visual Re-ID + Cross-cluster, completa il differenziatore |
+| 6 | **API Platform** | Enable ecosystem |
+| 7 | **Real-Time Mode** | Premium feature |
+| 8 | **Auto-Culling** | Time saver, quick win |
+| 9 | **Multi-Sport** | Market expansion |
+| 10 | **Mobile App** | Field workflow |
+| 11 | **Multi-Photographer** | Team support |
+| 12 | **Video Analysis** | Content expansion (abilitato da Sequence Tracking) |
+| 13 | **B2B Dashboard** | Enterprise sales |
 
 ---
 
 ## 5. Roadmap Temporale
 
-### Q1 2025: Foundation
+### 2026 — Piano Attivo
 
-**Obiettivo**: Completare infrastruttura base per features avanzate
+#### Q1 2026: Sequence Tracking Quick Win + Stabilizzazione
 
-| Settimana | Focus | Deliverable |
-|-----------|-------|-------------|
-| 1-2 | On-Device AI | ONNX runtime integration |
-| 3-4 | On-Device AI | Model conversion pipeline |
-| 5-6 | Auto-Culling | Quality scoring MVP |
-| 7-8 | Auto-Culling | UI integration |
-| 9-10 | Multi-Sport | Cycling adapter |
-| 11-12 | Testing | Performance benchmarks |
+**Obiettivo**: Rilasciare Identity Propagation (zero costi, alto impatto)
 
-**Milestone Q1**: RaceTagger funziona 100% offline con auto-culling
+| Periodo | Focus | Deliverable |
+|---------|-------|-------------|
+| Mar | Sequence Tracking Fase 1 | Post-processing su temporal clusters |
+| Mar | Sequence Tracking Fase 1 | Propagazione match con guardia soggetto dominante |
+| Apr | Sequence Tracking Fase 1 | UI indicatore "match propagato" vs "match diretto" |
+| Apr | Testing | Validazione su 3+ eventi reali |
 
-### Q2 2025: Monetization
+**Milestone**: v1.1.0 — Match rate complessivo 85-92%, 150-300 foto recuperate/evento
 
-**Obiettivo**: Lanciare D2P e API per revenue
+#### Q2 2026: Visual Fingerprinting + Face Recognition
 
-| Settimana | Focus | Deliverable |
-|-----------|-------|-------------|
-| 1-3 | D2P Sales | Storefront MVP |
-| 4-5 | D2P Sales | Stripe integration |
-| 6-7 | D2P Sales | QR code system |
-| 8-9 | API | REST API v1 |
-| 10-11 | API | Lightroom plugin |
-| 12 | Launch | Beta with select photographers |
+**Obiettivo**: Validazione visiva della propagazione + attivazione face recognition
 
-**Milestone Q2**: Primi €10,000 revenue da D2P
+| Periodo | Focus | Deliverable |
+|---------|-------|-------------|
+| Mag | Sequence Tracking Fase 2 | Color histogram extraction via Sharp.js |
+| Mag-Giu | Sequence Tracking Fase 2 | Similarity scoring + threshold tuning (luce variabile) |
+| Giu | Sequence Tracking Fase 2 | Integrazione nel post-processing pipeline |
+| Giu | Face Recognition | Inizio migrazione AuraFace v1 (se v1.1.0 stabile) |
 
-### Q3 2025: Scale
+**Milestone**: v1.1.5 — Match rate 90-95%, validazione visiva funzionante
 
-**Obiettivo**: Real-time e collaborazione per eventi grandi
+#### Q3-Q4 2026: Re-ID Avanzato + Cross-Cluster
 
-| Settimana | Focus | Deliverable |
-|-----------|-------|-------------|
-| 1-3 | Real-Time | Tethering support |
-| 4-6 | Real-Time | Live dashboard |
-| 7-9 | Multi-Photo | Workspace system |
-| 10-12 | Multi-Photo | Sync & merge |
+**Obiettivo**: DINOv2/MobileNetV3 embedding + cross-cluster linking
 
-**Milestone Q3**: 5+ fotografi usano RaceTagger su stesso evento
+| Periodo | Focus | Deliverable |
+|---------|-------|-------------|
+| Q3 | Sequence Tracking Fase 3 | ONNX embedding integration (modello da decidere post-F2) |
+| Q3 | Sequence Tracking Fase 3 | Cross-cluster subject linking |
+| Q4 | Face Recognition | Completamento AuraFace v1 + UI attiva |
+| Q4 | Stabilizzazione | Testing, tuning, performance optimization |
 
-### Q4 2025: Mobile & Enterprise
+**Milestone**: v1.2.0 — Match rate 95-99%, <10 correzioni manuali/evento
 
-**Obiettivo**: Mobile app e offerta B2B
+**Target completamento Sequence Tracking tutte le fasi**: Fine 2026
 
-| Settimana | Focus | Deliverable |
-|-----------|-------|-------------|
-| 1-4 | Mobile | iOS app MVP |
-| 5-8 | Mobile | Android + sync |
-| 9-10 | B2B | Organizer dashboard |
-| 11-12 | B2B | Enterprise features |
+### 2025 — Completato/In Corso (Storico)
 
-**Milestone Q4**: 1000+ downloads mobile, 10 organizzatori B2B
+#### Q1 2025: Foundation
+
+| Focus | Deliverable | Stato |
+|-------|-------------|-------|
+| On-Device AI | ONNX runtime integration | ✅ |
+| On-Device AI | Model conversion pipeline | ✅ |
+| Auto-Culling | Quality scoring MVP | Rimandato |
+| Multi-Sport | Cycling adapter | Parziale |
+
+#### Q2-Q4 2025: Feature Pipeline (Riposizionato)
+
+Le feature D2P Sales, API Platform, Real-Time Mode, Mobile App restano nella roadmap strategica ma sono riposizionate post-2026 in favore del Sequence Tracking (quick win con impatto immediato sulla retention degli attuali 29 utenti attivi)
 
 ---
 
@@ -1425,4 +1634,5 @@ EFF │                    │                    │ EFFORT
 ---
 
 *Documento creato: Dicembre 2025*
-*Prossima revisione: Marzo 2025*
+*Ultimo aggiornamento: 17 Febbraio 2026 — Aggiunta sezione 3.12 Sequence Tracking & Visual Re-ID*
+*Prossima revisione: Prima di inizio sviluppo Fase 1 (Marzo 2026)*

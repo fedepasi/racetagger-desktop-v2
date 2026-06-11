@@ -30,6 +30,7 @@ import {
   bulkSetPresetParticipantsIncludeDefaultFolder,
   resetPresetActiveStates
 } from '../database-service';
+import { FaceRecognitionOnnxProcessor } from '../face-recognition-onnx-processor';
 import * as crypto from 'crypto';
 import * as path from 'path';
 
@@ -110,6 +111,52 @@ export function registerPresetFaceHandlers(): void {
 
       const photoUrl = urlData.publicUrl;
 
+      // Run ONNX face detection + embedding in main process
+      let faceDescriptor512: number[] | undefined;
+      let detectionConfidence = params.detectionConfidence;
+      let descriptorModel: string | undefined;
+
+      try {
+        const onnxProcessor = FaceRecognitionOnnxProcessor.getInstance();
+        let onnxStatus = onnxProcessor.getStatus();
+
+        // Lazy-initialize ONNX pipeline if not yet ready
+        // (models are loaded on first face photo upload, not at app start)
+        if (!onnxStatus.ready) {
+          console.log(`[PresetFace IPC] ONNX not ready, initializing lazily...`);
+          const initOk = await onnxProcessor.initialize();
+          if (initOk) {
+            // After init, embedder may need separate loading if model was downloaded
+            await onnxProcessor.ensureEmbedderReady();
+            onnxStatus = onnxProcessor.getStatus();
+            console.log(`[PresetFace IPC] ONNX lazy init result: detector=${onnxStatus.detectorLoaded}, embedder=${onnxStatus.embedderLoaded}`);
+          } else {
+            console.warn(`[PresetFace IPC] ONNX lazy init failed, using legacy descriptor if provided`);
+          }
+        }
+
+        if (onnxStatus.ready) {
+          // Detect + embed from buffer
+          const onnxResult = await onnxProcessor.detectAndEmbedFromBuffer(buffer);
+
+          if (onnxResult.success && onnxResult.faces.length > 0) {
+            const face = onnxResult.faces[0]; // Reference photos should have 1 face
+            if (face.embedding && face.embedding.length === 512) {
+              faceDescriptor512 = face.embedding;
+              detectionConfidence = face.detectionConfidence;
+              descriptorModel = 'auraface-v1';
+              console.log(`[PresetFace IPC] ONNX: Face detected (confidence: ${face.detectionConfidence.toFixed(3)}, embedding: 512-dim)`);
+            }
+          } else {
+            console.log(`[PresetFace IPC] ONNX: No face detected in uploaded photo`);
+          }
+        } else {
+          console.log(`[PresetFace IPC] ONNX still not ready after init attempt (detector: ${onnxStatus.detectorLoaded}, embedder: ${onnxStatus.embedderLoaded}), using legacy descriptor if provided`);
+        }
+      } catch (onnxError) {
+        console.warn('[PresetFace IPC] ONNX detection failed, falling back to provided descriptor:', onnxError);
+      }
+
       // Save to database
       // Note: participant_id and driver_id are mutually exclusive (enforced by DB constraint)
       // - For participant photos: participant_id is set, driver_id is null
@@ -120,11 +167,17 @@ export function registerPresetFaceHandlers(): void {
         user_id: params.userId, // Required for RLS policy
         photo_url: photoUrl,
         storage_path: storagePath,
-        face_descriptor: params.faceDescriptor,
+        face_descriptor: params.faceDescriptor, // Legacy 128-dim (from renderer, if provided)
         photo_type: params.photoType || 'reference',
-        detection_confidence: params.detectionConfidence,
+        detection_confidence: detectionConfidence,
         is_primary: params.isPrimary || (currentCount === 0) // First photo is primary by default
       };
+
+      // Add 512-dim descriptor if ONNX detection succeeded
+      if (faceDescriptor512) {
+        createParams.face_descriptor_512 = faceDescriptor512;
+        createParams.descriptor_model = descriptorModel;
+      }
 
       console.log('[PresetFace IPC] 💾 Saving photo with:', {
         participant_id: createParams.participant_id,
@@ -218,12 +271,20 @@ export function registerPresetFaceHandlers(): void {
   ipcMain.handle('preset-face-update-descriptor', async (_, params: {
     photoId: string;
     faceDescriptor: number[];
+    faceDescriptor512?: number[];
+    descriptorModel?: string;
     detectionConfidence?: number;
   }) => {
     try {
       const updates: any = {
         face_descriptor: params.faceDescriptor
       };
+      if (params.faceDescriptor512) {
+        updates.face_descriptor_512 = params.faceDescriptor512;
+      }
+      if (params.descriptorModel) {
+        updates.descriptor_model = params.descriptorModel;
+      }
       if (params.detectionConfidence !== undefined) {
         updates.detection_confidence = params.detectionConfidence;
       }

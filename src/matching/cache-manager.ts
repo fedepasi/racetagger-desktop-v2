@@ -486,7 +486,8 @@ export class CacheManager {
 
       return JSON.parse(data.value);
     } catch (error) {
-      console.error('Error reading from L3 cache:', error);
+      const errMsg = (error as any)?.message || JSON.stringify(error) || 'unknown';
+      console.error(`[L3Cache] Read exception: ${errMsg}`);
       return null;
     }
   }

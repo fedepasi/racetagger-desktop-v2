@@ -359,7 +359,27 @@ export const APP_CONFIG = {
   // Feature flags for experimental functionality
   features: {
     // ADMIN FEATURE: Folder organization - Easy to remove by setting to false
-    ENABLE_FOLDER_ORGANIZATION: true  // Enable folder organization by race number (admin-only)
+    ENABLE_FOLDER_ORGANIZATION: true,  // Enable folder organization by race number (admin-only)
+    // NOTE: face recognition is NOT gated here. The real switches are two DB flags:
+    //   • sport_categories.face_recognition_enabled  (per-category, main-process gate)
+    //   • per-user face_recognition_enabled via delivery-get-plan-limits (renderer/UI gate)
+    // The old config-level AURAFACE_ENABLED was dead (never read) and was removed.
+  },
+  // Face Recognition ONNX model configuration
+  faceRecognition: {
+    // YuNet face detector (~90KB, bundled with app)
+    yunetModelName: 'face_detection_yunet_2023mar.onnx',
+    yunetConfidenceThreshold: 0.7,
+    yunetNmsThreshold: 0.5,
+    // AuraFace v1 face embedder (~250MB, downloaded on-demand)
+    aurafaceModelName: 'auraface_v1.onnx',
+    aurafaceEmbeddingDim: 512,
+    aurafaceInputSize: 112,  // 112x112 px
+    // Supabase Storage bucket for model downloads (same bucket as other ONNX models)
+    modelStorageBucket: 'onnx-models',
+    modelStoragePath: 'face-recognition/auraface-v1/',
+    // Local cache directory: ~/.racetagger/models/
+    localModelCacheDir: 'models',
   },
   // Legacy performance optimizations (kept for backward compatibility)
   performance: {
