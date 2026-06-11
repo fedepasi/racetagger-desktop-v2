@@ -45,6 +45,26 @@ export interface PersonMatch {
 // Alias for backward compatibility
 export type DriverMatch = PersonMatch;
 
+/**
+ * Per-face matching outcome, including faces whose best candidate fell BELOW
+ * the threshold. Used for telemetry/observability (JSONL + analysis_results),
+ * so the portal can always show how confident the offline face pipeline was —
+ * not only when a face match was accepted.
+ */
+export interface FaceMatchOutcome {
+  faceIndex: number;
+  /** True when the best candidate crossed the context threshold */
+  matched: boolean;
+  /** Best candidate (even when below threshold). Undefined if no descriptors compared. */
+  personId?: string;
+  personName?: string;
+  /** Best similarity score (cosine: higher=better; euclidean: lower=better) */
+  score: number;
+  metric: 'cosine' | 'euclidean';
+  /** Threshold that was applied for this context */
+  threshold: number;
+}
+
 export interface FaceRecognitionResult {
   success: boolean;
   faces: DetectedFace[];
@@ -83,25 +103,33 @@ export type FaceContext = 'portrait' | 'action' | 'podium' | 'auto';
 
 // Cosine similarity thresholds for 512-dim AuraFace
 // Higher = stricter (cosine: 1.0 = identical, 0.0 = orthogonal)
+//
+// Calibration note (2026-06-11, exec 5b90d238 + 5b3cd54b, F1 test set):
+// correct candidates on real photos scored 0.508-0.588 while unrelated
+// faces stayed <= 0.461. The previous thresholds (portrait 0.60, others
+// 0.55) rejected most CORRECT matches. Lowered uniformly to 0.50 as an
+// experimental calibration while the feature is founder-only — revisit
+// with a larger roster before broad rollout (margin to false positives
+// is ~0.05 on current data).
 const COSINE_CONTEXT_CONFIG: Record<FaceContext, {
   maxFaces: number;
   matchThreshold: number;  // Minimum cosine similarity for a match
 }> = {
   portrait: {
     maxFaces: 1,
-    matchThreshold: 0.60
+    matchThreshold: 0.50
   },
   action: {
     maxFaces: 3,
-    matchThreshold: 0.55
+    matchThreshold: 0.50
   },
   podium: {
     maxFaces: 5,
-    matchThreshold: 0.55
+    matchThreshold: 0.50
   },
   auto: {
     maxFaces: 5,
-    matchThreshold: 0.55
+    matchThreshold: 0.50
   }
 };
 
@@ -387,7 +415,20 @@ export class FaceRecognitionProcessor {
     embeddings: Array<{ faceIndex: number; embedding: number[] }>,
     context: FaceContext = 'auto'
   ): PersonMatch[] {
-    if (this.personDescriptors.size === 0) return [];
+    return this.matchEmbeddingsDetailed(embeddings, context).matches;
+  }
+
+  /**
+   * Like matchEmbeddings(), but also returns a per-face outcome for every
+   * embedding — including below-threshold best candidates — so callers can
+   * persist face telemetry (JSONL + analysis_results) regardless of whether
+   * the match was accepted.
+   */
+  matchEmbeddingsDetailed(
+    embeddings: Array<{ faceIndex: number; embedding: number[] }>,
+    context: FaceContext = 'auto'
+  ): { matches: PersonMatch[]; outcomes: FaceMatchOutcome[] } {
+    if (this.personDescriptors.size === 0) return { matches: [], outcomes: [] };
 
     const useCosine = this.isCosineSimilarityMode();
     const config = useCosine
@@ -395,6 +436,7 @@ export class FaceRecognitionProcessor {
       : EUCLIDEAN_CONTEXT_CONFIG[context];
 
     const matches: PersonMatch[] = [];
+    const outcomes: FaceMatchOutcome[] = [];
 
     for (const { faceIndex, embedding } of embeddings) {
       // First, get best score WITHOUT threshold to log diagnostics
@@ -425,8 +467,20 @@ export class FaceRecognitionProcessor {
             referencePhotoUrl: storedFace.referencePhotoUrl,
             similarityMetric: match.metric
           });
+          outcomes.push({
+            faceIndex,
+            matched: true,
+            personId: storedFace.personId,
+            personName: storedFace.personName,
+            score: match.score,
+            metric: match.metric,
+            threshold: config.matchThreshold
+          });
+          continue;
         }
-      } else if (bestNoThreshold) {
+      }
+
+      if (bestNoThreshold) {
         // Log the best score even when below threshold (diagnostic)
         const storedFace = this.storedFaces.get(bestNoThreshold.personId);
         const personName = storedFace?.personName || bestNoThreshold.personId;
@@ -434,10 +488,27 @@ export class FaceRecognitionProcessor {
           `[FaceRecognition] ❌ Face ${faceIndex} NO MATCH - best: ${personName} ` +
           `(${bestNoThreshold.metric}: ${bestNoThreshold.score.toFixed(3)}, threshold: ${config.matchThreshold})`
         );
+        outcomes.push({
+          faceIndex,
+          matched: false,
+          personId: bestNoThreshold.personId,
+          personName,
+          score: bestNoThreshold.score,
+          metric: bestNoThreshold.metric,
+          threshold: config.matchThreshold
+        });
+      } else {
+        outcomes.push({
+          faceIndex,
+          matched: false,
+          score: 0,
+          metric: useCosine ? 'cosine' : 'euclidean',
+          threshold: config.matchThreshold
+        });
       }
     }
 
-    return matches;
+    return { matches, outcomes };
   }
 
   /**
