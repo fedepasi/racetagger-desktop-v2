@@ -4496,9 +4496,56 @@ export async function getUserPlanLimits() {
     projects_enabled: flagMap['projects_enabled'] ?? planLimits.projects_enabled ?? false,
     r2_storage_enabled: flagMap['r2_storage_enabled'] ?? planLimits.r2_storage_enabled ?? false,
     face_recognition_enabled: flagMap['face_recognition_enabled'] ?? planLimits.face_recognition_enabled ?? false,
+    // #184 Phase 1 — cross-device DB reconstruction of the review gallery.
+    // Dark-launched: per-user opt-in via feature_flags (same mechanism as
+    // face_recognition_enabled), default off.
+    db_execution_fallback: flagMap['db_execution_fallback'] ?? planLimits.db_execution_fallback ?? false,
     r2_storage_max_gb: planLimits.r2_storage_max_gb ?? 0,
     gallery_max_galleries: planLimits.gallery_max_galleries ?? 3,
   };
+}
+
+// =============================================================================
+// db_execution_fallback flag (#184 Phase 1) — lightweight, cached read.
+//
+// The cross-device gallery reconstruction (get-execution-log fallback) only
+// fires when a local JSONL is missing, but the manual "Refresh" button can be
+// clicked repeatedly, so we cache the per-user flag for 60s to avoid hammering
+// feature_flags. Reads ONLY the per-user row (user_id = me), exactly like
+// getUserPlanLimits — a global (user_id IS NULL) row is intentionally not a
+// blanket on-switch here, keeping parity with the other gated features.
+// Never throws: any failure degrades to OFF (today's behavior).
+// =============================================================================
+let _dbExecFallbackCache: { userId: string; value: boolean; at: number } | null = null;
+const DB_EXEC_FALLBACK_TTL_MS = 60_000;
+
+export async function isDbExecutionFallbackEnabled(): Promise<boolean> {
+  const userId = authService.getCurrentUserId();
+  if (!userId) return false;
+
+  const now = Date.now();
+  if (
+    _dbExecFallbackCache &&
+    _dbExecFallbackCache.userId === userId &&
+    now - _dbExecFallbackCache.at < DB_EXEC_FALLBACK_TTL_MS
+  ) {
+    return _dbExecFallbackCache.value;
+  }
+
+  try {
+    const client = getSupabaseClient();
+    const { data } = await client
+      .from('feature_flags')
+      .select('is_enabled')
+      .eq('user_id', userId)
+      .eq('feature_name', 'db_execution_fallback')
+      .maybeSingle();
+    const value = data?.is_enabled === true;
+    _dbExecFallbackCache = { userId, value, at: now };
+    return value;
+  } catch {
+    return false; // never blocks the gallery; degrade to today's behavior
+  }
 }
 
 // ==================== GALLERY UPDATES ====================

@@ -14,7 +14,7 @@ import { DEBUG_MODE, ENABLE_DB_EXECUTION_FALLBACK } from '../config';
 import { unifiedImageProcessor } from '../unified-image-processor';
 import { AnalysisLogger, writeUploadedMarker } from '../utils/analysis-logger';
 import { loadFromDatabaseIfExists } from '../utils/execution-log-loader';
-import { getSupabaseClient, getUserPlanLimits, reconcileOrphanExecutions } from '../database-service';
+import { getSupabaseClient, getUserPlanLimits, reconcileOrphanExecutions, isDbExecutionFallbackEnabled } from '../database-service';
 import { authService } from '../auth-service';
 
 // ==================== Log Reading Utilities ====================
@@ -117,10 +117,14 @@ export function registerAnalysisHandlers(): void {
       // Cross-device DB reconstruction. Never throws; returns null when the flag
       // is off, the user isn't authenticated, or anything fails → caller degrades.
       const tryDbReconstruct = async (bypassCache: boolean): Promise<any[] | null> => {
-        if (!ENABLE_DB_EXECUTION_FALLBACK) return null;
         const authState = authService.getAuthState();
         const userId = authState.isAuthenticated ? authState.user?.id : null;
         if (!userId) return null;
+        // Flag resolution: the env var forces it on for local dev; in packaged
+        // builds (no env) it's gated per-user via feature_flags.db_execution_fallback
+        // (cached 60s). Either source off → behave exactly as today.
+        const enabled = ENABLE_DB_EXECUTION_FALLBACK || await isDbExecutionFallbackEnabled();
+        if (!enabled) return null;
         const res = await loadFromDatabaseIfExists(
           executionId,
           { supabase: getSupabaseClient(), userId },

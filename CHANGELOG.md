@@ -40,10 +40,10 @@
   still renders** — plus a manual **Refresh** button to re-pull the cloud copy
   (e.g. to pick up corrections made on another device). **Per-user gated via the
   `feature_flags` table** (`db_execution_fallback`, default off) — the same
-  DB-delivered mechanism as `face_recognition_enabled`, so it can be turned on for
-  individual users or by `rollout_percentage` without a rebuild; the
-  `RACETAGGER_DB_EXECUTION_FALLBACK` env still forces it on for local dev. With the
-  flag off, behavior is identical to today. Additive and defensive — any DB/network
+  DB-delivered, per-user mechanism as `face_recognition_enabled`, so it can be
+  turned on for individual users from the DB without a rebuild (read cached 60s);
+  the `RACETAGGER_DB_EXECUTION_FALLBACK` env still forces it on for local dev. With
+  the flag off, behavior is identical to today. Additive and defensive — any DB/network
   failure degrades to the previous behavior (empty gallery), never throws. The
   local-first path is unchanged. No token logic / Edge Functions / schema touched.
   Online-only by policy (CLAUDE.md → Offline Capability Policy). *Known v1
