@@ -1,4 +1,4 @@
-/* 
+﻿/* 
  * Racetagger Desktop - Native Desktop Theme
  * A dark theme inspired by native desktop applications
  */
@@ -13,8 +13,8 @@
   --text-dark: #0f172a;
   --text-secondary: #e2e8f0;
   --text-muted: #94a3b8;
-  --accent-primary: #3b82f6;
-  --accent-secondary: #6366f1;
+  --accent-primary: #1a9ee0;
+  --accent-secondary: #1a9ee0;
   --accent-success: #10b981;
   --accent-warning: #f59e0b;
   --accent-danger: #ef4444;
@@ -41,16 +41,30 @@
   --transition-fast: 0.15s ease;
   --transition-normal: 0.3s ease;
 
+  /* Monospace — brand: JetBrains Mono for all numbers, stats, credits */
+  --font-mono-rt: 'JetBrains Mono', ui-monospace, 'Cascadia Code', monospace;
+
   /* Compatibility layer for participants.css */
   --surface-color: var(--bg-card);
   --surface-color-light: rgba(51, 65, 85, 0.3);
   --border-color-light: var(--border-light);
   --accent-color: var(--accent-primary);
-  --accent-color-20: rgba(59, 130, 246, 0.2);
+  --accent-color-20: rgba(26, 158, 224, 0.2);
   --text-placeholder: var(--text-muted);
   --input-bg: var(--bg-dark);
   --error-color: var(--accent-danger);
   --error-color-dark: #dc2626;
+}
+
+/* Monospace elements — race numbers, credit balances, stats, file names */
+.mono,
+code,
+.token-value,
+#app-version,
+.results-stat-value,
+.rt-num {
+  font-family: var(--font-mono-rt);
+  font-feature-settings: "tnum";
 }
 
 /* Base styles */
@@ -183,7 +197,7 @@ body {
   right: 0;
   width: 1px;
   height: 100%;
-  background: linear-gradient(180deg, transparent, rgba(59, 130, 246, 0.3), transparent);
+  background: linear-gradient(180deg, transparent, rgba(26, 158, 224, 0.3), transparent);
 }
 
 .sidebar-logo {
@@ -230,13 +244,13 @@ body {
 }
 
 .nav-item:hover {
-  background: rgba(59, 130, 246, 0.1);
+  background: rgba(26, 158, 224, 0.1);
   color: var(--text-primary);
   transform: translateX(4px);
 }
 
 .nav-item.active {
-  background: rgba(59, 130, 246, 0.15);
+  background: rgba(26, 158, 224, 0.15);
   color: var(--text-primary);
 }
 
@@ -355,8 +369,8 @@ body {
   left: var(--sidebar-width);
   right: 0;
   height: 100vh;
-  background: radial-gradient(circle at 20% 80%, rgba(59, 130, 246, 0.05) 0%, transparent 50%),
-              radial-gradient(circle at 80% 20%, rgba(99, 102, 241, 0.05) 0%, transparent 50%);
+  background: radial-gradient(circle at 20% 80%, rgba(26, 158, 224, 0.05) 0%, transparent 50%),
+              radial-gradient(circle at 80% 20%, rgba(26, 158, 224, 0.05) 0%, transparent 50%);
   pointer-events: none;
   z-index: -1;
 }
@@ -380,7 +394,7 @@ body {
   left: 0;
   right: 0;
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.3), transparent);
+  background: linear-gradient(90deg, transparent, rgba(26, 158, 224, 0.3), transparent);
 }
 
 .card:hover {
@@ -1430,8 +1444,8 @@ body {
 /* Enhanced toggle container enabled state */
 .toggle-container.enabled {
   border-color: var(--accent-primary);
-  background-color: rgba(59, 130, 246, 0.05);
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.1);
+  background-color: rgba(26, 158, 224, 0.05);
+  box-shadow: 0 0 0 1px rgba(26, 158, 224, 0.1);
 }
 
 /* Enhanced preset options styling */
@@ -1566,15 +1580,15 @@ body {
 /* Enhanced state for checked preset options */
 .preset-option:has(input:checked) {
   border-color: var(--accent-primary);
-  background-color: rgba(59, 130, 246, 0.05);
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.1);
+  background-color: rgba(26, 158, 224, 0.05);
+  box-shadow: 0 0 0 1px rgba(26, 158, 224, 0.1);
 }
 
 /* Fallback for browsers without :has() support */
 .preset-option.selected {
   border-color: var(--accent-primary);
-  background-color: rgba(59, 130, 246, 0.05);
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.1);
+  background-color: rgba(26, 158, 224, 0.05);
+  box-shadow: 0 0 0 1px rgba(26, 158, 224, 0.1);
 }
 
 /* Enhanced resize info styling */
@@ -1633,14 +1647,14 @@ body {
 }
 
 .main-content::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, rgba(59, 130, 246, 0.3), rgba(99, 102, 241, 0.3));
+  background: linear-gradient(180deg, rgba(26, 158, 224, 0.3), rgba(26, 158, 224, 0.3));
   border-radius: 4px;
   transition: all 0.2s ease;
 }
 
 .main-content::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, rgba(59, 130, 246, 0.5), rgba(99, 102, 241, 0.5));
-  box-shadow: 0 2px 4px rgba(59, 130, 246, 0.2);
+  background: linear-gradient(180deg, rgba(26, 158, 224, 0.5), rgba(26, 158, 224, 0.5));
+  box-shadow: 0 2px 4px rgba(26, 158, 224, 0.2);
 }
 
 /* Smooth scroll behavior for anchor links */
@@ -1650,7 +1664,7 @@ html {
 
 /* Focus indication for keyboard navigation */
 .main-content:focus-within {
-  outline: 2px solid rgba(59, 130, 246, 0.3);
+  outline: 2px solid rgba(26, 158, 224, 0.3);
   outline-offset: -2px;
 }
 

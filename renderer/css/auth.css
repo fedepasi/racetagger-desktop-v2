@@ -1,4 +1,4 @@
-/* Stili per il sistema di autenticazione */
+﻿/* Stili per il sistema di autenticazione */
 .auth-container {
   position: fixed;
   top: 0;
@@ -33,7 +33,7 @@
 
 /* Colonna sinistra */
 .auth-sidebar {
-  background: linear-gradient(135deg, #3b82f6, #1e40af, #1e3a8a);
+  background: linear-gradient(135deg, #1a9ee0, #0e7ab4, #0a5f8c);
   color: white;
   padding: 0;
   position: relative;
@@ -107,7 +107,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background: radial-gradient(circle at 80% 20%, rgba(59, 130, 246, 0.02) 0%, transparent 50%);
+  background: radial-gradient(circle at 80% 20%, rgba(26, 158, 224, 0.02) 0%, transparent 50%);
   pointer-events: none;
 }
 
@@ -131,13 +131,13 @@
 }
 
 .auth-tab.active {
-  color: #3b82f6;
-  border-bottom-color: #3b82f6;
+  color: #1a9ee0;
+  border-bottom-color: #1a9ee0;
 }
 
 .auth-tab:hover:not(.active) {
   color: #1e293b;
-  background-color: rgba(59, 130, 246, 0.05);
+  background-color: rgba(26, 158, 224, 0.05);
 }
 
 .auth-tab:hover:not(.active) {
@@ -172,9 +172,9 @@
 }
 
 .form-group input:focus {
-  border-color: #3b82f6;
+  border-color: #1a9ee0;
   outline: none;
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  box-shadow: 0 0 0 3px rgba(26, 158, 224, 0.1);
   background-color: #ffffff;
 }
 
@@ -191,7 +191,7 @@
 
 .forgot-password-link a {
   font-size: 13px;
-  color: #3b82f6;
+  color: #1a9ee0;
   text-decoration: none;
   transition: color 0.15s ease;
 }
@@ -239,7 +239,7 @@
 }
 
 .btn.primary {
-  background: linear-gradient(135deg, #3b82f6, #6366f1);
+  background: linear-gradient(135deg, #1a9ee0, #1a9ee0);
   color: white;
   width: 100%;
   box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
@@ -508,7 +508,7 @@
 
 .strength-bar-fill.good {
   width: 75%;
-  background-color: #3b82f6;
+  background-color: #1a9ee0;
 }
 
 .strength-bar-fill.strong {
@@ -534,7 +534,7 @@
 }
 
 .strength-label.good {
-  color: #3b82f6;
+  color: #1a9ee0;
 }
 
 .strength-label.strong {

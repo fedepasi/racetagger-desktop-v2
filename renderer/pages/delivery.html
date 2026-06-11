@@ -1,4 +1,4 @@
-<div class="delivery-page" style="padding: 24px; max-width: 1200px;">
+﻿<div class="delivery-page" style="padding: 24px; max-width: 1200px;">
 
   <!-- Page Header (hidden when inside client detail) -->
   <div id="delivery-page-header" style="margin-bottom: 32px;">
@@ -36,23 +36,23 @@
         <p style="color: var(--text-primary); font-size: 14px; font-weight: 600; margin: 0 0 12px;">What would be most useful to you?</p>
         <div style="display: flex; flex-direction: column; gap: 10px;">
           <label style="display: flex; align-items: center; gap: 10px; color: var(--text-muted); font-size: 13px; cursor: pointer;">
-            <input type="checkbox" id="interest-single-gallery" style="accent-color: var(--accent-primary, #3b82f6); width: 16px; height: 16px;">
+            <input type="checkbox" id="interest-single-gallery" style="accent-color: var(--accent-primary, #1a9ee0); width: 16px; height: 16px;">
             <span>A <strong style="color: var(--text-primary);">public gallery</strong> where runners/riders find their photos by bib number</span>
           </label>
           <label style="display: flex; align-items: center; gap: 10px; color: var(--text-muted); font-size: 13px; cursor: pointer;">
-            <input type="checkbox" id="interest-multi-client" style="accent-color: var(--accent-primary, #3b82f6); width: 16px; height: 16px;">
+            <input type="checkbox" id="interest-multi-client" style="accent-color: var(--accent-primary, #1a9ee0); width: 16px; height: 16px;">
             <span><strong style="color: var(--text-primary);">Multi-client delivery</strong> — auto-route photos to different teams/clients</span>
           </label>
           <label style="display: flex; align-items: center; gap: 10px; color: var(--text-muted); font-size: 13px; cursor: pointer;">
-            <input type="checkbox" id="interest-hd-download" style="accent-color: var(--accent-primary, #3b82f6); width: 16px; height: 16px;">
+            <input type="checkbox" id="interest-hd-download" style="accent-color: var(--accent-primary, #1a9ee0); width: 16px; height: 16px;">
             <span><strong style="color: var(--text-primary);">HD originals</strong> — clients download full-resolution files (not just previews)</span>
           </label>
           <label style="display: flex; align-items: center; gap: 10px; color: var(--text-muted); font-size: 13px; cursor: pointer;">
-            <input type="checkbox" id="interest-watermark" style="accent-color: var(--accent-primary, #3b82f6); width: 16px; height: 16px;">
+            <input type="checkbox" id="interest-watermark" style="accent-color: var(--accent-primary, #1a9ee0); width: 16px; height: 16px;">
             <span><strong style="color: var(--text-primary);">Watermarking</strong> — preview with watermark, clean download after purchase/code</span>
           </label>
           <label style="display: flex; align-items: center; gap: 10px; color: var(--text-muted); font-size: 13px; cursor: pointer;">
-            <input type="checkbox" id="interest-payment" style="accent-color: var(--accent-primary, #3b82f6); width: 16px; height: 16px;">
+            <input type="checkbox" id="interest-payment" style="accent-color: var(--accent-primary, #1a9ee0); width: 16px; height: 16px;">
             <span><strong style="color: var(--text-primary);">Sell photos</strong> — payment integration for direct photo sales</span>
           </label>
         </div>
@@ -80,7 +80,7 @@
 
       <!-- Submit -->
       <div style="text-align: center;">
-        <button id="btn-submit-interest" style="padding: 12px 32px; background: linear-gradient(135deg, #3b82f6, #6366f1); border: none; border-radius: 10px; color: white; font-size: 14px; font-weight: 600; cursor: pointer; transition: opacity 0.2s;" onmouseenter="this.style.opacity='0.9'" onmouseleave="this.style.opacity='1'">
+        <button id="btn-submit-interest" style="padding: 12px 32px; background: linear-gradient(135deg, #1a9ee0, #1a9ee0); border: none; border-radius: 10px; color: white; font-size: 14px; font-weight: 600; cursor: pointer; transition: opacity 0.2s;" onmouseenter="this.style.opacity='0.9'" onmouseleave="this.style.opacity='1'">
           Submit Feedback
         </button>
         <p style="color: var(--text-muted); font-size: 11px; margin: 8px 0 0;">Your responses help us prioritize what to build next.</p>
@@ -98,11 +98,11 @@
     <div id="upload-active-card" style="display: none; background: var(--bg-card, #1e293b); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 12px; padding: 16px; margin-bottom: 12px;">
       <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
         <span id="upload-active-title" style="font-size: 14px; font-weight: 600; color: var(--text-primary);">Uploading...</span>
-        <span style="font-size: 10px; padding: 3px 10px; border-radius: 12px; background: rgba(59, 130, 246, 0.15); color: #60a5fa; font-weight: 600;">⟳ Uploading</span>
+        <span style="font-size: 10px; padding: 3px 10px; border-radius: 12px; background: rgba(59, 130, 246, 0.15); color: #1a9ee0; font-weight: 600;">⟳ Uploading</span>
       </div>
       <div id="upload-active-meta" style="font-size: 11px; color: var(--text-muted); margin-bottom: 8px;"></div>
       <div style="background: rgba(255,255,255,0.06); border-radius: 6px; height: 6px; overflow: hidden; margin-bottom: 6px;">
-        <div id="upload-active-progress" style="height: 100%; border-radius: 6px; background: linear-gradient(90deg, #3b82f6, #60a5fa); width: 0%; transition: width 0.4s ease;"></div>
+        <div id="upload-active-progress" style="height: 100%; border-radius: 6px; background: linear-gradient(90deg, #1a9ee0, #1a9ee0); width: 0%; transition: width 0.4s ease;"></div>
       </div>
       <div id="upload-active-stats" style="display: flex; gap: 16px; font-size: 11px; color: var(--text-muted);"></div>
     </div>

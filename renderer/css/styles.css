@@ -1,4 +1,4 @@
-* {
+﻿* {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
@@ -25,8 +25,8 @@
   --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
   
   /* Enhanced UX Variables */
-  --accent-primary: #3b82f6;
-  --accent-secondary: #6366f1;
+  --accent-primary: #1a9ee0;
+  --accent-secondary: #1a9ee0;
   --accent-success: #10b981;
   --accent-warning: #f59e0b;
   --accent-danger: #ef4444;
@@ -2262,12 +2262,12 @@ html {
   gap: 12px;
   padding: 8px 16px;
   background: linear-gradient(135deg, 
-    rgba(59, 130, 246, 0.12) 0%, 
+    rgba(26, 158, 224, 0.12) 0%, 
     rgba(99, 102, 241, 0.08) 100%);
-  border: 1.5px solid rgba(59, 130, 246, 0.2);
+  border: 1.5px solid rgba(26, 158, 224, 0.2);
   border-radius: 20px;
   box-shadow: 
-    0 4px 12px rgba(59, 130, 246, 0.1),
+    0 4px 12px rgba(26, 158, 224, 0.1),
     0 2px 4px rgba(0, 0, 0, 0.05),
     inset 0 1px 0 rgba(255, 255, 255, 0.1);
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -2286,7 +2286,7 @@ html {
 .token-amount {
   font-size: 1.1rem;
   font-weight: 700;
-  color: #3b82f6;
+  color: #1a9ee0;
 }
 
 .token-label {
@@ -2339,8 +2339,8 @@ html {
 }
 
 .refresh-btn:hover {
-  background: rgba(59, 130, 246, 0.1);
-  color: #3b82f6;
+  background: rgba(26, 158, 224, 0.1);
+  color: #1a9ee0;
   transform: rotate(45deg);
 }
 
@@ -2359,12 +2359,12 @@ html {
 
 .token-balance-widget:hover {
   background: linear-gradient(135deg, 
-    rgba(59, 130, 246, 0.18) 0%, 
+    rgba(26, 158, 224, 0.18) 0%, 
     rgba(99, 102, 241, 0.12) 100%);
-  border-color: rgba(59, 130, 246, 0.3);
+  border-color: rgba(26, 158, 224, 0.3);
   transform: translateY(-1px);
   box-shadow: 
-    0 6px 16px rgba(59, 130, 246, 0.15),
+    0 6px 16px rgba(26, 158, 224, 0.15),
     0 3px 6px rgba(0, 0, 0, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.2);
 }
@@ -2454,8 +2454,8 @@ html {
   border-color: var(--accent-primary);
   outline: none;
   box-shadow: 
-    0 0 0 4px rgba(59, 130, 246, 0.1),
-    0 4px 12px rgba(59, 130, 246, 0.08),
+    0 0 0 4px rgba(26, 158, 224, 0.1),
+    0 4px 12px rgba(26, 158, 224, 0.08),
     0 2px 4px rgba(0, 0, 0, 0.04),
     inset 0 1px 0 rgba(255, 255, 255, 0.5);
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(248, 250, 252, 0.95));
@@ -2485,7 +2485,7 @@ html {
   background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
   color: white;
   box-shadow: 
-    0 4px 12px rgba(59, 130, 246, 0.3),
+    0 4px 12px rgba(26, 158, 224, 0.3),
     0 2px 4px rgba(0, 0, 0, 0.1),
     inset 0 1px 0 rgba(255, 255, 255, 0.2);
 }
@@ -2493,7 +2493,7 @@ html {
 .token-request-modal .btn.primary:hover {
   transform: translateY(-2px);
   box-shadow: 
-    0 8px 20px rgba(59, 130, 246, 0.4),
+    0 8px 20px rgba(26, 158, 224, 0.4),
     0 4px 8px rgba(0, 0, 0, 0.15),
     inset 0 1px 0 rgba(255, 255, 255, 0.3);
 }
@@ -2550,7 +2550,7 @@ html {
   height: 3px;
   background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
   border-radius: 2px;
-  box-shadow: 0 1px 3px rgba(59, 130, 246, 0.3);
+  box-shadow: 0 1px 3px rgba(26, 158, 224, 0.3);
 }
 
 .token-request-modal h4 {
@@ -2618,13 +2618,13 @@ html {
 }
 
 .token-request-modal .modal-body::-webkit-scrollbar-thumb {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.3), rgba(99, 102, 241, 0.3));
+  background: linear-gradient(135deg, rgba(26, 158, 224, 0.3), rgba(99, 102, 241, 0.3));
   border-radius: 3px;
   transition: background 0.3s ease;
 }
 
 .token-request-modal .modal-body::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.5), rgba(99, 102, 241, 0.5));
+  background: linear-gradient(135deg, rgba(26, 158, 224, 0.5), rgba(99, 102, 241, 0.5));
 }
 
 /* Enhanced Loading State */
@@ -2739,8 +2739,8 @@ html {
   }
   
   .early-access-notice {
-    background: linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(99, 102, 241, 0.12));
-    border-color: rgba(59, 130, 246, 0.3);
+    background: linear-gradient(135deg, rgba(26, 158, 224, 0.15), rgba(99, 102, 241, 0.12));
+    border-color: rgba(26, 158, 224, 0.3);
   }
   
   .pricing-info .info-box {
@@ -2787,16 +2787,16 @@ body.modal-open {
   display: block;
   padding: 24px;
   background: linear-gradient(135deg, 
-    rgba(59, 130, 246, 0.08) 0%, 
+    rgba(26, 158, 224, 0.08) 0%, 
     rgba(99, 102, 241, 0.06) 50%,
     rgba(147, 51, 234, 0.04) 100%);
   border-radius: 12px;
   margin-bottom: 32px;
-  border: 1px solid rgba(59, 130, 246, 0.15);
+  border: 1px solid rgba(26, 158, 224, 0.15);
   position: relative;
   backdrop-filter: blur(10px);
   box-shadow: 
-    0 8px 16px rgba(59, 130, 246, 0.08),
+    0 8px 16px rgba(26, 158, 224, 0.08),
     0 2px 4px rgba(0, 0, 0, 0.04),
     inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
@@ -2810,7 +2810,7 @@ body.modal-open {
   width: 4px;
   background: linear-gradient(180deg, var(--accent-primary), var(--accent-secondary));
   border-radius: 4px 0 0 4px;
-  box-shadow: 0 0 8px rgba(59, 130, 246, 0.3);
+  box-shadow: 0 0 8px rgba(26, 158, 224, 0.3);
 }
 
 .notice-icon {
@@ -2818,7 +2818,7 @@ body.modal-open {
   display: block;
   text-align: center;
   margin-bottom: 16px;
-  filter: drop-shadow(0 2px 4px rgba(59, 130, 246, 0.2));
+  filter: drop-shadow(0 2px 4px rgba(26, 158, 224, 0.2));
   animation: float 3s ease-in-out infinite;
 }
 
@@ -2892,12 +2892,12 @@ body.modal-open {
 }
 
 .token-suggestion-btn:hover {
-  border-color: rgba(59, 130, 246, 0.4);
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.08), rgba(99, 102, 241, 0.06));
+  border-color: rgba(26, 158, 224, 0.4);
+  background: linear-gradient(135deg, rgba(26, 158, 224, 0.08), rgba(99, 102, 241, 0.06));
   color: var(--accent-primary);
   transform: translateY(-2px);
   box-shadow: 
-    0 8px 16px rgba(59, 130, 246, 0.12),
+    0 8px 16px rgba(26, 158, 224, 0.12),
     0 4px 8px rgba(0, 0, 0, 0.06),
     inset 0 1px 0 rgba(255, 255, 255, 0.4);
 }
@@ -2908,7 +2908,7 @@ body.modal-open {
   color: white;
   transform: translateY(-2px);
   box-shadow: 
-    0 8px 16px rgba(59, 130, 246, 0.3),
+    0 8px 16px rgba(26, 158, 224, 0.3),
     0 4px 8px rgba(0, 0, 0, 0.1),
     inset 0 1px 0 rgba(255, 255, 255, 0.2);
 }
@@ -2940,7 +2940,7 @@ body.modal-open {
   padding: 8px 12px;
   border-radius: 8px;
   font-size: 16px;
-  box-shadow: 0 4px 8px rgba(59, 130, 246, 0.2);
+  box-shadow: 0 4px 8px rgba(26, 158, 224, 0.2);
 }
 
 .pricing-info .info-box strong {
@@ -2986,7 +2986,7 @@ body.modal-open {
   padding: 24px 32px 20px 32px;
   border-bottom: 1px solid rgba(226, 232, 240, 0.7);
   margin-bottom: 0;
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.02), rgba(99, 102, 241, 0.01));
+  background: linear-gradient(135deg, rgba(26, 158, 224, 0.02), rgba(99, 102, 241, 0.01));
   border-radius: 16px 16px 0 0;
   position: relative;
 }
@@ -2998,7 +2998,7 @@ body.modal-open {
   left: 0;
   right: 0;
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.2), transparent);
+  background: linear-gradient(90deg, transparent, rgba(26, 158, 224, 0.2), transparent);
 }
 
 .token-request-modal .modal-header h2 {
@@ -3048,7 +3048,7 @@ body.modal-open {
   left: 0;
   right: 0;
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.2), transparent);
+  background: linear-gradient(90deg, transparent, rgba(26, 158, 224, 0.2), transparent);
 }
 
 @media (max-width: 768px) {
@@ -3304,13 +3304,13 @@ body.modal-open {
 /* Enhanced Animations */
 @keyframes pulse {
   0% {
-    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7);
+    box-shadow: 0 0 0 0 rgba(26, 158, 224, 0.7);
   }
   70% {
-    box-shadow: 0 0 0 10px rgba(59, 130, 246, 0);
+    box-shadow: 0 0 0 10px rgba(26, 158, 224, 0);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+    box-shadow: 0 0 0 0 rgba(26, 158, 224, 0);
   }
 }
 
@@ -3360,7 +3360,7 @@ body.modal-open {
   left: 0;
   right: 0;
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.3), transparent);
+  background: linear-gradient(90deg, transparent, rgba(26, 158, 224, 0.3), transparent);
 }
 
 /* Enhanced logo/brand styling */
@@ -3382,7 +3382,7 @@ body.modal-open {
 }
 
 #logo.app-logo:hover .logo-icon {
-  filter: drop-shadow(0 4px 8px rgba(59, 130, 246, 0.3));
+  filter: drop-shadow(0 4px 8px rgba(26, 158, 224, 0.3));
 }
 
 #logo.app-logo .logo-text {
@@ -3415,15 +3415,15 @@ body.modal-open {
   gap: var(--spacing-md);
   padding: 5px 5px;
   background: linear-gradient(135deg, 
-    rgba(59, 130, 246, 0.12) 0%, 
+    rgba(26, 158, 224, 0.12) 0%, 
     rgba(99, 102, 241, 0.08) 50%,
     rgba(139, 92, 246, 0.06) 100%);
   border-radius: 24px;
   box-shadow: 
-    0 4px 12px rgba(59, 130, 246, 0.1),
+    0 4px 12px rgba(26, 158, 224, 0.1),
     0 2px 4px rgba(0, 0, 0, 0.05),
     inset 0 1px 0 rgba(255, 255, 255, 0.1);
-  border: 1.5px solid rgba(59, 130, 246, 0.2);
+  border: 1.5px solid rgba(26, 158, 224, 0.2);
   position: relative;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
@@ -3431,12 +3431,12 @@ body.modal-open {
 .token-balance-widget:hover {
   transform: translateY(-1px);
   background: linear-gradient(135deg, 
-    rgba(59, 130, 246, 0.18) 0%, 
+    rgba(26, 158, 224, 0.18) 0%, 
     rgba(99, 102, 241, 0.12) 50%,
     rgba(139, 92, 246, 0.08) 100%);
-  border-color: rgba(59, 130, 246, 0.3);
+  border-color: rgba(26, 158, 224, 0.3);
   box-shadow: 
-    0 6px 16px rgba(59, 130, 246, 0.15),
+    0 6px 16px rgba(26, 158, 224, 0.15),
     0 3px 6px rgba(0, 0, 0, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.2);
 }
@@ -3469,7 +3469,7 @@ body.modal-open {
 .token-amount {
   font-size: 1.2rem;
   font-weight: 800;
-  color: #3b82f6;
+  color: #1a9ee0;
   text-shadow: none;
 }
 
@@ -3483,7 +3483,7 @@ body.modal-open {
 /* Enhanced token request button */
 .btn.btn-outline {
   background: rgba(255, 255, 255, 0.1);
-  border: 2px solid rgba(59, 130, 246, 0.6);
+  border: 2px solid rgba(26, 158, 224, 0.6);
   color: var(--accent-primary);
   padding: 6px 14px;
   font-size: 0.85rem;
@@ -3499,7 +3499,7 @@ body.modal-open {
   color: white;
   transform: translateY(-1px);
   box-shadow: 
-    0 4px 12px rgba(59, 130, 246, 0.3),
+    0 4px 12px rgba(26, 158, 224, 0.3),
     0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
@@ -3553,8 +3553,8 @@ body.modal-open {
 
 /* Enhanced folder selection container */
 .form-group:has(#folder-select-button) {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.06) 0%, rgba(99, 102, 241, 0.04) 100%);
-  border: 2px solid rgba(59, 130, 246, 0.15);
+  background: linear-gradient(135deg, rgba(26, 158, 224, 0.06) 0%, rgba(99, 102, 241, 0.04) 100%);
+  border: 2px solid rgba(26, 158, 224, 0.15);
   border-radius: var(--border-radius-lg);
   padding: var(--spacing-xl);
   margin-bottom: var(--spacing-2xl, 48px);
@@ -3562,17 +3562,17 @@ body.modal-open {
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   backdrop-filter: blur(15px);
   box-shadow: 
-    0 8px 24px rgba(59, 130, 246, 0.1),
+    0 8px 24px rgba(26, 158, 224, 0.1),
     0 4px 8px rgba(0, 0, 0, 0.05),
     inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .form-group:has(#folder-select-button):hover {
-  border-color: rgba(59, 130, 246, 0.2);
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.08) 0%, rgba(99, 102, 241, 0.05) 100%);
+  border-color: rgba(26, 158, 224, 0.2);
+  background: linear-gradient(135deg, rgba(26, 158, 224, 0.08) 0%, rgba(99, 102, 241, 0.05) 100%);
   transform: translateY(-2px);
   box-shadow: 
-    0 8px 24px rgba(59, 130, 246, 0.12),
+    0 8px 24px rgba(26, 158, 224, 0.12),
     0 4px 8px rgba(0, 0, 0, 0.05),
     inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
@@ -3610,7 +3610,7 @@ body.modal-open {
   cursor: pointer;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   box-shadow: 
-    0 4px 12px rgba(59, 130, 246, 0.3),
+    0 4px 12px rgba(26, 158, 224, 0.3),
     0 2px 4px rgba(0, 0, 0, 0.1),
     inset 0 1px 0 rgba(255, 255, 255, 0.2);
   position: relative;
@@ -3637,7 +3637,7 @@ body.modal-open {
 #folder-select-button:hover {
   transform: translateY(-2px);
   box-shadow: 
-    0 8px 24px rgba(59, 130, 246, 0.4),
+    0 8px 24px rgba(26, 158, 224, 0.4),
     0 4px 8px rgba(0, 0, 0, 0.15),
     inset 0 1px 0 rgba(255, 255, 255, 0.3);
 }
@@ -3645,7 +3645,7 @@ body.modal-open {
 #folder-select-button:active {
   transform: translateY(0);
   box-shadow: 
-    0 4px 12px rgba(59, 130, 246, 0.3),
+    0 4px 12px rgba(26, 158, 224, 0.3),
     0 2px 4px rgba(0, 0, 0, 0.1),
     inset 0 1px 0 rgba(255, 255, 255, 0.2);
 }
@@ -3803,14 +3803,14 @@ body.modal-open {
   align-items: center;
   gap: var(--spacing-sm);
   padding: 8px 16px;
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(99, 102, 241, 0.08) 100%);
-  border: 1px solid rgba(59, 130, 246, 0.2);
+  background: linear-gradient(135deg, rgba(26, 158, 224, 0.1) 0%, rgba(99, 102, 241, 0.08) 100%);
+  border: 1px solid rgba(26, 158, 224, 0.2);
   border-radius: 20px;
   font-size: 14px;
   font-weight: 600;
   color: var(--accent-primary);
   box-shadow: 
-    0 2px 6px rgba(59, 130, 246, 0.1),
+    0 2px 6px rgba(26, 158, 224, 0.1),
     0 1px 2px rgba(0, 0, 0, 0.05),
     inset 0 1px 0 rgba(255, 255, 255, 0.1);
   backdrop-filter: blur(10px);
@@ -4391,14 +4391,14 @@ body.modal-open {
 /* ===== PARTICIPANT PRESETS INFO BOX ===== */
 .info-box {
   background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
-  border: 2px solid #3b82f6;
+  border: 2px solid #1a9ee0;
   border-radius: 12px;
   padding: 20px 24px;
   margin-bottom: 24px;
   display: flex;
   align-items: flex-start;
   gap: 16px;
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
+  box-shadow: 0 4px 12px rgba(26, 158, 224, 0.15);
   transition: all 0.3s ease;
   position: relative;
   overflow: hidden;
@@ -4411,7 +4411,7 @@ body.modal-open {
   left: 0;
   right: 0;
   height: 4px;
-  background: linear-gradient(90deg, #3b82f6, #8b5cf6, #3b82f6);
+  background: linear-gradient(90deg, #1a9ee0, #8b5cf6, #1a9ee0);
   background-size: 200% 100%;
   animation: shimmer 3s linear infinite;
 }
@@ -4426,14 +4426,14 @@ body.modal-open {
 }
 
 .info-box:hover {
-  box-shadow: 0 8px 24px rgba(59, 130, 246, 0.25);
+  box-shadow: 0 8px 24px rgba(26, 158, 224, 0.25);
   transform: translateY(-2px);
 }
 
 .info-box .info-icon {
   font-size: 32px;
   flex-shrink: 0;
-  filter: drop-shadow(0 2px 4px rgba(59, 130, 246, 0.3));
+  filter: drop-shadow(0 2px 4px rgba(26, 158, 224, 0.3));
   animation: pulse-icon 2s ease-in-out infinite;
 }
 
@@ -4462,7 +4462,7 @@ body.modal-open {
 }
 
 .info-box .info-text a {
-  color: #3b82f6;
+  color: #1a9ee0;
   text-decoration: none;
   font-weight: 600;
   display: inline-flex;
@@ -4474,7 +4474,7 @@ body.modal-open {
 
 .info-box .info-text a:hover {
   color: #2563eb;
-  border-bottom-color: #3b82f6;
+  border-bottom-color: #1a9ee0;
   transform: translateX(2px);
 }
 
@@ -4734,7 +4734,7 @@ body.modal-open {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(59, 130, 246, 0.1));
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(26, 158, 224, 0.1));
   border: 1px solid rgba(139, 92, 246, 0.3);
   border-radius: var(--border-radius);
   padding: 0.75rem 1rem;
@@ -4742,7 +4742,7 @@ body.modal-open {
 }
 
 .pro-badge {
-  background: linear-gradient(135deg, #8b5cf6, #3b82f6);
+  background: linear-gradient(135deg, #8b5cf6, #1a9ee0);
   color: white;
   font-size: 0.7rem;
   font-weight: 700;
@@ -4809,8 +4809,8 @@ body.modal-open {
 }
 
 .badge-info {
-  background: rgba(59, 130, 246, 0.2);
-  color: #3b82f6;
+  background: rgba(26, 158, 224, 0.2);
+  color: #1a9ee0;
 }
 
 .badge-warning {
@@ -5040,7 +5040,7 @@ body.modal-open {
 .editor-form-container .form-group textarea:focus {
   outline: none;
   border-color: var(--primary-color);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  box-shadow: 0 0 0 3px rgba(26, 158, 224, 0.1);
 }
 
 .editor-form-container .form-group textarea {
@@ -5276,7 +5276,7 @@ body.modal-open {
 
 #model-download-modal .download-progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--accent-primary, #3b82f6), #60a5fa);
+  background: linear-gradient(90deg, var(--accent-primary, #1a9ee0), #1a9ee0);
   border-radius: 5px;
   transition: width 0.3s ease;
   width: 0%;
@@ -5371,12 +5371,12 @@ body.modal-open {
   padding: 0.75rem;
   margin-bottom: 1rem;
   border-radius: 8px;
-  background: rgba(59, 130, 246, 0.08);
+  background: rgba(26, 158, 224, 0.08);
   transition: background 0.2s ease;
 }
 
 .guide-link:hover {
-  background: rgba(59, 130, 246, 0.15);
+  background: rgba(26, 158, 224, 0.15);
   text-decoration: none;
 }
 

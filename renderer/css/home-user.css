@@ -1,4 +1,4 @@
-/*
+﻿/*
  * RaceTagger Desktop - User-Friendly Home Page Styles
  * Modern, welcoming design for racing photographers
  */
@@ -653,7 +653,7 @@
 
 .card-b:hover {
   border-color: var(--accent-primary);
-  background: var(--bg-card-hover, rgba(59, 130, 246, 0.04));
+  background: var(--bg-card-hover, rgba(26, 158, 224, 0.04));
 }
 
 .card-b-main {
@@ -793,8 +793,8 @@
   color: var(--accent-success, #10b981);
 }
 .badge-delivery.progress {
-  background: rgba(59, 130, 246, 0.15);
-  color: var(--accent-primary, #3b82f6);
+  background: rgba(26, 158, 224, 0.15);
+  color: var(--accent-primary, #1a9ee0);
 }
 .badge-delivery.failed {
   background: rgba(239, 68, 68, 0.15);
@@ -875,8 +875,8 @@
   color: var(--accent-success, #10b981);
 }
 .card-b .status-pill.processing {
-  background: rgba(59, 130, 246, 0.15);
-  color: var(--accent-primary, #3b82f6);
+  background: rgba(26, 158, 224, 0.15);
+  color: var(--accent-primary, #1a9ee0);
 }
 .card-b .status-pill.failed {
   background: rgba(239, 68, 68, 0.15);

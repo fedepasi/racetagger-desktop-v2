@@ -1,4 +1,4 @@
-/* ==========================================
+﻿/* ==========================================
    RESULTS PAGE - INTEGRATED DESIGN SYSTEM
    ========================================== */
 
@@ -103,9 +103,9 @@
 }
 
 .results-info-tag--category {
-  background: rgba(59, 130, 246, 0.15);
+  background: rgba(26, 158, 224, 0.15);
   color: var(--accent-primary);
-  border: 1px solid rgba(59, 130, 246, 0.25);
+  border: 1px solid rgba(26, 158, 224, 0.25);
 }
 
 .results-info-tag--preset {
@@ -180,12 +180,12 @@
 }
 
 .results-stat-item--active {
-  background-color: rgba(59, 130, 246, 0.06);
-  box-shadow: inset 0 -2px 0 0 var(--accent-primary, #3b82f6);
+  background-color: rgba(26, 158, 224, 0.06);
+  box-shadow: inset 0 -2px 0 0 var(--accent-primary, #1a9ee0);
 }
 
 .results-stat-item--active .results-stat-label {
-  color: var(--accent-primary, #3b82f6);
+  color: var(--accent-primary, #1a9ee0);
   font-weight: 600;
 }
 
@@ -216,7 +216,7 @@
   /* Shadows and transitions like main app */
   box-shadow:
     var(--shadow-md),
-    0 2px 4px rgba(59, 130, 246, 0.2);
+    0 2px 4px rgba(26, 158, 224, 0.2);
 
   cursor: pointer;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -232,7 +232,7 @@
   transform: translateY(-2px);
   box-shadow:
     var(--shadow-lg),
-    0 8px 20px rgba(59, 130, 246, 0.3);
+    0 8px 20px rgba(26, 158, 224, 0.3);
 }
 
 .btn-new-analysis:active {
@@ -701,7 +701,7 @@
 
 .lv-vehicle-editor.modified {
   border-color: var(--accent-primary) !important;
-  background: rgba(59, 130, 246, 0.05) !important;
+  background: rgba(26, 158, 224, 0.05) !important;
 }
 
 .lv-vehicle-header {
@@ -767,7 +767,7 @@
 .lv-form-group textarea:focus {
   outline: none !important;
   border-color: var(--accent-primary) !important;
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1) !important;
+  box-shadow: 0 0 0 3px rgba(26, 158, 224, 0.1) !important;
 }
 
 /* Gallery Overlay */
@@ -928,8 +928,8 @@
 }
 
 .lv-folder-org-content .radio-option:hover {
-  background: rgba(59, 130, 246, 0.1);
-  border-color: rgba(59, 130, 246, 0.4);
+  background: rgba(26, 158, 224, 0.1);
+  border-color: rgba(26, 158, 224, 0.4);
   transform: none;
   box-shadow: none;
 }
@@ -952,13 +952,13 @@
 }
 
 .lv-folder-org-content .radio-option:has(input:checked) {
-  background: rgba(59, 130, 246, 0.1);
-  border-color: rgba(59, 130, 246, 0.45);
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.15);
+  background: rgba(26, 158, 224, 0.1);
+  border-color: rgba(26, 158, 224, 0.45);
+  box-shadow: 0 0 0 1px rgba(26, 158, 224, 0.15);
 }
 
 .lv-folder-org-content .radio-option:has(input:checked) .radio-title {
-  color: var(--accent-primary, #3b82f6) !important;
+  color: var(--accent-primary, #1a9ee0) !important;
 }
 
 /* Checkbox inside radio-option (rename toggle) */
@@ -979,8 +979,8 @@
 }
 
 .lv-folder-org-content .radio-option input[type="checkbox"]:checked {
-  background: var(--accent-primary, #3b82f6);
-  border-color: var(--accent-primary, #3b82f6);
+  background: var(--accent-primary, #1a9ee0);
+  border-color: var(--accent-primary, #1a9ee0);
 }
 
 .lv-folder-org-content .radio-option input[type="checkbox"]:checked::after {
@@ -996,7 +996,7 @@
 }
 
 .lv-folder-org-content .radio-option input[type="checkbox"]:focus {
-  outline: 2px solid rgba(59, 130, 246, 0.4);
+  outline: 2px solid rgba(26, 158, 224, 0.4);
   outline-offset: 2px;
 }
 
@@ -1018,8 +1018,8 @@
 }
 
 .lv-folder-org-content .radio-option input[type="radio"]:checked {
-  border-color: var(--accent-primary, #3b82f6);
-  background: rgba(59, 130, 246, 0.15);
+  border-color: var(--accent-primary, #1a9ee0);
+  background: rgba(26, 158, 224, 0.15);
 }
 
 .lv-folder-org-content .radio-option input[type="radio"]:checked::before {
@@ -1029,7 +1029,7 @@
   left: 3px;
   width: 8px;
   height: 8px;
-  background: var(--accent-primary, #3b82f6);
+  background: var(--accent-primary, #1a9ee0);
   border-radius: 50%;
 }
 
@@ -1037,8 +1037,8 @@
 .lv-folder-org-progress {
   margin-top: var(--spacing-lg);
   padding: 16px 20px;
-  background: rgba(59, 130, 246, 0.06);
-  border: 1.5px solid rgba(59, 130, 246, 0.2);
+  background: rgba(26, 158, 224, 0.06);
+  border: 1.5px solid rgba(26, 158, 224, 0.2);
   border-radius: var(--radius-lg);
 }
 
@@ -1058,21 +1058,21 @@
 .lv-folder-org-progress-count {
   font-size: 14px;
   font-weight: 700;
-  color: rgba(59, 130, 246, 1);
+  color: rgba(26, 158, 224, 1);
   font-variant-numeric: tabular-nums;
 }
 
 .lv-folder-org-progress-bar-container {
   width: 100%;
   height: 8px;
-  background: rgba(59, 130, 246, 0.12);
+  background: rgba(26, 158, 224, 0.12);
   border-radius: 4px;
   overflow: hidden;
 }
 
 .lv-folder-org-progress-bar {
   height: 100%;
-  background: linear-gradient(90deg, rgba(59, 130, 246, 0.8), rgba(59, 130, 246, 1));
+  background: linear-gradient(90deg, rgba(26, 158, 224, 0.8), rgba(26, 158, 224, 1));
   border-radius: 4px;
   transition: width 0.3s ease;
 }
@@ -1141,8 +1141,8 @@
 
 .lv-rename-input:focus {
   outline: none;
-  border-color: var(--accent-primary, #3b82f6);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+  border-color: var(--accent-primary, #1a9ee0);
+  box-shadow: 0 0 0 3px rgba(26, 158, 224, 0.15);
 }
 
 .lv-rename-chips {
@@ -1156,20 +1156,20 @@
   display: inline-flex;
   align-items: center;
   padding: 3px 10px;
-  background: rgba(59, 130, 246, 0.1);
-  border: 1px solid rgba(59, 130, 246, 0.25);
+  background: rgba(26, 158, 224, 0.1);
+  border: 1px solid rgba(26, 158, 224, 0.25);
   border-radius: 12px;
   font-size: 11px;
   font-family: 'SF Mono', 'Fira Code', monospace;
-  color: var(--accent-primary, #3b82f6);
+  color: var(--accent-primary, #1a9ee0);
   cursor: pointer;
   transition: all 0.15s ease;
   user-select: none;
 }
 
 .lv-rename-chip:hover {
-  background: rgba(59, 130, 246, 0.2);
-  border-color: rgba(59, 130, 246, 0.5);
+  background: rgba(26, 158, 224, 0.2);
+  border-color: rgba(26, 158, 224, 0.5);
   transform: translateY(-1px);
 }
 
@@ -1214,12 +1214,12 @@
 .lv-btn-primary {
   background: linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-secondary) 100%);
   color: white;
-  box-shadow: var(--shadow-md), 0 2px 4px rgba(59, 130, 246, 0.2);
+  box-shadow: var(--shadow-md), 0 2px 4px rgba(26, 158, 224, 0.2);
 }
 
 .lv-btn-primary:hover {
   transform: translateY(-2px);
-  box-shadow: var(--shadow-lg), 0 8px 20px rgba(59, 130, 246, 0.3);
+  box-shadow: var(--shadow-lg), 0 8px 20px rgba(26, 158, 224, 0.3);
 }
 
 .lv-btn-secondary {
@@ -1835,7 +1835,7 @@
   justify-content: space-between;
   align-items: flex-start;
   padding: 1rem 1.5rem;
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.12) 0%, rgba(59, 130, 246, 0.04) 100%);
+  background: linear-gradient(135deg, rgba(26, 158, 224, 0.12) 0%, rgba(26, 158, 224, 0.04) 100%);
   border-bottom: 1px solid var(--border-color, #333);
 }
 
@@ -1856,9 +1856,9 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  background: rgba(59, 130, 246, 0.2);
+  background: rgba(26, 158, 224, 0.2);
   color: #60a5fa;
-  border: 1px solid rgba(59, 130, 246, 0.4);
+  border: 1px solid rgba(26, 158, 224, 0.4);
 }
 
 .export-panel-header h2 {
@@ -1908,7 +1908,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 0.625rem 0.75rem;
-  background: rgba(59, 130, 246, 0.06);
+  background: rgba(26, 158, 224, 0.06);
   border-bottom: 1px solid var(--border-color, #333);
 }
 
@@ -1923,7 +1923,7 @@
 }
 
 .export-section-head input[type="checkbox"] {
-  accent-color: #3b82f6;
+  accent-color: #1a9ee0;
 }
 
 .export-section-hint {
@@ -1955,7 +1955,7 @@
   padding: 0.5rem 1rem;
   border: 1px solid var(--border-color, #444);
   border-radius: 6px;
-  background: rgba(59, 130, 246, 0.1);
+  background: rgba(26, 158, 224, 0.1);
   color: #60a5fa;
   font-size: 0.8125rem;
   cursor: pointer;
@@ -1963,7 +1963,7 @@
 }
 
 .export-btn-browse:hover {
-  background: rgba(59, 130, 246, 0.2);
+  background: rgba(26, 158, 224, 0.2);
 }
 
 /* Preview */
@@ -1973,7 +1973,7 @@
   gap: 0.375rem;
   margin-top: 0.375rem;
   padding: 0.375rem 0.5rem;
-  background: rgba(59, 130, 246, 0.06);
+  background: rgba(26, 158, 224, 0.06);
   border-radius: 4px;
   font-size: 0.75rem;
 }
@@ -2007,16 +2007,16 @@
   border-radius: 4px;
   font-size: 0.6875rem;
   font-family: 'SF Mono', 'Fira Code', monospace;
-  background: rgba(59, 130, 246, 0.1);
+  background: rgba(26, 158, 224, 0.1);
   color: #60a5fa;
-  border: 1px solid rgba(59, 130, 246, 0.2);
+  border: 1px solid rgba(26, 158, 224, 0.2);
   cursor: pointer;
   user-select: none;
 }
 
 .export-ph:hover {
-  background: rgba(59, 130, 246, 0.2);
-  border-color: rgba(59, 130, 246, 0.4);
+  background: rgba(26, 158, 224, 0.2);
+  border-color: rgba(26, 158, 224, 0.4);
 }
 
 /* IPTC summary */
@@ -2088,7 +2088,7 @@
   padding: 0.5rem 1.25rem;
   border: none;
   border-radius: 6px;
-  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  background: linear-gradient(135deg, #1a9ee0, #0e7ab4);
   color: #fff;
   font-size: 0.875rem;
   font-weight: 600;
@@ -2096,7 +2096,7 @@
 }
 
 .export-btn-start:hover {
-  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  background: linear-gradient(135deg, #0e7ab4, #1d4ed8);
 }
 
 .export-btn-start:disabled {
@@ -2110,9 +2110,9 @@
   align-items: center;
   gap: 0.375rem;
   padding: 0.5rem 1rem;
-  border: 1px solid rgba(59, 130, 246, 0.4);
+  border: 1px solid rgba(26, 158, 224, 0.4);
   border-radius: 8px;
-  background: rgba(59, 130, 246, 0.1);
+  background: rgba(26, 158, 224, 0.1);
   color: #60a5fa;
   font-size: 0.875rem;
   font-weight: 600;
@@ -2121,8 +2121,8 @@
 }
 
 .btn-export:hover {
-  background: rgba(59, 130, 246, 0.2);
-  border-color: rgba(59, 130, 246, 0.6);
+  background: rgba(26, 158, 224, 0.2);
+  border-color: rgba(26, 158, 224, 0.6);
 }
 
 /* Progress */
@@ -2281,14 +2281,14 @@
 }
 
 .unified-mode-option:hover {
-  background: rgba(59, 130, 246, 0.08);
+  background: rgba(26, 158, 224, 0.08);
   color: #e2e8f0;
 }
 
 .unified-mode-option.unified-mode-active {
-  background: rgba(59, 130, 246, 0.15);
-  border-color: rgba(59, 130, 246, 0.5);
-  color: #3b82f6;
+  background: rgba(26, 158, 224, 0.15);
+  border-color: rgba(26, 158, 224, 0.5);
+  color: #1a9ee0;
 }
 
 /* Section Conditional (show/hide based on mode) */
@@ -2339,16 +2339,16 @@
 
 .unified-dest-input:focus {
   outline: none;
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+  border-color: #1a9ee0;
+  box-shadow: 0 0 0 3px rgba(26, 158, 224, 0.15);
 }
 
 .unified-browse-btn {
   padding: 8px 14px;
-  background: rgba(59, 130, 246, 0.12);
-  border: 1px solid rgba(59, 130, 246, 0.3);
+  background: rgba(26, 158, 224, 0.12);
+  border: 1px solid rgba(26, 158, 224, 0.3);
   border-radius: 8px;
-  color: #3b82f6;
+  color: #1a9ee0;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
@@ -2356,7 +2356,7 @@
 }
 
 .unified-browse-btn:hover {
-  background: rgba(59, 130, 246, 0.2);
+  background: rgba(26, 158, 224, 0.2);
 }
 
 /* Rename / Subfolder option rows */
@@ -2377,7 +2377,7 @@
 }
 
 .unified-option-row input[type="checkbox"] {
-  accent-color: #3b82f6;
+  accent-color: #1a9ee0;
 }
 
 /* Write-to-originals warning */
@@ -2459,7 +2459,7 @@
 }
 
 .unified-scope-selector input[type="radio"] {
-  accent-color: #3b82f6;
+  accent-color: #1a9ee0;
 }
 
 .unified-btn-cancel {
@@ -2479,7 +2479,7 @@
 
 .unified-btn-start {
   padding: 10px 24px;
-  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  background: linear-gradient(135deg, #1a9ee0, #0e7ab4);
   border: none;
   border-radius: 8px;
   color: #fff;
@@ -2491,7 +2491,7 @@
 }
 
 .unified-btn-start:hover {
-  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  background: linear-gradient(135deg, #0e7ab4, #1d4ed8);
   box-shadow: 0 4px 12px rgba(37, 99, 235, 0.35);
 }
 
@@ -2549,10 +2549,10 @@
 .unified-export-modal .iptc-pro-progress-fill {
   height: 100%;
   width: 0%;
-  background: linear-gradient(90deg, #3b82f6, #60a5fa);
+  background: linear-gradient(90deg, #1a9ee0, #60a5fa);
   border-radius: 5px;
   transition: width 0.3s ease;
-  box-shadow: 0 0 8px rgba(59, 130, 246, 0.4);
+  box-shadow: 0 0 8px rgba(26, 158, 224, 0.4);
 }
 
 /* Progress bar fill — purple when in IPTC/write-to-originals mode */
@@ -2585,9 +2585,9 @@
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
-  background: rgba(59, 130, 246, 0.15);
+  background: rgba(26, 158, 224, 0.15);
   color: #60a5fa;
-  border: 1px solid rgba(59, 130, 246, 0.3);
+  border: 1px solid rgba(26, 158, 224, 0.3);
 }
 
 /* IPTC section header row */
@@ -2620,8 +2620,8 @@
 .unified-export-modal .ipf input:focus,
 .unified-export-modal .ipf textarea:focus,
 .unified-export-modal .ipf select:focus {
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
+  border-color: #1a9ee0;
+  box-shadow: 0 0 0 2px rgba(26, 158, 224, 0.25);
 }
 
 /* --- Export destination input: dark --- */
@@ -2636,8 +2636,8 @@
 }
 
 .unified-export-modal .export-dest-input:focus {
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
+  border-color: #1a9ee0;
+  box-shadow: 0 0 0 2px rgba(26, 158, 224, 0.25);
 }
 
 /* --- IPTC column cards: dark with purple accent headers --- */
@@ -2666,7 +2666,7 @@
 }
 
 .unified-export-modal .export-section-head {
-  background: rgba(59, 130, 246, 0.08);
+  background: rgba(26, 158, 224, 0.08);
   border-bottom-color: #334155;
 }
 
@@ -2675,7 +2675,7 @@
 }
 
 .unified-export-modal .export-section-head input[type="checkbox"] {
-  accent-color: #3b82f6;
+  accent-color: #1a9ee0;
 }
 
 .unified-export-modal .export-section-hint {
@@ -2706,7 +2706,7 @@
 
 /* --- Export radio buttons: blue accent --- */
 .unified-export-modal .ipf-radio-row input[type="radio"] {
-  accent-color: #3b82f6;
+  accent-color: #1a9ee0;
 }
 
 .unified-export-modal .ipf-radio-row label {
@@ -2769,8 +2769,8 @@
 
 /* --- Preview rows --- */
 .unified-export-modal .export-preview-row {
-  background: rgba(59, 130, 246, 0.06);
-  border: 1px solid rgba(59, 130, 246, 0.1);
+  background: rgba(26, 158, 224, 0.06);
+  border: 1px solid rgba(26, 158, 224, 0.1);
 }
 
 .unified-export-modal .export-preview-label {
@@ -2787,14 +2787,14 @@
 
 /* --- Placeholder chips --- */
 .unified-export-modal .export-ph {
-  background: rgba(59, 130, 246, 0.1);
+  background: rgba(26, 158, 224, 0.1);
   color: #60a5fa;
-  border-color: rgba(59, 130, 246, 0.2);
+  border-color: rgba(26, 158, 224, 0.2);
 }
 
 .unified-export-modal .export-ph:hover {
-  background: rgba(59, 130, 246, 0.2);
-  border-color: rgba(59, 130, 246, 0.4);
+  background: rgba(26, 158, 224, 0.2);
+  border-color: rgba(26, 158, 224, 0.4);
 }
 
 /* --- Footer scope selector labels --- */
@@ -2821,13 +2821,13 @@
 
 /* --- Browse button in export sections --- */
 .unified-export-modal .export-btn-browse {
-  background: rgba(59, 130, 246, 0.12);
-  border-color: rgba(59, 130, 246, 0.3);
+  background: rgba(26, 158, 224, 0.12);
+  border-color: rgba(26, 158, 224, 0.3);
   color: #60a5fa;
 }
 
 .unified-export-modal .export-btn-browse:hover {
-  background: rgba(59, 130, 246, 0.2);
+  background: rgba(26, 158, 224, 0.2);
 }
 
 /* ==========================================

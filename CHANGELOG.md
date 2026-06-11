@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### 🎨 Brand
+
+- **Desktop brand tokens — accent colour + monospace font**: replaces the deprecated blue
+  `#3b82f6` and indigo `#6366f1` accent colours with the canonical RaceTagger blue `#1a9ee0`
+  across all renderer CSS files (`desktop-theme.css`, `auth.css`, `admin-features.css`,
+  `delight-system.css`, `enhanced-file-browser.css`, `feedback-modal.css`, `home-user.css`,
+  `participants.css`, `results-integrated.css`) and inline styles in `delivery.html`/`results.html`.
+  Adds JetBrains Mono (Google Fonts, weight 400 + 700) to `index.html` and introduces the
+  `--font-mono-rt` CSS variable with `font-feature-settings: "tnum"` applied to `.mono`, `code`,
+  `.token-value`, `#app-version`, `.results-stat-value`, and `.rt-num`. CSS/markup only —
+  no TypeScript or logic changes.
+
 ### ✨ Features
 
 - **Visual tagging — calendar-anchor grounding**: the desktop now forwards
