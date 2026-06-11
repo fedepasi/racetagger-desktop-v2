@@ -67,6 +67,37 @@ describe('isEdgeFunctionRetryable — existing behavior preserved', () => {
   });
 });
 
+describe('isEdgeFunctionRetryable — HTML gateway responses (issue #188)', () => {
+  // When supabase.functions.invoke() gets an HTML 5xx page and tries to JSON.parse it,
+  // the JS engine throws "Unexpected token '<'". This must be retried, not crashed on.
+  it('retries on JSON parse exception from HTML gateway response', () => {
+    expect(isEdgeFunctionRetryable("Unexpected token '<', \"<!DOCTYPE \" is not valid JSON")).toBe(true);
+    expect(isEdgeFunctionRetryable('unexpected token <')).toBe(true);
+    expect(isEdgeFunctionRetryable('is not valid json')).toBe(true);
+    expect(isEdgeFunctionRetryable('unexpected end of json input')).toBe(true);
+    expect(isEdgeFunctionRetryable('<!doctype html>')).toBe(true);
+  });
+
+  it('retries on 502/504 gateway errors', () => {
+    expect(isEdgeFunctionRetryable('502 Bad Gateway')).toBe(true);
+    expect(isEdgeFunctionRetryable('504 Gateway Timeout')).toBe(true);
+    expect(isEdgeFunctionRetryable('bad gateway')).toBe(true);
+    expect(isEdgeFunctionRetryable('gateway timeout')).toBe(true);
+  });
+
+  it('isUploadRetryable also retries (transitively)', () => {
+    expect(isUploadRetryable("Unexpected token '<', \"<!DOCTYPE \" is not valid JSON")).toBe(true);
+    expect(isUploadRetryable('502 Bad Gateway')).toBe(true);
+    expect(isUploadRetryable('504 Gateway Timeout')).toBe(true);
+  });
+
+  it('still rejects non-transient errors', () => {
+    expect(isEdgeFunctionRetryable('403 Forbidden')).toBe(false);
+    expect(isEdgeFunctionRetryable('401 Unauthorized')).toBe(false);
+    expect(isEdgeFunctionRetryable('duplicate key value')).toBe(false);
+  });
+});
+
 describe('isDeferredUploadRetryCandidate — end-of-batch drain selection', () => {
   // Exact shape of the Gruppe C hard failure (processImage outer catch return).
   const ISSUE_142_RESULT = {

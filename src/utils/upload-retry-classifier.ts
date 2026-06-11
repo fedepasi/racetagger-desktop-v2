@@ -12,10 +12,12 @@
 
 /**
  * Determine if an Edge Function error is retryable.
- * Covers network failures, capacity/rate-limit errors (429, 503), and
- * Supabase/Postgres connection-pool exhaustion.
+ * Covers network failures, capacity/rate-limit errors (429, 503), HTML gateway
+ * responses, and Supabase/Postgres connection-pool exhaustion.
  * Issues: #55 (timeout), #57 (429 Resource Exhausted), #58 (Failed to send),
- *         #142/#143/#144 (connection-pool exhaustion — Nürburgring 24h batch, v1.1.9)
+ *         #116/#113 (HTML gateway response → JSON.parse crash),
+ *         #142/#143/#144 (connection-pool exhaustion — Nürburgring 24h batch, v1.1.9),
+ *         #188 (HTML response in edge function call path, not just upload path)
  */
 export function isEdgeFunctionRetryable(errorMessage: string): boolean {
   const msg = errorMessage.toLowerCase();
@@ -33,6 +35,19 @@ export function isEdgeFunctionRetryable(errorMessage: string): boolean {
       msg.includes('overloaded') || msg.includes('quota') ||
       msg.includes('rate limit') || msg.includes('rate_limit') ||
       msg.includes('too many requests') || msg.includes('service unavailable')) {
+    return true;
+  }
+  // HTML error page from gateway: supabase.functions.invoke() throws a JSON parse
+  // exception when a 5xx proxy returns an HTML page instead of JSON. Same transient
+  // class as 503 but surfaces as a thrown exception ("Unexpected token '<'") rather
+  // than response.error. Applies to both upload and edge function call paths.
+  if (msg.includes("unexpected token '<'") ||
+      msg.includes('unexpected token <') ||
+      msg.includes('<!doctype') ||
+      msg.includes('is not valid json') ||
+      msg.includes('unexpected end of json input') ||
+      msg.includes('502') || msg.includes('504') ||
+      msg.includes('bad gateway') || msg.includes('gateway timeout')) {
     return true;
   }
   // Supabase / Postgres connection-pool exhaustion (issues #142, #143, #144).
@@ -59,31 +74,14 @@ export function isEdgeFunctionRetryable(errorMessage: string): boolean {
 
 /**
  * Determine if an upload-to-storage error is retryable.
- * Extends `isEdgeFunctionRetryable` with storage-gateway failures that surface
- * as HTML error pages being parsed as JSON.
+ * All gateway/HTML patterns are now in isEdgeFunctionRetryable (the shared base),
+ * so this is a direct alias — kept as a named function for call-site clarity.
  *
- * Issues covered:
- *  - #108, #103, #95  "fetch failed" in UnifiedImageWorker.uploadToStorage
- *  - #107, #106, #100, #98  "Unexpected token '<', \"<!DOCTYPE ...\" is not valid JSON"
- *    (storage/edge gateway returns an HTML error page that the SDK tries to JSON.parse)
+ * Issues covered: #108, #103, #95 "fetch failed", #107/#106/#100/#98 HTML gateway,
+ *                 #142/#143/#144 connection-pool exhaustion, #188 edge fn HTML response.
  */
 export function isUploadRetryable(errorMessage: string): boolean {
-  if (isEdgeFunctionRetryable(errorMessage)) return true;
-  const msg = errorMessage.toLowerCase();
-  // JSON parse errors indicating HTML response from gateway (502/503/504 pages)
-  if (msg.includes("unexpected token '<'") ||
-      msg.includes('unexpected token <') ||
-      msg.includes('<!doctype') ||
-      msg.includes('is not valid json') ||
-      msg.includes('unexpected end of json input')) {
-    return true;
-  }
-  // Common transient HTTP 5xx/gateway responses
-  if (msg.includes('502') || msg.includes('504') ||
-      msg.includes('bad gateway') || msg.includes('gateway timeout')) {
-    return true;
-  }
-  return false;
+  return isEdgeFunctionRetryable(errorMessage);
 }
 
 /** Minimal shape of a per-image result needed to decide a deferred upload retry. */
