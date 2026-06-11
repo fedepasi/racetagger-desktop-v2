@@ -524,6 +524,15 @@ export class FaceEmbeddingService {
   }
 
   /**
+   * Last error from a failed loadModel() attempt (download / session-create).
+   * loadModel() swallows failures and returns false; callers that need to
+   * surface WHY the embedder is unavailable read it here.
+   */
+  public getLastError(): Error | null {
+    return this.loadError;
+  }
+
+  /**
    * Get model info
    */
   public getModelInfo(): {
