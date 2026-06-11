@@ -4,6 +4,12 @@
 
 ### ✨ Features
 
+- **Bulk folder assignment — backend (IPC + DB layer)**: adds `bulkAssignFoldersSupabase`
+  with append/replace modes, per-row UPDATE chains (avoids NOT NULL upsert constraint),
+  dual-write to legacy `folder_1/2/3` columns, unknown-folder reporting, cache
+  invalidation, and 26 unit tests. Backend only — no UI calls it yet; functionally
+  dormant until the split-view UI (PR3) wires it up. (PR #197)
+
 - **Default IPTC template (account-level)**: configure your IPTC Pro profile
   once and have it follow you. A new **default IPTC template** is stored on your
   account (new `user_iptc_templates` table, owner-only RLS) so it syncs across
