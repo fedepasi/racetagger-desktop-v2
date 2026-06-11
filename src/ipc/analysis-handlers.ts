@@ -10,10 +10,11 @@ import { ipcMain, app } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import { setBatchProcessingCancelled, getActiveProcessingExecutionId } from './context';
-import { DEBUG_MODE } from '../config';
+import { DEBUG_MODE, ENABLE_DB_EXECUTION_FALLBACK } from '../config';
 import { unifiedImageProcessor } from '../unified-image-processor';
 import { AnalysisLogger, writeUploadedMarker } from '../utils/analysis-logger';
-import { getSupabaseClient, getUserPlanLimits, reconcileOrphanExecutions } from '../database-service';
+import { loadFromDatabaseIfExists } from '../utils/execution-log-loader';
+import { getSupabaseClient, getUserPlanLimits, reconcileOrphanExecutions, isDbExecutionFallbackEnabled } from '../database-service';
 import { authService } from '../auth-service';
 
 // ==================== Log Reading Utilities ====================
@@ -96,8 +97,12 @@ export function registerAnalysisHandlers(): void {
     }
   });
 
-  // Get execution log (returns wrapped response with success flag)
-  ipcMain.handle('get-execution-log', async (_, executionId: string) => {
+  // Get execution log (returns wrapped response with success flag).
+  // `options.preferRemote` → skip the local JSONL and reconstruct from the DB
+  // (used by the manual "Refresh" button). The DB path is behind
+  // ENABLE_DB_EXECUTION_FALLBACK (#184 Phase 1, OFF by default): with the flag
+  // off this behaves EXACTLY as before (missing local JSONL → empty data).
+  ipcMain.handle('get-execution-log', async (_, executionId: string, options?: { preferRemote?: boolean }) => {
     try {
       // Handle mock execution IDs for testing
       if (executionId.startsWith('mock-exec-')) {
@@ -107,15 +112,53 @@ export function registerAnalysisHandlers(): void {
 
       const logsDir = path.join(app.getPath('userData'), '.analysis-logs');
       const logFilePath = path.join(logsDir, `exec_${executionId}.jsonl`);
+      const localExists = fs.existsSync(logFilePath);
 
-      if (!fs.existsSync(logFilePath)) {
-        if (DEBUG_MODE) console.warn(`[Analysis] Log file not found: ${logFilePath}`);
-        return { success: true, data: [] };
+      // Cross-device DB reconstruction. Never throws; returns null when the flag
+      // is off, the user isn't authenticated, or anything fails → caller degrades.
+      const tryDbReconstruct = async (bypassCache: boolean): Promise<any[] | null> => {
+        const authState = authService.getAuthState();
+        const userId = authState.isAuthenticated ? authState.user?.id : null;
+        if (!userId) return null;
+        // Flag resolution: the env var forces it on for local dev; in packaged
+        // builds (no env) it's gated per-user via feature_flags.db_execution_fallback
+        // (cached 60s). Either source off → behave exactly as today.
+        const enabled = ENABLE_DB_EXECUTION_FALLBACK || await isDbExecutionFallbackEnabled();
+        if (!enabled) return null;
+        const res = await loadFromDatabaseIfExists(
+          executionId,
+          { supabase: getSupabaseClient(), userId },
+          { bypassCache }
+        );
+        return res ? res.events : null;
+      };
+
+      // Manual Refresh: prefer the cloud copy even when a local file exists.
+      if (options?.preferRemote) {
+        const dbEvents = await tryDbReconstruct(true);
+        if (dbEvents) {
+          if (DEBUG_MODE) console.log(`[Analysis] Refresh: reconstructed ${dbEvents.length} events from DB for ${executionId}`);
+          return { success: true, data: dbEvents, source: 'db' };
+        }
+        if (localExists) return { success: true, data: readLogFile(logFilePath), source: 'local' };
+        return { success: true, data: [], source: 'none' };
       }
 
-      const logEvents = readLogFile(logFilePath);
-      if (DEBUG_MODE) console.log(`[Analysis] Loaded ${logEvents.length} log events for execution ${executionId}`);
-      return { success: true, data: logEvents };
+      // Normal open: local-first (unchanged behavior).
+      if (localExists) {
+        const logEvents = readLogFile(logFilePath);
+        if (DEBUG_MODE) console.log(`[Analysis] Loaded ${logEvents.length} log events for execution ${executionId}`);
+        return { success: true, data: logEvents, source: 'local' };
+      }
+
+      // Local missing → cross-device DB reconstruction (flag-gated).
+      if (DEBUG_MODE) console.warn(`[Analysis] Log file not found: ${logFilePath}`);
+      const dbEvents = await tryDbReconstruct(false);
+      if (dbEvents) {
+        if (DEBUG_MODE) console.log(`[Analysis] Reconstructed ${dbEvents.length} events from DB for cloud-only ${executionId}`);
+        return { success: true, data: dbEvents, source: 'db' };
+      }
+      return { success: true, data: [], source: 'none' };
 
     } catch (error) {
       console.error('[Analysis] Error reading execution log:', error);

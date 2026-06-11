@@ -3413,7 +3413,7 @@ class UnifiedImageWorker extends EventEmitter {
                   skipVisualTagsResult = await this.invokeVisualTagging(skipStoragePath, {
                     imageId: skipImageId,
                     analysis: []
-                  });
+                  }, this.buildVisualTaggingAnchor(processor, imageFile.originalPath));
                   if (skipVisualTagsResult) {
                     workerLog.info(`[SceneSkip] Visual tags extracted: ${Object.values(skipVisualTagsResult.tags).flat().length} tags`);
                   }
@@ -3780,7 +3780,7 @@ class UnifiedImageWorker extends EventEmitter {
                 faceVisualTagsResult = await this.invokeVisualTagging(faceRecognitionStoragePath, {
                   imageId: faceRecognitionImageId,
                   analysis: matchedDrivers
-                });
+                }, this.buildVisualTaggingAnchor(processor, imageFile.originalPath));
                 if (faceVisualTagsResult) {
                   workerLog.info(`[FaceRecognition] Visual tags extracted: ${Object.values(faceVisualTagsResult.tags).flat().length} tags`);
                 }
@@ -3912,7 +3912,7 @@ class UnifiedImageWorker extends EventEmitter {
         const [cropContextResult, parallelVisualTags] = await Promise.all([
           this.analyzeWithCropContext(imageFile, buffer, mimeType, uploadReadyPath, storagePath, processor),
           visualTaggingEnabled
-            ? this.invokeVisualTagging(storagePath, null).catch(err => {
+            ? this.invokeVisualTagging(storagePath, null, this.buildVisualTaggingAnchor(processor, imageFile.originalPath)).catch(err => {
                 log.warn(`[VisualTagging] Failed in parallel (continuing): ${err.message}`);
                 return null;
               })
@@ -3975,7 +3975,7 @@ class UnifiedImageWorker extends EventEmitter {
         const [onnxResult, onnxParallelVisualTags] = await Promise.all([
           this.analyzeImageLocal(buffer, imageFile.fileName, mimeType, storagePath),
           onnxVisualTaggingEnabled
-            ? this.invokeVisualTagging(storagePath, null).catch(err => {
+            ? this.invokeVisualTagging(storagePath, null, this.buildVisualTaggingAnchor(processor, imageFile.originalPath)).catch(err => {
                 log.warn(`[VisualTagging] Failed in parallel with ONNX (continuing): ${err.message}`);
                 return null;
               })
@@ -4034,7 +4034,7 @@ class UnifiedImageWorker extends EventEmitter {
         const [stdAnalysisResult, stdParallelVisualTags] = await Promise.all([
           this.analyzeImage(imageFile.fileName, storagePath, buffer.length, mimeType),
           stdVisualTaggingEnabled
-            ? this.invokeVisualTagging(storagePath, null).catch(err => {
+            ? this.invokeVisualTagging(storagePath, null, this.buildVisualTaggingAnchor(processor, imageFile.originalPath)).catch(err => {
                 log.warn(`[VisualTagging] Failed in parallel (continuing): ${err.message}`);
                 return null;
               })
@@ -4107,7 +4107,7 @@ class UnifiedImageWorker extends EventEmitter {
       } else if (this.config.visualTagging?.enabled && storagePath && !this.shouldUseCropContext() && !this.shouldUseLocalOnnx()) {
         // Fallback: Only run sequentially if not already parallelized (shouldn't happen normally)
         try {
-          visualTagsResult = await this.invokeVisualTagging(storagePath, analysisResult);
+          visualTagsResult = await this.invokeVisualTagging(storagePath, analysisResult, this.buildVisualTaggingAnchor(processor, imageFile.originalPath));
         } catch (err: any) {
           log.warn(`[VisualTagging] Failed (continuing without tags): ${err.message}`);
         }
@@ -5350,12 +5350,41 @@ class UnifiedImageWorker extends EventEmitter {
   }
 
   /**
+   * Build the calendar-anchor metadata payload for the visualTagging edge function.
+   * `processor` exposes `getPhotoMetadataForDB(path)` which reads EXIF data populated
+   * during temporal-clustering. Returns only the 3 fields the edge function consumes
+   * for grounding (photo_taken_at, photo_latitude, photo_longitude). Issue #159.
+   */
+  private buildVisualTaggingAnchor(
+    processor: UnifiedImageProcessor | undefined,
+    originalPath: string
+  ): { photo_taken_at?: string; photo_latitude?: number; photo_longitude?: number } {
+    if (!processor) return {};
+    const meta = processor.getPhotoMetadataForDB(originalPath) || {};
+    const out: { photo_taken_at?: string; photo_latitude?: number; photo_longitude?: number } = {};
+    if (typeof meta.photo_taken_at === 'string') out.photo_taken_at = meta.photo_taken_at;
+    if (typeof meta.photo_latitude === 'number') out.photo_latitude = meta.photo_latitude;
+    if (typeof meta.photo_longitude === 'number') out.photo_longitude = meta.photo_longitude;
+    return out;
+  }
+
+  /**
    * Visual Tagging: Invokes the visualTagging edge function to extract visual descriptive tags
    * Runs in parallel with recognition for zero additional latency
+   *
+   * `anchorMeta` (optional) enables the calendar anchor in the edge function:
+   * we forward preset_name + sport_category + photo_taken_at + GPS (when available)
+   * so the edge function can ground location_tags via event_calendar lookup.
+   * Issue #159.
    */
   private async invokeVisualTagging(
     storagePath: string,
-    analysisResult: any | null  // Now accepts null for parallel execution
+    analysisResult: any | null,  // Now accepts null for parallel execution
+    anchorMeta?: {
+      photo_taken_at?: string;
+      photo_latitude?: number;
+      photo_longitude?: number;
+    } | null
   ): Promise<{ tags: any; usage: any } | null> {
     // Only run if visual tagging is enabled
     if (!this.config.visualTagging?.enabled) {
@@ -5389,6 +5418,25 @@ class UnifiedImageWorker extends EventEmitter {
         };
       }
 
+      // Calendar anchor grounding signals (issue #159).
+      // Caller pre-extracts photo_taken_at/lat/lon from EXIF metadata; we forward
+      // them to the edge function alongside preset_name + sport_category.
+      // All fields are optional — edge function falls back to vanilla Gemini if missing.
+      const anchorFields: {
+        preset_name?: string;
+        sport_category?: string;
+        photo_taken_at?: string;
+        photo_latitude?: number;
+        photo_longitude?: number;
+      } = {};
+      if (this.config.presetName) anchorFields.preset_name = this.config.presetName;
+      if (this.config.category) anchorFields.sport_category = this.config.category;
+      if (anchorMeta) {
+        if (anchorMeta.photo_taken_at) anchorFields.photo_taken_at = anchorMeta.photo_taken_at;
+        if (typeof anchorMeta.photo_latitude === 'number') anchorFields.photo_latitude = anchorMeta.photo_latitude;
+        if (typeof anchorMeta.photo_longitude === 'number') anchorFields.photo_longitude = anchorMeta.photo_longitude;
+      }
+
       const response = await Promise.race([
         this.supabase.functions.invoke('visualTagging', {
           body: {
@@ -5396,7 +5444,8 @@ class UnifiedImageWorker extends EventEmitter {
             imageId: analysisResult?.imageId || '',
             executionId: this.config.executionId || '',
             userId: userId || '',
-            recognitionResult  // undefined when running in parallel (edge function handles this)
+            recognitionResult,  // undefined when running in parallel (edge function handles this)
+            ...anchorFields
           }
         }),
         new Promise((_, reject) =>

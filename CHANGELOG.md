@@ -14,8 +14,18 @@
   that hit the wrong project in packaged builds), streamed to disk with atomic
   promotion + size check (no ~500MB RAM peak, no "sticky" corrupt file), and disables
   cleanly with a log when the model/embedder can't load instead of returning silent
-  zero-matches. Includes 17 unit tests (YuNet decoding, cosine matching, model-missing
+  zero-matches. Includes 18 unit tests (YuNet decoding, cosine matching, model-missing
   behavior). UI remains "Coming Soon"; the in-app face panel is a follow-up.
+
+- **Visual tagging — calendar-anchor grounding**: the desktop now forwards
+  `preset_name`, `sport_category`, and the photo's EXIF `photo_taken_at` + GPS
+  coordinates to the `visualTagging` edge function at every invoke site (standard,
+  crop+context, ONNX, face-recognition, scene-skip and sequential fallback). The
+  edge function (already live) uses these to look up `event_calendar` and ground
+  `location_tags` against the real event, reducing location hallucinations (e.g.
+  NBR 24h photos tagged as Le Mans — issue #159). All fields are optional; when
+  absent the edge function falls back to vanilla Gemini, so there's no regression.
+  No schema/migration changes. (PR #198)
 
 - **Bulk folder assignment — backend (IPC + DB layer)**: adds `bulkAssignFoldersSupabase`
   with append/replace modes, per-row UPDATE chains (avoids NOT NULL upsert constraint),
@@ -36,6 +46,22 @@
   template…**), **Import from XMP…**, a status row, and **Clear**. The Export &
   IPTC modal reads the default directly over IPC and falls back to a local mirror
   for offline export. No token logic / Edge Functions touched. (UX-04)
+
+- **Cross-device review (#184 Phase 1, dark launch)**: opening an execution whose
+  local JSONL is missing (another device ran it, a reinstall, or a lost local file)
+  can now reconstruct its event stream from the Supabase DB so the **review gallery
+  still renders** — plus a manual **Refresh** button to re-pull the cloud copy
+  (e.g. to pick up corrections made on another device). **Per-user gated via the
+  `feature_flags` table** (`db_execution_fallback`, default off) — the same
+  DB-delivered, per-user mechanism as `face_recognition_enabled`, so it can be
+  turned on for individual users from the DB without a rebuild (read cached 60s);
+  the `RACETAGGER_DB_EXECUTION_FALLBACK` env still forces it on for local dev. With
+  the flag off, behavior is identical to today. Additive and defensive — any DB/network
+  failure degrades to the previous behavior (empty gallery), never throws. The
+  local-first path is unchanged. No token logic / Edge Functions / schema touched.
+  Online-only by policy (CLAUDE.md → Offline Capability Policy). *Known v1
+  limitation:* cross-device thumbnails (signed URLs) are a follow-up; recognized
+  data reconstructs. (PR #187)
 
 ### 🐛 Fixes
 
