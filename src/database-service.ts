@@ -2852,6 +2852,107 @@ export async function savePresetIptcMetadata(presetId: string, iptcMetadata: any
   }, 'savePresetIptcMetadata', 3, 1000);
 }
 
+// ============================================================================
+// ACCOUNT-LEVEL DEFAULT IPTC TEMPLATE (UX-04)
+// ============================================================================
+// Stored in public.user_iptc_templates (owner-only RLS). The template is the
+// PresetIptcMetadata shape MINUS the per-preset behavior overrides
+// (writingTiming / faceScope). It is copied into new presets and used as the
+// Export & IPTC fallback — precedence is always preset profile > user default.
+//
+// IMPORTANT: every read/write here uses authService.getSupabaseClient() (the
+// authenticated client), so auth.uid() resolves and RLS accepts the row.
+
+/**
+ * Get the current user's default IPTC template, or null if none is configured.
+ * Tolerant by design (mirrors getPresetIptcMetadata): logs and returns null on
+ * error so the caller can silently fall back to an empty form.
+ */
+export async function getUserDefaultIptcTemplate(): Promise<any | null> {
+  try {
+    const userId = getCurrentUserId();
+    if (!userId) return null;
+
+    const authenticatedClient = authService.getSupabaseClient();
+
+    const { data, error } = await authenticatedClient
+      .from('user_iptc_templates')
+      .select('template')
+      .eq('user_id', userId)
+      .eq('is_default', true)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[DB] Error getting default IPTC template:', error);
+      return null;
+    }
+
+    return data?.template ?? null;
+  } catch (error) {
+    console.error('[DB] Error getting default IPTC template:', error);
+    return null;
+  }
+}
+
+/**
+ * Save (or clear) the current user's default IPTC template.
+ *
+ * - `template === null` deletes the existing default row.
+ * - Otherwise it updates the existing default row, or inserts one if none
+ *   exists yet (the DB defaults cover name/is_default).
+ *
+ * supabase-js `upsert` cannot target the partial unique index
+ * (user_iptc_templates_one_default), so this uses update-then-insert.
+ */
+export async function saveUserDefaultIptcTemplate(template: any | null): Promise<void> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+
+  await withRetry(async () => {
+    const authenticatedClient = authService.getSupabaseClient();
+
+    // Clear: delete the default row (Settings → "Clear").
+    if (template === null) {
+      const { error } = await authenticatedClient
+        .from('user_iptc_templates')
+        .delete()
+        .eq('user_id', userId)
+        .eq('is_default', true);
+
+      if (error) {
+        console.error('[DB] Error clearing default IPTC template:', error);
+        throw error;
+      }
+      return;
+    }
+
+    // Update the existing default row.
+    const { data: updated, error: updateError } = await authenticatedClient
+      .from('user_iptc_templates')
+      .update({ template, updated_at: new Date().toISOString() })
+      .eq('user_id', userId)
+      .eq('is_default', true)
+      .select('id');
+
+    if (updateError) {
+      console.error('[DB] Error updating default IPTC template:', updateError);
+      throw updateError;
+    }
+
+    // No default row yet → insert one (name/is_default fall back to DB defaults).
+    if (!updated || updated.length === 0) {
+      const { error: insertError } = await authenticatedClient
+        .from('user_iptc_templates')
+        .insert({ user_id: userId, template });
+
+      if (insertError) {
+        console.error('[DB] Error inserting default IPTC template:', insertError);
+        throw insertError;
+      }
+    }
+  }, 'saveUserDefaultIptcTemplate', 3, 1000);
+}
+
 /**
  * Duplicate any preset for the current user
  * Creates a personal copy of a preset (official or user-owned) that the user can customize

@@ -217,3 +217,62 @@
   justify-content: space-between;
   align-items: center;
 }
+
+/* ============================================================
+   Default IPTC template (UX-04)
+   ============================================================ */
+.settings-iptc-template-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.settings-iptc-template-info {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.settings-iptc-template-status {
+  margin-top: 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.settings-iptc-template-status.is-configured {
+  color: var(--primary-color, #1a9ee0);
+}
+
+.settings-iptc-template-status.is-empty {
+  color: var(--text-muted, var(--text-secondary));
+}
+
+.settings-iptc-template-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+/* Default IPTC template editor modal (Option B) — sized like the preset
+   editor's IPTC section, scrollable on small viewports. */
+.iptc-defaults-modal-content {
+  width: min(1100px, 92vw);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.iptc-defaults-modal-content .modal-body {
+  overflow-y: auto;
+}
+
+/* The writing-behavior selects are per-preset overrides — they have no meaning
+   for a global default template, so hide them here. collectIptcDataFromForm()
+   already omits 'default'-valued behavior selects. */
+#iptc-defaults-modal .iptc-behavior-options {
+  display: none;
+}

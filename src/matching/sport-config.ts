@@ -487,11 +487,15 @@ export class SportConfig {
     const profile = this.getProfile(sport);
     if (!profile) return true; // If no profile, accept any number
 
-    const num = parseInt(raceNumber, 10);
-    if (isNaN(num)) {
-      // Check if alphanumeric is allowed
+    // Use regex to detect alphanumeric before parseInt, which silently drops
+    // trailing letters and would bypass the allowsAlphanumeric check.
+    const isAlphanumeric = !/^[0-9]+$/.test(raceNumber);
+    if (isAlphanumeric) {
       return profile.characteristics.allowsAlphanumeric;
     }
+
+    const num = parseInt(raceNumber, 10);
+    if (isNaN(num)) return profile.characteristics.allowsAlphanumeric;
 
     // Check if within typical range
     const [min, max] = profile.characteristics.typicalNumberRange;

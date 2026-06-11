@@ -6,8 +6,10 @@
  * - preset-iptc-save: Save/update IPTC profile for a preset
  * - preset-iptc-import-xmp: Import IPTC profile from XMP file (PhotoMechanic)
  * - iptc-finalize-batch: Trigger batch IPTC writing after review
+ * - iptc-defaults-get: Load the account-level default IPTC template (UX-04)
+ * - iptc-defaults-save: Save/clear the account-level default IPTC template (UX-04)
  *
- * Total: 4 handlers
+ * Total: 6 handlers
  */
 
 import { ipcMain, dialog } from 'electron';
@@ -19,13 +21,15 @@ import { finalizeIptcMetadata } from '../utils/iptc-finalizer';
 import {
   getPresetIptcMetadata,
   savePresetIptcMetadata,
+  getUserDefaultIptcTemplate,
+  saveUserDefaultIptcTemplate,
 } from '../database-service';
 
 /**
  * Register all IPTC-related IPC handlers
  */
 export function registerPresetIptcHandlers(): void {
-  console.log('[IPC] Registering IPTC metadata handlers (4)...');
+  console.log('[IPC] Registering IPTC metadata handlers (6)...');
 
   // Get IPTC profile for a preset
   ipcMain.handle('preset-iptc-get', async (_event, presetId: string): Promise<HandlerResult<PresetIptcMetadata | null>> => {
@@ -91,6 +95,32 @@ export function registerPresetIptcHandlers(): void {
     }
   });
 
+  // Get the account-level default IPTC template (UX-04). Returns null when the
+  // user hasn't configured one yet — the renderer treats that as "no default".
+  ipcMain.handle('iptc-defaults-get', async (_event): Promise<HandlerResult<PresetIptcMetadata | null>> => {
+    try {
+      const template = await getUserDefaultIptcTemplate();
+      return { success: true, data: template };
+    } catch (error) {
+      console.error('[IPC] Error getting default IPTC template:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to get default IPTC template' };
+    }
+  });
+
+  // Save or clear the account-level default IPTC template (UX-04). A null
+  // template clears the existing default (Settings → "Clear"). The renderer is
+  // responsible for stripping per-preset behavior keys (writingTiming/faceScope)
+  // before calling this.
+  ipcMain.handle('iptc-defaults-save', async (_event, template: PresetIptcMetadata | null): Promise<HandlerResult<void>> => {
+    try {
+      await saveUserDefaultIptcTemplate(template);
+      return { success: true, data: undefined };
+    } catch (error) {
+      console.error('[IPC] Error saving default IPTC template:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to save default IPTC template' };
+    }
+  });
+
   // Batch finalize IPTC metadata after review.
   //
   // Signature is positional + a trailing options bag. Older callers that
@@ -138,5 +168,5 @@ export function registerPresetIptcHandlers(): void {
     }
   });
 
-  console.log('[IPC] ✅ IPTC metadata handlers registered (4)');
+  console.log('[IPC] ✅ IPTC metadata handlers registered (6)');
 }

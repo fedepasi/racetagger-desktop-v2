@@ -368,6 +368,7 @@ describe('SmartMatcher System', () => {
         allCandidates: [],
         multipleHighScores: false,
         resolvedByOverride: false,
+        matchStatus: 'matched',
         debugInfo: {
           totalEvidence: 1,
           evidenceTypes: [],

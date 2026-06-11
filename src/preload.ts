@@ -284,6 +284,8 @@ const validInvokeChannels: string[] = [
   'preset-iptc-save',
   'preset-iptc-import-xmp',
   'iptc-finalize-batch',
+  'iptc-defaults-get',       // UX-04: account-level default IPTC template
+  'iptc-defaults-save',      // UX-04: account-level default IPTC template
 
   // Folder Path Validation
   'validate-preset-folder-paths',
