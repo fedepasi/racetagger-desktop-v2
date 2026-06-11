@@ -304,6 +304,10 @@ export interface UnifiedProcessorConfig {
   // (b) strips the field from the response, and the sanity filter on the desktop
   // additionally removes any driver name not present in `participantsData`.
   allowExternalPersonRecognition?: boolean;
+  // ACC-01 (Gruppe C): preset-level list of series-wide sponsor brands the
+  // SmartMatcher excludes from SPONSOR evidence before scoring (propagated from
+  // participant_presets.series_sponsor_ignore). Empty/undefined = no filtering.
+  seriesSponsorIgnore?: string[];
 }
 
 /**
@@ -2948,6 +2952,11 @@ class UnifiedImageWorker extends EventEmitter {
    * Initialize sport configurations from Supabase sport categories
    */
   private async initializeSportConfigurations() {
+    // ACC-01 (Gruppe C): apply the preset's series-sponsor ignore list to this
+    // worker's matcher. Set BEFORE the try block (and before the empty-categories
+    // early return) so the list still applies even if sport-category fetch fails.
+    this.smartMatcher?.setSeriesSponsorIgnoreList(this.config.seriesSponsorIgnore ?? []);
+
     try {
       // PERFORMANCE: Use pre-fetched categories if available (batch optimization)
       // This avoids redundant Supabase calls when processing multiple images

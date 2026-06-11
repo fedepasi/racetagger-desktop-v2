@@ -174,7 +174,7 @@ export function registerSupabaseHandlers(): void {
     }
   });
 
-  ipcMain.handle('supabase-update-participant-preset', async (_, { presetId, updateData }: { presetId: string, updateData: Partial<{ name: string, description: string, category_id: string, custom_folders: (string | { name: string; path?: string })[], person_shown_template: string | null, allow_external_person_recognition: boolean }> }) => {
+  ipcMain.handle('supabase-update-participant-preset', async (_, { presetId, updateData }: { presetId: string, updateData: Partial<{ name: string, description: string, category_id: string, custom_folders: (string | { name: string; path?: string })[], person_shown_template: string | null, allow_external_person_recognition: boolean, series_sponsor_ignore: string[] }> }) => {
     try {
       await updateParticipantPresetSupabase(presetId, updateData);
       return { success: true };

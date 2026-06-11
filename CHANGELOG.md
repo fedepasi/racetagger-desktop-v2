@@ -27,6 +27,19 @@
   recurring Postgres errors on every triage run. No schema change; no app impact.
   (PR #195)
 
+- **Duplicating a preset no longer loses its IPTC profile & recognition flags**:
+  `duplicateOfficialPresetSupabase` copied only `name`/`description`/`category_id`/
+  `custom_folders`, silently dropping the preset-level columns
+  `iptc_metadata` (the curated IPTC Pro profile), `person_shown_template`
+  (the IPTC PersonInImage template) and `allow_external_person_recognition`. An
+  editorial photographer who duplicated an official preset got a copy stripped of
+  its Getty-ready metadata profile with no warning, and had to rebuild it. The
+  duplication payload now carries all four preset-level fields —
+  `iptc_metadata`, `person_shown_template`, `allow_external_person_recognition`
+  and the ACC-01 `series_sponsor_ignore` list (see the Gruppe C field-feedback
+  section) — and `ParticipantPresetSupabase` gains the `person_shown_template`
+  field. `database-service.ts` only; no token logic / Edge Functions touched.
+
 - **Add a missing detection on a group photo from the review gallery**: the
   "+ Add detection" button was rendered **only** in the empty-state branch of
   the gallery's detection editor (`updateVehicleEditor`), so a photo that
@@ -37,6 +50,23 @@
   flows into folder org / IPTC like any other correction. Renderer-only
   (`renderer/js/log-visualizer.js` + `renderer/css/processing-status.css`);
   no token logic / Edge Functions / schema touched. (#167)
+
+- **Removed a no-op "Write metadata automatically during analysis" toggle**
+  (Settings → IPTC Pro Defaults): the toggle persisted to
+  `localStorage['iptc-pro-defaults'].autoWrite` but was wired to **nothing** —
+  it never reached the main process, `UnifiedProcessorConfig.iptcMetadata` was
+  never populated from it, and the analysis pipeline ignored it entirely.
+  Turning it on (expecting metadata written *during* analysis) or off
+  (expecting writes suppressed) produced identical behavior, so the control
+  silently misrepresented what the app does — a trust bug. The toggle and its
+  no-op change handler are removed from `settings.html` / `settings.js`. Actual
+  behavior is unchanged and matches the toggle's former *disabled* copy: the
+  IPTC Pro profile is written when you use **Export & IPTC**. The per-preset
+  "Writing timing" override and the `UnifiedProcessorConfig.iptcMetadata`
+  safety-net hook are left intact as the architecturally-correct home for this
+  behavior if it is ever wired (note: that per-preset override is itself not
+  yet consumed during analysis). Renderer-only; no token logic / Edge Functions
+  / schema touched.
 
 - **ExifTool now runs from mount paths with spaces (macOS DMG)**: temporal
   clustering built the ExifTool command as a single shell string with an
@@ -97,6 +127,18 @@
 - **Startup reliability**: ONNX model download now retries with backoff, writes
   atomically (no more "sticky" truncated model files), validates size, and
   offers an in-app **Retry** button instead of "restart the app" (BUG-04).
+- **Matching — per-preset "Series sponsors to ignore" list (ACC-01)**: at events
+  like Le Mans the series sponsors (Michelin, Rolex, TotalEnergies …) appear on
+  every car and on trackside banners, so their text used to pollute match
+  scoring. Each preset now has a **Series sponsors to ignore** list (a chip input
+  in the preset editor): the SmartMatcher drops those brands from sponsor
+  evidence **before** scoring, so an ignored sponsor neither adds a match bonus
+  nor fires the −30/−15 contradiction penalties against any participant, and can
+  no longer trip a false ghost-vehicle alert. Stored in the new additive
+  `participant_presets.series_sponsor_ignore` JSONB column (migration in
+  `racetagger-app`); an empty list — the default for every existing preset —
+  means matching is unchanged. Matching is entirely local; no token logic /
+  Edge Functions touched.
 
 ## [1.1.9] - 2026-05-12
 
