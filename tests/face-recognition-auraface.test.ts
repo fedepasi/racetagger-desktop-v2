@@ -12,6 +12,8 @@
  * No network, no real ONNX model: everything below runs offline.
  */
 
+import * as fs from 'fs';
+import * as path from 'path';
 import { FaceDetectorService, DetectedFaceRegion } from '../src/face-detector-service';
 import {
   FaceRecognitionProcessor,
@@ -147,6 +149,28 @@ describe('YuNet multi-head output decoding', () => {
     // The higher-confidence box must win
     expect(kept[0].confidence).toBeCloseTo(1.0, 5);
   });
+
+  // Regression guard for B1: load the REAL bundled YuNet model and assert its
+  // output names are exactly the 12 multi-head tensors the decoder indexes into.
+  // If someone swaps the model for a variant with a different output layout
+  // (e.g. a single concatenated tensor), this fails loudly instead of silently
+  // detecting zero faces forever. Skips cleanly where the model isn't present.
+  const modelPath = path.join(process.cwd(), 'src/assets/models/yunet/face_detection_yunet_2023mar.onnx');
+  const realModel = fs.existsSync(modelPath) ? test : test.skip;
+  realModel('bundled YuNet model exposes exactly the 12 outputs the decoder reads', async () => {
+    const loaded = await FaceDetectorService.getInstance().loadModel();
+    expect(loaded).toBe(true);
+    // session is private; reach in to read the resolved output names.
+    const outputs: string[] = (detector.session?.outputNames ?? []) as string[];
+    const expected = [
+      'cls_8', 'obj_8', 'bbox_8', 'kps_8',
+      'cls_16', 'obj_16', 'bbox_16', 'kps_16',
+      'cls_32', 'obj_32', 'bbox_32', 'kps_32',
+    ];
+    for (const name of expected) {
+      expect(outputs).toContain(name);
+    }
+  }, 30000);
 
   test('missing output tensors yield zero faces (documents current silent-skip behavior)', () => {
     // NOTE: today the decoder logs a warning and returns [] when the model's
