@@ -464,6 +464,16 @@ export class FaceRecognitionOnnxProcessor {
   }
 
   /**
+   * Reason the embedder failed to load (download / session-create), or null.
+   * Used by callers to fail loudly instead of silently saving a
+   * descriptor-less photo when AuraFace is unavailable.
+   */
+  public getEmbedderLoadError(): string | null {
+    const err = this.embedder.getLastError();
+    return err ? err.message : null;
+  }
+
+  /**
    * Get current status of both models
    */
   public getStatus(): FaceRecognitionOnnxStatus {

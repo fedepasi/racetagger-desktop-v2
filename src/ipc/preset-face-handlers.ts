@@ -31,6 +31,7 @@ import {
   resetPresetActiveStates
 } from '../database-service';
 import { FaceRecognitionOnnxProcessor } from '../face-recognition-onnx-processor';
+import { errorTelemetryService } from '../utils/error-telemetry-service';
 import * as crypto from 'crypto';
 import * as path from 'path';
 
@@ -111,10 +112,21 @@ export function registerPresetFaceHandlers(): void {
 
       const photoUrl = urlData.publicUrl;
 
-      // Run ONNX face detection + embedding in main process
+      // Run ONNX face detection + embedding in main process.
+      //
+      // Reference photos MUST produce a 512-dim descriptor. Previously this block
+      // swallowed every failure (model not loaded, download failed, embedder not
+      // ready) and saved a descriptor-less photo silently — the user only saw a
+      // yellow ⚠ triangle with no way to tell a real "no face in this photo" from
+      // a broken model pipeline. We now distinguish the two:
+      //   • systemError → the pipeline could not run (fail LOUD: clean up the
+      //     uploaded object, report telemetry, return an error to the user).
+      //   • noFaceDetected → the pipeline ran fine but found no face (legitimate
+      //     per-photo outcome: save the photo, the ⚠ triangle is correct here).
       let faceDescriptor512: number[] | undefined;
       let detectionConfidence = params.detectionConfidence;
       let descriptorModel: string | undefined;
+      let faceSystemError: string | undefined;
 
       try {
         const onnxProcessor = FaceRecognitionOnnxProcessor.getInstance();
@@ -131,7 +143,7 @@ export function registerPresetFaceHandlers(): void {
             onnxStatus = onnxProcessor.getStatus();
             console.log(`[PresetFace IPC] ONNX lazy init result: detector=${onnxStatus.detectorLoaded}, embedder=${onnxStatus.embedderLoaded}`);
           } else {
-            console.warn(`[PresetFace IPC] ONNX lazy init failed, using legacy descriptor if provided`);
+            console.warn(`[PresetFace IPC] ONNX lazy init failed (face detector did not load)`);
           }
         }
 
@@ -139,22 +151,67 @@ export function registerPresetFaceHandlers(): void {
           // Detect + embed from buffer
           const onnxResult = await onnxProcessor.detectAndEmbedFromBuffer(buffer);
 
-          if (onnxResult.success && onnxResult.faces.length > 0) {
+          if (!onnxResult.success) {
+            // Pipeline error (Sharp decode, inference crash, …) — system fault.
+            faceSystemError = `Face detection failed: ${onnxResult.error || 'unknown error'}`;
+          } else if (onnxResult.faces.length === 0) {
+            // Genuine: the photo simply has no detectable face. Save it; the
+            // ⚠ triangle ("No face detected") is the correct, explicit signal.
+            console.log(`[PresetFace IPC] ONNX: No face detected in uploaded photo`);
+          } else {
             const face = onnxResult.faces[0]; // Reference photos should have 1 face
             if (face.embedding && face.embedding.length === 512) {
               faceDescriptor512 = face.embedding;
               detectionConfidence = face.detectionConfidence;
               descriptorModel = 'auraface-v1';
               console.log(`[PresetFace IPC] ONNX: Face detected (confidence: ${face.detectionConfidence.toFixed(3)}, embedding: 512-dim)`);
+            } else {
+              // A face WAS found but no 512-dim vector came back → the embedder
+              // is not actually working (e.g. AuraFace not loaded). System fault.
+              faceSystemError =
+                'Face embedding model produced no descriptor (AuraFace embedder not ready).';
             }
-          } else {
-            console.log(`[PresetFace IPC] ONNX: No face detected in uploaded photo`);
           }
         } else {
-          console.log(`[PresetFace IPC] ONNX still not ready after init attempt (detector: ${onnxStatus.detectorLoaded}, embedder: ${onnxStatus.embedderLoaded}), using legacy descriptor if provided`);
+          // Detector and/or embedder could not be loaded. Surface the concrete
+          // reason (typically the AuraFace download/load error) so the failure is
+          // diagnosable instead of a silent descriptor-less save.
+          const reason =
+            onnxProcessor.getEmbedderLoadError() ||
+            (!onnxStatus.detectorLoaded
+              ? 'face detector (YuNet) failed to load'
+              : 'face embedding model (AuraFace ~260MB) not available');
+          faceSystemError = `Face recognition model not available: ${reason}`;
+          console.error(
+            `[PresetFace IPC] ONNX not ready (detector=${onnxStatus.detectorLoaded}, embedder=${onnxStatus.embedderLoaded}): ${reason}`
+          );
         }
       } catch (onnxError) {
-        console.warn('[PresetFace IPC] ONNX detection failed, falling back to provided descriptor:', onnxError);
+        faceSystemError = `Face recognition error: ${(onnxError as Error).message}`;
+        console.error('[PresetFace IPC] ONNX detection threw:', onnxError);
+      }
+
+      // Fail LOUD on a real system fault, unless the caller supplied a legacy
+      // descriptor we can still fall back to. Do not persist a descriptor-less
+      // photo silently, and roll back the storage object we just uploaded so we
+      // don't leave an orphan. Also report telemetry so the same breakage on
+      // other users' machines surfaces as a (deduplicated) GitHub issue with
+      // their OS/arch/RAM — telling us exactly what's missing where.
+      if (faceSystemError && !params.faceDescriptor) {
+        errorTelemetryService.reportCriticalError({
+          errorType: 'onnx_model',
+          severity: 'recoverable',
+          error: new Error(faceSystemError),
+          batchPhase: 'preset_face_upload'
+        });
+
+        try {
+          await supabase.storage.from(STORAGE_BUCKET).remove([storagePath]);
+        } catch (cleanupErr) {
+          console.warn('[PresetFace IPC] Failed to clean up storage after face error:', cleanupErr);
+        }
+
+        return { success: false, error: faceSystemError };
       }
 
       // Save to database
