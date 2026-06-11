@@ -4,6 +4,13 @@
 
 ### 🐛 Fixes
 
+- **Backlog-autopilot workflows now use the real `error_reports` column names**: the
+  sweep and implement workflows queried PostgREST with columns that don't exist
+  (`occurrence_count`, `last_seen`, `user_count`…) instead of the real ones
+  (`total_occurrences`, `last_seen_at`, `affected_user_count`…), producing
+  recurring Postgres errors on every triage run. No schema change; no app impact.
+  (PR #195)
+
 - **Add a missing detection on a group photo from the review gallery**: the
   "+ Add detection" button was rendered **only** in the empty-state branch of
   the gallery's detection editor (`updateVehicleEditor`), so a photo that
