@@ -349,10 +349,10 @@ export const APP_CONFIG = {
   features: {
     // ADMIN FEATURE: Folder organization - Easy to remove by setting to false
     ENABLE_FOLDER_ORGANIZATION: true,  // Enable folder organization by race number (admin-only)
-    // FACE RECOGNITION: AuraFace v1 ONNX (512-dim cosine similarity)
-    // When true: uses YuNet + AuraFace in main process (no face-api.js / canvas)
-    // When false: face recognition disabled (Coming Soon state)
-    AURAFACE_ENABLED: true
+    // NOTE: face recognition is NOT gated here. The real switches are two DB flags:
+    //   • sport_categories.face_recognition_enabled  (per-category, main-process gate)
+    //   • per-user face_recognition_enabled via delivery-get-plan-limits (renderer/UI gate)
+    // The old config-level AURAFACE_ENABLED was dead (never read) and was removed.
   },
   // Face Recognition ONNX model configuration
   faceRecognition: {

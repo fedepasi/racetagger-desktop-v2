@@ -42,6 +42,9 @@ interface FaceRecognitionResult {
       driverName: string;
       teamName: string;
       raceNumber: string;
+      /** Provenance of the matched descriptor — drives FACE_MATCH evidence
+       *  weighting in SmartMatcher (global face DB vs per-preset upload). */
+      source?: 'global' | 'preset';
     };
     similarity: number;
     faceIndex: number;
@@ -730,8 +733,20 @@ class UnifiedImageWorker extends EventEmitter {
         this.faceRecognitionEnabled = false;
         return;
       }
-      // Ensure AuraFace embedder is loaded (may not have loaded during initialize if model was downloading)
-      await onnxProcessor.ensureEmbedderReady();
+      // Ensure AuraFace embedder is loaded (may not have loaded during initialize
+      // if the model was still downloading). FAIL CLEARLY if it can't load: without
+      // the embedder, detection still runs but every embedding is empty, producing
+      // zero matches with NO error — a silent failure. The app is online-required
+      // for analysis (offline policy), so a missing model = disable, not pretend.
+      const embedderReady = await onnxProcessor.ensureEmbedderReady();
+      if (!embedderReady) {
+        log.warn(
+          'Face recognition: AuraFace embedder not available (offline or model download failed) — ' +
+          'disabling face recognition for this run instead of returning silent zero-matches.'
+        );
+        this.faceRecognitionEnabled = false;
+        return;
+      }
       const onnxStatus = onnxProcessor.getStatus();
       log.info(`Face recognition: ONNX pipeline initialized (detector: ${onnxStatus.detectorLoaded}, embedder: ${onnxStatus.embedderLoaded})`);
 
@@ -879,7 +894,10 @@ class UnifiedImageWorker extends EventEmitter {
           driverId: pm.personId,
           driverName: pm.personName,
           teamName: pm.team,
-          raceNumber: pm.carNumber
+          raceNumber: pm.carNumber,
+          // Propagate provenance so the FACE_MATCH evidence downstream can tell
+          // a global-DB match from a per-preset one (was silently lost → always 'preset').
+          source: pm.source
         },
         similarity: pm.confidence,
         faceIndex: pm.faceIndex

@@ -20,7 +20,6 @@ import * as fs from 'fs';
 import { app } from 'electron';
 import sharp from 'sharp';
 import { createComponentLogger } from './utils/logger';
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { APP_CONFIG } from './config';
 
 const log = createComponentLogger('FaceEmbeddingService');
@@ -28,9 +27,12 @@ const log = createComponentLogger('FaceEmbeddingService');
 // ONNX Runtime - lazy loaded
 let ort: typeof import('onnxruntime-node') | null = null;
 
-// Supabase config for model download
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://fwoqfgeviftmkxivtpkg.supabase.co';
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
+/**
+ * Minimum plausible size of the AuraFace v1 ONNX (the real file is ~260MB).
+ * Anything smaller is a truncated / interrupted download and must be rejected
+ * rather than written to the final path (where it would become "sticky").
+ */
+const MIN_AURAFACE_BYTES = 200 * 1024 * 1024;
 
 // ============================================
 // Type Definitions
@@ -176,13 +178,20 @@ export class FaceEmbeddingService {
     }
 
     const localPath = path.join(cacheDir, AURAFACE_MODEL_FILENAME);
+    const tmpPath = `${localPath}.tmp`;
     const bucketName = APP_CONFIG.faceRecognition.modelStorageBucket;
     const storagePath = APP_CONFIG.faceRecognition.modelStoragePath + AURAFACE_MODEL_FILENAME;
 
     console.log(`[FaceEmbeddingService] Downloading AuraFace from bucket '${bucketName}' path '${storagePath}'...`);
 
-    // Get signed URL from Supabase Storage
-    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    // Use the app's shared Supabase client (authenticated session when available,
+    // otherwise the anon client built from SUPABASE_CONFIG). NEVER a hand-rolled
+    // client from process.env — that is empty in packaged builds (config comes
+    // from config.production.ts), so the old code fell back to the WRONG project
+    // and every production download failed.
+    const { getSupabaseClient } = await import('./database-service');
+    const supabase = getSupabaseClient();
+
     const { data: signedUrlData, error: signedUrlError } = await supabase.storage
       .from(bucketName)
       .createSignedUrl(storagePath, 3600); // 1 hour expiry
@@ -194,7 +203,6 @@ export class FaceEmbeddingService {
       );
     }
 
-    // Download with progress
     const response = await fetch(signedUrlData.signedUrl);
     if (!response.ok) {
       throw new Error(`[FaceEmbeddingService] Download failed: ${response.status} ${response.statusText}`);
@@ -209,28 +217,66 @@ export class FaceEmbeddingService {
       throw new Error('[FaceEmbeddingService] Failed to get response reader');
     }
 
-    const chunks: Uint8Array[] = [];
+    // Stream straight to a temp file. The model is ~260MB; buffering it all in
+    // RAM (old behaviour) peaked at ~500MB on an 8GB box. Writing to .tmp and
+    // only promoting to the final path after a size check makes the download
+    // atomic: an interrupted write can never leave a truncated "sticky" file.
+    if (fs.existsSync(tmpPath)) {
+      try { fs.unlinkSync(tmpPath); } catch { /* best-effort cleanup of stale tmp */ }
+    }
+    const writeStream = fs.createWriteStream(tmpPath);
     let downloadedBytes = 0;
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-      chunks.push(value);
-      downloadedBytes += value.length;
+        // Respect backpressure so we never queue the whole file in memory.
+        if (!writeStream.write(Buffer.from(value))) {
+          await new Promise<void>(resolve => writeStream.once('drain', resolve));
+        }
+        downloadedBytes += value.length;
 
-      if (onProgress && totalBytes > 0) {
-        const percent = Math.round((downloadedBytes / totalBytes) * 100);
-        const downloadedMB = downloadedBytes / (1024 * 1024);
-        onProgress(percent, downloadedMB, totalMB);
+        if (onProgress && totalBytes > 0) {
+          const percent = Math.round((downloadedBytes / totalBytes) * 100);
+          const downloadedMB = downloadedBytes / (1024 * 1024);
+          onProgress(percent, downloadedMB, totalMB);
+        }
       }
+      await new Promise<void>((resolve, reject) =>
+        writeStream.end((err?: Error | null) => (err ? reject(err) : resolve()))
+      );
+    } catch (streamErr) {
+      writeStream.destroy();
+      try { fs.unlinkSync(tmpPath); } catch { /* best-effort cleanup */ }
+      throw streamErr;
     }
 
-    // Write to disk
-    const fileBuffer = Buffer.concat(chunks.map(chunk => Buffer.from(chunk)));
-    fs.writeFileSync(localPath, fileBuffer);
+    // Integrity check on the temp file BEFORE promoting it. No checksum is
+    // published for AuraFace, so we reject an obviously-truncated file via a
+    // size floor and, when the server told us the size, require an exact match.
+    const writtenBytes = fs.statSync(tmpPath).size;
+    const sizeLooksValid =
+      writtenBytes >= MIN_AURAFACE_BYTES &&
+      (totalBytes === 0 || writtenBytes === totalBytes);
 
-    const finalSizeMB = (fileBuffer.length / (1024 * 1024)).toFixed(1);
+    if (!sizeLooksValid) {
+      try { fs.unlinkSync(tmpPath); } catch { /* best-effort cleanup */ }
+      throw new Error(
+        `[FaceEmbeddingService] AuraFace download incomplete: wrote ${writtenBytes} bytes` +
+        (totalBytes ? ` of ${totalBytes} expected` : '') + ' — discarded, will retry.'
+      );
+    }
+
+    // Promote atomically. Remove any existing file first — renameSync over an
+    // existing/in-use destination is unreliable on Windows.
+    if (fs.existsSync(localPath)) {
+      try { fs.unlinkSync(localPath); } catch { /* will surface on rename */ }
+    }
+    fs.renameSync(tmpPath, localPath);
+
+    const finalSizeMB = (writtenBytes / (1024 * 1024)).toFixed(1);
     console.log(`[FaceEmbeddingService] AuraFace downloaded: ${finalSizeMB}MB → ${localPath}`);
 
     return localPath;
@@ -252,9 +298,13 @@ export class FaceEmbeddingService {
       return this.session !== null;
     }
 
-    if (this.loadError) throw this.loadError;
-
+    // A previous failure must NOT permanently poison future attempts. The old
+    // `if (this.loadError) throw this.loadError` meant one bad load (e.g. a
+    // corrupt download) made every later call throw forever, with no recovery
+    // short of restarting the app. We keep loadError for diagnostics only and
+    // always allow a fresh attempt below.
     this.isLoading = true;
+    this.loadError = null;
 
     try {
       const ortReady = await this.initONNXRuntime();
@@ -290,7 +340,21 @@ export class FaceEmbeddingService {
         enableMemPattern: true,
       };
 
-      this.session = await ort.InferenceSession.create(resolvedPath, sessionOptions);
+      try {
+        this.session = await ort.InferenceSession.create(resolvedPath, sessionOptions);
+      } catch (createErr) {
+        // The on-disk model is unusable (corrupt / partially written). If it
+        // lives in our cache dir, delete it so the NEXT loadModel() re-downloads
+        // a clean copy instead of failing forever on the same bad file.
+        const cacheDir = path.normalize(this.getModelCacheDir());
+        if (resolvedPath && path.normalize(resolvedPath).startsWith(cacheDir)) {
+          try {
+            fs.unlinkSync(resolvedPath);
+            log.warn(`[FaceEmbeddingService] Deleted corrupt cached model at ${resolvedPath} — will re-download on next attempt`);
+          } catch { /* best-effort cleanup */ }
+        }
+        throw createErr;
+      }
 
       console.log(
         `[FaceEmbeddingService] AuraFace v1 loaded. ` +

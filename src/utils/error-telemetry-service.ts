@@ -32,6 +32,7 @@ export type ErrorType =
   | 'zero_results'
   | 'ghost_images'
   | 'memory'
+  | 'filesystem'
   | 'pdf_parser'
   | 'renderer_action'
   | 'uncaught';
