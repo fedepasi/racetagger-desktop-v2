@@ -14,6 +14,17 @@
   transfer-activity strip, timing-tower stats, segmented control). Both wired into `index.html`.
   CSS/JS only — no logic changes.
 
+- **Delivery page redesign — galleries + clients (Phase B)**: re-skins the Delivery landing on
+  the new "gallery is the unit of delivery" hierarchy. `delivery.html` gets a plain header
+  ("Delivery" / "Share race photos with your clients."), a single primary `dl-create-band`,
+  a galleries grid (`#galleries-grid`) with a 3-step empty state, and a compact, demoted Clients
+  panel. `delivery-manager.js` rewrites `renderGalleries()`/`renderProjects()` to the new
+  card markup — livery-stripe per status, JetBrains Mono stats (photos · views · downloads),
+  the public-URL slug, and honest chips (access type, HD ready/pending, client tag) all guarded
+  on real fields. Adds inline-SVG icons (`DL_ICONS`/`dlIcon`, since the renderer has no icon
+  font) and routes `alert()` → the canonical toast (`dlNotify`) on gallery/client create.
+  Markup + render-layer only — no IPC, token, or data-model changes.
+
 ## [1.1.10] - 2026-06-11
 
 ### 🎨 Brand

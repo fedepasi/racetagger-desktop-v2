@@ -1,12 +1,12 @@
 ﻿<div class="delivery-page" style="padding: 24px; max-width: 1200px;">
 
   <!-- Page Header (hidden when inside client detail) -->
-  <div id="delivery-page-header" style="margin-bottom: 32px;">
-    <h1 style="font-size: 24px; font-weight: 700; color: var(--text-primary); margin: 0 0 8px 0;">
-      📦 Delivery & Galleries
+  <div id="delivery-page-header" style="margin-bottom: 24px;">
+    <h1 style="font-size: 20px; font-weight: 600; letter-spacing: -0.3px; color: var(--text-primary); margin: 0 0 4px 0;">
+      Delivery
     </h1>
-    <p style="color: var(--text-muted); font-size: 14px; margin: 0;">
-      Manage your photo galleries and delivery rules for clients.
+    <p style="color: var(--text-muted); font-size: 13px; margin: 0;">
+      Share race photos with your clients.
     </p>
   </div>
 
@@ -129,34 +129,62 @@
   </div>
 
   <!-- Galleries Section -->
-  <div id="delivery-galleries-section" style="display: none; margin-bottom: 32px;">
-    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
-      <h2 style="font-size: 18px; font-weight: 600; color: var(--text-primary); margin: 0;">🖼️ Your Galleries</h2>
-      <button id="btn-create-gallery" style="background: var(--accent-primary); color: white; border: none; padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: opacity 0.2s;" onmouseenter="this.style.opacity='0.85'" onmouseleave="this.style.opacity='1'">
-        + New Gallery
+  <div id="delivery-galleries-section" style="display: none; margin-bottom: 28px;">
+
+    <!-- Primary action — one clear thing to do -->
+    <div class="dl-create-band" style="margin-bottom: 22px;">
+      <div class="dl-create-band__icon">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+      </div>
+      <div class="dl-create-band__text">
+        <div class="dl-create-band__title">Create a client gallery</div>
+        <div class="dl-create-band__sub">Turn an analyzed batch into a link clients browse by race number.</div>
+      </div>
+      <button id="btn-create-gallery" class="dl-btn dl-btn--primary">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        New gallery
       </button>
     </div>
-    <div id="galleries-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px;">
+
+    <!-- Section head (hidden until there are galleries) -->
+    <div id="delivery-galleries-head" class="dl-section-head" style="display: none;">
+      <div class="dl-section-head__left">
+        <span class="dl-section-head__title">Your galleries</span>
+        <span id="galleries-count" class="dl-section-head__count dl-num">0</span>
+      </div>
     </div>
-    <div id="galleries-empty" style="display: none; text-align: center; padding: 40px; color: var(--text-muted); font-size: 14px;">
-      No galleries yet. Create your first gallery to start sharing photos.
+
+    <div id="galleries-grid" class="dl-grid"></div>
+
+    <!-- Empty / first-run state -->
+    <div id="galleries-empty" class="dl-empty" style="display: none;">
+      <div class="dl-empty__icon">
+        <svg viewBox="0 0 24 24" width="27" height="27" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+      </div>
+      <div class="dl-empty__title">Create your first gallery</div>
+      <div class="dl-empty__sub">Turn an analyzed batch into one shareable link. Clients find their own photos by race number — no folders, no WeTransfer.</div>
+      <div class="dl-steps">
+        <div class="dl-step"><span class="dl-step__n dl-step__n--blue dl-num">1</span>Pick a batch</div>
+        <div class="dl-step"><span class="dl-step__n dl-step__n--amber dl-num">2</span>Set who can see it</div>
+        <div class="dl-step"><span class="dl-step__n dl-step__n--green dl-num">3</span>Share the link</div>
+      </div>
     </div>
   </div>
 
-  <!-- Clients Section (formerly "Projects") -->
-  <div id="delivery-projects-section" style="display: none; margin-bottom: 32px;">
-    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-      <h2 style="font-size: 18px; font-weight: 600; color: var(--text-primary); margin: 0;">👥 Clients</h2>
-      <button id="btn-create-project" style="background: var(--accent-primary); color: white; border: none; padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: opacity 0.2s;" onmouseenter="this.style.opacity='0.85'" onmouseleave="this.style.opacity='1'">
-        + New Client
+  <!-- Clients Section (optional grouping) -->
+  <div id="delivery-projects-section" style="display: none; margin-bottom: 28px; padding: 14px 16px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px;">
+    <div class="dl-section-head" style="margin-bottom: 11px;">
+      <div class="dl-section-head__left" style="flex-wrap: wrap;">
+        <span style="font-size: 13px; font-weight: 600; color: var(--text-primary);">Clients</span>
+        <span id="projects-count" class="dl-num" style="font-size: 12px; color: var(--text-muted);">0</span>
+        <span style="font-size: 11px; color: var(--text-muted);">· optional — group galleries by team or sponsor</span>
+      </div>
+      <button id="btn-create-project" class="dl-btn dl-btn--ghost dl-btn--sm">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        New client
       </button>
     </div>
-    <p style="color: var(--text-muted); font-size: 12px; margin: 0 0 12px; line-height: 1.4;">
-      Each client has their own galleries and delivery rules. Photos are auto-routed to the right gallery after each execution.
-    </p>
-
-    <div id="projects-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px;">
-    </div>
+    <div id="projects-grid" style="display: flex; gap: 9px; flex-wrap: wrap;"></div>
   </div>
 
   <!-- Client Detail (shown when client selected) -->

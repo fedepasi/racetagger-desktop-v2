@@ -10,6 +10,59 @@
   let projects = [];
   let selectedProjectId = null;
 
+  // ── Inline SVG icons (Tabler/Feather-style, MIT). The desktop renderer has no
+  //    icon font, so the brand-aligned UI uses these instead of emoji. ──────────
+  var DL_ICONS = {
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>',
+    clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    eye: '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/>',
+    download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/>',
+    globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 4 9 15 15 0 0 1-4 9 15 15 0 0 1-4-9 15 15 0 0 1 4-9z"/>',
+    lock: '<rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+    key: '<circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L20 3"/><path d="M16 7l3 3"/><path d="M14 9l2 2"/>',
+    check: '<path d="M5 12l5 5L20 7"/>',
+    arrowUp: '<path d="M12 19V5"/><path d="M6 11l6-6 6 6"/>',
+    briefcase: '<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><path d="M3 12h18"/>',
+    users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="8" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 4.13a4 4 0 0 1 0 7.75"/>',
+    x: '<path d="M18 6L6 18M6 6l12 12"/>',
+    copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+    refresh: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>',
+    trash: '<path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14"/>',
+    cloudUp: '<path d="M20 17.5a4.5 4.5 0 0 0-2-8.5h-1.3A7 7 0 1 0 5 16"/><path d="M12 12v9"/><path d="M8 16l4-4 4 4"/>',
+    link: '<path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/>',
+    eyeOff: '<path d="M17 17A10 10 0 0 1 12 19c-7 0-11-7-11-7a18 18 0 0 1 5-5"/><path d="M9.9 4.2A10 10 0 0 1 12 4c7 0 11 7 11 7a18 18 0 0 1-2.3 3.3"/><path d="M1 1l22 22"/>',
+  };
+
+  function dlIcon(name, size) {
+    var inner = DL_ICONS[name] || '';
+    var s = size || 16;
+    return '<svg viewBox="0 0 24 24" width="' + s + '" height="' + s + '" fill="none" stroke="currentColor" ' +
+      'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + inner + '</svg>';
+  }
+
+  // Rotating livery-stripe colours (the "each gallery has its own livery" motif)
+  var DL_STRIPES = ['blue', 'amber', 'green', 'purple'];
+  var DL_AVATAR = [
+    { bg: 'rgba(26,158,224,0.16)', fg: '#1a9ee0' },
+    { bg: 'rgba(167,139,250,0.16)', fg: '#a78bfa' },
+    { bg: 'rgba(16,185,129,0.16)', fg: '#10b981' },
+    { bg: 'rgba(245,158,11,0.16)', fg: '#f59e0b' },
+  ];
+
+  function dlInitials(name) {
+    var parts = String(name || '?').trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return '?';
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+
+  // Toast helper — uses the canonical global toast (toast.js), falls back to alert().
+  function dlNotify(message, type) {
+    if (typeof window.showToast === 'function') window.showToast(message, type);
+    else alert(message);
+  }
+
   // Init on page load
   window.addEventListener('page-loaded', async (e) => {
     if (e.detail && e.detail.page === 'delivery') {
@@ -106,73 +159,94 @@
   function renderGalleries() {
     const grid = document.getElementById('galleries-grid');
     const empty = document.getElementById('galleries-empty');
+    const countEl = document.getElementById('galleries-count');
+    const head = document.getElementById('delivery-galleries-head');
     if (!grid) return;
+
+    if (countEl) countEl.textContent = galleries.length;
 
     if (galleries.length === 0) {
       grid.innerHTML = '';
       if (empty) empty.style.display = 'block';
+      if (head) head.style.display = 'none';
       return;
     }
     if (empty) empty.style.display = 'none';
+    if (head) head.style.display = 'flex';
 
-    grid.innerHTML = galleries.map(function(g) {
-      var statusColor = g.status === 'published' ? '#10b981' : '#f59e0b';
-      var statusBg = g.status === 'published' ? 'rgba(16,185,129,0.2)' : 'rgba(245,158,11,0.2)';
-      return '<div class="delivery-card" data-id="' + g.id + '" style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 16px; transition: border-color 0.2s; cursor: pointer;">' +
-        '<div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">' +
-          '<h4 style="color: var(--text-primary); font-size: 14px; font-weight: 600; margin: 0;">' + escapeHtml(g.title) + '</h4>' +
-          '<span style="font-size: 10px; padding: 2px 8px; border-radius: 99px; background: ' + statusBg + '; color: ' + statusColor + ';">' + g.status + '</span>' +
-        '</div>' +
-        '<div style="display: flex; gap: 16px; color: var(--text-muted); font-size: 12px;">' +
-          '<span>👁 ' + (g.total_views || 0) + ' views</span>' +
-          '<span>⬇ ' + (g.total_downloads || 0) + ' downloads</span>' +
-        '</div>' +
-        '<div style="margin-top: 8px; color: var(--text-muted); font-size: 11px;">' +
-          (g.access_type === 'unrestricted' ? '🌐 Public' : '🔒 Code required') +
+    grid.innerHTML = galleries.map(function(g, i) {
+      var isLive = g.status === 'published';
+      var stripe = DL_STRIPES[i % DL_STRIPES.length];
+      var photoCount = g.image_count != null ? g.image_count
+        : (g.gallery_image_count != null ? g.gallery_image_count
+        : (g.photo_count != null ? g.photo_count : null));
+
+      // Honest chips: only render what the gallery object actually carries.
+      var chips = '';
+      chips += g.access_type === 'unrestricted'
+        ? '<span class="dl-chip dl-chip--neutral">' + dlIcon('globe', 13) + 'Public</span>'
+        : '<span class="dl-chip dl-chip--neutral">' + dlIcon('lock', 13) + 'Code</span>';
+      // HD status — render only when the gallery object exposes it (data wiring is Phase C).
+      if (g.original_upload_status === 'completed' || g.hd_status === 'completed') {
+        chips += '<span class="dl-chip dl-chip--green">' + dlIcon('check', 13) + 'HD ready</span>';
+      } else if (g.hd_pending != null && g.hd_total != null) {
+        chips += '<span class="dl-chip dl-chip--amber">' + dlIcon('arrowUp', 13) + 'HD <b class="dl-num" style="font-weight:700">' + g.hd_pending + '/' + g.hd_total + '</b></span>';
+      }
+      var clientName = g.client_name || g.project_name;
+      if (clientName) {
+        chips += '<span class="dl-chip dl-chip--neutral">' + dlIcon('briefcase', 13) + escapeHtml(clientName) + '</span>';
+      }
+
+      var statsHtml = '';
+      if (photoCount != null) {
+        statsHtml += '<span><b>' + photoCount + '</b> photos</span>';
+      }
+      statsHtml += '<span>' + dlIcon('eye', 13) + ' <b>' + (g.total_views || 0) + '</b></span>';
+      statsHtml += '<span>' + dlIcon('download', 13) + ' <b>' + (g.total_downloads || 0) + '</b></span>';
+
+      return '<div class="dl-card" data-id="' + g.id + '">' +
+        '<div class="dl-card__stripe dl-card__stripe--' + stripe + '"></div>' +
+        '<div class="dl-card__body">' +
+          '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:10px;">' +
+            '<h4 class="dl-card__title">' + escapeHtml(g.title) + '</h4>' +
+            '<span class="dl-pill ' + (isLive ? 'dl-pill--live' : 'dl-pill--draft') + '"><span class="dl-pill__dot"></span>' + (isLive ? 'Live' : 'Draft') + '</span>' +
+          '</div>' +
+          '<div class="dl-card__stats dl-num" style="margin-bottom:10px;">' + statsHtml + '</div>' +
+          (g.slug ? '<div class="dl-card__url dl-num" style="margin-bottom:11px;">photos.racetagger.cloud/' + escapeHtml(g.slug) + '</div>' : '') +
+          '<div style="display:flex;flex-wrap:wrap;gap:6px;">' + chips + '</div>' +
         '</div>' +
       '</div>';
     }).join('');
 
-    // Add hover effects and click handlers
-    grid.querySelectorAll('.delivery-card').forEach(function(card) {
-      card.addEventListener('mouseenter', function() { this.style.borderColor = 'var(--accent-primary)'; });
-      card.addEventListener('mouseleave', function() { this.style.borderColor = 'var(--border-color)'; });
+    grid.querySelectorAll('.dl-card').forEach(function(card) {
       card.addEventListener('click', function() { openGalleryDetail(this.dataset.id); });
     });
   }
 
   function renderProjects() {
     var grid = document.getElementById('projects-grid');
+    var countEl = document.getElementById('projects-count');
     if (!grid) return;
 
+    if (countEl) countEl.textContent = projects.length;
+
     if (projects.length === 0) {
-      grid.innerHTML = '<div style="color: var(--text-muted); font-size: 13px; padding: 20px; text-align: center;">No clients yet. Create one to start organizing multi-client delivery.</div>';
+      grid.innerHTML = '<div style="color: var(--text-muted); font-size: 12px;">No clients yet — add one to group galleries by team or sponsor.</div>';
       return;
     }
 
-    var clientTypeIcons = { team: '🏎️', sponsor: '💰', organizer: '🏟️', media: '📷', other: '📋' };
-
-    grid.innerHTML = projects.map(function(p) {
-      var typeIcon = clientTypeIcons[p.client_type] || '📋';
+    grid.innerHTML = projects.map(function(p, i) {
       var galCount = p.galleries ? p.galleries.length : 0;
-
-      return '<div class="project-card" data-id="' + p.id + '" style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 16px; cursor: pointer; transition: border-color 0.2s;">' +
-        '<div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">' +
-          '<h4 style="color: var(--text-primary); font-size: 14px; font-weight: 600; margin: 0;">' + typeIcon + ' ' + escapeHtml(p.name) + '</h4>' +
-        '</div>' +
-        (p.client_contact_email ? '<div style="color: var(--text-muted); font-size: 11px; margin-bottom: 4px;">✉ ' + escapeHtml(p.client_contact_email) + '</div>' : '') +
-        '<div style="display: flex; gap: 12px; color: var(--text-muted); font-size: 11px; margin-top: 6px;">' +
-          '<span>🖼 ' + galCount + ' galler' + (galCount !== 1 ? 'ies' : 'y') + '</span>' +
-          '<span style="text-transform: capitalize;">' + escapeHtml(p.client_type || 'team') + '</span>' +
-        '</div>' +
-      '</div>';
+      var av = DL_AVATAR[i % DL_AVATAR.length];
+      return '<span class="dl-client-chip" data-id="' + p.id + '">' +
+        '<span class="dl-client-chip__avatar" style="background:' + av.bg + ';color:' + av.fg + ';">' + escapeHtml(dlInitials(p.name)) + '</span>' +
+        '<span style="font-size:12px;color:var(--text-primary);">' + escapeHtml(p.name) + '</span>' +
+        '<span class="dl-num" style="font-size:11px;color:var(--text-muted);">' + galCount + '</span>' +
+      '</span>';
     }).join('');
 
-    // Bind click + hover on project cards
-    grid.querySelectorAll('.project-card').forEach(function(card) {
+    grid.querySelectorAll('.dl-client-chip').forEach(function(card) {
       card.addEventListener('click', function() { openProjectDetail(this.dataset.id); });
-      card.addEventListener('mouseenter', function() { this.style.borderColor = 'var(--accent-primary)'; });
-      card.addEventListener('mouseleave', function() { this.style.borderColor = 'var(--border-color)'; });
     });
   }
 
@@ -317,11 +391,12 @@
           if (selectedProjectId) {
             await openProjectDetail(selectedProjectId);
           }
+          dlNotify('Gallery "' + title + '" created.', 'success');
         } else {
-          alert('Error: ' + (result ? result.error : 'Unknown'));
+          dlNotify('Couldn\'t create the gallery: ' + (result ? result.error : 'unknown error'), 'error');
         }
       } catch (e) {
-        alert('Error creating gallery');
+        dlNotify('Couldn\'t create the gallery.', 'error');
       }
     });
 
@@ -354,11 +429,12 @@
           var selectEl = document.getElementById('input-project-client-type');
           if (selectEl) selectEl.value = 'team';
           await loadProjects();
+          dlNotify('Client "' + name + '" added.', 'success');
         } else {
-          alert('Error: ' + (result ? result.error : 'Unknown'));
+          dlNotify('Couldn\'t add the client: ' + (result ? result.error : 'unknown error'), 'error');
         }
       } catch (e) {
-        alert('Error creating client');
+        dlNotify('Couldn\'t add the client.', 'error');
       }
     });
 
