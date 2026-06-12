@@ -58,11 +58,14 @@
   white-space: nowrap;
 }
 .dl-btn svg { width: 15px; height: 15px; flex-shrink: 0; }
-.dl-btn--primary { background: var(--dl-blue); color: #fff; padding: 9px 16px; }
+/* Colours are pinned with !important + explicit values: the desktop loads two
+   conflicting :root themes (styles.css light vs desktop-theme.css dark) and the
+   buttons must stay readable regardless of which var wins in a given context. */
+.dl-btn--primary { background: #1a9ee0 !important; color: #fff !important; padding: 9px 16px; }
 .dl-btn--primary:hover { opacity: 0.9; }
 .dl-btn--ghost {
-  background: var(--bg-light, #243049);
-  color: var(--text-primary, #f1f4fa);
+  background: var(--bg-light, #243049) !important;
+  color: #f1f4fa !important;
   border-color: var(--border-light, #3a4666);
   padding: 8px 13px;
   font-weight: 500;
@@ -70,8 +73,8 @@
 }
 .dl-btn--ghost:hover { border-color: var(--dl-blue); }
 .dl-btn--danger {
-  background: rgba(239, 68, 68, 0.12);
-  color: var(--accent-danger, #ef4444);
+  background: rgba(239, 68, 68, 0.12) !important;
+  color: #ef4444 !important;
   border-color: rgba(239, 68, 68, 0.30);
   padding: 8px 13px;
   font-weight: 500;

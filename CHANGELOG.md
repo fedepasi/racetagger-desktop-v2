@@ -73,6 +73,14 @@
   match. Net result: the Delivery layer is emoji-free (bar the `✕` close glyph) with no deprecated
   colours. Display/markup only — no IPC, token, or data-model changes.
 
+- **Delivery page redesign — harden button colours (fix)**: pin the `dl-btn`
+  primary/ghost/danger background + text colours with explicit values and `!important`.
+  The desktop loads two conflicting `:root` themes (`styles.css` light vs `desktop-theme.css`
+  dark) and the previous buttons inherited colour through theme vars, so in some cascade
+  contexts the fill/contrast could drop out (black-on-dark, missing fill). Buttons now render
+  a solid `#1a9ee0` primary (white text), a readable dark ghost, and a red danger regardless
+  of which theme var wins. CSS only.
+
 ## [1.1.10] - 2026-06-11
 
 ### 🎨 Brand
