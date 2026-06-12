@@ -4,7 +4,8 @@ import * as path from 'path';
 
 // Definisci le estensioni supportate
 const RAW_EXTENSIONS = ['.nef', '.arw', '.cr2', '.cr3', '.orf', '.raw', '.rw2', '.dng'];
-const STANDARD_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp'];
+// PNG excluded from import (2026-06-12) — see main.ts STANDARD_EXTENSIONS
+const STANDARD_EXTENSIONS = ['.jpg', '.jpeg', '.webp'];
 const ALL_SUPPORTED_EXTENSIONS = [...STANDARD_EXTENSIONS, ...RAW_EXTENSIONS];
 
 export function setupFolderSelectHandlers(mainWindow: BrowserWindow | null) {

@@ -8,13 +8,13 @@ class EnhancedFileBrowser {
     this.selectedFiles = [];
     this.selectedFileObjects = [];
     this.activeFilter = 'all';
-    this.supportedFormats = ['jpg', 'jpeg', 'png', 'webp', 'nef', 'arw', 'cr2', 'cr3', 'orf', 'raw', 'rw2', 'dng'];
+    // PNG excluded from import (2026-06-12) — see main.ts STANDARD_EXTENSIONS
+    this.supportedFormats = ['jpg', 'jpeg', 'webp', 'nef', 'arw', 'cr2', 'cr3', 'orf', 'raw', 'rw2', 'dng'];
 
     this.fileTypeFilters = [
       { id: 'all', label: 'All Files', icon: '📁' },
       { id: 'jpg', label: 'JPEG', icon: '🖼️' },
-      { id: 'raw', label: 'RAW', icon: '📸' },
-      { id: 'png', label: 'PNG', icon: '🎨' }
+      { id: 'raw', label: 'RAW', icon: '📸' }
     ];
 
     // Preset state lives in window.presetController — single source of truth.
@@ -75,7 +75,6 @@ class EnhancedFileBrowser {
           <div class="formats-label">Supported Formats</div>
           <div class="format-tags">
             <span class="format-tag">JPG</span>
-            <span class="format-tag">PNG</span>
             <span class="format-tag">WebP</span>
             <span class="format-tag">NEF</span>
             <span class="format-tag">CR2</span>
@@ -775,7 +774,6 @@ class EnhancedFileBrowser {
         switch (this.activeFilter) {
           case 'jpg': return ['jpg', 'jpeg'].includes(file.extension);
           case 'raw': return file.isRaw;
-          case 'png': return file.extension === 'png';
           default: return true;
         }
       });
