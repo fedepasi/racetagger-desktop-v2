@@ -520,7 +520,7 @@
     var isActive = document.getElementById('input-rule-active').checked;
 
     if (!name || !galleryId) {
-      alert('Rule name and target gallery are required');
+      dlNotify('Rule name and target gallery are required', 'warning');
       return;
     }
 
@@ -567,10 +567,10 @@
           openProjectDetail(selectedProjectId);
         }
       } else {
-        alert('Error: ' + (result ? result.error : 'Unknown'));
+        dlNotify('Error: ' + (result ? result.error : 'Unknown'), 'error');
       }
     }).catch(function(e) {
-      alert('Error saving rule');
+      dlNotify('Error saving rule', 'error');
       console.error('[Delivery] Rule save error:', e);
     });
   }
@@ -726,10 +726,10 @@
           openGalleryDetail(galleryId);
         }
       } else {
-        alert('Error updating gallery: ' + (result ? result.error : 'Unknown'));
+        dlNotify('Error updating gallery: ' + (result ? result.error : 'Unknown'), 'error');
       }
     } catch (e) {
-      alert('Error updating gallery: ' + (e.message || e));
+      dlNotify('Error updating gallery: ' + (e.message || e), 'error');
       console.error('[Delivery] Update error:', e);
     }
   }
@@ -744,21 +744,21 @@
           hideModal('modal-gallery-detail');
           loadGalleries();
         } else {
-          alert('Error: ' + (result ? result.error : 'Unknown'));
+          dlNotify('Error: ' + (result ? result.error : 'Unknown'), 'error');
         }
       }).catch(function(e) {
-        alert('Error deleting gallery');
+        dlNotify('Error deleting gallery', 'error');
         console.error('[Delivery] Delete error:', e);
       });
     } catch (e) {
-      alert('Error deleting gallery');
+      dlNotify('Error deleting gallery', 'error');
       console.error('[Delivery] Delete error:', e);
     }
   }
 
   function sendExecutionToGallery(galleryId, executionId) {
     if (!executionId) {
-      alert('Please select an execution');
+      dlNotify('Please select an execution', 'warning');
       return;
     }
 
@@ -782,16 +782,16 @@
           // Refresh the linked executions list
           loadGalleryLinkedExecutions(galleryId);
         } else {
-          alert('Error: ' + (result ? result.error : 'Unknown'));
+          dlNotify('Error: ' + (result ? result.error : 'Unknown'), 'error');
         }
       }).catch(function(e) {
-        alert('Error sending images');
+        dlNotify('Error sending images', 'error');
         console.error('[Delivery] Send error:', e);
       }).finally(function() {
         if (btnAdd) { btnAdd.disabled = false; btnAdd.textContent = 'Add'; }
       });
     } catch (e) {
-      alert('Error sending images');
+      dlNotify('Error sending images', 'error');
       console.error('[Delivery] Send error:', e);
       if (btnAdd) { btnAdd.disabled = false; btnAdd.textContent = 'Add'; }
     }
@@ -912,11 +912,11 @@
       if (result && result.success) {
         if (selectedProjectId) openProjectDetail(selectedProjectId);
       } else {
-        alert('Error: ' + (result ? result.error : 'Unknown'));
+        dlNotify('Error: ' + (result ? result.error : 'Unknown'), 'error');
       }
     } catch (e) {
       console.error('[Delivery] Toggle rule error:', e);
-      alert('Error toggling rule');
+      dlNotify('Error toggling rule', 'error');
     }
   }
 
@@ -962,11 +962,11 @@
       if (result && result.success) {
         if (selectedProjectId) openProjectDetail(selectedProjectId);
       } else {
-        alert('Error: ' + (result ? result.error : 'Unknown'));
+        dlNotify('Error: ' + (result ? result.error : 'Unknown'), 'error');
       }
     } catch (e) {
       console.error('[Delivery] Delete rule error:', e);
-      alert('Error deleting rule');
+      dlNotify('Error deleting rule', 'error');
     }
   }
 
@@ -1053,10 +1053,10 @@
             var g = galleries.find(function(x) { return x.id === galleryId; });
             if (g) g.access_type = newAccess;
           } else {
-            alert('Error updating access: ' + (result ? result.error : 'Unknown'));
+            dlNotify('Error updating access: ' + (result ? result.error : 'Unknown'), 'error');
           }
         } catch (e) {
-          alert('Error updating access type');
+          dlNotify('Error updating access type', 'error');
           console.error('[Delivery] Access type update error:', e);
         }
       });
@@ -1147,7 +1147,7 @@
     // Check at least one interest is selected
     var hasAny = Object.values(interests).some(function(v) { return v; });
     if (!hasAny && !workflow && !comment) {
-      alert('Please select at least one option or leave a comment.');
+      dlNotify('Please select at least one option or leave a comment.', 'warning');
       return;
     }
 
@@ -1170,14 +1170,14 @@
         document.getElementById('survey-form').style.display = 'none';
         document.getElementById('survey-submitted').style.display = 'block';
       } else {
-        alert('Error submitting. Please try again.');
+        dlNotify('Error submitting. Please try again.', 'error');
         if (btnSubmit) {
           btnSubmit.disabled = false;
           btnSubmit.textContent = 'Submit feedback';
         }
       }
     } catch (e) {
-      alert('Error submitting. Please try again.');
+      dlNotify('Error submitting. Please try again.', 'error');
       console.error('[Delivery] Survey submission error:', e);
       if (btnSubmit) {
         btnSubmit.disabled = false;
@@ -1237,11 +1237,11 @@
         hideModal('modal-link-gallery');
         await openProjectDetail(selectedProjectId);
       } else {
-        alert('Error linking gallery: ' + (result ? result.error : 'Unknown'));
+        dlNotify('Error linking gallery: ' + (result ? result.error : 'Unknown'), 'error');
       }
     } catch (e) {
       console.error('[Delivery] Link gallery error:', e);
-      alert('Error linking gallery');
+      dlNotify('Error linking gallery', 'error');
     }
   }
 
@@ -1300,7 +1300,7 @@
 
     var newSlug = slugInput.value.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
     if (!newSlug) {
-      alert('Please enter a valid slug');
+      dlNotify('Please enter a valid slug', 'warning');
       return;
     }
 
@@ -1317,11 +1317,11 @@
         }
         exitSlugEditMode();
       } else {
-        alert('Error saving slug: ' + (result ? result.error : 'Unknown'));
+        dlNotify('Error saving slug: ' + (result ? result.error : 'Unknown'), 'error');
       }
     } catch (e) {
       console.error('[Delivery] Slug save error:', e);
-      alert('Error saving shareable link');
+      dlNotify('Error saving shareable link', 'error');
     }
   }
 
@@ -1416,7 +1416,7 @@
               var self = this;
               setTimeout(function() { self.textContent = '✉️'; }, 2000);
             } else {
-              alert('Error resending invite: ' + (result ? result.error : 'Unknown'));
+              dlNotify('Error resending invite: ' + (result ? result.error : 'Unknown'), 'error');
             }
           } catch (e) { console.error('[Delivery] Resend invite error:', e); }
         });
@@ -1453,13 +1453,13 @@
     var email = document.getElementById('input-client-email').value.trim();
 
     if (!displayName || !email) {
-      alert('Name and email are required.');
+      dlNotify('Name and email are required.', 'warning');
       return;
     }
 
     // Basic email validation
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      alert('Please enter a valid email address.');
+      dlNotify('Please enter a valid email address.', 'warning');
       return;
     }
 
@@ -1497,14 +1497,14 @@
       } else {
         var errorMsg = result ? result.error : 'Unknown error';
         if (errorMsg.includes('duplicate') || errorMsg.includes('unique')) {
-          alert('This email has already been invited for this client.');
+          dlNotify('This email has already been invited for this client.', 'warning');
         } else {
-          alert('Error: ' + errorMsg);
+          dlNotify('Error: ' + errorMsg, 'error');
         }
       }
     } catch (e) {
       console.error('[Delivery] Invite client user error:', e);
-      alert('Error sending invitation');
+      dlNotify('Error sending invitation', 'error');
     }
   }
 
@@ -1578,7 +1578,7 @@
             window.dispatchEvent(new CustomEvent('page-loaded', { detail: { page: 'delivery' } }));
           }
         } else if (error) {
-          alert(error);
+          dlNotify(error, 'error');
           if (btn) {
             btn.disabled = false;
             btn.textContent = '☁️ Retry HD Upload';
@@ -1593,7 +1593,7 @@
           }
         }
       } else {
-        alert('Upload failed: ' + (result ? result.error : 'Unknown error'));
+        dlNotify('Upload failed: ' + (result ? result.error : 'Unknown error'), 'error');
         if (btn) {
           btn.disabled = false;
           btn.textContent = '☁️ Retry HD Upload';
@@ -1603,7 +1603,7 @@
       }
     } catch (e) {
       console.error('[Delivery] retryHDUpload error:', e);
-      alert('HD Upload error: ' + (e.message || e));
+      dlNotify('HD Upload error: ' + (e.message || e), 'error');
       if (btn) {
         btn.disabled = false;
         btn.textContent = '☁️ Retry HD Upload';
@@ -1729,7 +1729,7 @@
       var result = await window.api.invoke('delivery-r2-upload-start', executionId);
       if (result && result.success && result.data) {
         if (result.data.error) {
-          alert('R2 Upload: ' + result.data.error);
+          dlNotify('R2 Upload: ' + result.data.error, 'error');
         } else {
           console.log('[R2] Retry queued: ' + (result.data.queued || 0) + ' images');
         }
@@ -1737,7 +1737,7 @@
       // Refresh the status display after a short delay
       setTimeout(loadR2ExecutionStatus, 1500);
     } catch (e) {
-      alert('Retry failed: ' + (e.message || e));
+      dlNotify('Retry failed: ' + (e.message || e), 'error');
     }
   };
 
@@ -1750,7 +1750,7 @@
         await loadR2ExecutionStatus();
       }
     } catch (e) {
-      alert('Reset failed: ' + (e.message || e));
+      dlNotify('Reset failed: ' + (e.message || e), 'error');
     }
   };
 
@@ -1771,7 +1771,7 @@
 
       console.log('[R2] Source folder updated to: ' + data.sourceFolder);
     } catch (e) {
-      alert('Failed to update folder: ' + (e.message || e));
+      dlNotify('Failed to update folder: ' + (e.message || e), 'error');
     }
   };
 

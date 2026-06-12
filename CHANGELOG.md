@@ -53,6 +53,14 @@
   only — upload logic untouched. (Full demotion to a collapsible transfer-activity fold is
   deferred — it would require reworking the section's show/hide logic.)
 
+- **Delivery page redesign — native alerts → canonical toast (Phase D, part 3)**: routes all
+  40 native `alert()` notifications on the Delivery page through the brand toast (`dlNotify` →
+  `window.showToast`), typed by intent — 33 errors (red) and 7 validation prompts (amber).
+  No more blocking OS dialogs for delivery errors/validation; the canonical fallback to
+  `alert()` inside `dlNotify` is preserved for environments without the toast. Native
+  `confirm()` prompts (destructive yes/no) are intentionally left as-is. Display/UX only —
+  no IPC, token, or data-model changes.
+
 ## [1.1.10] - 2026-06-11
 
 ### 🎨 Brand
