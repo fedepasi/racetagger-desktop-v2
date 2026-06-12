@@ -149,8 +149,8 @@
     var stats = document.getElementById('upload-active-stats');
     if (stats) {
       stats.innerHTML =
-        '<span>📁 ' + p.completed + ' / ' + p.total + ' files</span>' +
-        (p.failed > 0 ? '<span style="color: #ef4444;">⚠ ' + p.failed + ' failed</span>' : '');
+        '<span>' + p.completed + ' / ' + p.total + ' files</span>' +
+        (p.failed > 0 ? '<span style="color: #ef4444;">' + p.failed + ' failed</span>' : '');
     }
 
     var meta = document.getElementById('upload-active-meta');
@@ -230,8 +230,8 @@
 
       var badgeClass = isFailed ? 'failed' : 'completed';
       var badgeText = isFailed
-        ? '⚠ ' + item.failed + ' Failed'
-        : '✓ Complete';
+        ? item.failed + ' failed'
+        : 'Complete';
       var badgeBg = isFailed
         ? 'rgba(239, 68, 68, 0.15)'
         : 'rgba(16, 185, 129, 0.15)';
@@ -247,7 +247,7 @@
         '</div>' +
         '<div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">' + timeAgo + '</div>' +
         '<div style="display: flex; gap: 16px; font-size: 11px; color: var(--text-muted);">' +
-          '<span>📁 ' + item.completed + ' / ' + item.total + ' files</span>' +
+          '<span>' + item.completed + ' / ' + item.total + ' files</span>' +
           (isFailed ? '<span style="color: #ef4444;">' + item.failed + ' files failed</span>' : '') +
         '</div>' +
       '</div>';

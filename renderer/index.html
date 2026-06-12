@@ -34,6 +34,9 @@
   <!-- Feedback Modal -->
   <link rel="stylesheet" href="css/feedback-modal.css">
 
+  <!-- Delivery Page (brand-aligned redesign) -->
+  <link rel="stylesheet" href="css/delivery.css">
+
   <!-- Router Page Container Styles -->
   <style>
     .page-container {
@@ -311,6 +314,9 @@
   <!-- Navigo Router -->
   <script src="js/vendor/navigo.min.js"></script>
   <script src="js/router.js"></script>
+
+  <!-- Canonical app-wide toast (window.showToast) — load early so every module can call it -->
+  <script src="js/toast.js"></script>
 
   <!-- Preset Controller — single source of truth for participant-preset state.
        MUST load before last-analysis-settings.js, renderer.js and enhanced-file-browser.js. -->

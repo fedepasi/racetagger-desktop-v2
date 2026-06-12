@@ -2,6 +2,85 @@
 
 ## [Unreleased]
 
+### 🎨 Brand
+
+- **Delivery page redesign — foundation (Phase A)**: introduces a canonical app-wide toast
+  (`renderer/js/toast.js`, `window.showToast`) — flat and brand-aligned (`#1a9ee0` + the
+  four-colour functional palette), stacks top-right, dismiss-on-click, auto-dismiss. Replaces
+  the gradient toast that was trapped inside `results-delivery.js`'s IIFE, so callers that
+  check `typeof showToast === 'function'` (`settings.js`, `preset-face-manager.js`) now resolve
+  it. Adds `renderer/css/delivery.css` with the redesign's component foundation (livery-stripe
+  cards, mono+tnum numbers, status pills, chips, primary create-band, empty/first-run state,
+  transfer-activity strip, timing-tower stats, segmented control). Both wired into `index.html`.
+  CSS/JS only — no logic changes.
+
+- **Delivery page redesign — galleries + clients (Phase B)**: re-skins the Delivery landing on
+  the new "gallery is the unit of delivery" hierarchy. `delivery.html` gets a plain header
+  ("Delivery" / "Share race photos with your clients."), a single primary `dl-create-band`,
+  a galleries grid (`#galleries-grid`) with a 3-step empty state, and a compact, demoted Clients
+  panel. `delivery-manager.js` rewrites `renderGalleries()`/`renderProjects()` to the new
+  card markup — livery-stripe per status, JetBrains Mono stats (photos · views · downloads),
+  the public-URL slug, and honest chips (access type, HD ready/pending, client tag) all guarded
+  on real fields. Adds inline-SVG icons (`DL_ICONS`/`dlIcon`, since the renderer has no icon
+  font) and routes `alert()` → the canonical toast (`dlNotify`) on gallery/client create.
+  Markup + render-layer only — no IPC, token, or data-model changes.
+
+- **Delivery page redesign — modals + gallery detail (Phase C)**: brings the six Delivery
+  modals onto the redesign system. Action buttons across create-gallery, create-client,
+  invite-user, link-gallery, create-rule and gallery-detail now use the `dl-btn`
+  primary/ghost/danger classes (flat, `#1a9ee0`); decorative emoji are removed from modal
+  headers and the access-type `<select>` options; and the gallery-detail Statistics block
+  becomes a "timing-tower" stat strip (`dl-stat-tower`, JetBrains Mono views/downloads in
+  blue/green). Modal titles/buttons move to sentence case — including the JS-driven
+  create/edit Rule strings (`delivery-manager.js`). All element IDs preserved; markup +
+  display-string only — no IPC, token, or data-model changes.
+
+- **Delivery page redesign — client detail, survey & banner (Phase D, part 1)**: brings the
+  remaining static Delivery surfaces onto the system. The interest survey swaps its 🙏/📦 hero
+  emoji for brand icon-wells (blue image / green check) and its fake-gradient submit for a flat
+  `dl-btn--primary` ("Submit feedback"). The client-detail view drops the 🖼️/🔗/🔐/🔀 header
+  emoji for plain section heads and moves its action buttons to `dl-btn--ghost` (with a `+`
+  glyph). The post-execution routing banner loses its 🔀 for a green check, fixes a malformed
+  `margin: 0 0: 12px`, and flattens its CTA. Two deprecated cyan `#06b6d4` accents (the
+  FROM-PRESET tag, the gallery-link hover) collapse to `#1a9ee0`. Markup + display-string only.
+
+- **Delivery page redesign — HD uploads (Phase D, part 2)**: cleans up the HD-uploads block.
+  The ☁️/⟳/📦 emoji are dropped from the section header, the in-flight pill, and the empty
+  state; the active-upload card's leftover deprecated blue (`rgba(59,130,246,…)` = `#3b82f6`)
+  is corrected to `#1a9ee0` and its fake-gradient progress bar flattened to a solid fill. In
+  `upload-monitor.js`, the JS-rendered active stats and history cards drop their 📁/⚠/✓ emoji
+  (status now reads "Complete" / "N failed" in the existing green/red). Markup + display-string
+  only — upload logic untouched. (Full demotion to a collapsible transfer-activity fold is
+  deferred — it would require reworking the section's show/hide logic.)
+
+- **Delivery page redesign — native alerts → canonical toast (Phase D, part 3)**: routes all
+  40 native `alert()` notifications on the Delivery page through the brand toast (`dlNotify` →
+  `window.showToast`), typed by intent — 33 errors (red) and 7 validation prompts (amber).
+  No more blocking OS dialogs for delivery errors/validation; the canonical fallback to
+  `alert()` inside `dlNotify` is preserved for environments without the toast. Native
+  `confirm()` prompts (destructive yes/no) are intentionally left as-is. Display/UX only —
+  no IPC, token, or data-model changes.
+
+- **Delivery page redesign — de-emoji + colour-normalize rendered content (Phase D, part 4)**:
+  finishes the brand pass on the JS-rendered Delivery surfaces. Every remaining emoji in
+  `delivery-manager.js` is replaced — status/label prefixes (☁️/⏳/✓/✗/⚠/○/📷/📁/📂) are dropped,
+  and the icon-only action buttons (resend ✉️, enable/disable ⏸/▶, delete 🗑, edit ✏️, copy 📋/✅)
+  now render inline SVGs via the `dlIcon` helper (new `mail`/`pause`/`play`/`folder`/`edit`
+  glyphs added). The R2 execution-status panel and rule criteria-tags are colour-normalized off
+  their pre-brand hues (`#3b82f6`/`#60a5fa`/`#22c55e`/`#4ade80` and the `rgba(6,182,212)` cyan)
+  onto the four-colour system (`#1a9ee0`/`#10b981`/`#f59e0b`/`#ef4444`); the routing-banner text,
+  deliver-button states and the static copy/edit/refresh icons in `delivery.html` are cleaned to
+  match. Net result: the Delivery layer is emoji-free (bar the `✕` close glyph) with no deprecated
+  colours. Display/markup only — no IPC, token, or data-model changes.
+
+- **Delivery page redesign — harden button colours (fix)**: pin the `dl-btn`
+  primary/ghost/danger background + text colours with explicit values and `!important`.
+  The desktop loads two conflicting `:root` themes (`styles.css` light vs `desktop-theme.css`
+  dark) and the previous buttons inherited colour through theme vars, so in some cascade
+  contexts the fill/contrast could drop out (black-on-dark, missing fill). Buttons now render
+  a solid `#1a9ee0` primary (white text), a readable dark ghost, and a red danger regardless
+  of which theme var wins. CSS only.
+
 ## [1.1.10] - 2026-06-11
 
 ### 🎨 Brand
