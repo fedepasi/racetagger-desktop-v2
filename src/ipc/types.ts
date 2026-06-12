@@ -149,7 +149,8 @@ export interface UpsertPresetParticipantParams {
 // ==================== File Extensions ====================
 
 export const RAW_EXTENSIONS = ['.nef', '.arw', '.cr2', '.cr3', '.orf', '.raw', '.rw2', '.dng'];
-export const STANDARD_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp'];
+// PNG excluded from import (2026-06-12) — see main.ts STANDARD_EXTENSIONS
+export const STANDARD_EXTENSIONS = ['.jpg', '.jpeg', '.webp'];
 export const ALL_SUPPORTED_EXTENSIONS = [...STANDARD_EXTENSIONS, ...RAW_EXTENSIONS];
 
 // ==================== Support Feedback System ====================

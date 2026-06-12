@@ -677,7 +677,7 @@ async function handleFilesSelection() {
       properties: ['openFile', 'multiSelections'],
       title: 'Select image files (the entire folder will be analyzed)',
       filters: [
-        { name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp', 'nef', 'arw', 'cr2', 'cr3', 'orf', 'raw', 'rw2', 'dng'] },
+        { name: 'Images', extensions: ['jpg', 'jpeg', 'webp', 'nef', 'arw', 'cr2', 'cr3', 'orf', 'raw', 'rw2', 'dng'] },
         { name: 'All Files', extensions: ['*'] }
       ]
     });
