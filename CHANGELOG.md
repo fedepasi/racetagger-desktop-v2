@@ -61,6 +61,18 @@
   `confirm()` prompts (destructive yes/no) are intentionally left as-is. Display/UX only —
   no IPC, token, or data-model changes.
 
+- **Delivery page redesign — de-emoji + colour-normalize rendered content (Phase D, part 4)**:
+  finishes the brand pass on the JS-rendered Delivery surfaces. Every remaining emoji in
+  `delivery-manager.js` is replaced — status/label prefixes (☁️/⏳/✓/✗/⚠/○/📷/📁/📂) are dropped,
+  and the icon-only action buttons (resend ✉️, enable/disable ⏸/▶, delete 🗑, edit ✏️, copy 📋/✅)
+  now render inline SVGs via the `dlIcon` helper (new `mail`/`pause`/`play`/`folder`/`edit`
+  glyphs added). The R2 execution-status panel and rule criteria-tags are colour-normalized off
+  their pre-brand hues (`#3b82f6`/`#60a5fa`/`#22c55e`/`#4ade80` and the `rgba(6,182,212)` cyan)
+  onto the four-colour system (`#1a9ee0`/`#10b981`/`#f59e0b`/`#ef4444`); the routing-banner text,
+  deliver-button states and the static copy/edit/refresh icons in `delivery.html` are cleaned to
+  match. Net result: the Delivery layer is emoji-free (bar the `✕` close glyph) with no deprecated
+  colours. Display/markup only — no IPC, token, or data-model changes.
+
 ## [1.1.10] - 2026-06-11
 
 ### 🎨 Brand

@@ -32,6 +32,11 @@
     cloudUp: '<path d="M20 17.5a4.5 4.5 0 0 0-2-8.5h-1.3A7 7 0 1 0 5 16"/><path d="M12 12v9"/><path d="M8 16l4-4 4 4"/>',
     link: '<path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/>',
     eyeOff: '<path d="M17 17A10 10 0 0 1 12 19c-7 0-11-7-11-7a18 18 0 0 1 5-5"/><path d="M9.9 4.2A10 10 0 0 1 12 4c7 0 11 7 11 7a18 18 0 0 1-2.3 3.3"/><path d="M1 1l22 22"/>',
+    mail: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 7l-10 5L2 7"/>',
+    pause: '<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>',
+    play: '<path d="M6 4l14 8-14 8z"/>',
+    folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+    edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
   };
 
   function dlIcon(name, size) {
@@ -670,11 +675,11 @@
               '<div style="color: var(--text-primary); font-size: 12px; font-weight: 600;">' + escapeHtml(exec.name || 'Execution') + '</div>' +
               '<div style="color: var(--text-muted); font-size: 10px;">' + date + ' • ' + (exec.gallery_image_count || 0) + ' photos in gallery</div>' +
             '</div>' +
-            '<span style="color: #10b981; font-size: 10px; font-weight: 600;">✓ Added</span>' +
+            '<span style="color: #10b981; font-size: 10px; font-weight: 600;">Added</span>' +
           '</div>' +
           '<div style="margin-top: 6px; display: flex; gap: 6px;">' +
-            '<button onclick="retryHDUpload(\'' + exec.id + '\')" style="flex: 1; background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-secondary); padding: 4px 8px; border-radius: 6px; font-size: 10px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.borderColor=\'#06b6d4\';this.style.color=\'#06b6d4\'" onmouseout="this.style.borderColor=\'var(--border-color)\';this.style.color=\'var(--text-secondary)\'">' +
-              '☁️ Retry HD Upload' +
+            '<button onclick="retryHDUpload(\'' + exec.id + '\')" style="flex: 1; background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-secondary); padding: 4px 8px; border-radius: 6px; font-size: 10px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.borderColor=\'#1a9ee0\';this.style.color=\'#1a9ee0\'" onmouseout="this.style.borderColor=\'var(--border-color)\';this.style.color=\'var(--text-secondary)\'">' +
+              'Retry HD upload' +
             '</button>' +
           '</div>' +
         '</div>';
@@ -825,7 +830,7 @@
       }
       if (mc.numbers && mc.numbers.length) {
         criteriaTags += mc.numbers.map(function(n) {
-          return '<span style="display: inline-block; font-size: 10px; padding: 2px 6px; border-radius: 4px; background: rgba(59,130,246,0.15); color: #60a5fa; margin-right: 4px;"># ' + escapeHtml(n) + '</span>';
+          return '<span style="display: inline-block; font-size: 10px; padding: 2px 6px; border-radius: 4px; background: rgba(26,158,224,0.15); color: #1a9ee0; margin-right: 4px;"># ' + escapeHtml(n) + '</span>';
         }).join('');
       }
       if (mc.participants && mc.participants.length) {
@@ -839,7 +844,7 @@
 
       // Source badge for auto-generated rules
       var sourceBadge = isAuto
-        ? '<span style="font-size: 9px; padding: 2px 6px; border-radius: 99px; background: rgba(6,182,212,0.15); color: #06b6d4; font-weight: 600; margin-left: 4px;">FROM PRESET</span>'
+        ? '<span style="font-size: 9px; padding: 2px 6px; border-radius: 99px; background: rgba(26,158,224,0.15); color: #1a9ee0; font-weight: 600; margin-left: 4px;">FROM PRESET</span>'
         : '';
 
       // Action buttons: auto-generated rules only get toggle, manual rules get all actions
@@ -847,15 +852,15 @@
       if (isAuto) {
         // Read-only: only toggle on/off allowed
         actionButtons =
-          '<button class="rule-toggle-btn" data-rule-id="' + r.id + '" data-active="' + (r.is_active ? '1' : '0') + '" title="' + (r.is_active ? 'Disable rule' : 'Enable rule') + '" style="background: none; border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: var(--text-muted); font-size: 12px; transition: color 0.2s, border-color 0.2s;">' + (r.is_active ? '⏸' : '▶') + '</button>';
+          '<button class="rule-toggle-btn" data-rule-id="' + r.id + '" data-active="' + (r.is_active ? '1' : '0') + '" title="' + (r.is_active ? 'Disable rule' : 'Enable rule') + '" style="background: none; border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: var(--text-muted); font-size: 12px; transition: color 0.2s, border-color 0.2s;">' + (r.is_active ? dlIcon('pause', 13) : dlIcon('play', 13)) + '</button>';
       } else {
         actionButtons =
-          '<button class="rule-toggle-btn" data-rule-id="' + r.id + '" data-active="' + (r.is_active ? '1' : '0') + '" title="' + (r.is_active ? 'Disable rule' : 'Enable rule') + '" style="background: none; border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: var(--text-muted); font-size: 12px; transition: color 0.2s, border-color 0.2s;">' + (r.is_active ? '⏸' : '▶') + '</button>' +
-          '<button class="rule-edit-btn" data-rule-id="' + r.id + '" title="Edit rule" style="background: none; border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: var(--text-muted); font-size: 12px; transition: color 0.2s, border-color 0.2s;">✏️</button>' +
-          '<button class="rule-delete-btn" data-rule-id="' + r.id + '" title="Delete rule" style="background: none; border: 1px solid rgba(239,68,68,0.3); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: #f87171; font-size: 12px; transition: opacity 0.2s;">🗑</button>';
+          '<button class="rule-toggle-btn" data-rule-id="' + r.id + '" data-active="' + (r.is_active ? '1' : '0') + '" title="' + (r.is_active ? 'Disable rule' : 'Enable rule') + '" style="background: none; border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: var(--text-muted); font-size: 12px; transition: color 0.2s, border-color 0.2s;">' + (r.is_active ? dlIcon('pause', 13) : dlIcon('play', 13)) + '</button>' +
+          '<button class="rule-edit-btn" data-rule-id="' + r.id + '" title="Edit rule" style="background: none; border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: var(--text-muted); font-size: 12px; transition: color 0.2s, border-color 0.2s;">' + dlIcon('edit', 13) + '</button>' +
+          '<button class="rule-delete-btn" data-rule-id="' + r.id + '" title="Delete rule" style="background: none; border: 1px solid rgba(239,68,68,0.3); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: #f87171; font-size: 12px; transition: opacity 0.2s;">' + dlIcon('trash', 13) + '</button>';
       }
 
-      var cardBorder = isAuto ? 'border-left: 3px solid rgba(6,182,212,0.5);' : '';
+      var cardBorder = isAuto ? 'border-left: 3px solid rgba(26,158,224,0.5);' : '';
 
       return '<div class="delivery-rule-card" data-rule-id="' + r.id + '" style="background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 10px; padding: 14px; transition: border-color 0.2s; ' + cardBorder + '">' +
         '<div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 8px;">' +
@@ -981,14 +986,14 @@
 
     var text = '';
     if (routed > 0) {
-      text = '✅ ' + routed + ' photo' + (routed !== 1 ? 's' : '') + ' routed to ' + galleriesCount + ' galler' + (galleriesCount !== 1 ? 'ies' : 'y');
+      text = routed + ' photo' + (routed !== 1 ? 's' : '') + ' routed to ' + galleriesCount + ' galler' + (galleriesCount !== 1 ? 'ies' : 'y');
       if (unmatched > 0) {
         text += '. ' + unmatched + ' photo' + (unmatched !== 1 ? 's' : '') + ' did not match any rule.';
       } else {
         text += '.';
       }
     } else {
-      text = '⚠️ No photos matched any delivery rule. ' + unmatched + ' photo' + (unmatched !== 1 ? 's' : '') + ' unmatched.';
+      text = 'No photos matched any delivery rule. ' + unmatched + ' photo' + (unmatched !== 1 ? 's' : '') + ' unmatched.';
     }
     message.textContent = text;
     banner.style.display = 'block';
@@ -1331,7 +1336,7 @@
     if (navigator.clipboard) {
       navigator.clipboard.writeText(fullUrl).then(function() {
         var btn = document.getElementById('btn-copy-client-link');
-        if (btn) { btn.textContent = '✓'; setTimeout(function() { btn.textContent = '📋'; }, 1500); }
+        if (btn) { btn.innerHTML = dlIcon('check', 13); setTimeout(function() { btn.innerHTML = dlIcon('copy', 13); }, 1500); }
       });
     }
   }
@@ -1385,9 +1390,9 @@
             '<div style="font-size: 11px; color: var(--text-muted);">' + detailParts.join(' &bull; ') + '</div>' +
           '</div>' +
           '<div style="display: flex; gap: 4px; flex-shrink: 0; margin-left: 12px;">' +
-            (status === 'invited' ? '<button class="client-user-resend-btn" data-user-id="' + u.id + '" title="Resend invitation" style="background: none; border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: var(--text-muted); font-size: 12px;">✉️</button>' : '') +
-            (status !== 'invited' ? '<button class="client-user-toggle-btn" data-user-id="' + u.id + '" data-status="' + status + '" title="' + (status === 'active' ? 'Disable' : 'Enable') + '" style="background: none; border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: var(--text-muted); font-size: 12px;">' + (status === 'active' ? '⏸' : '▶') + '</button>' : '') +
-            '<button class="client-user-delete-btn" data-user-id="' + u.id + '" data-name="' + escapeHtml(displayName) + '" title="Remove user" style="background: none; border: 1px solid rgba(239,68,68,0.3); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: #f87171; font-size: 12px;">🗑</button>' +
+            (status === 'invited' ? '<button class="client-user-resend-btn" data-user-id="' + u.id + '" title="Resend invitation" style="background: none; border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: var(--text-muted); font-size: 12px;">' + dlIcon('mail', 13) + '</button>' : '') +
+            (status !== 'invited' ? '<button class="client-user-toggle-btn" data-user-id="' + u.id + '" data-status="' + status + '" title="' + (status === 'active' ? 'Disable' : 'Enable') + '" style="background: none; border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: var(--text-muted); font-size: 12px;">' + (status === 'active' ? dlIcon('pause', 13) : dlIcon('play', 13)) + '</button>' : '') +
+            '<button class="client-user-delete-btn" data-user-id="' + u.id + '" data-name="' + escapeHtml(displayName) + '" title="Remove user" style="background: none; border: 1px solid rgba(239,68,68,0.3); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: #f87171; font-size: 12px;">' + dlIcon('trash', 13) + '</button>' +
           '</div>' +
         '</div>';
       }).join('');
@@ -1412,9 +1417,9 @@
           try {
             var result = await window.api.invoke('delivery-resend-client-invite', userId);
             if (result && result.success) {
-              this.textContent = '✓';
+              this.innerHTML = dlIcon('check', 13);
               var self = this;
-              setTimeout(function() { self.textContent = '✉️'; }, 2000);
+              setTimeout(function() { self.innerHTML = dlIcon('mail', 13); }, 2000);
             } else {
               dlNotify('Error resending invite: ' + (result ? result.error : 'Unknown'), 'error');
             }
@@ -1524,8 +1529,8 @@
     navigator.clipboard.writeText(fullUrl).then(function() {
       var icon = document.getElementById('gallery-slug-copy-icon');
       if (icon) {
-        icon.textContent = '✅';
-        setTimeout(function() { icon.textContent = '📋'; }, 1500);
+        icon.innerHTML = dlIcon('check', 13);
+        setTimeout(function() { icon.innerHTML = dlIcon('copy', 13); }, 1500);
       }
     }).catch(function() {
       // Fallback
@@ -1537,8 +1542,8 @@
       document.body.removeChild(ta);
       var icon = document.getElementById('gallery-slug-copy-icon');
       if (icon) {
-        icon.textContent = '✅';
-        setTimeout(function() { icon.textContent = '📋'; }, 1500);
+        icon.innerHTML = dlIcon('check', 13);
+        setTimeout(function() { icon.innerHTML = dlIcon('copy', 13); }, 1500);
       }
     });
   };
@@ -1557,7 +1562,7 @@
 
     if (btn) {
       btn.disabled = true;
-      btn.textContent = '⏳ Starting upload...';
+      btn.textContent = 'Starting upload…';
       btn.style.color = '#f59e0b';
       btn.style.borderColor = '#f59e0b';
     }
@@ -1569,7 +1574,7 @@
         var error = result.data ? result.data.error : null;
         if (queued > 0) {
           if (btn) {
-            btn.textContent = '☁️ ' + queued + ' files uploading...';
+            btn.textContent = queued + ' files uploading…';
             btn.style.color = '#10b981';
             btn.style.borderColor = '#10b981';
           }
@@ -1581,13 +1586,13 @@
           dlNotify(error, 'error');
           if (btn) {
             btn.disabled = false;
-            btn.textContent = '☁️ Retry HD Upload';
+            btn.textContent = 'Retry HD upload';
             btn.style.color = 'var(--text-secondary)';
             btn.style.borderColor = 'var(--border-color)';
           }
         } else {
           if (btn) {
-            btn.textContent = '✓ Already uploaded';
+            btn.textContent = 'Already uploaded';
             btn.style.color = '#10b981';
             btn.style.borderColor = '#10b981';
           }
@@ -1596,7 +1601,7 @@
         dlNotify('Upload failed: ' + (result ? result.error : 'Unknown error'), 'error');
         if (btn) {
           btn.disabled = false;
-          btn.textContent = '☁️ Retry HD Upload';
+          btn.textContent = 'Retry HD upload';
           btn.style.color = 'var(--text-secondary)';
           btn.style.borderColor = 'var(--border-color)';
         }
@@ -1606,7 +1611,7 @@
       dlNotify('HD Upload error: ' + (e.message || e), 'error');
       if (btn) {
         btn.disabled = false;
-        btn.textContent = '☁️ Retry HD Upload';
+        btn.textContent = 'Retry HD upload';
         btn.style.color = 'var(--text-secondary)';
         btn.style.borderColor = 'var(--border-color)';
       }
@@ -1653,14 +1658,14 @@
           var pct = st.total > 0 ? Math.round((st.completed / st.total) * 100) : 0;
           var hasIssues = st.failed > 0 || st.queued > 0;
           var allDone = st.completed === st.total;
-          var borderColor = allDone ? 'rgba(34, 197, 94, 0.3)' : hasIssues ? 'rgba(239, 68, 68, 0.3)' : 'rgba(255,255,255,0.06)';
+          var borderColor = allDone ? 'rgba(16, 185, 129, 0.3)' : hasIssues ? 'rgba(239, 68, 68, 0.3)' : 'rgba(255,255,255,0.06)';
           var statusBadge = allDone
-            ? '<span style="font-size:10px;padding:3px 8px;border-radius:10px;background:rgba(34,197,94,0.15);color:#4ade80;font-weight:600;">✓ Complete</span>'
+            ? '<span style="font-size:10px;padding:3px 8px;border-radius:10px;background:rgba(16,185,129,0.15);color:#10b981;font-weight:600;">Complete</span>'
             : st.failed > 0
-            ? '<span style="font-size:10px;padding:3px 8px;border-radius:10px;background:rgba(239,68,68,0.15);color:#f87171;font-weight:600;">⚠ ' + st.failed + ' Failed</span>'
+            ? '<span style="font-size:10px;padding:3px 8px;border-radius:10px;background:rgba(239,68,68,0.15);color:#ef4444;font-weight:600;">' + st.failed + ' failed</span>'
             : st.queued > 0
-            ? '<span style="font-size:10px;padding:3px 8px;border-radius:10px;background:rgba(251,191,36,0.15);color:#fbbf24;font-weight:600;">⏳ ' + st.queued + ' Queued</span>'
-            : '<span style="font-size:10px;padding:3px 8px;border-radius:10px;background:rgba(148,163,184,0.15);color:#94a3b8;font-weight:600;">○ Pending</span>';
+            ? '<span style="font-size:10px;padding:3px 8px;border-radius:10px;background:rgba(245,158,11,0.15);color:#f59e0b;font-weight:600;">' + st.queued + ' queued</span>'
+            : '<span style="font-size:10px;padding:3px 8px;border-radius:10px;background:rgba(148,163,184,0.15);color:#94a3b8;font-weight:600;">Pending</span>';
 
           var execDate = exec.execution_at ? new Date(exec.execution_at).toLocaleDateString('en-US', { day:'numeric', month:'short', year:'numeric' }) : '';
           var execName = exec.name || 'Execution';
@@ -1676,32 +1681,32 @@
           // Source folder path + update button (only if not all completed)
           if (!allDone) {
             html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;padding:6px 8px;background:rgba(255,255,255,0.03);border-radius:6px;border:1px solid rgba(255,255,255,0.04);">';
-            html += '<span style="font-size:10px;color:var(--text-muted);white-space:nowrap;">📁</span>';
+            html += '<span style="font-size:10px;color:var(--text-muted);white-space:nowrap;">' + dlIcon('folder', 11) + '</span>';
             html += '<span id="r2-folder-' + exec.id + '" style="font-size:10px;color:' + (sourceFolder ? 'var(--text-muted)' : '#f87171') + ';overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;" title="' + escapeHtml(sourceFolder || 'No folder set') + '">';
             html += sourceFolder ? escapeHtml(sourceFolder) : '<em>No source folder set</em>';
             html += '</span>';
-            html += '<button onclick="window.__r2UpdateFolder(\'' + exec.id + '\')" style="background:none;border:1px solid rgba(148,163,184,0.2);color:#94a3b8;padding:2px 8px;border-radius:5px;font-size:9px;cursor:pointer;white-space:nowrap;flex-shrink:0;" title="Browse for new folder location">📂 Update</button>';
+            html += '<button onclick="window.__r2UpdateFolder(\'' + exec.id + '\')" style="background:none;border:1px solid rgba(148,163,184,0.2);color:#94a3b8;padding:2px 8px;border-radius:5px;font-size:9px;cursor:pointer;white-space:nowrap;flex-shrink:0;" title="Browse for new folder location">Update</button>';
             html += '</div>';
           }
 
           // Progress bar
           html += '<div style="background:rgba(255,255,255,0.06);border-radius:4px;height:4px;overflow:hidden;margin-bottom:8px;">';
-          var barColor = allDone ? '#22c55e' : hasIssues ? '#f59e0b' : '#3b82f6';
+          var barColor = allDone ? '#10b981' : hasIssues ? '#f59e0b' : '#1a9ee0';
           html += '<div style="height:100%;border-radius:4px;background:' + barColor + ';width:' + pct + '%;transition:width 0.4s ease;"></div>';
           html += '</div>';
 
           // Stats row
           html += '<div style="display:flex;gap:12px;font-size:11px;color:var(--text-muted);align-items:center;flex-wrap:wrap;">';
-          html += '<span>📷 ' + st.total + ' images</span>';
-          html += '<span style="color:#4ade80;">✓ ' + st.completed + '</span>';
-          if (st.failed > 0) html += '<span style="color:#f87171;">✗ ' + st.failed + '</span>';
-          if (st.queued > 0) html += '<span style="color:#fbbf24;">⏳ ' + st.queued + '</span>';
-          if (st.pending > 0) html += '<span>○ ' + st.pending + ' pending</span>';
+          html += '<span>' + st.total + ' images</span>';
+          html += '<span style="color:#10b981;">' + st.completed + '</span>';
+          if (st.failed > 0) html += '<span style="color:#ef4444;">' + st.failed + '</span>';
+          if (st.queued > 0) html += '<span style="color:#f59e0b;">' + st.queued + '</span>';
+          if (st.pending > 0) html += '<span>' + st.pending + ' pending</span>';
 
           // Action buttons
           if (st.failed > 0 || st.queued > 0) {
             html += '<div style="margin-left:auto;display:flex;gap:6px;">';
-            html += '<button onclick="window.__r2RetryExecution(\'' + exec.id + '\')" style="background:none;border:1px solid rgba(59,130,246,0.3);color:#60a5fa;padding:3px 10px;border-radius:6px;font-size:10px;cursor:pointer;font-weight:600;">↻ Retry</button>';
+            html += '<button onclick="window.__r2RetryExecution(\'' + exec.id + '\')" style="background:none;border:1px solid rgba(26,158,224,0.3);color:#1a9ee0;padding:3px 10px;border-radius:6px;font-size:10px;cursor:pointer;font-weight:600;">Retry</button>';
             html += '<button onclick="window.__r2ResetExecution(\'' + exec.id + '\')" style="background:none;border:1px solid rgba(239,68,68,0.2);color:#f87171;padding:3px 10px;border-radius:6px;font-size:10px;cursor:pointer;">Reset</button>';
             html += '</div>';
           }
