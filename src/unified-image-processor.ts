@@ -10361,8 +10361,17 @@ export class UnifiedImageProcessor extends EventEmitter {
     const workerConfig = { ...this.config, sportCategories: this.batchSportCategories };
     const workerPromises: Promise<UnifiedImageWorker>[] = [];
 
+    // GHOST-IMAGES FLAVOR A2 (2026-06-12, see wiki/entities/ghost-images.md):
+    // pool workers must NEVER hold an analysisLogger. The pool is created at
+    // processBatch BEFORE the per-execution logger is (re)created at
+    // processBatchInternal, so on the 2nd+ batch of an app session
+    // `this.analysisLogger` still points to the PREVIOUS execution's finalized
+    // logger. Workers saw it truthy, wrote JSONL into the dead file, and
+    // skipped the pendingLogEntry contract → face-only images vanished again.
+    // Passing `undefined` makes every batch behave like the first (validated)
+    // one: workers always return pendingLogEntry, main writes with the live logger.
     for (let i = 0; i < poolSize; i++) {
-      workerPromises.push(UnifiedImageWorker.create(workerConfig, this.analysisLogger, this.networkMonitor));
+      workerPromises.push(UnifiedImageWorker.create(workerConfig, undefined, this.networkMonitor));
     }
 
     this.workerPool = await Promise.all(workerPromises);
