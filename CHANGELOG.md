@@ -44,6 +44,15 @@
   `margin: 0 0: 12px`, and flattens its CTA. Two deprecated cyan `#06b6d4` accents (the
   FROM-PRESET tag, the gallery-link hover) collapse to `#1a9ee0`. Markup + display-string only.
 
+- **Delivery page redesign — HD uploads (Phase D, part 2)**: cleans up the HD-uploads block.
+  The ☁️/⟳/📦 emoji are dropped from the section header, the in-flight pill, and the empty
+  state; the active-upload card's leftover deprecated blue (`rgba(59,130,246,…)` = `#3b82f6`)
+  is corrected to `#1a9ee0` and its fake-gradient progress bar flattened to a solid fill. In
+  `upload-monitor.js`, the JS-rendered active stats and history cards drop their 📁/⚠/✓ emoji
+  (status now reads "Complete" / "N failed" in the existing green/red). Markup + display-string
+  only — upload logic untouched. (Full demotion to a collapsible transfer-activity fold is
+  deferred — it would require reworking the section's show/hide logic.)
+
 ## [1.1.10] - 2026-06-11
 
 ### 🎨 Brand
