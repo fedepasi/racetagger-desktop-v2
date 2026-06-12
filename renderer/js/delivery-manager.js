@@ -1173,7 +1173,7 @@
         alert('Error submitting. Please try again.');
         if (btnSubmit) {
           btnSubmit.disabled = false;
-          btnSubmit.textContent = 'Submit Feedback';
+          btnSubmit.textContent = 'Submit feedback';
         }
       }
     } catch (e) {
@@ -1181,7 +1181,7 @@
       console.error('[Delivery] Survey submission error:', e);
       if (btnSubmit) {
         btnSubmit.disabled = false;
-        btnSubmit.textContent = 'Submit Feedback';
+        btnSubmit.textContent = 'Submit feedback';
       }
     }
   }

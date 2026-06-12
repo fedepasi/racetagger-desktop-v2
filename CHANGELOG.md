@@ -35,6 +35,15 @@
   create/edit Rule strings (`delivery-manager.js`). All element IDs preserved; markup +
   display-string only — no IPC, token, or data-model changes.
 
+- **Delivery page redesign — client detail, survey & banner (Phase D, part 1)**: brings the
+  remaining static Delivery surfaces onto the system. The interest survey swaps its 🙏/📦 hero
+  emoji for brand icon-wells (blue image / green check) and its fake-gradient submit for a flat
+  `dl-btn--primary` ("Submit feedback"). The client-detail view drops the 🖼️/🔗/🔐/🔀 header
+  emoji for plain section heads and moves its action buttons to `dl-btn--ghost` (with a `+`
+  glyph). The post-execution routing banner loses its 🔀 for a green check, fixes a malformed
+  `margin: 0 0: 12px`, and flattens its CTA. Two deprecated cyan `#06b6d4` accents (the
+  FROM-PRESET tag, the gallery-link hover) collapse to `#1a9ee0`. Markup + display-string only.
+
 ## [1.1.10] - 2026-06-11
 
 ### 🎨 Brand
