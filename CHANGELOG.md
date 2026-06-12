@@ -25,6 +25,16 @@
   font) and routes `alert()` → the canonical toast (`dlNotify`) on gallery/client create.
   Markup + render-layer only — no IPC, token, or data-model changes.
 
+- **Delivery page redesign — modals + gallery detail (Phase C)**: brings the six Delivery
+  modals onto the redesign system. Action buttons across create-gallery, create-client,
+  invite-user, link-gallery, create-rule and gallery-detail now use the `dl-btn`
+  primary/ghost/danger classes (flat, `#1a9ee0`); decorative emoji are removed from modal
+  headers and the access-type `<select>` options; and the gallery-detail Statistics block
+  becomes a "timing-tower" stat strip (`dl-stat-tower`, JetBrains Mono views/downloads in
+  blue/green). Modal titles/buttons move to sentence case — including the JS-driven
+  create/edit Rule strings (`delivery-manager.js`). All element IDs preserved; markup +
+  display-string only — no IPC, token, or data-model changes.
+
 ## [1.1.10] - 2026-06-11
 
 ### 🎨 Brand

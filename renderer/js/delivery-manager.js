@@ -584,10 +584,10 @@
     document.getElementById('input-rule-active').checked = true;
     // Reset modal to "create" mode
     var modalTitle = document.querySelector('#modal-create-rule h3');
-    if (modalTitle) modalTitle.textContent = 'Create Delivery Rule';
+    if (modalTitle) modalTitle.textContent = 'Create delivery rule';
     var btnSave = document.getElementById('btn-save-rule');
     if (btnSave) {
-      btnSave.textContent = 'Create Rule';
+      btnSave.textContent = 'Create rule';
       delete btnSave.dataset.editRuleId;
     }
   }
@@ -944,10 +944,10 @@
 
       // Change modal title and save button to "edit" mode
       var modalTitle = document.querySelector('#modal-create-rule h3');
-      if (modalTitle) modalTitle.textContent = 'Edit Delivery Rule';
+      if (modalTitle) modalTitle.textContent = 'Edit delivery rule';
       var btnSave = document.getElementById('btn-save-rule');
       if (btnSave) {
-        btnSave.textContent = 'Save Changes';
+        btnSave.textContent = 'Save changes';
         btnSave.dataset.editRuleId = ruleId;
       }
 

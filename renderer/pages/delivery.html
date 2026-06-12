@@ -263,7 +263,7 @@
 <!-- Invite Client User Modal -->
 <div id="modal-create-client-user" style="display: none; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); align-items: center; justify-content: center;">
   <div style="background: var(--bg-medium); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; width: 100%; max-width: 440px; margin: auto;">
-    <h3 style="color: var(--text-primary); margin: 0 0 4px; font-size: 18px;">✉️ Invite User</h3>
+    <h3 style="color: var(--text-primary); margin: 0 0 4px; font-size: 18px;">Invite user</h3>
     <p style="color: var(--text-muted); font-size: 12px; margin: 0 0 16px; line-height: 1.4;">
       Enter the person's name and email. They'll receive an invitation to create their account and access this client's galleries.
     </p>
@@ -278,8 +278,8 @@
       </div>
     </div>
     <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px;">
-      <button id="btn-cancel-client-user" style="background: var(--bg-light); color: var(--text-primary); border: 1px solid var(--border-color); padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px;">Cancel</button>
-      <button id="btn-save-client-user" style="background: var(--accent-primary); color: white; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">Send Invitation</button>
+      <button id="btn-cancel-client-user" class="dl-btn dl-btn--ghost">Cancel</button>
+      <button id="btn-save-client-user" class="dl-btn dl-btn--primary">Send invitation</button>
     </div>
   </div>
 </div>
@@ -287,7 +287,7 @@
 <!-- Create Gallery Modal -->
 <div id="modal-create-gallery" style="display: none; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); align-items: center; justify-content: center;">
   <div style="background: var(--bg-medium); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; width: 100%; max-width: 440px; margin: auto;">
-    <h3 style="color: var(--text-primary); margin: 0 0 16px; font-size: 18px;">Create Gallery</h3>
+    <h3 style="color: var(--text-primary); margin: 0 0 16px; font-size: 18px;">Create gallery</h3>
     <div style="display: flex; flex-direction: column; gap: 12px;">
       <div>
         <label style="display: block; color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">Gallery Title</label>
@@ -312,8 +312,8 @@
       </div>
     </div>
     <div style="display: flex; gap: 8px; margin-top: 20px; justify-content: flex-end;">
-      <button id="btn-cancel-gallery" style="padding: 8px 16px; background: var(--bg-light); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); cursor: pointer; font-size: 13px;">Cancel</button>
-      <button id="btn-save-gallery" style="padding: 8px 16px; background: var(--accent-primary); border: none; border-radius: 8px; color: white; cursor: pointer; font-size: 13px; font-weight: 600;">Create Gallery</button>
+      <button id="btn-cancel-gallery" class="dl-btn dl-btn--ghost">Cancel</button>
+      <button id="btn-save-gallery" class="dl-btn dl-btn--primary">Create gallery</button>
     </div>
   </div>
 </div>
@@ -321,7 +321,7 @@
 <!-- Link Existing Gallery Modal -->
 <div id="modal-link-gallery" style="display: none; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); align-items: center; justify-content: center;">
   <div style="background: var(--bg-medium); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; width: 100%; max-width: 440px; margin: auto;">
-    <h3 style="color: var(--text-primary); margin: 0 0 4px; font-size: 18px;">Link Existing Gallery</h3>
+    <h3 style="color: var(--text-primary); margin: 0 0 4px; font-size: 18px;">Link existing gallery</h3>
     <p style="color: var(--text-muted); font-size: 12px; margin: 0 0 16px; line-height: 1.4;">
       Select a gallery that is not yet assigned to any client.
     </p>
@@ -334,8 +334,8 @@
       All galleries are already assigned to clients. Use "+ New Gallery" to create one.
     </div>
     <div style="display: flex; gap: 8px; margin-top: 20px; justify-content: flex-end;">
-      <button id="btn-cancel-link-gallery" style="padding: 8px 16px; background: var(--bg-light); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); cursor: pointer; font-size: 13px;">Cancel</button>
-      <button id="btn-confirm-link-gallery" style="padding: 8px 16px; background: var(--accent-primary); border: none; border-radius: 8px; color: white; cursor: pointer; font-size: 13px; font-weight: 600;">Link Gallery</button>
+      <button id="btn-cancel-link-gallery" class="dl-btn dl-btn--ghost">Cancel</button>
+      <button id="btn-confirm-link-gallery" class="dl-btn dl-btn--primary">Link gallery</button>
     </div>
   </div>
 </div>
@@ -343,7 +343,7 @@
 <!-- Create Client Modal -->
 <div id="modal-create-project" style="display: none; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); align-items: center; justify-content: center;">
   <div style="background: var(--bg-medium); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; width: 100%; max-width: 480px; margin: auto; max-height: 90vh; overflow-y: auto;">
-    <h3 id="modal-project-title" style="color: var(--text-primary); margin: 0 0 16px; font-size: 18px;">New Client</h3>
+    <h3 id="modal-project-title" style="color: var(--text-primary); margin: 0 0 16px; font-size: 18px;">New client</h3>
     <div style="display: flex; flex-direction: column; gap: 12px;">
       <!-- Client identity -->
       <div>
@@ -368,8 +368,8 @@
       </div>
     </div>
     <div style="display: flex; gap: 8px; margin-top: 20px; justify-content: flex-end;">
-      <button id="btn-cancel-project" style="padding: 8px 16px; background: transparent; border: 1px solid var(--border-color); border-radius: 8px; color: inherit; cursor: pointer; font-size: 13px;">Cancel</button>
-      <button id="btn-save-project" style="padding: 8px 16px; background: var(--accent-primary); border: none; border-radius: 8px; color: white; cursor: pointer; font-size: 13px; font-weight: 600;">Create Client</button>
+      <button id="btn-cancel-project" class="dl-btn dl-btn--ghost">Cancel</button>
+      <button id="btn-save-project" class="dl-btn dl-btn--primary">Create client</button>
     </div>
   </div>
 </div>
@@ -377,7 +377,7 @@
 <!-- Create Delivery Rule Modal -->
 <div id="modal-create-rule" style="display: none; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); align-items: center; justify-content: center;">
   <div style="background: var(--bg-medium); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; width: 100%; max-width: 500px; margin: auto; max-height: 90vh; overflow-y: auto;">
-    <h3 style="color: var(--text-primary); margin: 0 0 16px; font-size: 18px;">Create Delivery Rule</h3>
+    <h3 style="color: var(--text-primary); margin: 0 0 16px; font-size: 18px;">Create delivery rule</h3>
     <div style="display: flex; flex-direction: column; gap: 12px;">
       <div>
         <label style="display: block; color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">Rule Name</label>
@@ -418,8 +418,8 @@
       </div>
     </div>
     <div style="display: flex; gap: 8px; margin-top: 20px; justify-content: flex-end;">
-      <button id="btn-cancel-rule" style="padding: 8px 16px; background: var(--bg-light); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); cursor: pointer; font-size: 13px;">Cancel</button>
-      <button id="btn-save-rule" style="padding: 8px 16px; background: var(--accent-primary); border: none; border-radius: 8px; color: white; cursor: pointer; font-size: 13px; font-weight: 600;">Create Rule</button>
+      <button id="btn-cancel-rule" class="dl-btn dl-btn--ghost">Cancel</button>
+      <button id="btn-save-rule" class="dl-btn dl-btn--primary">Create rule</button>
     </div>
   </div>
 </div>
@@ -447,9 +447,9 @@
         <div style="margin-bottom: 8px;">
           <label style="display: block; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Access</label>
           <select id="gallery-detail-access-type" style="width: 100%; padding: 6px 10px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); font-size: 12px; cursor: pointer;">
-            <option value="unrestricted">🌐 Public — anyone with the link</option>
-            <option value="code">🔒 Access code required</option>
-            <option value="password">🔑 Password protected</option>
+            <option value="unrestricted">Public — anyone with the link</option>
+            <option value="code">Access code required</option>
+            <option value="password">Password protected</option>
           </select>
         </div>
         <div>
@@ -460,15 +460,15 @@
         </div>
       </div>
       <div style="border-bottom: 1px solid var(--border-color); padding-bottom: 12px;">
-        <h4 style="color: var(--text-primary); font-size: 13px; font-weight: 600; margin: 0 0 8px;">Statistics</h4>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-          <div style="background: var(--bg-dark); padding: 8px; border-radius: 6px;">
-            <div style="color: var(--text-muted); font-size: 11px;">Views</div>
-            <div id="gallery-detail-views" style="color: var(--text-primary); font-size: 16px; font-weight: 600;">0</div>
+        <div class="dl-eyebrow" style="margin-bottom: 8px;">Statistics</div>
+        <div class="dl-stat-tower">
+          <div class="dl-stat-tower__cell">
+            <div class="dl-eyebrow">Views</div>
+            <div id="gallery-detail-views" class="dl-stat-tower__val dl-stat-tower__val--blue dl-num">0</div>
           </div>
-          <div style="background: var(--bg-dark); padding: 8px; border-radius: 6px;">
-            <div style="color: var(--text-muted); font-size: 11px;">Downloads</div>
-            <div id="gallery-detail-downloads" style="color: var(--text-primary); font-size: 16px; font-weight: 600;">0</div>
+          <div class="dl-stat-tower__cell">
+            <div class="dl-eyebrow">Downloads</div>
+            <div id="gallery-detail-downloads" class="dl-stat-tower__val dl-stat-tower__val--green dl-num">0</div>
           </div>
         </div>
       </div>
@@ -496,8 +496,8 @@
         </button>
       </div>
       <div style="display: flex; gap: 8px;">
-        <button id="btn-toggle-gallery-status" style="flex: 1; padding: 8px 12px; background: var(--bg-light); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); cursor: pointer; font-size: 13px; font-weight: 600;">Publish/Unpublish</button>
-        <button id="btn-delete-gallery" style="flex: 1; padding: 8px 12px; background: rgba(239,68,68,0.2); border: 1px solid rgba(239,68,68,0.3); border-radius: 8px; color: #ef4444; cursor: pointer; font-size: 13px; font-weight: 600;">Delete</button>
+        <button id="btn-toggle-gallery-status" class="dl-btn dl-btn--ghost" style="flex: 1; justify-content: center;">Publish / Unpublish</button>
+        <button id="btn-delete-gallery" class="dl-btn dl-btn--danger" style="flex: 1; justify-content: center;">Delete</button>
       </div>
     </div>
   </div>
