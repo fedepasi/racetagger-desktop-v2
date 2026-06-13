@@ -26,6 +26,15 @@
   galleries query now selects `settings`. Reuses existing IPC; no new channel, token, or schema
   change.
 
+- **HD upload — real HD chip on gallery cards (Phase 3)**: gallery cards now show real HD
+  readiness aggregated from the linked images via a new read-only IPC `delivery-gallery-hd-status`
+  (reads `images.original_upload_status` for the gallery's `gallery_images` rows): green
+  "HD ready" when all originals are on R2, amber "HD N/M" when partial, dim "Previews only" when
+  none, and the chip is dropped when the gallery has no linked images. Previously the chip
+  checked fields the gallery row never carries, so it was effectively never shown. Filled async
+  per card so the list renders immediately. One read-only IPC (handler + preload whitelist);
+  no token or schema change.
+
 ### 🎨 Brand
 
 - **Delivery page redesign — foundation (Phase A)**: introduces a canonical app-wide toast

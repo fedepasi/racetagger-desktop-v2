@@ -314,6 +314,7 @@ const validInvokeChannels: string[] = [
   'delivery-auto-route',
   'delivery-send-execution-to-gallery',
   'delivery-get-gallery-executions',
+  'delivery-gallery-hd-status',
   'delivery-get-plan-limits',
   'delivery-get-recent-executions',
   'delivery-r2-upload-start',

@@ -191,12 +191,9 @@
       chips += g.access_type === 'unrestricted'
         ? '<span class="dl-chip dl-chip--neutral">' + dlIcon('globe', 13) + 'Public</span>'
         : '<span class="dl-chip dl-chip--neutral">' + dlIcon('lock', 13) + 'Code</span>';
-      // HD status — render only when the gallery object exposes it (data wiring is Phase C).
-      if (g.original_upload_status === 'completed' || g.hd_status === 'completed') {
-        chips += '<span class="dl-chip dl-chip--green">' + dlIcon('check', 13) + 'HD ready</span>';
-      } else if (g.hd_pending != null && g.hd_total != null) {
-        chips += '<span class="dl-chip dl-chip--amber">' + dlIcon('arrowUp', 13) + 'HD <b class="dl-num" style="font-weight:700">' + g.hd_pending + '/' + g.hd_total + '</b></span>';
-      }
+      // HD readiness — a placeholder filled async from the real aggregate
+      // (delivery-gallery-hd-status); HD state lives on the image rows, not the gallery.
+      chips += '<span class="dl-chip dl-chip--dim" data-hd-chip="' + g.id + '">' + dlIcon('clock', 13) + 'HD…</span>';
       var clientName = g.client_name || g.project_name;
       if (clientName) {
         chips += '<span class="dl-chip dl-chip--neutral">' + dlIcon('briefcase', 13) + escapeHtml(clientName) + '</span>';
@@ -225,6 +222,36 @@
 
     grid.querySelectorAll('.dl-card').forEach(function(card) {
       card.addEventListener('click', function() { openGalleryDetail(this.dataset.id); });
+    });
+
+    updateGalleryHdChips();
+  }
+
+  // Fill each card's HD chip from the real aggregate (images linked via
+  // gallery_images, read by original_upload_status). Async + per-card so the
+  // list renders immediately; the same R2 object is shared across galleries,
+  // so this reflects true readiness without any double-counting.
+  function updateGalleryHdChips() {
+    galleries.forEach(function(g) {
+      window.api.invoke('delivery-gallery-hd-status', g.id).then(function(r) {
+        var chip = document.querySelector('[data-hd-chip="' + g.id + '"]');
+        if (!chip) return;
+        var st = (r && r.success) ? r.data : null;
+        if (!st || !st.total) { chip.remove(); return; }
+        if (st.completed === st.total) {
+          chip.className = 'dl-chip dl-chip--green';
+          chip.innerHTML = dlIcon('check', 13) + 'HD ready';
+        } else if (st.completed === 0) {
+          chip.className = 'dl-chip dl-chip--dim';
+          chip.innerHTML = dlIcon('eyeOff', 13) + 'Previews only';
+        } else {
+          chip.className = 'dl-chip dl-chip--amber';
+          chip.innerHTML = dlIcon('arrowUp', 13) + 'HD <b class="dl-num" style="font-weight:700">' + st.completed + '/' + st.total + '</b>';
+        }
+      }).catch(function() {
+        var chip = document.querySelector('[data-hd-chip="' + g.id + '"]');
+        if (chip) chip.remove();
+      });
     });
   }
 
