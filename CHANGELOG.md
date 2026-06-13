@@ -83,6 +83,29 @@
 
 ### 🔧 Matching
 
+- **ACC-04 Phase 4 — series-sponsor UX (detect → user confirms → write)**:
+  After a successful learned-data save, `save-learned-participant-data` now returns
+  `seriesCandidates` (from `detectSeriesSponsors`) alongside the update count.
+  If new candidates exist (not already in `preset.series_sponsor_ignore`),
+  `learned-data-modal.js` transitions the modal to a second-step checklist instead of
+  closing immediately. Sponsors with ≥70% event coverage are pre-checked; 40–70% are
+  unchecked but visible. "Add to Ignore List" calls `supabase-update-participant-preset`
+  with the merged `series_sponsor_ignore` array; "Skip" closes without writing.
+  The log-visualizer passes `this.participantPresetData?.series_sponsor_ignore` to
+  `learnedDataModal.show()` so already-ignored keys are excluded from the checklist.
+
+- **ACC-04 Phase 2 — canonical sponsor dedup at write + series-sponsor dry-run**:
+  `save-learned-participant-data` now uses `canonicalKey` / `clusterSponsors` / `pickDisplay`
+  from `sponsor-canonical.ts` to deduplicate sponsors at write time: the CSV `sponsor` field
+  filters new additions by canonical key (replacing case-insensitive exact match), and the
+  `custom_fields.learned.sponsors` array merges via clustering (replacing a raw `Set` that
+  let "DÖRR" and "DOERR" coexist). A dry-run series-sponsor detector accumulates sponsor
+  frequency across all participants in a save batch, calls `detectSeriesSponsors`, and logs
+  candidates with coverage % — no writes, surfaced in Phase 4.
+  `learned-data-modal.js` aggregation key upgraded from `String(s).trim()` to a plain-JS
+  canonical key (`_canonicalKey`) with umlaut expansion + NFD diacritic strip, eliminating
+  case/umlaut duplicates in the proposal list before they ever reach the write path.
+
 - **ACC-04 Phase 5 — export coherence (`unified-export-iptc-modal.js`)**:
   Two bugs fixed in the export path that caused the "number+driver right, team wrong"
   symptom to leak into exported IPTC/XMP metadata even after correcting the preset:

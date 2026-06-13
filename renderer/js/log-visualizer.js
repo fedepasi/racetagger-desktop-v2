@@ -4881,7 +4881,7 @@ class LogVisualizer {
       return;
     }
 
-    const accepted = await window.learnedDataModal.show(presetId, this.executionId);
+    const accepted = await window.learnedDataModal.show(presetId, this.executionId, this.participantPresetData?.series_sponsor_ignore || []);
     if (accepted) {
       console.log('[LogVisualizer] User accepted learned data updates');
       this.showNotification('✅ Preset updated with learned data', 'success');
