@@ -372,12 +372,16 @@
       var galleryEventDate = document.getElementById('input-gallery-event-date').value || null;
       if (!title) return;
       try {
+        var autoHdEl = document.getElementById('input-gallery-auto-hd');
         var galleryData = {
           title: title,
           access_type: access,
           gallery_type: access === 'unrestricted' ? 'open' : 'private',
           season: gallerySeason || null,
-          event_date: galleryEventDate
+          event_date: galleryEventDate,
+          // Per-gallery opt-in: when on, adding an execution auto-uploads its HD
+          // originals (decision #1). Off by default → HD stays a manual choice.
+          settings: { auto_hd_upload: !!(autoHdEl && autoHdEl.checked) }
         };
         // If we're inside a project, associate the gallery
         if (selectedProjectId) {
@@ -391,6 +395,7 @@
           if (seasonInput) seasonInput.value = '';
           var dateInput = document.getElementById('input-gallery-event-date');
           if (dateInput) dateInput.value = '';
+          if (autoHdEl) autoHdEl.checked = false;
           await loadGalleries();
           // Refresh project detail if we were inside one
           if (selectedProjectId) {
@@ -402,6 +407,32 @@
         }
       } catch (e) {
         dlNotify('Couldn\'t create the gallery.', 'error');
+      }
+    });
+
+    // Gallery-detail "Auto HD upload" toggle → persist on settings.auto_hd_upload.
+    // Reuses the existing delivery-update-gallery IPC; merges client-side so other
+    // settings keys are preserved (updateGallery does a full-column replace).
+    var galleryAutoHdToggle = document.getElementById('gallery-detail-auto-hd');
+    if (galleryAutoHdToggle) galleryAutoHdToggle.addEventListener('change', async function() {
+      var el = this;
+      var modal = document.getElementById('modal-gallery-detail');
+      var gid = modal && modal.dataset ? modal.dataset.galleryId : null;
+      if (!gid) return;
+      var gal = galleries.find(function(g) { return g.id === gid; });
+      var merged = Object.assign({}, (gal && gal.settings) || {}, { auto_hd_upload: el.checked });
+      try {
+        var res = await window.api.invoke('delivery-update-gallery', { id: gid, data: { settings: merged } });
+        if (res && res.success) {
+          if (gal) gal.settings = merged;
+          dlNotify(el.checked ? 'Auto HD upload is on for this gallery.' : 'Auto HD upload is off.', 'success');
+        } else {
+          el.checked = !el.checked;
+          dlNotify('Couldn\'t update the setting.', 'error');
+        }
+      } catch (e) {
+        el.checked = !el.checked;
+        dlNotify('Couldn\'t update the setting.', 'error');
       }
     });
 
@@ -617,6 +648,10 @@
     if (accessSelect) {
       accessSelect.value = gallery.access_type || 'unrestricted';
     }
+
+    // Reflect the per-gallery auto-HD-upload flag (settings.auto_hd_upload)
+    var autoHdToggle = document.getElementById('gallery-detail-auto-hd');
+    if (autoHdToggle) autoHdToggle.checked = !!(gallery.settings && gallery.settings.auto_hd_upload);
 
     // Update status badge color
     var statusEl = document.getElementById('gallery-detail-status');
@@ -877,12 +912,21 @@
           // Refresh the linked executions list
           loadGalleryLinkedExecutions(galleryId);
 
-          // Dedup notice (decision #2): if these photos are already on R2,
-          // adding them to another gallery does NOT re-upload — the same
-          // object is referenced again. Otherwise just confirm the link.
+          // Decision #1: HD upload stays a manual choice UNLESS the gallery has
+          // settings.auto_hd_upload. Decision #2: if the photos are already on R2,
+          // say so (linked, no re-upload) instead of implying a new upload.
+          var addedGallery = galleries.find(function(g) { return g.id === galleryId; });
+          var autoHd = !!(addedGallery && addedGallery.settings && addedGallery.settings.auto_hd_upload);
           window.api.invoke('delivery-r2-upload-status', executionId).then(function(r) {
-            if (r && r.success && r.data && r.data.completed > 0) {
+            var st = (r && r.success) ? r.data : null;
+            var missing = st ? (st.total - (st.completed || 0)) : 0;
+            if (st && st.completed > 0 && missing === 0) {
               dlNotify('These photos are already on R2 — linked, no new upload.', 'info');
+            } else if (autoHd && missing > 0) {
+              // Gallery opted into auto-upload — start it. dlStartHdUpload reports
+              // progress and surfaces a clear error if the originals aren't local.
+              dlNotify('Added ' + added + ' photos.', 'success');
+              if (window.dlStartHdUpload) window.dlStartHdUpload(executionId);
             } else {
               dlNotify('Added ' + added + ' photos to the gallery.', 'success');
             }

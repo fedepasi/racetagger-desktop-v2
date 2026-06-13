@@ -16,6 +16,16 @@
   than implying a re-upload. Renderer-only — reuses existing IPC; no token, schema, or
   upload-logic change.
 
+- **HD upload — per-gallery auto-upload flag (Phase 2)**: galleries gain an opt-in
+  `settings.auto_hd_upload` (stored in the existing `galleries.settings` jsonb — no migration).
+  A checkbox in the create-gallery modal and a toggle in the gallery-detail set it (the toggle
+  persists via the existing `delivery-update-gallery` IPC, merging client-side so other
+  `settings` keys survive the full-column update). When on, adding an execution to the gallery
+  auto-starts the HD upload of its missing originals; when off (the default) HD upload stays a
+  manual action — HD upload is always the user's choice unless the gallery opts in. The
+  galleries query now selects `settings`. Reuses existing IPC; no new channel, token, or schema
+  change.
+
 ### 🎨 Brand
 
 - **Delivery page redesign — foundation (Phase A)**: introduces a canonical app-wide toast

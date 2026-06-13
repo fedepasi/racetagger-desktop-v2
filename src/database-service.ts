@@ -4233,7 +4233,7 @@ export async function getUserGalleries() {
   if (!userId) throw new Error('Not authenticated');
   const { data, error } = await client
     .from('galleries')
-    .select('id, title, slug, status, gallery_type, access_type, project_id, total_views, total_downloads, created_at')
+    .select('id, title, slug, status, gallery_type, access_type, project_id, total_views, total_downloads, created_at, settings')
     .eq('user_id', userId)
     .neq('status', 'suspended')
     .order('created_at', { ascending: false });
