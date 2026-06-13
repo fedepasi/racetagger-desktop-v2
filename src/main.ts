@@ -5403,6 +5403,7 @@ app.whenReady().then(async () => { // Added async here
   }) => {
     try {
       const { presetId, executionId, participants } = data;
+      const { canonicalKey, clusterSponsors, pickDisplay, detectSeriesSponsors } = await import('./matching/sponsor-canonical');
       const { getSupabaseClient } = await import('./database-service');
       const supabase = getSupabaseClient();
       const userId = authService.getAuthState().user?.id;
@@ -5471,9 +5472,17 @@ app.whenReady().then(async () => { // Added async here
             .maybeSingle();
 
           const existingSponsors = current?.sponsor ? current.sponsor.split(',').map((s: string) => s.trim()) : [];
-          const newSponsors = participant.fields.sponsors.filter((s: string) => !existingSponsors.map((e: string) => e.toLowerCase()).includes(s.toLowerCase()));
+          const existingKeys = new Set(existingSponsors.map((s: string) => canonicalKey(s)));
+          const newSponsors = participant.fields.sponsors.filter((s: string) => {
+            const key = canonicalKey(s);
+            return key && !existingKeys.has(key);
+          });
           if (newSponsors.length > 0) {
-            directUpdate.sponsor = [...existingSponsors, ...newSponsors].join(', ');
+            const newFreq = new Map<string, number>();
+            for (const s of newSponsors) newFreq.set(s, (newFreq.get(s) || 0) + 1);
+            const newClusters = clusterSponsors(newFreq);
+            const deduped = newClusters.map(c => pickDisplay(c, newFreq));
+            directUpdate.sponsor = [...existingSponsors, ...deduped].join(', ');
           }
         }
         if (participant.fields.team) directUpdate.squadra = participant.fields.team;
@@ -5495,7 +5504,11 @@ app.whenReady().then(async () => { // Added async here
         const mergedLearned = { ...existingLearned, ...learnedData };
         // Merge sponsors arrays (union)
         if (existingLearned.sponsors && learnedData.sponsors) {
-          mergedLearned.sponsors = [...new Set([...existingLearned.sponsors, ...learnedData.sponsors])];
+          const allSponsors = [...existingLearned.sponsors, ...learnedData.sponsors];
+          const freqMap = new Map<string, number>();
+          for (const s of allSponsors) freqMap.set(s, (freqMap.get(s) || 0) + 1);
+          const clusters = clusterSponsors(freqMap);
+          mergedLearned.sponsors = clusters.map(c => pickDisplay(c, freqMap));
         }
         // Merge execution IDs
         if (existingLearned.source_execution_ids) {
@@ -5520,13 +5533,41 @@ app.whenReady().then(async () => { // Added async here
         }
       }
 
+      // Series-sponsor detection — log candidates + surface them in the Phase 4 modal UX
+      let seriesCandidates: ReturnType<typeof detectSeriesSponsors> = [];
+      if (participants.length >= 4) {
+        const batchSponsorFreq = new Map<string, number>();
+        for (const p of participants) {
+          const pSponsors = p.fields.sponsors;
+          if (Array.isArray(pSponsors)) {
+            const seen = new Set<string>();
+            for (const s of pSponsors) {
+              const key = canonicalKey(s);
+              if (key && !seen.has(key)) {
+                seen.add(key);
+                batchSponsorFreq.set(s, (batchSponsorFreq.get(s) || 0) + 1);
+              }
+            }
+          }
+        }
+        seriesCandidates = detectSeriesSponsors(batchSponsorFreq, participants.length);
+        if (seriesCandidates.length > 0) {
+          console.log(
+            `[LearnedData] Series-sponsor candidates (${participants.length} participants):`,
+            seriesCandidates
+              .map(c => `"${c.display}" ${Math.round(c.coverageFraction * 100)}%`)
+              .join(', ')
+          );
+        }
+      }
+
       // Invalidate presets cache so next fetch returns fresh data with learned fields
       if (updatedCount > 0) {
         const { invalidatePresetsCache } = await import('./database-service');
         invalidatePresetsCache();
       }
 
-      return { success: true, data: { updated: updatedCount, total: participants.length } };
+      return { success: true, data: { updated: updatedCount, total: participants.length, seriesCandidates } };
 
     } catch (error) {
       console.error('[LearnedData] Error saving learned data:', error);
