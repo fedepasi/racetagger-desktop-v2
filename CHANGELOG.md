@@ -11,6 +11,14 @@
   into `analysis_results.training_flags.scene_training_candidate` on the normal path
   (queryable + GIN-indexed) and into `raw_response` on the crowd-skip path. No schema change.
 
+- **Crop detector near-miss capture (Phase 1)**: the YOLO segmenter now keeps the
+  "near-miss band" — detections it found but discarded for sitting just below the
+  confidence threshold (`[0.15, threshold)`, top-5, relevant-class) — instead of silently
+  dropping them at the filter. Surfaced as `training_flags.crop_near_miss` (+ count + top
+  confidence). These are the richest crop hard-examples, especially when **no** detection
+  passed and the image fell back to full-image analysis. Computed from data already in
+  hand — zero extra inference, no schema change.
+
 ### ✨ Delivery
 
 - **HD upload — real status + context-aware action (Phase 1)**: the gallery-detail

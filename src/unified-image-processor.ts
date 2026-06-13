@@ -1344,6 +1344,13 @@ class UnifiedImageWorker extends EventEmitter {
       confidence: number;
       detectionId: string;
     }>;
+    // TRAIN-01: detections found just below the confidence threshold (no mask).
+    nearMiss?: Array<{
+      bbox: { x: number; y: number; width: number; height: number };
+      classId: number;
+      className: string;
+      confidence: number;
+    }>;
   } | null = null;
 
   private async runGenericSegmentation(imageBuffer: Buffer): Promise<SegmentedDetection[]> {
@@ -1380,7 +1387,10 @@ class UnifiedImageWorker extends EventEmitter {
           modelId,
           detectionsCount: 0,
           inferenceMs: result.inferenceTimeMs,
-          masksApplied: false
+          masksApplied: false,
+          // TRAIN-01: even with 0 passing detections the model often had a
+          // near-miss — capture it (this is the highest-value fallback signal).
+          nearMiss: result.nearMissDetections || []
         };
         return [];
       }
@@ -1420,7 +1430,8 @@ class UnifiedImageWorker extends EventEmitter {
           className: det.className,
           confidence: det.confidence,
           detectionId: det.detectionId,
-        }))
+        })),
+        nearMiss: result.nearMissDetections || []
       };
 
       return segmentedDetections;
@@ -2878,6 +2889,8 @@ class UnifiedImageWorker extends EventEmitter {
         masksApplied: this.lastSegmentationMetadata.masksApplied,
         // Include detection bboxes for visualization (always available when detections exist)
         ...(this.lastSegmentationMetadata.detections ? { detections: this.lastSegmentationMetadata.detections } : {}),
+        // TRAIN-01: carry the near-miss band through so computeTrainingFlags sees it
+        ...(this.lastSegmentationMetadata.nearMiss?.length ? { nearMiss: this.lastSegmentationMetadata.nearMiss } : {}),
         // Include RLE mask data only if available (non-empty array)
         ...(extractedMasks.length > 0 ? { masks: extractedMasks } : {}),
         // Sharpness filter results (only present when multiple crops were analyzed)
@@ -10550,8 +10563,18 @@ function computeTrainingFlags(
     if (scene.uncertainty) flags.scene_uncertainty = scene.uncertainty;
   }
 
+  // ── Flag: crop_near_miss (TRAIN-01) ──
+  // Detector found subject(s) just below the confidence threshold and discarded
+  // them — strong crop hard-examples (especially when no detection passed).
+  const nearMiss = Array.isArray(segPre?.nearMiss) ? segPre.nearMiss : [];
+  if (nearMiss.length > 0) {
+    flags.crop_near_miss = true;
+    flags.near_miss_count = nearMiss.length;
+    flags.near_miss_top_conf = Math.round(Math.max(...nearMiss.map((d: any) => d.confidence || 0)) * 1000) / 1000;
+  }
+
   // Return null if no actual problem flags were set (only metadata)
-  const hasProblems = flags.no_yolo || flags.seg_fallback || flags.low_confidence || flags.split_bbox || flags.scene_training_candidate;
+  const hasProblems = flags.no_yolo || flags.seg_fallback || flags.low_confidence || flags.split_bbox || flags.scene_training_candidate || flags.crop_near_miss;
   if (!hasProblems) return null;
 
   return flags;
