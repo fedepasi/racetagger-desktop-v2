@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### ✨ Delivery
+
+- **HD upload — real status + context-aware action (Phase 1)**: the gallery-detail
+  "Executions in gallery" list now shows each execution's real HD (R2) upload status
+  (`completed/total`, plus failed/uploading counts) instead of an unconditional
+  "Retry HD upload" button. The action is context-aware — "Upload HD (N)" when none are
+  uploaded, "Upload missing (N)" when partial, "Retry (N)" when some failed, and a green
+  "HD ready" with no button when complete. Status is read live per execution via
+  `delivery-r2-upload-status` — HD state lives on the image rows (`original_upload_status`),
+  so this is the true state, not an assumption. Adding an execution whose originals are
+  already on R2 now surfaces a dedup notice ("already on R2 — linked, no new upload") rather
+  than implying a re-upload. Renderer-only — reuses existing IPC; no token, schema, or
+  upload-logic change.
+
 ### 🎨 Brand
 
 - **Delivery page redesign — foundation (Phase A)**: introduces a canonical app-wide toast
