@@ -191,12 +191,9 @@
       chips += g.access_type === 'unrestricted'
         ? '<span class="dl-chip dl-chip--neutral">' + dlIcon('globe', 13) + 'Public</span>'
         : '<span class="dl-chip dl-chip--neutral">' + dlIcon('lock', 13) + 'Code</span>';
-      // HD status — render only when the gallery object exposes it (data wiring is Phase C).
-      if (g.original_upload_status === 'completed' || g.hd_status === 'completed') {
-        chips += '<span class="dl-chip dl-chip--green">' + dlIcon('check', 13) + 'HD ready</span>';
-      } else if (g.hd_pending != null && g.hd_total != null) {
-        chips += '<span class="dl-chip dl-chip--amber">' + dlIcon('arrowUp', 13) + 'HD <b class="dl-num" style="font-weight:700">' + g.hd_pending + '/' + g.hd_total + '</b></span>';
-      }
+      // HD readiness — a placeholder filled async from the real aggregate
+      // (delivery-gallery-hd-status); HD state lives on the image rows, not the gallery.
+      chips += '<span class="dl-chip dl-chip--dim" data-hd-chip="' + g.id + '">' + dlIcon('clock', 13) + 'HD…</span>';
       var clientName = g.client_name || g.project_name;
       if (clientName) {
         chips += '<span class="dl-chip dl-chip--neutral">' + dlIcon('briefcase', 13) + escapeHtml(clientName) + '</span>';
@@ -225,6 +222,36 @@
 
     grid.querySelectorAll('.dl-card').forEach(function(card) {
       card.addEventListener('click', function() { openGalleryDetail(this.dataset.id); });
+    });
+
+    updateGalleryHdChips();
+  }
+
+  // Fill each card's HD chip from the real aggregate (images linked via
+  // gallery_images, read by original_upload_status). Async + per-card so the
+  // list renders immediately; the same R2 object is shared across galleries,
+  // so this reflects true readiness without any double-counting.
+  function updateGalleryHdChips() {
+    galleries.forEach(function(g) {
+      window.api.invoke('delivery-gallery-hd-status', g.id).then(function(r) {
+        var chip = document.querySelector('[data-hd-chip="' + g.id + '"]');
+        if (!chip) return;
+        var st = (r && r.success) ? r.data : null;
+        if (!st || !st.total) { chip.remove(); return; }
+        if (st.completed === st.total) {
+          chip.className = 'dl-chip dl-chip--green';
+          chip.innerHTML = dlIcon('check', 13) + 'HD ready';
+        } else if (st.completed === 0) {
+          chip.className = 'dl-chip dl-chip--dim';
+          chip.innerHTML = dlIcon('eyeOff', 13) + 'Previews only';
+        } else {
+          chip.className = 'dl-chip dl-chip--amber';
+          chip.innerHTML = dlIcon('arrowUp', 13) + 'HD <b class="dl-num" style="font-weight:700">' + st.completed + '/' + st.total + '</b>';
+        }
+      }).catch(function() {
+        var chip = document.querySelector('[data-hd-chip="' + g.id + '"]');
+        if (chip) chip.remove();
+      });
     });
   }
 
@@ -372,12 +399,16 @@
       var galleryEventDate = document.getElementById('input-gallery-event-date').value || null;
       if (!title) return;
       try {
+        var autoHdEl = document.getElementById('input-gallery-auto-hd');
         var galleryData = {
           title: title,
           access_type: access,
           gallery_type: access === 'unrestricted' ? 'open' : 'private',
           season: gallerySeason || null,
-          event_date: galleryEventDate
+          event_date: galleryEventDate,
+          // Per-gallery opt-in: when on, adding an execution auto-uploads its HD
+          // originals (decision #1). Off by default → HD stays a manual choice.
+          settings: { auto_hd_upload: !!(autoHdEl && autoHdEl.checked) }
         };
         // If we're inside a project, associate the gallery
         if (selectedProjectId) {
@@ -391,6 +422,7 @@
           if (seasonInput) seasonInput.value = '';
           var dateInput = document.getElementById('input-gallery-event-date');
           if (dateInput) dateInput.value = '';
+          if (autoHdEl) autoHdEl.checked = false;
           await loadGalleries();
           // Refresh project detail if we were inside one
           if (selectedProjectId) {
@@ -402,6 +434,32 @@
         }
       } catch (e) {
         dlNotify('Couldn\'t create the gallery.', 'error');
+      }
+    });
+
+    // Gallery-detail "Auto HD upload" toggle → persist on settings.auto_hd_upload.
+    // Reuses the existing delivery-update-gallery IPC; merges client-side so other
+    // settings keys are preserved (updateGallery does a full-column replace).
+    var galleryAutoHdToggle = document.getElementById('gallery-detail-auto-hd');
+    if (galleryAutoHdToggle) galleryAutoHdToggle.addEventListener('change', async function() {
+      var el = this;
+      var modal = document.getElementById('modal-gallery-detail');
+      var gid = modal && modal.dataset ? modal.dataset.galleryId : null;
+      if (!gid) return;
+      var gal = galleries.find(function(g) { return g.id === gid; });
+      var merged = Object.assign({}, (gal && gal.settings) || {}, { auto_hd_upload: el.checked });
+      try {
+        var res = await window.api.invoke('delivery-update-gallery', { id: gid, data: { settings: merged } });
+        if (res && res.success) {
+          if (gal) gal.settings = merged;
+          dlNotify(el.checked ? 'Auto HD upload is on for this gallery.' : 'Auto HD upload is off.', 'success');
+        } else {
+          el.checked = !el.checked;
+          dlNotify('Couldn\'t update the setting.', 'error');
+        }
+      } catch (e) {
+        el.checked = !el.checked;
+        dlNotify('Couldn\'t update the setting.', 'error');
       }
     });
 
@@ -618,6 +676,10 @@
       accessSelect.value = gallery.access_type || 'unrestricted';
     }
 
+    // Reflect the per-gallery auto-HD-upload flag (settings.auto_hd_upload)
+    var autoHdToggle = document.getElementById('gallery-detail-auto-hd');
+    if (autoHdToggle) autoHdToggle.checked = !!(gallery.settings && gallery.settings.auto_hd_upload);
+
     // Update status badge color
     var statusEl = document.getElementById('gallery-detail-status');
     if (statusEl) {
@@ -645,7 +707,53 @@
     showModal('modal-gallery-detail');
   }
 
-  function loadGalleryLinkedExecutions(galleryId) {
+  // Render the HD (R2) status line + context-aware action for one execution.
+  // st = { total, completed, failed, queued, pending } | null (from getR2UploadStatus).
+  // HD state lives on the image rows (original_upload_status), so this is the
+  // real per-execution status — not an assumption.
+  function renderHdRow(execId, st) {
+    if (!st || !st.total) {
+      return '<div style="margin-top:6px;font-size:10px;color:var(--text-muted);">HD status unavailable.</div>';
+    }
+    var total = st.total, completed = st.completed || 0, failed = st.failed || 0, queued = st.queued || 0;
+    var allDone = completed === total;
+    var line, btn = '';
+
+    if (allDone) {
+      line = '<span style="color:#10b981;display:inline-flex;align-items:center;gap:3px;">' + dlIcon('check', 12) + 'HD ready</span> ' +
+             '<span class="dl-num" style="color:var(--text-muted);">' + completed + '/' + total + '</span>';
+    } else if (failed > 0) {
+      line = '<span style="color:#ef4444;">' + failed + ' failed</span> · ' +
+             '<span class="dl-num" style="color:var(--text-muted);">' + completed + '/' + total + ' HD ready</span>';
+    } else if (queued > 0) {
+      line = '<span style="color:#f59e0b;">' + queued + ' uploading…</span> · ' +
+             '<span class="dl-num" style="color:var(--text-muted);">' + completed + '/' + total + '</span>';
+    } else if (completed === 0) {
+      line = '<span style="color:#f59e0b;">HD not uploaded</span> ' +
+             '<span class="dl-num" style="color:var(--text-muted);">0/' + total + '</span>';
+    } else {
+      line = '<span style="color:#f59e0b;">' + (total - completed) + ' HD missing</span> · ' +
+             '<span class="dl-num" style="color:var(--text-muted);">' + completed + '/' + total + '</span>';
+    }
+
+    // Action only when there is something to upload and nothing is in flight.
+    // The label is context-aware (Upload / Upload missing / Retry) instead of
+    // an unconditional "Retry" that wrongly implies a prior attempt.
+    if (!allDone && queued === 0) {
+      var label = failed > 0
+        ? 'Retry (' + failed + ')'
+        : (completed === 0 ? 'Upload HD (' + total + ')' : 'Upload missing (' + (total - completed) + ')');
+      btn = '<div style="margin-top:6px;">' +
+        '<button data-hd-exec="' + execId + '" onclick="dlStartHdUpload(\'' + execId + '\')" ' +
+        'class="dl-btn dl-btn--ghost dl-btn--sm">' + dlIcon('cloudUp', 13) + label + '</button>' +
+        '</div>';
+    }
+
+    return '<div style="margin-top:6px;font-size:10px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' +
+      line + '</div>' + btn;
+  }
+
+  async function loadGalleryLinkedExecutions(galleryId) {
     var container = document.getElementById('gallery-linked-executions');
     var emptyMsg = document.getElementById('gallery-linked-empty');
     if (!container) return;
@@ -653,7 +761,8 @@
     // Show loading state
     if (emptyMsg) emptyMsg.textContent = 'Loading...';
 
-    window.api.invoke('delivery-get-gallery-executions', galleryId).then(function(result) {
+    try {
+      var result = await window.api.invoke('delivery-get-gallery-executions', galleryId);
       if (!result || !result.success || !result.data || result.data.length === 0) {
         container.innerHTML = '';
         if (emptyMsg) {
@@ -667,7 +776,15 @@
       var linkedExecs = result.data;
       var linkedIds = linkedExecs.map(function(e) { return e.id; });
 
-      var html = linkedExecs.map(function(exec) {
+      // Fetch the real per-execution HD (R2) status in parallel so each row
+      // shows actual state instead of an unconditional "Retry" button.
+      var statuses = await Promise.all(linkedExecs.map(function(e) {
+        return window.api.invoke('delivery-r2-upload-status', e.id)
+          .then(function(r) { return (r && r.success) ? r.data : null; })
+          .catch(function() { return null; });
+      }));
+
+      var html = linkedExecs.map(function(exec, i) {
         var date = exec.execution_at ? exec.execution_at.split('T')[0] : '';
         return '<div style="background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; padding: 8px 12px;">' +
           '<div style="display: flex; align-items: center; justify-content: space-between;">' +
@@ -677,25 +794,60 @@
             '</div>' +
             '<span style="color: #10b981; font-size: 10px; font-weight: 600;">Added</span>' +
           '</div>' +
-          '<div style="margin-top: 6px; display: flex; gap: 6px;">' +
-            '<button onclick="retryHDUpload(\'' + exec.id + '\')" style="flex: 1; background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-secondary); padding: 4px 8px; border-radius: 6px; font-size: 10px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.borderColor=\'#1a9ee0\';this.style.color=\'#1a9ee0\'" onmouseout="this.style.borderColor=\'var(--border-color)\';this.style.color=\'var(--text-secondary)\'">' +
-              'Retry HD upload' +
-            '</button>' +
-          '</div>' +
+          renderHdRow(exec.id, statuses[i]) +
         '</div>';
       }).join('');
 
       container.innerHTML = html;
       loadAddExecutionDropdown(galleryId, linkedIds);
-    }).catch(function(e) {
+    } catch (e) {
       console.error('[Delivery] Failed to load gallery executions:', e);
       if (emptyMsg) {
         emptyMsg.textContent = 'Failed to load.';
         container.innerHTML = '';
         container.appendChild(emptyMsg);
       }
-    });
+    }
   }
+
+  // Context-aware HD upload trigger for the gallery-detail execution list.
+  // Queues the not-yet-uploaded originals for an execution (null/pending/failed);
+  // the list refreshes afterwards to reflect the new status. Upload reads the
+  // LOCAL originals, so a missing source folder surfaces as a clear error.
+  window.dlStartHdUpload = async function(executionId) {
+    if (!executionId) return;
+    var btn = document.querySelector('button[data-hd-exec="' + executionId + '"]');
+    if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
+    try {
+      var result = await window.api.invoke('delivery-r2-upload-start', executionId);
+      if (result && result.success && result.data) {
+        var queued = result.data.queued || 0;
+        var error = result.data.error || null;
+        if (queued > 0) {
+          dlNotify(queued + ' HD originals uploading…', 'info');
+          // Nudge the upload monitor to pick up the new upload.
+          if (window.dispatchEvent) {
+            window.dispatchEvent(new CustomEvent('page-loaded', { detail: { page: 'delivery' } }));
+          }
+        } else if (error) {
+          dlNotify(error, 'error');
+        } else {
+          dlNotify('HD originals already uploaded.', 'success');
+        }
+      } else {
+        dlNotify('Upload failed: ' + (result ? result.error : 'Unknown error'), 'error');
+      }
+    } catch (e) {
+      console.error('[Delivery] dlStartHdUpload error:', e);
+      dlNotify('HD upload error: ' + (e.message || e), 'error');
+    } finally {
+      // Refresh the linked list so the row reflects the new HD status.
+      var modal = document.getElementById('modal-gallery-detail');
+      var gid = modal && modal.dataset ? modal.dataset.galleryId : null;
+      if (gid) setTimeout(function() { loadGalleryLinkedExecutions(gid); }, 1500);
+      else if (btn) { btn.disabled = false; }
+    }
+  };
 
   function loadAddExecutionDropdown(galleryId, excludeIds) {
     var execSelect = document.getElementById('gallery-detail-execution-select');
@@ -786,6 +938,28 @@
 
           // Refresh the linked executions list
           loadGalleryLinkedExecutions(galleryId);
+
+          // Decision #1: HD upload stays a manual choice UNLESS the gallery has
+          // settings.auto_hd_upload. Decision #2: if the photos are already on R2,
+          // say so (linked, no re-upload) instead of implying a new upload.
+          var addedGallery = galleries.find(function(g) { return g.id === galleryId; });
+          var autoHd = !!(addedGallery && addedGallery.settings && addedGallery.settings.auto_hd_upload);
+          window.api.invoke('delivery-r2-upload-status', executionId).then(function(r) {
+            var st = (r && r.success) ? r.data : null;
+            var missing = st ? (st.total - (st.completed || 0)) : 0;
+            if (st && st.completed > 0 && missing === 0) {
+              dlNotify('These photos are already on R2 — linked, no new upload.', 'info');
+            } else if (autoHd && missing > 0) {
+              // Gallery opted into auto-upload — start it. dlStartHdUpload reports
+              // progress and surfaces a clear error if the originals aren't local.
+              dlNotify('Added ' + added + ' photos.', 'success');
+              if (window.dlStartHdUpload) window.dlStartHdUpload(executionId);
+            } else {
+              dlNotify('Added ' + added + ' photos to the gallery.', 'success');
+            }
+          }).catch(function() {
+            dlNotify('Added ' + added + ' photos to the gallery.', 'success');
+          });
         } else {
           dlNotify('Error: ' + (result ? result.error : 'Unknown'), 'error');
         }

@@ -314,6 +314,10 @@
         <label style="display: block; color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">Event Date</label>
         <input id="input-gallery-event-date" type="date" style="width: 100%; padding: 8px 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); font-size: 14px; box-sizing: border-box; outline: none;" onfocus="this.style.borderColor='var(--accent-primary)'" onblur="this.style.borderColor='var(--border-color)'">
       </div>
+      <label style="display: flex; align-items: flex-start; gap: 9px; cursor: pointer; padding: 10px 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px;">
+        <input id="input-gallery-auto-hd" type="checkbox" style="width: 15px; height: 15px; accent-color: #1a9ee0; cursor: pointer; margin-top: 1px; flex-shrink: 0;">
+        <span style="color: var(--text-secondary); font-size: 12px; line-height: 1.4;">Auto-upload HD originals when I add an execution<br><span style="color: var(--text-muted); font-size: 11px;">Off by default — HD upload stays a manual choice unless you turn this on.</span></span>
+      </label>
     </div>
     <div style="display: flex; gap: 8px; margin-top: 20px; justify-content: flex-end;">
       <button id="btn-cancel-gallery" class="dl-btn dl-btn--ghost">Cancel</button>
@@ -455,6 +459,15 @@
             <option value="code">Access code required</option>
             <option value="password">Password protected</option>
           </select>
+        </div>
+        <div style="margin-bottom: 8px;">
+          <label style="display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer;">
+            <span>
+              <span style="display: block; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">Auto HD upload</span>
+              <span style="color: var(--text-secondary); font-size: 11px;">Upload HD originals automatically when an execution is added</span>
+            </span>
+            <input id="gallery-detail-auto-hd" type="checkbox" style="width: 16px; height: 16px; accent-color: #1a9ee0; cursor: pointer; flex-shrink: 0;">
+          </label>
         </div>
         <div>
           <label style="display: block; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Status</label>

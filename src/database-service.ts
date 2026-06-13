@@ -4233,7 +4233,7 @@ export async function getUserGalleries() {
   if (!userId) throw new Error('Not authenticated');
   const { data, error } = await client
     .from('galleries')
-    .select('id, title, slug, status, gallery_type, access_type, project_id, total_views, total_downloads, created_at')
+    .select('id, title, slug, status, gallery_type, access_type, project_id, total_views, total_downloads, created_at, settings')
     .eq('user_id', userId)
     .neq('status', 'suspended')
     .order('created_at', { ascending: false });
@@ -4751,6 +4751,40 @@ export async function getGalleryExecutions(galleryId: string) {
     ...exec,
     gallery_image_count: countMap[exec.id] || 0,
   }));
+}
+
+// ==================== GALLERY HD (R2) STATUS — aggregated for cards ====================
+
+// Returns { total, completed } across the images linked to a gallery, read from
+// images.original_upload_status. HD state lives on the image row, so this reflects
+// real per-gallery HD readiness — the same R2 object is shared with any other
+// gallery referencing the same images (no duplication, no re-upload).
+export async function getGalleryHdStatus(galleryId: string) {
+  const client = getSupabaseClient();
+  const { data: links, error: linkErr } = await client
+    .from('gallery_images')
+    .select('image_id')
+    .eq('gallery_id', galleryId);
+  if (linkErr) throw new Error(linkErr.message);
+
+  const imageIds = (links || []).map((r: any) => r.image_id).filter(Boolean);
+  if (imageIds.length === 0) return { total: 0, completed: 0 };
+
+  let total = 0;
+  let completed = 0;
+  for (let i = 0; i < imageIds.length; i += 200) {
+    const chunk = imageIds.slice(i, i + 200);
+    const { data: imgs, error } = await client
+      .from('images')
+      .select('original_upload_status')
+      .in('id', chunk);
+    if (error) throw new Error(error.message);
+    for (const img of imgs || []) {
+      total++;
+      if (img.original_upload_status === 'completed') completed++;
+    }
+  }
+  return { total, completed };
 }
 
 // ==================== R2 UPLOAD: Get images needing upload for an execution ====================

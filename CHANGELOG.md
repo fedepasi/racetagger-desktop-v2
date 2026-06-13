@@ -2,6 +2,39 @@
 
 ## [Unreleased]
 
+### ✨ Delivery
+
+- **HD upload — real status + context-aware action (Phase 1)**: the gallery-detail
+  "Executions in gallery" list now shows each execution's real HD (R2) upload status
+  (`completed/total`, plus failed/uploading counts) instead of an unconditional
+  "Retry HD upload" button. The action is context-aware — "Upload HD (N)" when none are
+  uploaded, "Upload missing (N)" when partial, "Retry (N)" when some failed, and a green
+  "HD ready" with no button when complete. Status is read live per execution via
+  `delivery-r2-upload-status` — HD state lives on the image rows (`original_upload_status`),
+  so this is the true state, not an assumption. Adding an execution whose originals are
+  already on R2 now surfaces a dedup notice ("already on R2 — linked, no new upload") rather
+  than implying a re-upload. Renderer-only — reuses existing IPC; no token, schema, or
+  upload-logic change.
+
+- **HD upload — per-gallery auto-upload flag (Phase 2)**: galleries gain an opt-in
+  `settings.auto_hd_upload` (stored in the existing `galleries.settings` jsonb — no migration).
+  A checkbox in the create-gallery modal and a toggle in the gallery-detail set it (the toggle
+  persists via the existing `delivery-update-gallery` IPC, merging client-side so other
+  `settings` keys survive the full-column update). When on, adding an execution to the gallery
+  auto-starts the HD upload of its missing originals; when off (the default) HD upload stays a
+  manual action — HD upload is always the user's choice unless the gallery opts in. The
+  galleries query now selects `settings`. Reuses existing IPC; no new channel, token, or schema
+  change.
+
+- **HD upload — real HD chip on gallery cards (Phase 3)**: gallery cards now show real HD
+  readiness aggregated from the linked images via a new read-only IPC `delivery-gallery-hd-status`
+  (reads `images.original_upload_status` for the gallery's `gallery_images` rows): green
+  "HD ready" when all originals are on R2, amber "HD N/M" when partial, dim "Previews only" when
+  none, and the chip is dropped when the gallery has no linked images. Previously the chip
+  checked fields the gallery row never carries, so it was effectively never shown. Filled async
+  per card so the list renders immediately. One read-only IPC (handler + preload whitelist);
+  no token or schema change.
+
 ### 🎨 Brand
 
 - **Delivery page redesign — foundation (Phase A)**: introduces a canonical app-wide toast
