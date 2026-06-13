@@ -3010,6 +3010,19 @@ class UnifiedImageWorker extends EventEmitter {
         strategy: 'full-image',
         usedFullImage: true,
         recognitionMethod: 'gemini-v6-full-image',
+        // TRAIN-01: carry the near-miss band from the (empty) segmentation attempt
+        // so the full-image fallback still records crop_near_miss in training_flags.
+        // This is the highest-value case: YOLO missed, Gemini found it on the full
+        // image, and Gemini's box_2d (already persisted in raw_response.vehicles
+        // since v1.1.10) can be triangulated against the near-miss box downstream.
+        segmentationPreprocessing: this.lastSegmentationMetadata ? {
+          used: this.lastSegmentationMetadata.used,
+          modelId: this.lastSegmentationMetadata.modelId,
+          detectionsCount: this.lastSegmentationMetadata.detectionsCount,
+          inferenceMs: this.lastSegmentationMetadata.inferenceMs,
+          masksApplied: this.lastSegmentationMetadata.masksApplied,
+          ...(this.lastSegmentationMetadata.nearMiss?.length ? { nearMiss: this.lastSegmentationMetadata.nearMiss } : {})
+        } : undefined,
         imageId: v6Result.imageId  // Pass DB UUID for analysis_log UPDATE
       };
 
