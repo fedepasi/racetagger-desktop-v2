@@ -206,7 +206,7 @@ function getUnifiedSampleParticipant() {
         if (v.raceNumber && v.raceNumber !== 'N/A') {
           const presetParticipants = window.currentPresetParticipants ||
             (unifiedPresetData?.participants || []);
-          const presetMatch = presetParticipants.find(p => p.numero === v.raceNumber);
+          const presetMatch = presetParticipants.find(p => String(p.numero) === String(v.raceNumber));
 
           return {
             number: v.raceNumber || '10',
@@ -1103,13 +1103,14 @@ function buildUnifiedImages(scope) {
             team: vehicle.team || ''
           };
 
-          const presetMatch = presetParticipants.find(p => p.numero === vehicle.raceNumber);
+          const presetMatch = presetParticipants.find(p => String(p.numero) === String(vehicle.raceNumber));
           if (presetMatch) {
-            if (!participant.name && presetMatch.nome) participant.name = presetMatch.nome;
+            // Entry-first: preset is authoritative — always overwrite name and team
+            if (presetMatch.nome) participant.name = presetMatch.nome;
             if (presetMatch.car_model) participant.car_model = presetMatch.car_model;
             if (presetMatch.metatag) participant.metatag = presetMatch.metatag;
             if (presetMatch.nationality) participant.nationality = presetMatch.nationality;
-            if (!participant.team && presetMatch.squadra) participant.team = presetMatch.squadra;
+            if (presetMatch.squadra) participant.team = presetMatch.squadra;
 
             if (!participant.nationality && presetMatch.preset_participant_drivers?.length > 0) {
               const firstDriver = presetMatch.preset_participant_drivers[0];

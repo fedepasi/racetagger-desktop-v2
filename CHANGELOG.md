@@ -81,6 +81,46 @@
   a solid `#1a9ee0` primary (white text), a readable dark ghost, and a red danger regardless
   of which theme var wins. CSS only.
 
+### 🔧 Matching
+
+- **ACC-04 Phase 5 — export coherence (`unified-export-iptc-modal.js`)**:
+  Two bugs fixed in the export path that caused the "number+driver right, team wrong"
+  symptom to leak into exported IPTC/XMP metadata even after correcting the preset:
+  (1) `p.numero === vehicle.raceNumber` strict-equality failed when `p.numero` is a DB
+  integer and `raceNumber` is a string — changed to `String(p.numero) === String(...)`.
+  (2) participant `name` and `team` were initialized from AI-detected vehicle data and
+  preset only filled in the gap (`if (!participant.name) ...`). Changed to entry-first:
+  `presetMatch.nome` and `presetMatch.squadra` always overwrite, so the canonical preset
+  data takes authority over stale AI values in the JSONL log.
+
+- **ACC-04 Phase 3 — coherence cascade for MANUAL review path**:
+  When the user picks a candidate in the review panel (`resolveReview`), the renderer
+  now attaches the full preset entry (`chosenParticipant`) to the correction payload.
+  `update-analysis-log` in main.ts calls `cascadeEntryToVehicle` on the vehicle in
+  JSONL, overwriting ALL fields (team, drivers, category, make/model, sponsors, metatag)
+  from the entry — not just the slim `participantName + team` the candidate card carries.
+  The B1 overrides (`matchStatus`, `matchedBy`, `confidence`) are re-applied after the
+  cascade. `primaryVehicle` mirror is synced for vehicleIndex 0. No extra DB query —
+  the renderer uses its already-loaded `this.presetParticipants`.
+
+- **ACC-04 Phase 1 — preset-entry coherence cascade (AUTO + TEMPORAL paths)**:
+  `applyCorrectionsToAnalysis` now calls `cascadeEntryToVehicle` so ALL fields
+  (team, drivers, category, make/model, sponsors, plate, metatag) derive from the
+  matched preset entry — not partial AI values. Empty entry fields clear the vehicle
+  field to null (`clearMissing: true`), killing the "number+driver right, team wrong"
+  class of bug. The temporal-rescore flip now uses the same cascade (replacing a
+  broken `nome.split` that lost co-drivers and skipped category/make/model/sponsors)
+  and syncs `finalResult` via the cascade.
+
+- **ACC-04 Phase 0 — sponsor & coherence foundation (no behaviour change)**: adds
+  `src/matching/sponsor-canonical.ts` (pure canonical key + bidirectional umlaut
+  normalisation + clustering + series-sponsor detection helpers) and
+  `src/matching/entry-cascade.ts` (`cascadeEntryToVehicle` — single authoritative
+  function to overwrite all vehicle fields from a resolved preset entry).
+  `SmartMatcher.normalizeSponsorValue` now delegates to `sponsor-canonical.normalizeSponsor`
+  (identical behaviour). 52 new unit tests. Foundation for Phase 1 (coherence cascade)
+  and Phase 2 (sponsor dedup + series-sponsor detection UX).
+
 ## [1.1.10] - 2026-06-11
 
 ### 🎨 Brand
