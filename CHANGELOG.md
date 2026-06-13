@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### 🧠 Training data flywheel (TRAIN-01)
+
+- **Scene-classifier uncertainty capture (Phase 1)**: the local scene classifier now
+  derives an uncertainty signal (`top1`, `top2`, `margin`, `entropy`) from the softmax it
+  already computes, and flags low-confidence / torn / near-skip-boundary images as future
+  scene-model training candidates. Persisted with **zero extra inference and zero Gemini cost**:
+  into `analysis_results.training_flags.scene_training_candidate` on the normal path
+  (queryable + GIN-indexed) and into `raw_response` on the crowd-skip path. No schema change.
+
 ### ✨ Delivery
 
 - **HD upload — real status + context-aware action (Phase 1)**: the gallery-detail

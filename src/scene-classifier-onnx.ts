@@ -44,6 +44,16 @@ export interface SceneClassificationResult {
     confidence: number;
   }[];
   inferenceTimeMs: number;
+  /**
+   * Derived uncertainty signal for training-candidate mining (TRAIN-01).
+   * Cheap — the full softmax is already computed; we just stop discarding it.
+   */
+  uncertainty?: {
+    top1: number;     // highest class probability
+    top2: number;     // second-highest
+    margin: number;   // top1 - top2 (small = model torn between two scenes)
+    entropy: number;  // -Σ p·ln(p) over all class probabilities
+  };
 }
 
 /**
@@ -328,13 +338,23 @@ export class SceneClassifierONNX {
       // Get top prediction
       const topPrediction = allPredictions[0];
 
+      // Derived uncertainty (TRAIN-01): how "torn" the classifier was. The full
+      // softmax is already in hand — compute margin + entropy instead of dropping it.
+      const top1 = allPredictions[0]?.confidence ?? 0;
+      const top2 = allPredictions[1]?.confidence ?? 0;
+      let entropy = 0;
+      for (const p of allPredictions) {
+        if (p.confidence > 0) entropy -= p.confidence * Math.log(p.confidence);
+      }
+
       const inferenceTimeMs = Date.now() - startTime;
 
       return {
         category: topPrediction.category,
         confidence: topPrediction.confidence,
         allPredictions,
-        inferenceTimeMs
+        inferenceTimeMs,
+        uncertainty: { top1, top2, margin: top1 - top2, entropy }
       };
     } catch (error) {
       console.error('[SceneClassifierONNX] Classification failed:', error);

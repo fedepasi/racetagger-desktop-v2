@@ -3335,11 +3335,24 @@ class UnifiedImageWorker extends EventEmitter {
       // ============================================
       phaseStart = Date.now();
       let sceneClassification: SceneClassificationResult | null = null;
+      let sceneTrainingCandidate = false;
       let shouldSkipAI = false;
 
       if (this.sceneClassificationEnabled && this.sceneClassifier) {
         try {
           sceneClassification = await this.sceneClassifier.classify(buffer);
+
+          // TRAIN-01: mark a future scene-classifier training candidate when the
+          // model was unsure — low top1, torn margin, or a crowd_scene sitting
+          // just under the skip line (the exact boundary that decides a credit).
+          const u = sceneClassification.uncertainty;
+          sceneTrainingCandidate = !!u && (
+            u.top1 < 0.60 ||
+            u.margin < 0.15 ||
+            (sceneClassification.category === SceneCategory.CROWD_SCENE &&
+             sceneClassification.confidence >= 0.60 &&
+             sceneClassification.confidence < this.sceneSkipThreshold)
+          );
 
           // Log scene classification result
           workerLog.info(`Scene: ${sceneClassification.category} (${(sceneClassification.confidence * 100).toFixed(0)}%) - ${imageFile.fileName}`);
@@ -3442,6 +3455,8 @@ class UnifiedImageWorker extends EventEmitter {
                   modelSource: 'scene_classifier_onnx',
                   sceneCategory: sceneClassification.category,
                   sceneConfidence: sceneClassification.confidence,
+                  sceneUncertainty: sceneClassification.uncertainty || null,
+                  sceneTrainingCandidate,
                   visualTags: skipVisualTagsResult?.tags || null,
                   inferenceTimeMs: sceneClassification.inferenceTimeMs || 0
                 },
@@ -4281,7 +4296,10 @@ class UnifiedImageWorker extends EventEmitter {
         const trainingFlags = computeTrainingFlags(
           analysisResult.segmentationPreprocessing,
           analysisResult.recognitionMethod,
-          filteredAnalysis.length
+          filteredAnalysis.length,
+          sceneClassification
+            ? { candidate: sceneTrainingCandidate, category: sceneClassification.category, uncertainty: sceneClassification.uncertainty ?? null }
+            : null
         );
 
         // Photo / camera / exposure / AF metadata extracted upfront from EXIF.
@@ -10450,7 +10468,8 @@ export class UnifiedImageProcessor extends EventEmitter {
 function computeTrainingFlags(
   segmentationPreprocessing: any,
   recognitionMethod: string | undefined,
-  totalVehiclesFound: number
+  totalVehiclesFound: number,
+  scene?: { candidate: boolean; category: string | null; uncertainty: any } | null
 ): Record<string, any> | null {
   const flags: Record<string, any> = {};
 
@@ -10522,8 +10541,17 @@ function computeTrainingFlags(
     }
   }
 
+  // ── Flag: scene_training_candidate (TRAIN-01) ──
+  // The local scene classifier was unsure on this image — a future scene-model
+  // training candidate. Derived locally (no Gemini cost); see scene-classifier-onnx.
+  if (scene?.candidate) {
+    flags.scene_training_candidate = true;
+    flags.scene_category = scene.category ?? null;
+    if (scene.uncertainty) flags.scene_uncertainty = scene.uncertainty;
+  }
+
   // Return null if no actual problem flags were set (only metadata)
-  const hasProblems = flags.no_yolo || flags.seg_fallback || flags.low_confidence || flags.split_bbox;
+  const hasProblems = flags.no_yolo || flags.seg_fallback || flags.low_confidence || flags.split_bbox || flags.scene_training_candidate;
   if (!hasProblems) return null;
 
   return flags;
