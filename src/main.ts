@@ -114,10 +114,8 @@ import { registerAllHandlers, initializeIpcContext, isForceUpdateRequired, check
 import { loadExecutionLogIfExists } from './utils/execution-log-loader';
 
 // Definisci le estensioni supportate a livello globale per riutilizzo
-// PNG excluded from import (2026-06-12): web-sourced PNGs are often JPEGs in
-// disguise and ExifTool refuses metadata writes on extension/content mismatch.
 const RAW_EXTENSIONS = ['.nef', '.arw', '.cr2', '.cr3', '.orf', '.raw', '.rw2', '.dng'];
-const STANDARD_EXTENSIONS = ['.jpg', '.jpeg', '.webp'];
+const STANDARD_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp'];
 const ALL_SUPPORTED_EXTENSIONS = [...STANDARD_EXTENSIONS, ...RAW_EXTENSIONS];
 
 // Don't initialize @electron/remote here - will be done in app.whenReady()
@@ -1564,12 +1562,6 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
     unifiedImageProcessor.on('batchComplete', (summary: { successful: number; errors: number; total: number }) => {
       // REMOVED: Don't send summary as batch-complete, it confuses the renderer
       // The actual results array will be sent after processBatch() completes at line 1460
-    });
-
-    // Non-fatal batch warnings (e.g. face recognition unavailable for this
-    // batch). The renderer shows a banner; processing continues normally.
-    unifiedImageProcessor.on('processingWarning', (warning: { code: string; message: string; recoverable: boolean }) => {
-      safeSend('processing-warning', warning);
     });
 
     // Listen for uploaded images to cache their Supabase URLs (for RAW thumbnails)
@@ -4642,6 +4634,39 @@ app.whenReady().then(async () => { // Added async here
 
           // Manual correction confidence is 100%.
           vehicle.confidence = 1.0;
+
+          // ACC-04 Phase 3: cascade ALL preset-entry fields for review-resolved corrections
+          // (category, make/model, sponsors, metatag — fields the slim chosenCandidate omits).
+          // The renderer attaches correction.changes.chosenParticipant (full preset row + drivers)
+          // so this needs no extra DB round-trip.
+          if (correction.changes.resolvedFromReview === true && correction.changes.chosenParticipant) {
+            const { cascadeEntryToVehicle: _cascadeForReview } = await import('./matching/entry-cascade');
+            _cascadeForReview(vehicle, correction.changes.chosenParticipant, {
+              clearMissing: true, source: 'manual-review'
+            });
+            // Re-apply B1 overrides — cascade doesn't set these but be defensive
+            vehicle.matchStatus = 'matched';
+            vehicle.matchedBy = 'user_manual';
+            vehicle.confidence = 1.0;
+            vehicle.finalResult = vehicle.finalResult || {};
+            vehicle.finalResult.matchStatus = 'matched';
+            vehicle.finalResult.matchedBy = 'user_manual';
+            // Mirror cascaded fields to primaryVehicle (vehicle 0 only)
+            if (correction.vehicleIndex === 0 && imageAnalysisEvent?.primaryVehicle) {
+              const pv = imageAnalysisEvent.primaryVehicle;
+              pv.teamName = vehicle.teamName;
+              pv.drivers = vehicle.drivers;
+              pv.category = vehicle.category;
+              pv.make = vehicle.make;
+              pv.model = vehicle.model;
+              pv.sponsors = vehicle.sponsors;
+              pv.metatag = vehicle.metatag;
+              if (pv.finalResult) {
+                pv.finalResult.team = vehicle.teamName;
+                pv.finalResult.drivers = vehicle.drivers;
+              }
+            }
+          }
 
           // Append correction metadata for audit trail / training data.
           // Dedup guard: if `originalValues` deep-equals `correction.changes`,

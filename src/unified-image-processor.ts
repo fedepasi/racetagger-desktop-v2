@@ -31,6 +31,7 @@ import { createComponentLogger } from './utils/logger';
 import { FaceRecognitionOnnxProcessor, FaceRecognitionOnnxResult, FaceWithEmbedding } from './face-recognition-onnx-processor';
 import { faceRecognitionProcessor, FaceContext, PersonMatch } from './face-recognition-processor';
 import { SyntheticPresetBuilder } from './matching/synthetic-preset-builder';
+import { cascadeEntryToVehicle } from './matching/entry-cascade';
 
 // Bridge-compatible result type for face recognition (replaces old face-detection-bridge)
 interface FaceRecognitionResult {
@@ -53,31 +54,6 @@ interface FaceRecognitionResult {
   matchingTimeMs: number;
   totalTimeMs: number;
   error?: string;
-  /** Always-on observability block (persisted to JSONL + analysis_results.raw_response)
-   *  so the portal can show face confidence even when no match was accepted. */
-  telemetry?: FaceRecognitionTelemetry;
-}
-
-/** Face telemetry persisted per image whenever face recognition runs (or is
- *  strategically skipped while enabled). Powers the portal's always-visible
- *  face data — measurement baseline for the face-primary (option B) work. */
-interface FaceRecognitionTelemetry {
-  /** Why face rec didn't run despite the category having it enabled */
-  skipped?: 'vehicles_only_scene';
-  context?: 'portrait' | 'action' | 'podium' | 'auto';
-  facesDetected?: number;
-  matchedCount?: number;
-  detectionTimeMs?: number;
-  matchingTimeMs?: number;
-  /** Per-face outcome incl. below-threshold best candidate */
-  faces?: Array<{
-    faceIndex: number;
-    matched: boolean;
-    personName?: string;
-    score: number;
-    metric: 'cosine' | 'euclidean';
-    threshold: number;
-  }>;
 }
 import { consentService } from './consent-service';
 import {
@@ -402,11 +378,6 @@ class UnifiedImageWorker extends EventEmitter {
   // Face Recognition (ONNX-based: YuNet detection + AuraFace embedding)
   private faceRecognitionEnabled: boolean = false;
   private faceDescriptorsLoaded: boolean = false;
-  // Set when the category wants face rec but initialization FAILED (network,
-  // model download, ONNX): the batch runs without face rec and the processor
-  // surfaces this to the user (fail loud, not silent). Read via
-  // getFaceRecognitionInitError() by initializeWorkerPool().
-  public faceRecognitionInitError: string | null = null;
   private _dimMismatchWarned: boolean = false;
   // RAW preview calibration strategy (set by processor from calibration results)
   private rawPreviewStrategies: Map<string, RawPreviewStrategy> = new Map();
@@ -673,9 +644,6 @@ class UnifiedImageWorker extends EventEmitter {
 
       const participantIds = participants.map((p: any) => p.id);
       let totalCount = 0;
-      // Track failed sub-queries: a network error must NOT read as "0
-      // descriptors" (that silently disabled face rec for the whole batch).
-      let anyQueryFailed = false;
 
       // 1. Count participant-level face photos (linked via participant_id)
       const { count: participantPhotoCount, error: fError } = await this.supabase
@@ -686,7 +654,6 @@ class UnifiedImageWorker extends EventEmitter {
 
       if (fError) {
         log.warn(`[FaceRecognition] Pre-check participant photos query failed: ${fError.message}`);
-        anyQueryFailed = true;
       } else {
         totalCount += participantPhotoCount ?? 0;
       }
@@ -707,55 +674,15 @@ class UnifiedImageWorker extends EventEmitter {
 
         if (dfError) {
           log.warn(`[FaceRecognition] Pre-check driver photos query failed: ${dfError.message}`);
-          anyQueryFailed = true;
         } else {
           totalCount += driverPhotoCount ?? 0;
         }
       }
 
-      // A zero produced by failed queries is "unknown", not "empty preset" —
-      // return -1 so initializeFaceRecognition proceeds to the full load
-      // (whose failure is surfaced loudly) instead of silently disabling.
-      if (totalCount === 0 && anyQueryFailed) {
-        return -1;
-      }
       return totalCount;
     } catch (err: any) {
       log.warn(`[FaceRecognition] Pre-check error: ${err.message || err}`);
       return -1;
-    }
-  }
-
-  /**
-   * Face-recognition TRUST threshold (cosine) for this category: the bar a
-   * face match must clear to take the face-only path (skip Gemini). Stricter
-   * than the per-context MATCH threshold (0.50). Configurable per category via
-   * sport_categories.matching_config.thresholds.faceTrustThreshold; default 0.6.
-   */
-  private getFaceTrustThreshold(): number {
-    try {
-      const mc: any = this.currentSportCategory?.matching_config;
-      const cfg = typeof mc === 'string' ? JSON.parse(mc) : mc;
-      const v = cfg?.thresholds?.faceTrustThreshold;
-      return typeof v === 'number' && v > 0 && v <= 1 ? v : 0.6;
-    } catch {
-      return 0.6;
-    }
-  }
-
-  /**
-   * Per-category face MATCH threshold override (cosine, evidence-level).
-   * Undefined → the per-context defaults in COSINE_CONTEXT_CONFIG apply (0.50).
-   * Configurable via sport_categories.matching_config.thresholds.faceMatchThreshold.
-   */
-  private getFaceMatchThreshold(): number | undefined {
-    try {
-      const mc: any = this.currentSportCategory?.matching_config;
-      const cfg = typeof mc === 'string' ? JSON.parse(mc) : mc;
-      const v = cfg?.thresholds?.faceMatchThreshold;
-      return typeof v === 'number' && v > 0 && v <= 1 ? v : undefined;
-    } catch {
-      return undefined;
     }
   }
 
@@ -803,8 +730,7 @@ class UnifiedImageWorker extends EventEmitter {
       const onnxProcessor = FaceRecognitionOnnxProcessor.getInstance();
       const onnxInitOk = await onnxProcessor.initialize();
       if (!onnxInitOk) {
-        this.faceRecognitionInitError = 'ONNX pipeline failed to initialize (YuNet detector not loaded)';
-        log.error(`Face recognition: ${this.faceRecognitionInitError} — batch will run WITHOUT face recognition`);
+        log.warn('Face recognition: ONNX pipeline failed to initialize (YuNet not loaded) - disabling');
         this.faceRecognitionEnabled = false;
         return;
       }
@@ -815,11 +741,9 @@ class UnifiedImageWorker extends EventEmitter {
       // for analysis (offline policy), so a missing model = disable, not pretend.
       const embedderReady = await onnxProcessor.ensureEmbedderReady();
       if (!embedderReady) {
-        const reason = onnxProcessor.getEmbedderLoadError();
-        this.faceRecognitionInitError =
-          `AuraFace embedder not available${reason ? ` (${reason})` : ' (offline or model download failed)'}`;
-        log.error(
-          `Face recognition: ${this.faceRecognitionInitError} — batch will run WITHOUT face recognition`
+        log.warn(
+          'Face recognition: AuraFace embedder not available (offline or model download failed) — ' +
+          'disabling face recognition for this run instead of returning silent zero-matches.'
         );
         this.faceRecognitionEnabled = false;
         return;
@@ -839,23 +763,12 @@ class UnifiedImageWorker extends EventEmitter {
         this.faceDescriptorsLoaded = true;
         this.faceDescriptorCount = descriptorCount;
         log.info(`Face recognition initialized with ${descriptorCount} descriptors`);
-      } else if (preCheckCount > 0) {
-        // Pre-check saw descriptors but the load produced none — data/transport
-        // inconsistency, not an empty preset. Surface it.
-        this.faceRecognitionInitError =
-          `descriptor load returned 0 but pre-check counted ${preCheckCount} — possible network/data issue`;
-        log.error(`Face recognition: ${this.faceRecognitionInitError} — batch will run WITHOUT face recognition`);
-        this.faceRecognitionEnabled = false;
       } else {
         log.info(`No face descriptors in preset - face recognition disabled`);
         this.faceRecognitionEnabled = false;
       }
-    } catch (error: any) {
-      // loadFromPreset now rethrows on network/DB failure (fail loud): the
-      // category asked for face rec, descriptors exist, but we couldn't load
-      // them. Record the reason so the processor can tell the user.
-      this.faceRecognitionInitError = `descriptor load failed: ${error?.message || error}`;
-      log.error(`Face recognition initialization failed — batch will run WITHOUT face recognition:`, error);
+    } catch (error) {
+      log.warn(`Face recognition initialization failed:`, error);
       this.faceRecognitionEnabled = false;
     }
   }
@@ -950,15 +863,7 @@ class UnifiedImageWorker extends EventEmitter {
           matches: [],
           detectionTimeMs: onnxResult.detectionTimeMs,
           matchingTimeMs: 0,
-          totalTimeMs: Date.now() - startTime,
-          telemetry: {
-            context,
-            facesDetected: 0,
-            matchedCount: 0,
-            detectionTimeMs: onnxResult.detectionTimeMs,
-            matchingTimeMs: 0,
-            faces: []
-          }
+          totalTimeMs: Date.now() - startTime
         };
       }
 
@@ -980,12 +885,7 @@ class UnifiedImageWorker extends EventEmitter {
         }
       }
 
-      const { matches: personMatches, outcomes: faceOutcomes } =
-        faceRecognitionProcessor.matchEmbeddingsDetailed(
-          embeddings,
-          context as FaceContext,
-          this.getFaceMatchThreshold()
-        );
+      const personMatches = faceRecognitionProcessor.matchEmbeddings(embeddings, context as FaceContext);
       const matchingTimeMs = Date.now() - matchStartTime;
 
       // Convert to bridge-compatible format
@@ -1020,22 +920,7 @@ class UnifiedImageWorker extends EventEmitter {
         matches,
         detectionTimeMs: onnxResult.detectionTimeMs,
         matchingTimeMs,
-        totalTimeMs: Date.now() - startTime,
-        telemetry: {
-          context,
-          facesDetected: onnxResult.faces.length,
-          matchedCount: faceOutcomes.filter(o => o.matched).length,
-          detectionTimeMs: onnxResult.detectionTimeMs,
-          matchingTimeMs,
-          faces: faceOutcomes.map(o => ({
-            faceIndex: o.faceIndex,
-            matched: o.matched,
-            personName: o.personName,
-            score: Math.round(o.score * 1000) / 1000,
-            metric: o.metric,
-            threshold: o.threshold
-          }))
-        }
+        totalTimeMs: Date.now() - startTime
       };
 
       if (result.matches.length > 0) {
@@ -3344,8 +3229,6 @@ class UnifiedImageWorker extends EventEmitter {
    */
   async processImage(imageFile: UnifiedImageFile, processor?: UnifiedImageProcessor, temporalContext?: { imageTimestamp: ImageTimestamp; temporalNeighbors: ImageTimestamp[] } | null): Promise<UnifiedProcessingResult> {
     const startTime = Date.now();
-    // Ghost-images investigation: unconditional entry trace (see wiki/entities/ghost-images.md)
-    workerLog.info(`processImage START: ${imageFile.fileName}`);
     let uploadReadyFileId: string | null = null;
     // let compressedFileId: string | null = null; // Not used anymore - compressed files are preserved
     let thumbnailFileId: string | null = null;
@@ -3670,9 +3553,6 @@ class UnifiedImageWorker extends EventEmitter {
         segmentationForStrategy || undefined
       );
       let faceRecognitionResult: FaceRecognitionResult | null = null;
-      // Always-persisted face observability block (undefined when the category
-      // has face recognition disabled or no descriptors are loaded).
-      let faceTelemetry: FaceRecognitionTelemetry | undefined;
 
       // STEP 3: Perform face recognition if strategy dictates
       workerLog.info(`[RecogStrategy] useFaceRecognition=${recognitionStrategy.useFaceRecognition}, useNumberRecognition=${recognitionStrategy.useNumberRecognition}, context=${recognitionStrategy.context} for ${imageFile.fileName}`);
@@ -3684,7 +3564,6 @@ class UnifiedImageWorker extends EventEmitter {
         );
         const matchedCount = faceRecognitionResult?.matches?.filter(m => m.matched).length || 0;
         workerLog.info(`[FaceRecogResult] success=${faceRecognitionResult?.success}, totalMatches=${faceRecognitionResult?.matches?.length || 0}, matchedFaces=${matchedCount} for ${imageFile.fileName}`);
-        faceTelemetry = faceRecognitionResult?.telemetry;
 
         // Persist face matches into the per-image cache so findIntelligentMatches()
         // can feed them to SmartMatcher as FACE_MATCH evidence. Only keep matches
@@ -3706,37 +3585,13 @@ class UnifiedImageWorker extends EventEmitter {
         }
       } else {
         workerLog.info(`Face recognition DISABLED (segmentation detected only vehicles)`);
-        // Record the strategic skip only when face rec is actually available
-        // for this batch (category enabled + descriptors loaded) — absence of
-        // the block means "face recognition not in play at all".
-        if (this.faceRecognitionEnabled) {
-          faceTelemetry = { skipped: 'vehicles_only_scene' };
-        }
       }
 
       // Check if we should skip number recognition (portrait/podium scenes)
       if (!recognitionStrategy.useNumberRecognition && faceRecognitionResult?.success) {
-        // FACE-PRIMARY POLICY (2026-06-11): the face-only path (skip Gemini)
-        // requires the TRUST threshold (default 0.60, configurable via
-        // matching_config.thresholds.faceTrustThreshold), which is stricter
-        // than the per-context MATCH threshold (0.50). Matches in the
-        // [match, trust) band are NOT confident enough to skip Gemini: they
-        // fall through to AI analysis and contribute as FACE_MATCH evidence
-        // in SmartMatcher instead ("face incerta → Gemini decide").
-        const faceTrustThreshold = this.getFaceTrustThreshold();
-        const trustedMatches = faceRecognitionResult.matches
-          .filter(m => m.matched && typeof m.similarity === 'number' && m.similarity >= faceTrustThreshold);
-        const belowTrustCount = faceRecognitionResult.matches.filter(
-          m => m.matched && (typeof m.similarity !== 'number' || m.similarity < faceTrustThreshold)
-        ).length;
-        if (belowTrustCount > 0) {
-          workerLog.info(
-            `[FaceOnlyPath] ${belowTrustCount} face match(es) below trust threshold ${faceTrustThreshold} ` +
-            `for ${imageFile.fileName} — falling through to AI analysis (face stays as SmartMatcher evidence)`
-          );
-        }
-
-        const matchedDrivers = trustedMatches
+        // For portrait/podium scenes, we only use face recognition IF we found matches
+        const matchedDrivers = faceRecognitionResult.matches
+          .filter(m => m.matched)
           .map(m => ({
             raceNumber: m.driverInfo?.raceNumber || null,
             drivers: m.driverInfo?.driverName ? [m.driverInfo.driverName] : [],
@@ -3747,7 +3602,7 @@ class UnifiedImageWorker extends EventEmitter {
 
         // FIX: Only use face-only results if we actually found matches
         // Otherwise, fall through to AI analysis for number recognition
-        workerLog.info(`[FaceOnlyPath] matchedDrivers=${matchedDrivers.length} (trust>=${faceTrustThreshold}), useNumberRecognition=${recognitionStrategy.useNumberRecognition} for ${imageFile.fileName}`);
+        workerLog.info(`[FaceOnlyPath] matchedDrivers=${matchedDrivers.length}, useNumberRecognition=${recognitionStrategy.useNumberRecognition} for ${imageFile.fileName}`);
         if (matchedDrivers.length > 0) {
           const processingTimeMs = Date.now() - startTime;
           workerLog.info(`Face-only recognition: ${matchedDrivers.length} drivers identified for ${imageFile.fileName}`);
@@ -3940,65 +3795,54 @@ class UnifiedImageWorker extends EventEmitter {
             // Non bloccare il processing per errori di upload
           }
 
-          // 6. Build the JSONL entry — ALWAYS, even if the upload/DB steps in
-          // the try above threw. Issue #136: this JSONL entry is the local
-          // source of truth for the review report. GHOST-IMAGES ROOT CAUSE
-          // (2026-06-11, see wiki/entities/ghost-images.md): this block used to
-          // write ONLY via `this.analysisLogger`, which is undefined in pool
-          // workers (the pool is created at processBatch:~8335 BEFORE the
-          // logger exists at processBatchInternal:~8938). Every face-only image
-          // therefore lost its JSONL entry AND returned no pendingLogEntry →
-          // invisible in the results UI, false-positive "ghost image", token
-          // charged with no visible trace. Fixed by following the same
-          // pendingLogEntry contract as the standard and scene-skip paths.
-          const { SUPABASE_CONFIG } = await import('./config');
-          const faceSupabaseUrl = faceRecognitionStoragePath
-            ? `${SUPABASE_CONFIG.url}/storage/v1/object/public/uploaded-images/${faceRecognitionStoragePath}`
-            : `local://${imageFile.originalPath}`;
-
-          const faceVehiclesForLog = matchedDrivers.map((driver, idx) => ({
-            vehicleIndex: idx,
-            raceNumber: driver.raceNumber ?? undefined,
-            drivers: driver.drivers,
-            team: driver.teamName ?? undefined,
-            confidence: driver.confidence,
-            corrections: [] as any[],
-            finalResult: {
-              raceNumber: driver.raceNumber ?? undefined,
-              team: driver.teamName ?? undefined,
-              drivers: driver.drivers,
-              matchedBy: 'face_recognition'
-            }
-          }));
-
-          const facePendingLogEntry: any = {
-            imageId: imageFile.id,
-            dbImageId: faceRecognitionImageId || undefined,
-            fileName: imageFile.fileName,
-            originalFileName: path.basename(imageFile.originalPath),
-            originalPath: imageFile.originalPath,
-            supabaseUrl: faceSupabaseUrl,
-            aiResponse: {
-              rawText: `FACE_RECOGNITION: ${matchedDrivers.length} drivers identified`,
-              totalVehicles: matchedDrivers.length,
-              vehicles: faceVehiclesForLog
-            },
-            thumbnailPath,
-            microThumbPath,
-            compressedPath,
-            visualTags: faceVisualTagsResult?.tags,
-            recognitionMethod: 'face_recognition',
-            sceneCategory: sceneClassification?.category,
-            sceneConfidence: sceneClassification?.confidence,
-            // Always-on face observability — same block as the standard path
-            faceRecognition: faceTelemetry
-          };
-
-          // Legacy / non-pool path: this worker owns its own logger, write
-          // through it. Pool workers leave `this.analysisLogger` undefined and
-          // the main process writes via the returned `pendingLogEntry`.
+          // 6. Log to JSONL — ALWAYS, even if the upload/DB steps in the try
+          // above threw. Issue #136: this JSONL entry is the local source of
+          // truth for the review report. Previously it was the last step INSIDE
+          // the try, so a failed uploadToStorage()/images insert (transient
+          // "max connections" / HTML-error / network — see #144/#116/#113/#164)
+          // was swallowed by the catch and the log was skipped, making
+          // face-matched photos vanish from the report even though their
+          // metadata was already written above. Decoupled so every processed
+          // photo stays reviewable/correctable (falls back to a local:// URL
+          // when the upload didn't land).
           if (this.analysisLogger) {
-            this.analysisLogger.logImageAnalysis(facePendingLogEntry);
+            const { SUPABASE_CONFIG } = await import('./config');
+            const faceSupabaseUrl = faceRecognitionStoragePath
+              ? `${SUPABASE_CONFIG.url}/storage/v1/object/public/uploaded-images/${faceRecognitionStoragePath}`
+              : `local://${imageFile.originalPath}`;
+
+            const faceVehiclesForLog = matchedDrivers.map((driver, idx) => ({
+              vehicleIndex: idx,
+              raceNumber: driver.raceNumber ?? undefined,
+              drivers: driver.drivers,
+              team: driver.teamName ?? undefined,
+              confidence: driver.confidence,
+              corrections: [] as any[],
+              finalResult: {
+                raceNumber: driver.raceNumber ?? undefined,
+                team: driver.teamName ?? undefined,
+                drivers: driver.drivers,
+                matchedBy: 'face_recognition'
+              }
+            }));
+
+            this.analysisLogger.logImageAnalysis({
+              imageId: imageFile.id,
+              fileName: imageFile.fileName,
+              originalFileName: path.basename(imageFile.originalPath),
+              originalPath: imageFile.originalPath,
+              supabaseUrl: faceSupabaseUrl,
+              aiResponse: {
+                rawText: `FACE_RECOGNITION: ${matchedDrivers.length} drivers identified`,
+                totalVehicles: matchedDrivers.length,
+                vehicles: faceVehiclesForLog
+              },
+              thumbnailPath,
+              microThumbPath,
+              compressedPath,
+              visualTags: faceVisualTagsResult?.tags,
+              recognitionMethod: 'face_recognition'
+            });
             workerLog.info(`[FaceRecognition] Logged to JSONL with URL: ${faceSupabaseUrl}`);
           }
 
@@ -4015,11 +3859,7 @@ class UnifiedImageWorker extends EventEmitter {
             microThumbPath,
             sceneCategory: sceneClassification?.category,
             sceneConfidence: sceneClassification?.confidence,
-            faceRecognitionUsed: true,
-            // pendingLogEntry contract (pool workers): main process writes the
-            // JSONL entry in processWithWorker(); the ghost detector reads
-            // pendingLogEntry.supabaseUrl from here too.
-            pendingLogEntry: this.analysisLogger ? undefined : facePendingLogEntry
+            faceRecognitionUsed: true
           };
         } else {
           // Face recognition found no matches - fallback to AI analysis
@@ -4464,8 +4304,6 @@ class UnifiedImageWorker extends EventEmitter {
               imageSize: analysisResult.imageSize || undefined,
               visualTags: visualTagsResult?.tags || undefined,
               temporalContext: temporalContextLog,
-              // Always-on face observability (matched AND below-threshold outcomes)
-              faceRecognition: faceTelemetry,
               enrichedByDesktop: true,
               enrichedAt: new Date().toISOString()
             },
@@ -4517,8 +4355,6 @@ class UnifiedImageWorker extends EventEmitter {
         segmentationPreprocessing: analysisResult.segmentationPreprocessing || undefined,
         // Visual tags extracted by AI (if enabled)
         visualTags: visualTagsResult?.tags || undefined,
-        // Always-on face observability (matched AND below-threshold outcomes)
-        faceRecognition: faceTelemetry,
         // Backward compatibility - use first vehicle as primary
         primaryVehicle: vehicles.length > 0 ? vehicles[0] : undefined,
         // Scene classification (ONNX) — only populated when sport_categories.scene_classifier_enabled = true.
@@ -5854,52 +5690,10 @@ class UnifiedImageWorker extends EventEmitter {
       // Store all matches for further processing
       csvMatch = csvMatches;
     } else if (faceMatchedCsvEntries.length > 0) {
-      // FACE FALLBACK (2026-06-11): AI returned 0 results but face recognition
-      // matched. Previously these entries only fed metadata/keywords and the
-      // photo looked EMPTY in the results UI. Now we synthesize full result
-      // entries (same pattern as the temporal backfill below):
-      //   face >= trust  → 'matched'   (it would have qualified for face-only)
-      //   face <  trust  → 'needs_review' (pre-filled suggestion, user confirms)
-      const faceTrust = this.getFaceTrustThreshold();
-      const fallbackVehicles: any[] = [];
-      const enrichedEntries = faceMatchedCsvEntries.map((fe: any) => {
-        const sim = typeof fe.confidence === 'number' ? fe.confidence : 0;
-        const status: 'matched' | 'needs_review' = sim >= faceTrust ? 'matched' : 'needs_review';
-        const personName = (fe.entry ? getPrimaryDriverName(fe.entry) : undefined) || fe.entry?.nome || String(fe.matchedNumber ?? '');
-        const reason =
-          `Face fallback: AI returned 0 results; face match "${personName}" ` +
-          `(cosine ${sim.toFixed(2)} ${sim >= faceTrust ? '>=' : '<'} trust ${faceTrust}) ` +
-          `${status === 'matched' ? 'accepted as match' : 'kept as needs_review suggestion'}.`;
-        log.info(`[FaceFallback] ${imageFile.fileName}: ${reason}`);
-
-        fallbackVehicles.push({
-          raceNumber: fe.matchedNumber != null ? String(fe.matchedNumber) : null,
-          drivers: fe.entry ? getParticipantDriverNames(fe.entry) : [],
-          teamName: fe.entry?.squadra || fe.entry?.team || null,
-          otherText: [],
-          confidence: sim,
-          modelSource: 'face_recognition_fallback'
-        });
-
-        return {
-          ...fe,
-          matchType: 'face_fallback',
-          smartMatch: {
-            score: 0,
-            confidence: sim,
-            evidenceCount: 1,
-            multipleHighScores: false,
-            resolvedByOverride: false,
-            matchStatus: status,
-            reasoning: [reason],
-            alternativeCandidates: []
-          }
-        };
-      });
-
-      analysisResult.analysis = fallbackVehicles;
-      csvMatch = enrichedEntries;
-      const keywords = this.buildMetatag(fallbackVehicles, enrichedEntries);
+      // No AI analysis results, but face recognition found matches — use them directly
+      log.info(`[FaceRecognition→Metadata] No AI analysis results, using ${faceMatchedCsvEntries.length} face-only match(es)`);
+      csvMatch = faceMatchedCsvEntries;
+      const keywords = this.buildMetatag([], faceMatchedCsvEntries);
       description = keywords && keywords.length > 0 ? keywords.join(', ') : null;
     } else if (
       // TEMPORAL BACKFILL: When YOLO detected a vehicle but AI returned 0 results,
@@ -6336,43 +6130,21 @@ class UnifiedImageWorker extends EventEmitter {
         teamName: vehicle.teamName
       };
 
-      // Track corrections for this vehicle
+      // ACC-04 Phase 1: cascade ALL entry fields onto the vehicle in one call.
+      // clearMissing=true means an absent entry field (e.g. empty squadra) clears
+      // the vehicle field to null — killing "number+driver right, team wrong".
+      const preCascade = {
+        raceNumber: correctedVehicle.raceNumber,
+        drivers: JSON.stringify(correctedVehicle.drivers ?? []),
+        teamName: correctedVehicle.teamName,
+      };
+      cascadeEntryToVehicle(correctedVehicle, participant, { clearMissing: true, source: 'auto-match' });
       const corrections = {
         vehicleIndex: index,
-        raceNumber: false,
-        drivers: false,
-        team: false
+        raceNumber: correctedVehicle.raceNumber !== preCascade.raceNumber,
+        drivers: JSON.stringify(correctedVehicle.drivers ?? []) !== preCascade.drivers,
+        team: correctedVehicle.teamName !== preCascade.teamName,
       };
-
-      // Apply race number correction
-      if (participant.numero || participant.number) {
-        const correctedNumber = String(participant.numero || participant.number);
-        if (correctedVehicle.raceNumber !== correctedNumber) {
-          correctedVehicle.raceNumber = correctedNumber;
-          corrections.raceNumber = true;
-        }
-      }
-
-      // Apply driver corrections from preset_participant_drivers
-      const correctedDrivers: string[] = getParticipantDriverNames(participant);
-
-      if (correctedDrivers.length > 0) {
-        const originalDrivers = vehicle.drivers || [];
-        const driversChanged = JSON.stringify(originalDrivers.sort()) !== JSON.stringify(correctedDrivers.sort());
-        if (driversChanged) {
-          correctedVehicle.drivers = correctedDrivers;
-          corrections.drivers = true;
-        }
-      }
-
-      // Apply team correction
-      if (participant.squadra) {
-        const originalTeam = vehicle.teamName || '';
-        if (originalTeam !== participant.squadra) {
-          correctedVehicle.teamName = participant.squadra;
-          corrections.team = true;
-        }
-      }
 
       // Add corrections metadata for logging
       correctedVehicle._corrections = corrections;
@@ -9865,13 +9637,10 @@ export class UnifiedImageProcessor extends EventEmitter {
           console.log(`[TemporalRescore] image ${dbId}: vehicle ${flip.vehicleIndex} flipped #${flip.from} → #${flip.to} (score ${flip.oldScore.toFixed(1)} → ${flip.newScore.toFixed(1)})`);
           rescoreFlipsLog.push({ imageId: dbId, vehicleIndex: flip.vehicleIndex, from: flip.from, to: flip.to });
 
-          v.raceNumber = flip.to;
+          // ACC-04 Phase 1: cascade ALL entry fields (team, drivers, category, make/model, sponsors…)
+          // via cascadeEntryToVehicle; also syncs v.finalResult automatically.
+          cascadeEntryToVehicle(v, newParticipant, { clearMissing: true, source: 'temporal-rescore' });
           v.confidence = newConfidence;
-          v.teamName = newParticipant.squadra || null;
-          v.team = newParticipant.squadra || null;
-          v.drivers = newParticipant.nome
-            ? String(newParticipant.nome).split(/[,&]/).map((d: string) => d.trim()).filter(Boolean)
-            : [];
           if (v.participantMatch) {
             v.participantMatch.matchedValue = flip.to;
             v.participantMatch.entry = newParticipant;
@@ -9886,9 +9655,6 @@ export class UnifiedImageProcessor extends EventEmitter {
             }
           }
           if (v.finalResult) {
-            v.finalResult.raceNumber = flip.to;
-            v.finalResult.team = newParticipant.squadra || null;
-            v.finalResult.drivers = newParticipant.nome ? [newParticipant.nome] : [];
             v.finalResult.matchedBy = 'temporal_rescore';
           }
         }
@@ -10361,17 +10127,8 @@ export class UnifiedImageProcessor extends EventEmitter {
     const workerConfig = { ...this.config, sportCategories: this.batchSportCategories };
     const workerPromises: Promise<UnifiedImageWorker>[] = [];
 
-    // GHOST-IMAGES FLAVOR A2 (2026-06-12, see wiki/entities/ghost-images.md):
-    // pool workers must NEVER hold an analysisLogger. The pool is created at
-    // processBatch BEFORE the per-execution logger is (re)created at
-    // processBatchInternal, so on the 2nd+ batch of an app session
-    // `this.analysisLogger` still points to the PREVIOUS execution's finalized
-    // logger. Workers saw it truthy, wrote JSONL into the dead file, and
-    // skipped the pendingLogEntry contract → face-only images vanished again.
-    // Passing `undefined` makes every batch behave like the first (validated)
-    // one: workers always return pendingLogEntry, main writes with the live logger.
     for (let i = 0; i < poolSize; i++) {
-      workerPromises.push(UnifiedImageWorker.create(workerConfig, undefined, this.networkMonitor));
+      workerPromises.push(UnifiedImageWorker.create(workerConfig, this.analysisLogger, this.networkMonitor));
     }
 
     this.workerPool = await Promise.all(workerPromises);
@@ -10381,30 +10138,6 @@ export class UnifiedImageProcessor extends EventEmitter {
     // Share the adaptive upload semaphore with all workers
     for (const worker of this.workerPool) {
       worker.setUploadSemaphore(this.uploadSemaphore);
-    }
-
-    // FAIL LOUD (2026-06-11): if the category wanted face recognition but a
-    // worker couldn't initialize it (network during descriptor load, model
-    // download failure, ONNX init), tell the user ONCE instead of silently
-    // running the whole batch without face rec. The batch still proceeds —
-    // face rec is auxiliary — but the user must know it's off.
-    const faceInitError = this.workerPool.find(w => w.faceRecognitionInitError)?.faceRecognitionInitError;
-    if (faceInitError) {
-      const warning = {
-        code: 'face_recognition_unavailable',
-        message: `Face recognition is OFF for this batch: ${faceInitError}`,
-        recoverable: true
-      };
-      console.error(`[WorkerPool] ⚠️ ${warning.message}`);
-      this.emit('processingWarning', warning);
-      errorTelemetryService.reportCriticalError({
-        errorType: 'onnx_model',
-        severity: 'warning',
-        error: new Error(`Face recognition unavailable for batch: ${faceInitError}`),
-        executionId: this.config.executionId,
-        batchPhase: 'face_recognition_init',
-        categoryName: this.config.category
-      });
     }
 
     console.log(`[WorkerPool] ✅ Pool initialized with ${this.workerPool.length} workers (ONNX loaded once per worker, upload semaphore shared)`);
@@ -10594,21 +10327,10 @@ export class UnifiedImageProcessor extends EventEmitter {
 
     this.activeWorkers++;
 
-    // Dispatch tracing (ghost-images investigation, see wiki/entities/ghost-images.md):
-    // one line per image at the dispatch boundary so silent results are impossible.
-    const dispatchStart = Date.now();
-    console.log(`[Dispatch] → ${imageFile.fileName}`);
-
     try {
       // Calculate temporal context in main process and pass to worker
       const temporalContext = this.getTemporalContext(imageFile.originalPath);
       const result = await worker.processImage(imageFile, this, temporalContext);
-
-      console.log(
-        `[Dispatch] ← ${imageFile.fileName} success=${result.success} ` +
-        `logEntry=${!!result.pendingLogEntry} url=${result.pendingLogEntry?.supabaseUrl ? 'yes' : 'NO'} ` +
-        `ms=${Date.now() - dispatchStart}${result.error ? ` error="${result.error}"` : ''}`
-      );
 
       // BATCH INSERT ACCUMULATION: Collect pending analysis_results inserts from worker (ONNX optimization)
       if (result.pendingAnalysisInsert) {
@@ -10657,7 +10379,7 @@ export class UnifiedImageProcessor extends EventEmitter {
       // FIX: Preserve supabaseUrl before clearing pendingLogEntry — the ghost image detector
       // at batch-end reads result.pendingLogEntry.supabaseUrl, but it was always undefined
       // because we clear pendingLogEntry here. This caused 100% false-positive ghost images.
-      result.supabaseUrl = result.pendingLogEntry?.supabaseUrl ?? result.supabaseUrl;
+      result.supabaseUrl = result.pendingLogEntry?.supabaseUrl;
       result.pendingLogEntry = undefined;
       result.pendingAnalysisInsert = undefined;
       result.pendingUpdate = undefined;

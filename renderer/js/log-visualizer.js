@@ -2657,6 +2657,14 @@ class LogVisualizer {
     correction.changes.matchStatus = 'matched';
     correction.changes.resolvedFromReview = true;
     correction.changes.chosenCandidate = chosenCandidate;
+    // ACC-04 Phase 3: attach the full preset entry so main can cascade ALL fields
+    // (category, make/model, sponsors, metatag — not just name+team from the slim candidate).
+    if (chosenCandidate && this.presetParticipants && this.presetParticipants.length > 0) {
+      const fullEntry = this.presetParticipants.find(p =>
+        String(p.numero || p.number || '') === String(chosenCandidate.participantNumber || '')
+      );
+      if (fullEntry) correction.changes.chosenParticipant = fullEntry;
+    }
     if (chosenCandidate?.participantName) {
       correction.changes.drivers = [chosenCandidate.participantName];
     }
