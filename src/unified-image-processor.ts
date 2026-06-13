@@ -1344,6 +1344,13 @@ class UnifiedImageWorker extends EventEmitter {
       confidence: number;
       detectionId: string;
     }>;
+    // TRAIN-01: detections found just below the confidence threshold (no mask).
+    nearMiss?: Array<{
+      bbox: { x: number; y: number; width: number; height: number };
+      classId: number;
+      className: string;
+      confidence: number;
+    }>;
   } | null = null;
 
   private async runGenericSegmentation(imageBuffer: Buffer): Promise<SegmentedDetection[]> {
@@ -1380,7 +1387,10 @@ class UnifiedImageWorker extends EventEmitter {
           modelId,
           detectionsCount: 0,
           inferenceMs: result.inferenceTimeMs,
-          masksApplied: false
+          masksApplied: false,
+          // TRAIN-01: even with 0 passing detections the model often had a
+          // near-miss — capture it (this is the highest-value fallback signal).
+          nearMiss: result.nearMissDetections || []
         };
         return [];
       }
@@ -1420,7 +1430,8 @@ class UnifiedImageWorker extends EventEmitter {
           className: det.className,
           confidence: det.confidence,
           detectionId: det.detectionId,
-        }))
+        })),
+        nearMiss: result.nearMissDetections || []
       };
 
       return segmentedDetections;
@@ -2878,6 +2889,8 @@ class UnifiedImageWorker extends EventEmitter {
         masksApplied: this.lastSegmentationMetadata.masksApplied,
         // Include detection bboxes for visualization (always available when detections exist)
         ...(this.lastSegmentationMetadata.detections ? { detections: this.lastSegmentationMetadata.detections } : {}),
+        // TRAIN-01: carry the near-miss band through so computeTrainingFlags sees it
+        ...(this.lastSegmentationMetadata.nearMiss?.length ? { nearMiss: this.lastSegmentationMetadata.nearMiss } : {}),
         // Include RLE mask data only if available (non-empty array)
         ...(extractedMasks.length > 0 ? { masks: extractedMasks } : {}),
         // Sharpness filter results (only present when multiple crops were analyzed)
@@ -2997,6 +3010,19 @@ class UnifiedImageWorker extends EventEmitter {
         strategy: 'full-image',
         usedFullImage: true,
         recognitionMethod: 'gemini-v6-full-image',
+        // TRAIN-01: carry the near-miss band from the (empty) segmentation attempt
+        // so the full-image fallback still records crop_near_miss in training_flags.
+        // This is the highest-value case: YOLO missed, Gemini found it on the full
+        // image, and Gemini's box_2d (already persisted in raw_response.vehicles
+        // since v1.1.10) can be triangulated against the near-miss box downstream.
+        segmentationPreprocessing: this.lastSegmentationMetadata ? {
+          used: this.lastSegmentationMetadata.used,
+          modelId: this.lastSegmentationMetadata.modelId,
+          detectionsCount: this.lastSegmentationMetadata.detectionsCount,
+          inferenceMs: this.lastSegmentationMetadata.inferenceMs,
+          masksApplied: this.lastSegmentationMetadata.masksApplied,
+          ...(this.lastSegmentationMetadata.nearMiss?.length ? { nearMiss: this.lastSegmentationMetadata.nearMiss } : {})
+        } : undefined,
         imageId: v6Result.imageId  // Pass DB UUID for analysis_log UPDATE
       };
 
@@ -3335,11 +3361,24 @@ class UnifiedImageWorker extends EventEmitter {
       // ============================================
       phaseStart = Date.now();
       let sceneClassification: SceneClassificationResult | null = null;
+      let sceneTrainingCandidate = false;
       let shouldSkipAI = false;
 
       if (this.sceneClassificationEnabled && this.sceneClassifier) {
         try {
           sceneClassification = await this.sceneClassifier.classify(buffer);
+
+          // TRAIN-01: mark a future scene-classifier training candidate when the
+          // model was unsure — low top1, torn margin, or a crowd_scene sitting
+          // just under the skip line (the exact boundary that decides a credit).
+          const u = sceneClassification.uncertainty;
+          sceneTrainingCandidate = !!u && (
+            u.top1 < 0.60 ||
+            u.margin < 0.15 ||
+            (sceneClassification.category === SceneCategory.CROWD_SCENE &&
+             sceneClassification.confidence >= 0.60 &&
+             sceneClassification.confidence < this.sceneSkipThreshold)
+          );
 
           // Log scene classification result
           workerLog.info(`Scene: ${sceneClassification.category} (${(sceneClassification.confidence * 100).toFixed(0)}%) - ${imageFile.fileName}`);
@@ -3442,6 +3481,8 @@ class UnifiedImageWorker extends EventEmitter {
                   modelSource: 'scene_classifier_onnx',
                   sceneCategory: sceneClassification.category,
                   sceneConfidence: sceneClassification.confidence,
+                  sceneUncertainty: sceneClassification.uncertainty || null,
+                  sceneTrainingCandidate,
                   visualTags: skipVisualTagsResult?.tags || null,
                   inferenceTimeMs: sceneClassification.inferenceTimeMs || 0
                 },
@@ -4281,7 +4322,10 @@ class UnifiedImageWorker extends EventEmitter {
         const trainingFlags = computeTrainingFlags(
           analysisResult.segmentationPreprocessing,
           analysisResult.recognitionMethod,
-          filteredAnalysis.length
+          filteredAnalysis.length,
+          sceneClassification
+            ? { candidate: sceneTrainingCandidate, category: sceneClassification.category, uncertainty: sceneClassification.uncertainty ?? null }
+            : null
         );
 
         // Photo / camera / exposure / AF metadata extracted upfront from EXIF.
@@ -10450,7 +10494,8 @@ export class UnifiedImageProcessor extends EventEmitter {
 function computeTrainingFlags(
   segmentationPreprocessing: any,
   recognitionMethod: string | undefined,
-  totalVehiclesFound: number
+  totalVehiclesFound: number,
+  scene?: { candidate: boolean; category: string | null; uncertainty: any } | null
 ): Record<string, any> | null {
   const flags: Record<string, any> = {};
 
@@ -10522,8 +10567,27 @@ function computeTrainingFlags(
     }
   }
 
+  // ── Flag: scene_training_candidate (TRAIN-01) ──
+  // The local scene classifier was unsure on this image — a future scene-model
+  // training candidate. Derived locally (no Gemini cost); see scene-classifier-onnx.
+  if (scene?.candidate) {
+    flags.scene_training_candidate = true;
+    flags.scene_category = scene.category ?? null;
+    if (scene.uncertainty) flags.scene_uncertainty = scene.uncertainty;
+  }
+
+  // ── Flag: crop_near_miss (TRAIN-01) ──
+  // Detector found subject(s) just below the confidence threshold and discarded
+  // them — strong crop hard-examples (especially when no detection passed).
+  const nearMiss = Array.isArray(segPre?.nearMiss) ? segPre.nearMiss : [];
+  if (nearMiss.length > 0) {
+    flags.crop_near_miss = true;
+    flags.near_miss_count = nearMiss.length;
+    flags.near_miss_top_conf = Math.round(Math.max(...nearMiss.map((d: any) => d.confidence || 0)) * 1000) / 1000;
+  }
+
   // Return null if no actual problem flags were set (only metadata)
-  const hasProblems = flags.no_yolo || flags.seg_fallback || flags.low_confidence || flags.split_bbox;
+  const hasProblems = flags.no_yolo || flags.seg_fallback || flags.low_confidence || flags.split_bbox || flags.scene_training_candidate || flags.crop_near_miss;
   if (!hasProblems) return null;
 
   return flags;

@@ -63,6 +63,17 @@ export interface GenericSegmenterOutput {
   detections: SegmentationResult[];
   imageSize: { width: number; height: number };
   inferenceTimeMs: number;
+  /**
+   * TRAIN-01: detections the model found but discarded for sitting just below
+   * the confidence threshold (the near-miss band). Lightweight (no mask) —
+   * the richest crop hard-example source, especially when nothing passed.
+   */
+  nearMissDetections?: Array<{
+    classId: number;
+    className: string;
+    confidence: number;
+    bbox: BoundingBox;
+  }>;
 }
 
 /**
@@ -426,10 +437,25 @@ export class GenericSegmenter {
           detectionId: `seg_${idx}_${ts}`,
         }));
 
+      // ── TRAIN-01: near-miss band ──
+      // Detections found but discarded for being just below the threshold — the
+      // richest crop hard-example source (esp. when nothing passed). Lightweight
+      // (no mask), top-K, relevant-class only. Floor 0.15 hardcoded here; the
+      // management-portal card exposes it per-sport in Phase 2.
+      const NEAR_MISS_FLOOR = 0.15;
+      const NEAR_MISS_TOPK = 5;
+      const nearMissDetections = filteredDetections
+        .filter(d => d.confidence >= NEAR_MISS_FLOOR && d.confidence < this.config.confidenceThreshold)
+        .filter(d => this.config.relevantClassIds.length === 0 || this.config.relevantClassIds.includes(d.classId))
+        .sort((a, b) => b.confidence - a.confidence)
+        .slice(0, NEAR_MISS_TOPK)
+        .map(d => ({ classId: d.classId, className: d.className, confidence: d.confidence, bbox: d.bbox }));
+
       const inferenceTimeMs = Date.now() - startTime;
 
       return {
         detections: finalDetections,
+        nearMissDetections,
         imageSize: { width: originalWidth, height: originalHeight },
         inferenceTimeMs,
       };
