@@ -87,6 +87,7 @@ export interface GenericSegmenterConfig {
   relevantClassIds: number[];             // Class IDs to filter (computed from relevantClassNames)
   relevantClassNames: string[];           // Class names to filter (e.g., ['vehicle', 'rider'])
   maxDetections: number;                  // Max detections per image
+  nearMissFloor?: number;                 // TRAIN-01: lower bound of the near-miss band (default 0.15)
 }
 
 /**
@@ -153,6 +154,7 @@ export class GenericSegmenter {
     this.config.confidenceThreshold = segConfig.confidence_threshold;
     this.config.iouThreshold = segConfig.iou_threshold;
     this.config.maxDetections = segConfig.max_detections;
+    this.config.nearMissFloor = segConfig.near_miss_floor;
 
     // Recompute class IDs
     this.updateRelevantClassIds();
@@ -442,7 +444,7 @@ export class GenericSegmenter {
       // richest crop hard-example source (esp. when nothing passed). Lightweight
       // (no mask), top-K, relevant-class only. Floor 0.15 hardcoded here; the
       // management-portal card exposes it per-sport in Phase 2.
-      const NEAR_MISS_FLOOR = 0.15;
+      const NEAR_MISS_FLOOR = this.config.nearMissFloor ?? 0.15;
       const NEAR_MISS_TOPK = 5;
       const nearMissDetections = filteredDetections
         .filter(d => d.confidence >= NEAR_MISS_FLOOR && d.confidence < this.config.confidenceThreshold)

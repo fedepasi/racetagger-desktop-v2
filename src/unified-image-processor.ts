@@ -483,6 +483,12 @@ class UnifiedImageWorker extends EventEmitter {
       return;
     }
 
+    // TRAIN-01 (D3): per-sport crowd-skip threshold, read from segmentation_config.
+    // Literal 0.75 default so an unconfigured/offline category reproduces the
+    // previous hardcoded behaviour exactly (no accuracy regression).
+    const sst = this.currentSportCategory?.segmentation_config?.scene_skip_threshold;
+    this.sceneSkipThreshold = typeof sst === 'number' ? sst : 0.75;
+
     try {
       this.sceneClassifier = SceneClassifierONNX.getInstance();
       const loaded = await this.sceneClassifier.loadModel();
