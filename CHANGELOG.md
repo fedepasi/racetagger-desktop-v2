@@ -4,6 +4,12 @@
 
 ### 🧠 Training data flywheel (TRAIN-01)
 
+- **Per-sport thresholds now configurable (Phase 2)**: the crop near-miss floor
+  (`segmentation_config.near_miss_floor`, default 0.15) and the crowd-skip threshold
+  (`segmentation_config.scene_skip_threshold`, default 0.75) are now read per sport category
+  instead of hardcoded. Literal defaults reproduce current behaviour exactly when unset (no
+  regression, offline-safe). No schema change (existing `segmentation_config` jsonb).
+
 - **Scene-classifier uncertainty capture (Phase 1)**: the local scene classifier now
   derives an uncertainty signal (`top1`, `top2`, `margin`, `entropy`) from the softmax it
   already computes, and flags low-confidence / torn / near-skip-boundary images as future
