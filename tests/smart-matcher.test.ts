@@ -159,6 +159,81 @@ describe('SmartMatcher System', () => {
     });
   });
 
+  describe('Confidence calibration (portrait / no-number)', () => {
+    // Regression coverage for the false-100% bug on number-less portraits.
+    // Two same-team drivers share the team sponsor, so a number-less portrait of
+    // either reads the SAME shared signal and cannot be told apart.
+    const sameTeamParticipants: Participant[] = [
+      {
+        numero: 44,
+        preset_participant_drivers: [{ driver_name: 'Lewis Hamilton', driver_order: 0 }],
+        squadra: 'Mercedes',
+        sponsor: ['Mercedes', 'Petronas'],
+        categoria: 'F1'
+      },
+      {
+        numero: 63,
+        preset_participant_drivers: [{ driver_name: 'George Russell', driver_order: 0 }],
+        squadra: 'Mercedes',
+        sponsor: ['Mercedes', 'Petronas'],
+        categoria: 'F1'
+      }
+    ];
+
+    // A clear winner can emerge purely from NON-unique shared evidence — it simply
+    // matches more shared sponsors than its rivals — and with no race number that
+    // is exactly the old false-100% trap. #44 out-matches on 3 shared sponsors but
+    // owns none of them uniquely (each is shared with another car).
+    const sharedEvidenceParticipants: Participant[] = [
+      { numero: 44, preset_participant_drivers: [{ driver_name: 'Lewis Hamilton', driver_order: 0 }], squadra: 'Mercedes', sponsor: ['Petronas', 'IWC', 'Tommy'], categoria: 'F1' },
+      { numero: 63, preset_participant_drivers: [{ driver_name: 'George Russell', driver_order: 0 }], squadra: 'Mercedes', sponsor: ['Petronas', 'IWC'], categoria: 'F1' },
+      { numero: 11, preset_participant_drivers: [{ driver_name: 'Sergio Perez', driver_order: 0 }], squadra: 'Red Bull', sponsor: ['Tommy', 'Oracle'], categoria: 'F1' }
+    ];
+
+    test('no-number clear-winner on only SHARED evidence is capped and never auto-matched', async () => {
+      const analysis: AnalysisResult = {
+        // no raceNumber; every sponsor is shared across cars (none unique to #44)
+        otherText: ['Petronas', 'IWC', 'Tommy'],
+        confidence: 0.9
+      };
+
+      const result = await smartMatcher.findMatches(analysis, sharedEvidenceParticipants);
+
+      // #44 out-scores the others, but on non-unique evidence with no number it must
+      // NOT be a confident auto-match (it routes to needs_review / no_match)…
+      expect(result.matchStatus).not.toBe('matched');
+      // …and if a best guess is surfaced, it can't claim certainty.
+      if (result.bestMatch) {
+        expect(result.bestMatch.confidence).toBeLessThan(0.85);
+      }
+    });
+
+    test('a real race-number match stays confident and matched (no regression)', async () => {
+      const analysis: AnalysisResult = { raceNumber: '44', confidence: 0.95 };
+
+      const result = await smartMatcher.findMatches(analysis, sameTeamParticipants);
+
+      expect(result.bestMatch?.participant.numero).toBe(44);
+      expect(result.matchStatus).toBe('matched');
+      // The +0.2 exact-number bonus still applies → clearly confident.
+      expect(result.bestMatch?.confidence).toBeGreaterThan(0.7);
+    });
+
+    test('no-number match with UNIQUE evidence is not over-penalized', async () => {
+      // #123 owns "Castrol" uniquely; sponsor + team both point only to #123.
+      const analysis: AnalysisResult = {
+        otherText: ['Castrol'],
+        teamName: 'Thunder Racing',
+        confidence: 0.85
+      };
+
+      const result = await smartMatcher.findMatches(analysis, mockParticipants);
+
+      expect(result.bestMatch?.participant.numero).toBe(123);
+      expect(result.matchStatus).toBe('matched');
+    });
+  });
+
   describe('Evidence Collector', () => {
     test('should extract all evidence types from analysis', () => {
       const analysis = {

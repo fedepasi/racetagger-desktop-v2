@@ -169,6 +169,15 @@ export interface MatchCandidate {
 
 export type MatchStatus = 'matched' | 'needs_review' | 'no_match';
 
+/**
+ * Confidence cap for number-less matches that rest only on NON-unique evidence
+ * (a shared/team sponsor or livery, no race number, no face). Such a signal
+ * cannot tell two same-team cars apart, so it must never read as confident:
+ * we clamp below the "amber" pill threshold (>=0.85) so the UI shows uncertainty
+ * and the match routes to needs_review instead of asserting a false 100%.
+ */
+const NO_NUMBER_WEAK_CONFIDENCE_CAP = 0.8;
+
 export interface MatchResult {
   bestMatch: MatchCandidate | null;
   allCandidates: MatchCandidate[];
@@ -1165,7 +1174,13 @@ export class SmartMatcher {
       ? 'no_match'
       : (resolvedResult.multipleHighScores && !resolvedResult.resolvedByOverride)
         ? 'needs_review'
-        : 'matched';
+        // Honesty gate (portrait / no-number fix): a winner with NO race number
+        // AND no uniquely-identifying evidence (only shared sponsor/team/livery)
+        // can't be told apart from its same-team sibling — never auto-confirm it
+        // as a clear match; route to review instead of asserting a single driver.
+        : (noNumberDetected && !resolvedResult.bestMatch.hasUniqueEvidence)
+          ? 'needs_review'
+          : 'matched';
 
     return {
       bestMatch: resolvedResult.bestMatch,
@@ -1391,8 +1406,13 @@ export class SmartMatcher {
       reasoning.push(`Multi-evidence bonus: +${bonus.toFixed(1)} points`);
     }
 
-    // Calculate confidence based on evidence quality and quantity
-    const confidence = this.calculateConfidence(matchedEvidence, totalScore);
+    // Calculate confidence based on evidence quality and quantity.
+    // Pass the no-number + uniqueness context so a number-less match resting on
+    // non-unique evidence can't report false certainty (portrait / no-number fix).
+    const confidence = this.calculateConfidence(matchedEvidence, totalScore, {
+      noNumberDetected,
+      hasUniqueEvidence,
+    });
 
     return {
       participant,
@@ -2437,7 +2457,14 @@ export class SmartMatcher {
   /**
    * Calculate confidence score based on evidence quality and quantity
    */
-  private calculateConfidence(evidence: Evidence[], totalScore: number): number {
+  private calculateConfidence(
+    evidence: Evidence[],
+    totalScore: number,
+    context: { noNumberDetected: boolean; hasUniqueEvidence: boolean } = {
+      noNumberDetected: false,
+      hasUniqueEvidence: true,
+    }
+  ): number {
     if (evidence.length === 0) return 0;
 
     // Base confidence from evidence types
@@ -2449,10 +2476,23 @@ export class SmartMatcher {
 
     confidence = (confidence + scoreNormalized) / 2;
 
-    // Bonus for exact matches
-    const hasExactMatch = evidence.some(e => e.value && e.score && e.score >= this.config.weights.raceNumber * 0.9);
-    if (hasExactMatch) {
+    // Bonus for an EXACT match — but only from a real RACE NUMBER. Previously any
+    // evidence reaching raceNumber*0.9 triggered the +0.2, so a sponsor inflated by
+    // the 1.5x no-number boost could masquerade as an exact match and push a
+    // number-less portrait to 100%. Gating to RACE_NUMBER removes that false
+    // jackpot. (FACE_MATCH could join here once face-rec is enabled — Level 2.)
+    const hasExactNumberMatch = evidence.some(
+      e => e.type === EvidenceType.RACE_NUMBER && e.value && e.score && e.score >= this.config.weights.raceNumber * 0.9
+    );
+    if (hasExactNumberMatch) {
       confidence = Math.min(confidence + 0.2, 1);
+    }
+
+    // Honesty cap: with NO race number and no uniquely-identifying evidence, the
+    // identity rests on a shared signal (team sponsor/livery) that can't separate
+    // two same-team cars — never report it as confident.
+    if (context.noNumberDetected && !context.hasUniqueEvidence) {
+      confidence = Math.min(confidence, NO_NUMBER_WEAK_CONFIDENCE_CAP);
     }
 
     return Math.round(confidence * 100) / 100; // Round to 2 decimal places

@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### 🐛 Fixes
+
+- **No more false 100% confidence on number-less portraits (SmartMatcher
+  calibration)**: a driver close-up with no visible race number used to be matched
+  with up to 100% confidence on a single shared/team sponsor — so a wrong driver
+  name could be written into Getty-grade IPTC while looking certain. Two surgical
+  changes in `matching/smart-matcher.ts`, both reusing flags already computed: (1)
+  `calculateConfidence` now grants the `+0.2` exact-match bonus only to a **real
+  `RACE_NUMBER`** (previously any evidence reaching `raceNumber*0.9` triggered it,
+  so a sponsor inflated by the 1.5× no-number boost faked an exact match), and
+  caps confidence below the amber pill threshold when there is **no number and no
+  uniquely-identifying evidence**; (2) the same number-less-and-non-unique case is
+  routed to **`needs_review`** instead of a confident `matched`, so two same-team
+  cars are never told apart by guesswork. A real race-number match is unchanged
+  (still `matched`, still confident). Adds regression fixtures (portrait /
+  same-team / shared-sponsor) to `tests/smart-matcher.test.ts`. Matching is local;
+  no token logic / Edge Functions / schema touched.
+
 ## [1.1.10] - 2026-06-11
 
 ### 🎨 Brand
