@@ -2064,8 +2064,8 @@ class UnifiedImageWorker extends EventEmitter {
           // YOLO-seg found no subjects - handle fallback based on sport_categories settings
           log.info(`[CropContext] ${segModelId} found no subjects, checking fallback strategy`);
 
-          // V6 Baseline 2026: Send fullImage to V6 instead of returning null
-          if (this.currentSportCategory?.edge_function_version === 6) {
+          // V6 Baseline 2026: Send fullImage to the crop-context EF instead of returning null
+          if (this.isCropContextVersion()) {
             log.info(`[CropContext] V6: Sending full image (no subjects detected by ${segModelId})`);
             const v6FullResult = await this.sendFullImageToV6(imageFile, compressedBuffer, effectivePath, storagePath, mimeType);
             // FIX: If V6 returned 0 vehicles, return null to trigger standard analyzeImage fallback
@@ -2109,8 +2109,8 @@ class UnifiedImageWorker extends EventEmitter {
 
         // If no detections, fallback to standard analysis or V6 fullImage
         if (detections.length === 0) {
-          // V6 Baseline 2026: Send fullImage to V6 instead of returning null
-          if (this.currentSportCategory?.edge_function_version === 6) {
+          // V6 Baseline 2026: Send fullImage to the crop-context EF instead of returning null
+          if (this.isCropContextVersion()) {
             log.info(`[CropContext] V6: Sending full image (no subjects detected by ONNX)`);
             const v6FullResult = await this.sendFullImageToV6(imageFile, compressedBuffer, effectivePath, storagePath, mimeType);
             // FIX: If V6 returned 0 vehicles, return null to trigger standard analyzeImage fallback
@@ -2454,7 +2454,7 @@ class UnifiedImageWorker extends EventEmitter {
           log.info(`[CropContext] Sequential call ${i + 1}/${cropsPayload.length}`);
 
           const response = await Promise.race([
-            this.supabase.functions.invoke('analyzeImageDesktopV6', { body: singleCropPayload }),
+            this.supabase.functions.invoke(this.cropContextFunctionName(), { body: singleCropPayload }),
             new Promise((_, reject) =>
               setTimeout(() => reject(new Error('V6 function invocation timeout')), 60000)
             )
@@ -2599,7 +2599,7 @@ class UnifiedImageWorker extends EventEmitter {
             await new Promise(resolve => setTimeout(resolve, backoffMs));
           }
           response = await Promise.race([
-            this.supabase.functions.invoke('analyzeImageDesktopV6', { body: v6Payload }),
+            this.supabase.functions.invoke(this.cropContextFunctionName(), { body: v6Payload }),
             new Promise((_, reject) =>
               setTimeout(() => reject(new Error('V6 function invocation timeout')), 60000)
             )
@@ -2922,6 +2922,27 @@ class UnifiedImageWorker extends EventEmitter {
   }
 
   /**
+   * Crop+Context Edge Function family (V6, V7+). V7 is a strict superset of V6:
+   * it sends the exact same crop+context request and returns a backward-compatible
+   * response (adding vehicle-DNA fields). Both flow through this path, so version
+   * checks gate on "is this a crop-context version" rather than "=== 6".
+   */
+  private isCropContextVersion(): boolean {
+    const v = this.currentSportCategory?.edge_function_version;
+    return v === 6 || v === 7;
+  }
+
+  /**
+   * Resolves the crop+context Edge Function name for the active sport category.
+   * Defaults to V6 (the established baseline); V7 opts in via edge_function_version.
+   */
+  private cropContextFunctionName(): string {
+    return this.currentSportCategory?.edge_function_version === 7
+      ? 'analyzeImageDesktopV7'
+      : 'analyzeImageDesktopV6';
+  }
+
+  /**
    * V6 Baseline 2026: Send full image to V6 when no subjects detected
    * This replaces the legacy fallback to V5 when crop-context detection fails
    */
@@ -2964,7 +2985,7 @@ class UnifiedImageWorker extends EventEmitter {
 
     try {
       const response = await Promise.race([
-        this.supabase.functions.invoke('analyzeImageDesktopV6', { body: fullImagePayload }),
+        this.supabase.functions.invoke(this.cropContextFunctionName(), { body: fullImagePayload }),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('V6 fullImage function invocation timeout')), 60000)
         )
@@ -5300,7 +5321,9 @@ class UnifiedImageWorker extends EventEmitter {
 
     if (this.currentSportCategory?.edge_function_version) {
       const version = this.currentSportCategory.edge_function_version;
-      if (version === 6) {
+      if (version === 7) {
+        functionName = 'analyzeImageDesktopV7';
+      } else if (version === 6) {
         functionName = 'analyzeImageDesktopV6';
       } else if (version === 5) {
         functionName = 'analyzeImageDesktopV5';

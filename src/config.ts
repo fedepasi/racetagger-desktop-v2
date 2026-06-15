@@ -121,7 +121,8 @@ export const SUPABASE_CONFIG = {
 // - V4: RF-DETR support (app 1.0.9+) [deprecated path, kept for history]
 // - V5: Vehicle recognition, face recognition (app 1.0.11+)
 // - V6: Crop + Context multi-image analysis (app 1.0.12+)
-export const MAX_SUPPORTED_EDGE_FUNCTION_VERSION = 6;
+// - V7: Vehicle DNA (make/model/livery) — strict superset of V6's crop+context contract (app 1.1.11+)
+export const MAX_SUPPORTED_EDGE_FUNCTION_VERSION = 7;
 
 // App Version Number (for category visibility control)
 // Integer representation of app version: major*10000 + minor*100 + patch
