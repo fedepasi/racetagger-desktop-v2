@@ -2,7 +2,17 @@
 
 ## [Unreleased]
 
-### 🧠 Training data flywheel (TRAIN-01)
+### 🔌 Edge Function V7 support (Vehicle DNA)
+
+- **Desktop now supports `edge_function_version = 7`**: bumped
+  `MAX_SUPPORTED_EDGE_FUNCTION_VERSION` 6 → 7 so categories pinned to V7 are visible, and
+  wired the analysis pipeline to actually call `analyzeImageDesktopV7` for them. V7 is a
+  strict superset of V6 (same crop+context request/response contract, adds vehicle-DNA
+  fields), so the crop+context path resolves the Edge Function name via the new
+  `cropContextFunctionName()` helper and the no-subjects full-image fallback gates on
+  `isCropContextVersion()` (V6 **or** V7) instead of `=== 6`. The standard single-image
+  switch gained a `version === 7` branch. V6 remains the default; nothing changes for
+  existing V6 categories. Internal-test only until a V7 category is published.
 
 - **Per-sport thresholds now configurable (Phase 2)**: the crop near-miss floor
   (`segmentation_config.near_miss_floor`, default 0.15) and the crowd-skip threshold
