@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### 🖼️ Gallery delivery: write IPTC tags so the web filter works
+
+- **Deliveries now populate `gallery_images.tags`** (`sendExecutionToGallery` + `autoRouteImagesToGalleries`). Until now only number/name/team were written, so the public gallery's filter-by-make/model/category/livery/sponsor/plate was dead (`tags='{}'`). A shared `buildGalleryTags()` denormalises the 7 keys the gallery reads — vehicle DNA (make/model/category/liveryPrimary/plateNumber, sponsors unioned across vehicles) parsed from `analysis_results.raw_response.vehicles[]` (V6/V7/ONNX-shape-defensive, primary-vehicle = recognised number else highest confidence) + `cameraModel` from the flat column. No extra queries (the delivery selects were widened), no schema change. Already-published galleries need a separate backfill.
+
 ### 🔌 Edge Function V7 support (Vehicle DNA)
 
 - **Desktop now supports `edge_function_version = 7`**: bumped
