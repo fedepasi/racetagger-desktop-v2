@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### 🔑 "Keep me signed in" — pre-fill login from the OS credential vault
+
+- **New "Keep me signed in" checkbox on the desktop login** (on by default). When ticked, the email + password are saved **encrypted with the OS credential vault** (Electron `safeStorage` → Windows DPAPI / macOS Keychain / Linux libsecret) in `userData/remember.enc`, and the login screen is **pre-filled** after a logout or session expiry (across app restarts the session was already restored). Unticking forgets the saved credentials. New `src/credential-store.ts` + `auth-get-remembered-credentials` / `auth-clear-remembered-credentials` IPC; the `login` channel now carries `rememberMe`. Never written in plaintext — if `safeStorage` is unavailable nothing is persisted.
+- **Hardening:** the persisted Supabase session (`userData/session.json`) is now **encrypted at rest** with the same OS vault instead of plaintext JSON. Backward-compatible: legacy plaintext session files are still read and re-encrypted on the next save; falls back to plaintext only where encryption is unavailable.
+
 ### 🔒 Fix: privacy/terms notice re-shown on every login
 
 - **The first-launch Privacy Policy / Terms notice no longer reappears after every logout→login.** It was gated only on a `localStorage` flag that `handleLogout()` wipes via `localStorage.clear()`, so any re-login re-triggered it even when nothing had changed. It's now gated on the DB (`subscribers.accepted_privacy_policy_at` + version, GDPR Art. 7): if the user already accepted the current policy version it's never shown; otherwise it shows once and **records acceptance to the DB** on agree (new `consentService.getPrivacyConsentStatus()` / `setPrivacyConsent()` + `get/set-privacy-consent` IPC). A per-user + per-version local flag (now preserved across logout) is the offline fallback. Policy versions are centralised in `CURRENT_PRIVACY_POLICY_VERSION` / `CURRENT_TERMS_OF_SERVICE_VERSION`. Requires DB migration `20260616120000_grant_authenticated_update_gdpr_consent` (grants `authenticated` column-level UPDATE on the 4 consent columns).

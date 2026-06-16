@@ -152,7 +152,8 @@ function handleLogin(event) {
   // Normalize email (lowercase + trim) to ensure consistent authentication
   const email = document.getElementById('login-email').value.toLowerCase().trim();
   const password = document.getElementById('login-password').value;
-  
+  const rememberMe = document.getElementById('login-remember-me')?.checked ?? true;
+
   if (!email || !password) {
     showAuthError('login', 'Email e password sono obbligatorie');
     return;
@@ -169,7 +170,7 @@ function handleLogin(event) {
   
   // Send login request to main process
   if (window.api) {
-    window.api.send('login', { email, password });
+    window.api.send('login', { email, password, rememberMe });
   }
   
   // Reset form state after timeout (in case of no response)
@@ -177,6 +178,27 @@ function handleLogin(event) {
     submitBtn.textContent = originalText;
     submitBtn.disabled = false;
   }, 10000);
+}
+
+// Pre-fill the login form from the OS-vault-stored credentials ("Keep me
+// signed in"). Only fills empty fields so it never clobbers what the user is
+// typing. Safe no-op when nothing is stored or safeStorage is unavailable.
+async function prefillRememberedCredentials() {
+  try {
+    if (!window.api || !window.api.invoke) return;
+    const creds = await window.api.invoke('auth-get-remembered-credentials');
+    if (!creds || !creds.email) return;
+
+    const emailEl = document.getElementById('login-email');
+    const passwordEl = document.getElementById('login-password');
+    const rememberEl = document.getElementById('login-remember-me');
+
+    if (emailEl && !emailEl.value) emailEl.value = creds.email;
+    if (passwordEl && !passwordEl.value && creds.password) passwordEl.value = creds.password;
+    if (rememberEl) rememberEl.checked = true;
+  } catch (error) {
+    console.error('[Auth] Error pre-filling remembered credentials:', error);
+  }
 }
 
 // Validate password strength
@@ -953,7 +975,11 @@ function updateUIForAuthState() {
     if (authContainer) {
       authContainer.style.display = 'flex';
     }
-    
+
+    // Pre-fill saved credentials whenever the login screen is shown
+    // (covers logout and session-expiry, not just cold start).
+    prefillRememberedCredentials();
+
     if (userBar) {
       userBar.style.display = 'none';
     }
@@ -1324,6 +1350,10 @@ async function handleTrainingConsentChange(event) {
 // Inizializza quando il documento è pronto
 document.addEventListener('DOMContentLoaded', () => {
   initializeAuth();
+
+  // Pre-fill the login form from saved credentials (the login screen is the
+  // default-visible view until auth status resolves).
+  prefillRememberedCredentials();
 
   // Ricontrolla auth status dopo 2 secondi per assicurarsi che il userRole sia determinato
   setTimeout(() => {

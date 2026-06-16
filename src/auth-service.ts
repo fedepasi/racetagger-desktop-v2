@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient, Session } from '@supabase/supabase-js';
-import { BrowserWindow, shell, app } from 'electron';
+import { BrowserWindow, shell, app, safeStorage } from 'electron';
 import { SUPABASE_CONFIG } from './config';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -610,12 +610,16 @@ export class AuthService {
       // Use atomic write to prevent corruption
       const tempPath = this.SESSION_FILE_PATH + '.tmp';
 
-      // Write to temporary file first
-      fs.writeFileSync(
-        tempPath,
-        JSON.stringify(sessionData, null, 2), // Formatta il JSON per leggibilità
-        { encoding: 'utf8' }
-      );
+      // Encrypt at rest with the OS vault (safeStorage / DPAPI / Keychain /
+      // libsecret) when available. Fall back to plaintext JSON only if
+      // encryption is unavailable (e.g. a Linux box without a keyring) so we
+      // never break login. loadSessionFromFile() reads both forms.
+      const plaintext = JSON.stringify(sessionData, null, 2); // Formatta il JSON per leggibilità
+      if (safeStorage.isEncryptionAvailable()) {
+        fs.writeFileSync(tempPath, safeStorage.encryptString(plaintext));
+      } else {
+        fs.writeFileSync(tempPath, plaintext, { encoding: 'utf8' });
+      }
 
       // Atomically move temp file to final location
       fs.renameSync(tempPath, this.SESSION_FILE_PATH);
@@ -643,8 +647,27 @@ export class AuthService {
         return null;
       }
 
-      // Leggi e analizza il file JSON
-      const fileContent = fs.readFileSync(this.SESSION_FILE_PATH, { encoding: 'utf8' });
+      // Read raw bytes: the file is OS-vault-encrypted (safeStorage) for
+      // sessions written by this version, but may be legacy plaintext JSON
+      // from an older build — handle both, re-encrypting on the next save.
+      const fileBuffer = fs.readFileSync(this.SESSION_FILE_PATH);
+      if (!fileBuffer || fileBuffer.length === 0) {
+        return null; // Non rimuoviamo il file, potrebbe essere un problema temporaneo
+      }
+
+      let fileContent: string;
+      if (safeStorage.isEncryptionAvailable()) {
+        try {
+          fileContent = safeStorage.decryptString(fileBuffer);
+        } catch {
+          // Not encrypted (legacy plaintext, or written when encryption was
+          // unavailable) → read as UTF-8.
+          fileContent = fileBuffer.toString('utf8');
+        }
+      } else {
+        fileContent = fileBuffer.toString('utf8');
+      }
+
       if (!fileContent || fileContent.trim() === '') {
         return null; // Non rimuoviamo il file, potrebbe essere un problema temporaneo
       }
