@@ -6680,6 +6680,76 @@ function showPdfValidationError(title, message, details) {
  * Show preview state with extracted data
  * @param {Object} data - Extraction result data
  */
+/**
+ * Compute the merge impact of the pending PDF import against the currently open
+ * preset, keyed by race number (the same key the merge engine uses):
+ *   updated — import numbers already in the preset
+ *   added   — import numbers not yet in the preset (preset smaller than import)
+ *   missing — persisted preset rows (have an id) whose number is NOT in the
+ *             import (preset bigger than import)
+ * Race numbers are matched as exact strings on purpose — "007" and "7" are
+ * different cars (leading zeros are significant in motorsport), so they are
+ * never collapsed.
+ */
+function computePdfMergeImpact() {
+  const imported = (pdfImportData && Array.isArray(pdfImportData.participants)) ? pdfImportData.participants : [];
+  const importNumeros = new Set();
+  imported.forEach(p => { const k = String(p.numero ?? '').trim(); if (k) importNumeros.add(k); });
+
+  const existing = Array.isArray(participantsData) ? participantsData : [];
+  const existingNumeros = new Set();
+  existing.forEach(p => { const k = String(p.numero ?? '').trim(); if (k) existingNumeros.add(k); });
+
+  let updated = 0, added = 0;
+  importNumeros.forEach(n => { if (existingNumeros.has(n)) updated++; else added++; });
+
+  let missing = 0;
+  existing.forEach(p => {
+    const n = String(p.numero ?? '').trim();
+    if (p.id && n && !importNumeros.has(n)) missing++;
+  });
+  return { updated, added, missing };
+}
+
+/**
+ * Render the live merge-impact line in the PDF modal (merge mode only) and keep
+ * the confirm button label honest. Re-runs on "missing participants" change
+ * (the deactivate/remove/keep wording depends on it).
+ */
+function renderPdfMergeImpact() {
+  const box = document.getElementById('pdf-merge-impact');
+  if (!box) return;
+  if (!window.pdfImportMergeMode) { box.style.display = 'none'; return; }
+
+  const { updated, added, missing } = computePdfMergeImpact();
+  const action = document.getElementById('pdf-missing-action')?.value || 'deactivate';
+  const presetName = currentPreset && (currentPreset.name || currentPreset.nome);
+  const presetLabel = presetName ? `"${presetName}"` : 'this preset';
+
+  let missingTxt = '';
+  if (missing > 0) {
+    if (action === 'deactivate') missingTxt = ` · 💤 ${missing} deactivated`;
+    else if (action === 'remove') missingTxt = ` · 🗑️ ${missing} removed`;
+    else missingTxt = ` · ${missing} left unchanged`;
+  }
+  const warn = missing > 0 && action !== 'keep';
+  box.style.display = 'block';
+  box.style.borderColor = warn ? '#f59e0b' : 'var(--border-color)';
+  box.innerHTML =
+    `In ${escapeHtml(presetLabel)}: ✏️ <strong>${updated}</strong> updated · ➕ <strong>${added}</strong> added${missingTxt}.` +
+    (warn
+      ? `<br><span style="color:#f59e0b;">⚠️ ${missing} participant(s) in the preset are NOT in this PDF and will be ${action === 'remove' ? 'removed' : 'deactivated'} on Save.</span>`
+      : '');
+
+  // The "what to do with the missing" selector only matters when some preset
+  // cars are absent from the import — show it right under the impact, only then.
+  const group = document.getElementById('pdf-missing-action-group');
+  if (group) group.style.display = (missing > 0) ? '' : 'none';
+
+  const importBtn = document.getElementById('import-pdf-btn');
+  if (importBtn) importBtn.innerHTML = `<span class="btn-icon">➕</span>➕ ${added} · ✏️ ${updated} in preset`;
+}
+
 function showPdfPreviewState(data) {
   hidePdfStates();
   const previewState = document.getElementById('pdf-preview-state');
@@ -6754,8 +6824,13 @@ function showPdfPreviewState(data) {
   if (nameGroupP) nameGroupP.style.display = pdfMerge ? 'none' : '';
   const missingGroupP = document.getElementById('pdf-missing-action-group');
   if (missingGroupP) missingGroupP.style.display = pdfMerge ? '' : 'none';
-  if (pdfMerge && importBtn) {
-    importBtn.innerHTML = `<span class="btn-icon">➕</span>Add / update ${data.participants.length} in preset`;
+  if (pdfMerge) {
+    // Live add/update/deactivate breakdown vs the open preset, BEFORE confirming
+    // — not just in the post-merge toast. Also sets the confirm button label.
+    renderPdfMergeImpact();
+  } else {
+    const impactBox = document.getElementById('pdf-merge-impact');
+    if (impactBox) impactBox.style.display = 'none';
   }
 }
 
