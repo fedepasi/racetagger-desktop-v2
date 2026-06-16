@@ -4345,6 +4345,20 @@ class UnifiedImageWorker extends EventEmitter {
       console.log(`[DBUpdate] Check: dbImageId=${dbImageId}, vehicles.length=${vehicles.length}`);
 
       if (dbImageId && vehicles.length > 0) {
+        // ── TRAIN-01: onnx_miss_gemini_hit — local ONNX gave no/weak number on a subject
+        //    but Gemini (already run on LOW/MEDIUM crops) read one. Free, forward-only
+        //    signal for the per-championship number model, derived from modelSource on the
+        //    final results (no extra inference / no extra Gemini call). modelSource patterns
+        //    (seq + batch): 'v6-fallback-from-low-onnx*' (ONNX absent/low → Gemini sole) and
+        //    'onnx+v6-default-gemini*' / 'onnx+v6-preset-gemini*' (Gemini won over weak ONNX).
+        const ONNX_MISS_RE = /(fallback-from-low-onnx|onnx\+v6-(?:default-gemini|preset-gemini))/;
+        const onnxMissNumbers: string[] = [];
+        for (const v of filteredAnalysis) {
+          if (v?.raceNumber && ONNX_MISS_RE.test(String(v.modelSource || ''))) {
+            onnxMissNumbers.push(String(v.raceNumber));
+          }
+        }
+
         // ── Compute training_flags for YOLO-seg retraining pipeline ──
         const trainingFlags = computeTrainingFlags(
           analysisResult.segmentationPreprocessing,
@@ -4352,7 +4366,8 @@ class UnifiedImageWorker extends EventEmitter {
           filteredAnalysis.length,
           sceneClassification
             ? { candidate: sceneTrainingCandidate, category: sceneClassification.category, uncertainty: sceneClassification.uncertainty ?? null }
-            : null
+            : null,
+          onnxMissNumbers
         );
 
         // Photo / camera / exposure / AF metadata extracted upfront from EXIF.
@@ -10524,7 +10539,8 @@ function computeTrainingFlags(
   segmentationPreprocessing: any,
   recognitionMethod: string | undefined,
   totalVehiclesFound: number,
-  scene?: { candidate: boolean; category: string | null; uncertainty: any } | null
+  scene?: { candidate: boolean; category: string | null; uncertainty: any } | null,
+  onnxMissNumbers?: string[]
 ): Record<string, any> | null {
   const flags: Record<string, any> = {};
 
@@ -10615,8 +10631,19 @@ function computeTrainingFlags(
     flags.near_miss_top_conf = Math.round(Math.max(...nearMiss.map((d: any) => d.confidence || 0)) * 1000) / 1000;
   }
 
+  // ── Flag: onnx_miss_gemini_hit (TRAIN-01) ──
+  // The per-championship ONNX number model produced no/weak number on a subject but
+  // Gemini (already run on those crops) read one — a silver label for that sport's
+  // number model, medium reliability, human-gated in the inbox. Forward-only; zero
+  // extra cost (derived from modelSource on results already computed).
+  if (onnxMissNumbers && onnxMissNumbers.length > 0) {
+    flags.onnx_miss_gemini_hit = true;
+    flags.onnx_miss_count = onnxMissNumbers.length;
+    flags.onnx_miss_numbers = onnxMissNumbers;
+  }
+
   // Return null if no actual problem flags were set (only metadata)
-  const hasProblems = flags.no_yolo || flags.seg_fallback || flags.low_confidence || flags.split_bbox || flags.scene_training_candidate || flags.crop_near_miss;
+  const hasProblems = flags.no_yolo || flags.seg_fallback || flags.low_confidence || flags.split_bbox || flags.scene_training_candidate || flags.crop_near_miss || flags.onnx_miss_gemini_hit;
   if (!hasProblems) return null;
 
   return flags;

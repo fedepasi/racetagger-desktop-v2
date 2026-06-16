@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### 🎯 TRAIN-01: capture ONNX-miss + Gemini-hit as a training signal
+
+- **New `training_flags.onnx_miss_gemini_hit`** stamped inline during analysis: when a
+  per-championship ONNX number model produces no/weak number on a subject but Gemini
+  (already run on those LOW/MEDIUM crops) reads one, the row records the flag + the gemini
+  numbers (`onnx_miss_count`, `onnx_miss_numbers`). Derived from `modelSource` on the final
+  results (`v6-fallback-from-low-onnx*`, `onnx+v6-default-gemini*`, `onnx+v6-preset-gemini*`)
+  — **zero extra inference, zero extra Gemini call** (those crops already hit Gemini today).
+  Feeds the per-sport model inbox as a silver, human-gated training candidate. Forward-only.
+
 ### 🖼️ Gallery delivery: write IPTC tags so the web filter works
 
 - **Deliveries now populate `gallery_images.tags`** (`sendExecutionToGallery` + `autoRouteImagesToGalleries`). Until now only number/name/team were written, so the public gallery's filter-by-make/model/category/livery/sponsor/plate was dead (`tags='{}'`). A shared `buildGalleryTags()` denormalises the 7 keys the gallery reads — vehicle DNA (make/model/category/liveryPrimary/plateNumber, sponsors unioned across vehicles) parsed from `analysis_results.raw_response.vehicles[]` (V6/V7/ONNX-shape-defensive, primary-vehicle = recognised number else highest confidence) + `cameraModel` from the flat column. No extra queries (the delivery selects were widened), no schema change. Already-published galleries need a separate backfill.
