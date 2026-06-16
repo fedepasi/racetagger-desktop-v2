@@ -226,9 +226,9 @@
 
         <!-- Participants Table -->
         <div class="participants-table-section">
-          <!-- V1 design: section title + active pill on left, Import CSV + Add
-               Participant on right. The "Reset all" + "Clear All" controls
-               stay reachable but secondary. -->
+          <!-- V1 design: section title + active pill on left, Add Participant +
+               Update participants (PDF entry list) on right. The "Reset all" +
+               "Clear All" controls stay reachable but secondary. -->
           <div class="table-header table-header-v1">
             <h3 class="table-header-title-v1">Participants</h3>
             <div id="active-participants-summary" class="active-participants-summary" style="display: none;">
@@ -242,17 +242,13 @@
             </div>
             <div class="table-header-spacer"></div>
             <div class="table-actions">
-              <button class="btn btn-sm" onclick="openCsvImportModal()" title="Import participants from CSV">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="margin-right: 4px;"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"/></svg>
-                Import CSV
-              </button>
-              <button class="btn btn-sm" onclick="openPdfImportModal()" title="Import / update participants from a PDF entry list">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="margin-right: 4px;"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"/></svg>
-                Import PDF
-              </button>
               <button class="btn btn-primary btn-sm" onclick="openParticipantEditModal(-1)" title="Add a new participant">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="margin-right: 4px;"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5z"/></svg>
                 Add Participant
+              </button>
+              <button class="btn btn-sm" onclick="openPdfImportModal()" title="Update participants from a PDF entry list">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="margin-right: 4px;"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"/></svg>
+                Update participants
               </button>
               <button class="btn btn-sm btn-clear-all-v1" onclick="clearAllParticipants()" title="Remove all participants">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 19a2 2 0 002 2h8a2 2 0 002-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
@@ -1096,18 +1092,23 @@
             </small>
           </div>
 
-          <!-- BUG-03 — round-to-round handling (merge mode only) -->
-          <div class="form-group" id="pdf-missing-action-group" style="display: none;">
+          <!-- Merge impact + round-to-round handling (merge mode only). Impact
+               first (it carries the count that matters), then — right beneath it,
+               and only when there actually are participants not in this PDF — the
+               action to apply to them (BUG-03). -->
+          <div id="pdf-merge-impact" style="display: none; margin: 0 0 0.75rem; padding: 0.6rem 0.8rem; border: 1px solid var(--border-color); border-radius: 8px; background: rgba(255,255,255,0.06); color: #e5e7eb; font-size: 0.9rem; line-height: 1.45;"></div>
+
+          <div class="form-group" id="pdf-missing-action-group" style="display: none; margin-bottom: 1.25rem;">
             <label for="pdf-missing-action" style="font-weight: 600;">
-              Participants not in this PDF
+              What to do with the ones not in this PDF
             </label>
-            <select id="pdf-missing-action" class="form-input-sm">
+            <select id="pdf-missing-action" class="form-input-sm" onchange="renderPdfMergeImpact()">
               <option value="deactivate" selected>Deactivate (keep their data &amp; photos)</option>
               <option value="remove">Remove from preset</option>
               <option value="keep">Keep unchanged</option>
             </select>
             <small class="form-hint">
-              Cars missing from this list are disabled for AI matching by default — nothing is deleted until you Save.
+              Nothing is deleted until you Save.
             </small>
           </div>
 
