@@ -261,6 +261,8 @@ const validInvokeChannels: string[] = [
   'get-training-consent',
   'set-training-consent',
   'get-consent-status',
+  'get-privacy-consent-status',
+  'set-privacy-consent',
 
   // Export Destinations Operations
   'export-destinations-create',

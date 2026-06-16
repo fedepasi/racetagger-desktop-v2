@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### 🔒 Fix: privacy/terms notice re-shown on every login
+
+- **The first-launch Privacy Policy / Terms notice no longer reappears after every logout→login.** It was gated only on a `localStorage` flag that `handleLogout()` wipes via `localStorage.clear()`, so any re-login re-triggered it even when nothing had changed. It's now gated on the DB (`subscribers.accepted_privacy_policy_at` + version, GDPR Art. 7): if the user already accepted the current policy version it's never shown; otherwise it shows once and **records acceptance to the DB** on agree (new `consentService.getPrivacyConsentStatus()` / `setPrivacyConsent()` + `get/set-privacy-consent` IPC). A per-user + per-version local flag (now preserved across logout) is the offline fallback. Policy versions are centralised in `CURRENT_PRIVACY_POLICY_VERSION` / `CURRENT_TERMS_OF_SERVICE_VERSION`. Requires DB migration `20260616120000_grant_authenticated_update_gdpr_consent` (grants `authenticated` column-level UPDATE on the 4 consent columns).
+
 ### 🎯 TRAIN-01: capture ONNX-miss + Gemini-hit as a training signal
 
 - **New `training_flags.onnx_miss_gemini_hit`** stamped inline during analysis: when a
