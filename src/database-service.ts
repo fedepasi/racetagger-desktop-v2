@@ -3110,7 +3110,7 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
       custom_fields: {
         // Store any additional CSV fields
         ...Object.keys(row).reduce((acc, key) => {
-          const knownFields = ['numero', 'Number', 'number', 'race_number', 'bib', 'Bib', 'nome', 'Driver', 'driver', 'Person', 'person', 'Name', 'name', 'categoria', 'Category', 'category', 'class', 'Class', 'squadra', 'team', 'Team', 'sponsor', 'Sponsors', 'sponsors', 'metatag', 'Metatag', 'plate_number', 'Plate_Number', 'plate', 'Plate', 'folder_1', 'Folder_1', 'folder_2', 'Folder_2', 'folder_3', 'Folder_3', 'folder_1_path', 'Folder_1_Path', 'folder_2_path', 'Folder_2_Path', 'folder_3_path', 'Folder_3_Path', '_Driver_IDs', '_driver_ids', '_Driver_Metatags', '_driver_metatags', '_Driver_Nationalities', '_driver_nationalities', 'car_model', 'Car_Model', 'nationality', 'Nationality'];
+          const knownFields = ['numero', 'Number', 'number', 'race_number', 'bib', 'Bib', 'nome', 'Driver', 'driver', 'Person', 'person', 'Name', 'name', 'categoria', 'Category', 'category', 'class', 'Class', 'squadra', 'team', 'Team', 'sponsor', 'Sponsors', 'sponsors', 'metatag', 'Metatag', 'plate_number', 'Plate_Number', 'plate', 'Plate', 'folder_1', 'Folder_1', 'folder_2', 'Folder_2', 'folder_3', 'Folder_3', 'folder_1_path', 'Folder_1_Path', 'folder_2_path', 'Folder_2_Path', 'folder_3_path', 'Folder_3_Path', '_Driver_IDs', '_driver_ids', '_Driver_Metatags', '_driver_metatags', '_Driver_Nationalities', '_driver_nationalities', '_Driver_Names', '_driver_names', 'car_model', 'Car_Model', 'nationality', 'Nationality'];
           if (!knownFields.includes(key)) {
             acc[key] = row[key];
           }
@@ -3134,9 +3134,13 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
     const driverMetatagsRaw = row._Driver_Metatags || row._driver_metatags || '';
     const driverNationalitiesRaw = row._Driver_Nationalities || row._driver_nationalities || '';
     const driverNamesRaw = row.nome || row.Driver || '';
+    const driverNamesPipeRaw = row._Driver_Names || row._driver_names || '';
 
-    // Parse driver names (comma-separated)
-    const driverNames = driverNamesRaw ? driverNamesRaw.split(',').map((s: string) => s.trim()).filter(Boolean) : [];
+    // Prefer the structured pipe-delimited names (comma-safe — a "Lastname, Firstname"
+    // name stays ONE driver); fall back to splitting the legacy comma-joined column.
+    const driverNames = driverNamesPipeRaw
+      ? driverNamesPipeRaw.split('|').map((s: string) => s.trim()).filter(Boolean)
+      : (driverNamesRaw ? driverNamesRaw.split(',').map((s: string) => s.trim()).filter(Boolean) : []);
 
     if (driverIdsRaw && driverNames.length > 0) {
       // PRESERVE MODE: CSV has driver IDs - reuse them
@@ -3181,11 +3185,13 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
 
       console.log(`[DB] CSV Import: Created ${driversToCreate.length} new drivers for participant ${savedParticipant.numero}`);
     } else if (driverNames.length === 1) {
-      // SINGLE DRIVER: Still check for nationality to preserve
+      // SINGLE DRIVER: preserve nationality if present, and ALWAYS materialise the
+      // canonical row when the name itself contains a comma ("Lastname, Firstname") —
+      // otherwise the comma-joined `nome` would be re-split into two people on later reads.
       const nationalityRaw = row.Nationality || row.nationality || '';
       const singleNationality = driverNationalitiesRaw ? driverNationalitiesRaw.split('|')[0]?.trim() : nationalityRaw;
 
-      if (singleNationality) {
+      if (singleNationality || driverNames[0].includes(',')) {
         const driverToCreate = {
           id: crypto.randomUUID(),
           participant_id: savedParticipant.id,
@@ -3198,7 +3204,7 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
         };
 
         await supabase.from('preset_participant_drivers').insert([driverToCreate]);
-        console.log(`[DB] CSV Import: Created single driver with nationality for participant ${savedParticipant.numero}`);
+        console.log(`[DB] CSV Import: Created single driver for participant ${savedParticipant.numero}`);
       }
     }
   }
