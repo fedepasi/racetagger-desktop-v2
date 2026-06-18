@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### 🗂️ Results & folder organization now ordered by filename
+
+- **Analysis Results grid is now sorted by filename** (natural, numeric-aware) instead of
+  analysis-completion order. The JSONL is written as images finish analyzing, which — with the
+  parallel/streaming pipeline — has no relation to filename and looked random to users. Photos
+  now appear in the same order as the file explorer. This also fixes the gallery prev/next order
+  and the export/delivery order (all read the same sorted list). Renderer-only.
+- **Post-analysis "Organize into Folders" now processes photos in filename order too**, so the
+  per-folder write order and any `{seq}` rename token follow the source folder rather than the
+  random completion order.
+
 ### 🔌 Edge Function V7 support (Vehicle DNA)
 
 - **Desktop now supports `edge_function_version = 7`**: bumped

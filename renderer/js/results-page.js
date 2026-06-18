@@ -198,6 +198,20 @@ class ResultsPageManager {
         return;
       }
 
+      // Order results by filename so the grid matches the order the user
+      // sees in their file explorer. The JSONL is written in analysis-
+      // *completion* order (parallel/streaming pipeline), which is unrelated
+      // to filename and reads as "random" — see feedback 2026-06-18.
+      // Natural, numeric-aware compare so IMG_2 < IMG_10 (not IMG_10 < IMG_2).
+      // Sort key is `fileName` (the name rendered on the card); falls back to
+      // originalFileName for safety. This also fixes the gallery prev/next and
+      // export/delivery order, which all read this.results.
+      const fileNameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+      this.results.sort((a, b) => fileNameCollator.compare(
+        a.fileName || a.originalFileName || '',
+        b.fileName || b.originalFileName || ''
+      ));
+
       // Inizializza cache per le immagini
       await this.cacheManager.initializeForExecution(this.executionId, this.results);
 
