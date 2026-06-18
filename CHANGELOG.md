@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### 🐛 Fix: PDF entry-list import split "Lastname, Firstname" drivers into two people
+
+- **Importing a PDF entry list whose driver names are in `Lastname, Firstname` form (common in German lists, e.g. "Kaya, Mustafa Mehmet") no longer turns one person into two participants/drivers.** The `parsePdfEntryList` Edge Function already returns a structured per-driver `drivers[]` array, but the desktop import discarded it and rebuilt names by splitting the legacy comma-joined `nome` on `,` — which tears a `Lastname, Firstname` name in two. Both PDF paths (create-new preset **and** merge-into-open-preset) now consume the structured array via a shared `driverNamesFromImportRow()` helper, splitting `nome` only as a fallback. The **legacy CSV convention is unchanged**: a CSV cell like `"Max Mustermann, John Doe"` (no structured array) still means two drivers. PDF create-new now also **always materialises a `preset_participant_drivers` row** for single-driver entries — even without a nationality — so the canonical record shadows the ambiguous `nome` and the name is never re-split on a later reload/edit (previously a lone `Lastname, Firstname` with no nationality wrote no driver row and was re-split by `getDriverNamesFromParticipant` / `autoMigrateDriverRecords`). Renderer-only; no schema / Edge Function / token changes.
+
 ### 🔑 "Keep me signed in" — pre-fill login from the OS credential vault
 
 - **New "Keep me signed in" checkbox on the desktop login** (on by default). When ticked, the email + password are saved **encrypted with the OS credential vault** (Electron `safeStorage` → Windows DPAPI / macOS Keychain / Linux libsecret) in `userData/remember.enc`, and the login screen is **pre-filled** after a logout or session expiry (across app restarts the session was already restored). Unticking forgets the saved credentials. New `src/credential-store.ts` + `auth-get-remembered-credentials` / `auth-clear-remembered-credentials` IPC; the `login` channel now carries `rememberMe`. Never written in plaintext — if `safeStorage` is unavailable nothing is persisted.

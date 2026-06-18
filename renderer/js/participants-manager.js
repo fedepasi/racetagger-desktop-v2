@@ -5358,6 +5358,25 @@ function buildDriverMeta(driverNames, f) {
 }
 
 /**
+ * Resolve driver names from an import row, disambiguating the comma AT THE
+ * SOURCE where the convention is known.
+ *
+ * PDF entry-list rows carry a structured `drivers` array straight from the
+ * parsePdfEntryList Edge Function (one element per real driver), so a name in
+ * "Lastname, Firstname" form (e.g. "Kaya, Mustafa Mehmet") stays ONE driver —
+ * the internal comma is preserved. CSV rows never carry a `drivers` array, so
+ * they fall back to the legacy convention where a comma in `nome` separates
+ * MULTIPLE drivers ("Max Mustermann, John Doe" = two). Both conventions coexist
+ * because each is resolved where it is unambiguous.
+ */
+function driverNamesFromImportRow(row) {
+  if (Array.isArray(row?.drivers) && row.drivers.length > 0) {
+    return row.drivers.map(s => String(s).trim()).filter(Boolean);
+  }
+  return row?.nome ? row.nome.split(',').map(s => s.trim()).filter(Boolean) : [];
+}
+
+/**
  * BUG-03 — shared merge engine for CSV and PDF entry-list imports into the
  * currently open preset (instead of creating a separate one). `mappedRows` is an
  * array of normalized field objects:
@@ -5399,7 +5418,8 @@ function mergeMappedRowsIntoCurrentPreset(mappedRows, missingAction = 'deactivat
 
   (mappedRows || []).forEach(f => {
     const numero = String(f.numero ?? '').trim();
-    const driverNames = f.nome ? f.nome.split(',').map(s => s.trim()).filter(Boolean) : [];
+    const driverNames = driverNamesFromImportRow(f);
+    const hasStructuredDrivers = Array.isArray(f.drivers) && f.drivers.length > 0;
     if (numero) importedNumeros.add(numero);
 
     const existingIdx = numero ? indexByNumero.get(numero) : undefined;
@@ -5408,8 +5428,10 @@ function mergeMappedRowsIntoCurrentPreset(mappedRows, missingAction = 'deactivat
       // empty cells never wipe data the user already has.
       const merged = { ...participantsData[existingIdx] };
       if (reactivateMatched) merged.is_active = true; // present in the list → racing again
-      if (f.nome) {
-        merged.nome = f.nome;
+      if (f.nome || hasStructuredDrivers) {
+        // Keep nome as the legacy fallback; when only the structured array is
+        // present, derive it from the (comma-safe) driver names.
+        merged.nome = f.nome || driverNames.join(', ');
         merged.drivers = driverNames;
         merged.driverMeta = buildDriverMeta(driverNames, f); // nationality/metatag per driver
         // Drop the stale driver-rows snapshot so the Save Preset driver sync
@@ -6900,6 +6922,13 @@ async function importPdfPreset() {
     const mapped = pdfImportData.participants.map(p => ({
       numero: p.numero || '',
       nome: p.nome || '',
+      // Structured per-driver names from the Edge Function — preserves names that
+      // contain a comma ("Kaya, Mustafa Mehmet"). The merge engine prefers this
+      // over splitting `nome`; absent for CSV (legacy comma-split). undefined (not
+      // []) so an empty array never shadows the nome fallback.
+      drivers: (Array.isArray(p.drivers) && p.drivers.length > 0)
+        ? p.drivers.map(s => String(s).trim()).filter(Boolean)
+        : undefined,
       categoria: p.categoria || '',
       squadra: p.squadra || '',
       sponsor: Array.isArray(p.sponsors) ? p.sponsors.join(', ') : (p.sponsor || ''),
@@ -6959,6 +6988,16 @@ async function importPdfPreset() {
       }
     });
 
+    // Build structured per-driver-name lookup, keyed by race number. Used to
+    // create preset_participant_drivers verbatim so names containing a comma
+    // ("Kaya, Mustafa Mehmet") are NOT re-split. `nome` stays the legacy
+    // comma-joined fallback written to the participant row.
+    const pdfDriversByNumero = {};
+    pdfImportData.participants.forEach(p => {
+      const list = driverNamesFromImportRow(p);
+      if (list.length > 0) pdfDriversByNumero[p.numero] = list;
+    });
+
     // Create preset
     const createResponse = await window.api.invoke('supabase-create-participant-preset', {
       name: presetName,
@@ -7006,12 +7045,25 @@ async function importPdfPreset() {
     let driversCreated = 0;
     for (let i = 0; i < savedParticipants.length; i++) {
       const savedP = savedParticipants[i];
-      const driverNames = savedP.nome ? savedP.nome.split(',').map(s => s.trim()).filter(Boolean) : [];
+      // Prefer the structured per-driver names (comma-safe) over re-splitting the
+      // legacy comma-joined nome — this is what stops "Kaya, Mustafa Mehmet" from
+      // being torn into two people. Fall back to the comma split only if no
+      // structured array reached us (defensive / legacy).
+      const structured = pdfDriversByNumero[savedP.numero];
+      const driverNames = (Array.isArray(structured) && structured.length > 0)
+        ? structured
+        : (savedP.nome ? savedP.nome.split(',').map(s => s.trim()).filter(Boolean) : []);
       const nationality = pdfNationalityByNumero[savedP.numero] || '';
 
-      if (driverNames.length > 1) {
-        // Multi-driver detected
-        console.log(`[PDF Import] Creating ${driverNames.length} drivers for #${savedP.numero}`);
+      // Always materialize driver records when we have ≥1 name — INCLUDING a
+      // single driver with no nationality. The canonical preset_participant_drivers
+      // row then shadows the ambiguous `nome` on every later read; without it a
+      // lone "Lastname, Firstname" would be re-split on the comma by
+      // getDriverNamesFromParticipant / autoMigrateDriverRecords after save.
+      if (driverNames.length >= 1) {
+        if (driverNames.length > 1) {
+          console.log(`[PDF Import] Creating ${driverNames.length} drivers for #${savedP.numero}`);
+        }
 
         const syncResult = await window.api.invoke('preset-driver-sync', {
           participantId: savedP.id,
@@ -7021,27 +7073,13 @@ async function importPdfPreset() {
         if (syncResult.success) {
           driversCreated += syncResult.created || 0;
 
-          // Propagate nationality to the first driver record
+          // Propagate the participant-level nationality to the primary driver.
           if (nationality && syncResult.drivers && syncResult.drivers.length > 0) {
             await window.api.invoke('preset-driver-update', {
               driverId: syncResult.drivers[0].id,
               driverNationality: nationality
             });
           }
-        }
-      } else if (driverNames.length === 1 && nationality) {
-        // Single driver with nationality - create driver record to preserve nationality
-        const batchResult = await window.api.invoke('preset-create-drivers-batch', {
-          participantId: savedP.id,
-          drivers: [{
-            driver_name: driverNames[0],
-            driver_nationality: nationality,
-            driver_order: 0
-          }]
-        });
-
-        if (batchResult.success) {
-          driversCreated += batchResult.count || 0;
         }
       }
 
