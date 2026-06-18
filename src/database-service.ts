@@ -3110,7 +3110,7 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
       custom_fields: {
         // Store any additional CSV fields
         ...Object.keys(row).reduce((acc, key) => {
-          const knownFields = ['numero', 'Number', 'number', 'race_number', 'bib', 'Bib', 'nome', 'Driver', 'driver', 'Person', 'person', 'Name', 'name', 'categoria', 'Category', 'category', 'class', 'Class', 'squadra', 'team', 'Team', 'sponsor', 'Sponsors', 'sponsors', 'metatag', 'Metatag', 'plate_number', 'Plate_Number', 'plate', 'Plate', 'folder_1', 'Folder_1', 'folder_2', 'Folder_2', 'folder_3', 'Folder_3', 'folder_1_path', 'Folder_1_Path', 'folder_2_path', 'Folder_2_Path', 'folder_3_path', 'Folder_3_Path', '_Driver_IDs', '_driver_ids', '_Driver_Metatags', '_driver_metatags', '_Driver_Nationalities', '_driver_nationalities', 'car_model', 'Car_Model', 'nationality', 'Nationality'];
+          const knownFields = ['numero', 'Number', 'number', 'race_number', 'bib', 'Bib', 'nome', 'Driver', 'driver', 'Person', 'person', 'Name', 'name', 'categoria', 'Category', 'category', 'class', 'Class', 'squadra', 'team', 'Team', 'sponsor', 'Sponsors', 'sponsors', 'metatag', 'Metatag', 'plate_number', 'Plate_Number', 'plate', 'Plate', 'folder_1', 'Folder_1', 'folder_2', 'Folder_2', 'folder_3', 'Folder_3', 'folder_1_path', 'Folder_1_Path', 'folder_2_path', 'Folder_2_Path', 'folder_3_path', 'Folder_3_Path', '_Driver_IDs', '_driver_ids', '_Driver_Metatags', '_driver_metatags', '_Driver_Nationalities', '_driver_nationalities', '_Driver_Names', '_driver_names', 'car_model', 'Car_Model', 'nationality', 'Nationality'];
           if (!knownFields.includes(key)) {
             acc[key] = row[key];
           }
@@ -3134,9 +3134,13 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
     const driverMetatagsRaw = row._Driver_Metatags || row._driver_metatags || '';
     const driverNationalitiesRaw = row._Driver_Nationalities || row._driver_nationalities || '';
     const driverNamesRaw = row.nome || row.Driver || '';
+    const driverNamesPipeRaw = row._Driver_Names || row._driver_names || '';
 
-    // Parse driver names (comma-separated)
-    const driverNames = driverNamesRaw ? driverNamesRaw.split(',').map((s: string) => s.trim()).filter(Boolean) : [];
+    // Prefer the structured pipe-delimited names (comma-safe — a "Lastname, Firstname"
+    // name stays ONE driver); fall back to splitting the legacy comma-joined column.
+    const driverNames = driverNamesPipeRaw
+      ? driverNamesPipeRaw.split('|').map((s: string) => s.trim()).filter(Boolean)
+      : (driverNamesRaw ? driverNamesRaw.split(',').map((s: string) => s.trim()).filter(Boolean) : []);
 
     if (driverIdsRaw && driverNames.length > 0) {
       // PRESERVE MODE: CSV has driver IDs - reuse them
@@ -3181,11 +3185,13 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
 
       console.log(`[DB] CSV Import: Created ${driversToCreate.length} new drivers for participant ${savedParticipant.numero}`);
     } else if (driverNames.length === 1) {
-      // SINGLE DRIVER: Still check for nationality to preserve
+      // SINGLE DRIVER: preserve nationality if present, and ALWAYS materialise the
+      // canonical row when the name itself contains a comma ("Lastname, Firstname") —
+      // otherwise the comma-joined `nome` would be re-split into two people on later reads.
       const nationalityRaw = row.Nationality || row.nationality || '';
       const singleNationality = driverNationalitiesRaw ? driverNationalitiesRaw.split('|')[0]?.trim() : nationalityRaw;
 
-      if (singleNationality) {
+      if (singleNationality || driverNames[0].includes(',')) {
         const driverToCreate = {
           id: crypto.randomUUID(),
           participant_id: savedParticipant.id,
@@ -3198,7 +3204,7 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
         };
 
         await supabase.from('preset_participant_drivers').insert([driverToCreate]);
-        console.log(`[DB] CSV Import: Created single driver with nationality for participant ${savedParticipant.numero}`);
+        console.log(`[DB] CSV Import: Created single driver for participant ${savedParticipant.numero}`);
       }
     }
   }
@@ -4420,6 +4426,61 @@ export async function syncDeliveryRulesFromPreset(presetId: string): Promise<{ c
 
 // ==================== GALLERY IMAGES ====================
 
+/**
+ * Denormalise a `gallery_images.tags` jsonb from an analysis_results row so the public
+ * gallery's IPTC filter has data. The gallery reads these EXACT camelCase keys
+ * (racetagger-gallery photos/route.ts): make, model, category, liveryPrimary,
+ * sponsors[], plateNumber, cameraModel — snake_case would silently yield null. Vehicle
+ * DNA (make/model/category/livery/plate/sponsors) is NOT a flat column; it lives inside
+ * analysis_results.raw_response.vehicles[], so we parse it here. cameraModel IS a flat
+ * column. Empty keys are omitted so the gallery's available_filters stays honest.
+ * `ar` is a loosely-typed Supabase jsonb row → `any` is intentional here.
+ */
+function buildGalleryTags(ar: any): Record<string, unknown> {
+  const tags: Record<string, unknown> = {};
+  if (!ar) return tags;
+
+  // Defensive raw_response shape: V6/V7 + ONNX-crop = { vehicles: [...] },
+  // ONNX-full = { vehicle: {...} } (singular), or (legacy) a bare array.
+  const rr = ar.raw_response;
+  const vehicles: any[] = Array.isArray(rr?.vehicles)
+    ? rr.vehicles
+    : (rr?.vehicle ? [rr.vehicle] : (Array.isArray(rr) ? rr : []));
+
+  if (vehicles.length > 0) {
+    const recNum = ar.recognized_number != null ? String(ar.recognized_number) : null;
+    const byNumber = recNum
+      ? vehicles.find((v) => String(v?.finalResult?.raceNumber ?? v?.raceNumber ?? '') === recNum)
+      : undefined;
+    // Primary vehicle: the one matching the recognised number, else highest confidence.
+    const primary = byNumber
+      ?? [...vehicles].sort((a, b) => (b?.confidence || 0) - (a?.confidence || 0))[0]
+      ?? null;
+
+    if (primary) {
+      if (primary.make) tags.make = primary.make;
+      if (primary.model) tags.model = primary.model;
+      if (primary.category) tags.category = primary.category;
+      if (primary.livery?.primary) tags.liveryPrimary = primary.livery.primary;
+      if (primary.plateNumber) tags.plateNumber = primary.plateNumber;
+    }
+
+    // Sponsors: deduped union across ALL vehicles (per-vehicle vehicles[].sponsors).
+    const sponsors = Array.from(new Set(
+      vehicles
+        .flatMap((v) => (Array.isArray(v?.sponsors) ? v.sponsors : []))
+        .map((s: any) => (typeof s === 'string' ? s.trim() : ''))
+        .filter(Boolean),
+    ));
+    if (sponsors.length > 0) tags.sponsors = sponsors;
+  }
+
+  // cameraModel is a flat analysis_results column.
+  if (ar.camera_model) tags.cameraModel = ar.camera_model;
+
+  return tags;
+}
+
 export async function addImagesToGallery(galleryId: string, images: any[]) {
   const client = getSupabaseClient();
   const rows = images.map((img: any) => ({ gallery_id: galleryId, ...img }));
@@ -4445,7 +4506,7 @@ export async function autoRouteImagesToGalleries(projectId: string, executionId:
   // Get images + analysis for this execution
   const { data: images } = await client
     .from('images')
-    .select('id, analysis_results(recognized_number), visual_tags(participant_name, participant_team)')
+    .select('id, analysis_results(recognized_number, raw_response, camera_model), visual_tags(participant_name, participant_team)')
     .eq('execution_id', executionId);
 
   if (!images) return { routed: 0, unmatched: 0 };
@@ -4478,6 +4539,7 @@ export async function autoRouteImagesToGalleries(projectId: string, executionId:
           recognized_numbers: number ? [number] : [],
           participant_name: name,
           participant_team: team,
+          tags: buildGalleryTags(ar),
         });
         matched = true;
         routed++;
@@ -4658,14 +4720,16 @@ export async function sendExecutionToGallery(galleryId: string, executionId: str
 
   // Step 2: Get analysis_results and visual_tags separately (uses indexes)
   const [arResult, vtResult] = await Promise.all([
-    client.from('analysis_results').select('image_id, recognized_number').in('image_id', imageIds),
+    client.from('analysis_results').select('image_id, recognized_number, raw_response, camera_model').in('image_id', imageIds),
     client.from('visual_tags').select('image_id, participant_name, participant_team').in('image_id', imageIds),
   ]);
 
   // Build lookup maps
-  const arMap: Record<string, string> = {};
+  // Store the FULL analysis_results row (not just the number) so buildGalleryTags can
+  // read raw_response + camera_model for the tags jsonb. `any` = loose Supabase row.
+  const arMap: Record<string, any> = {};
   if (arResult.data) {
-    arResult.data.forEach((ar: any) => { if (ar.recognized_number) arMap[ar.image_id] = ar.recognized_number; });
+    arResult.data.forEach((ar: any) => { arMap[ar.image_id] = ar; });
   }
   const vtMap: Record<string, { name: string; team: string }> = {};
   if (vtResult.data) {
@@ -4673,7 +4737,8 @@ export async function sendExecutionToGallery(galleryId: string, executionId: str
   }
 
   const rows = imageIds.map((imgId: string) => {
-    const number = arMap[imgId] || '';
+    const ar = arMap[imgId];
+    const number = ar?.recognized_number || '';
     const vt = vtMap[imgId];
     return {
       gallery_id: galleryId,
@@ -4683,6 +4748,7 @@ export async function sendExecutionToGallery(galleryId: string, executionId: str
       recognized_numbers: number ? [number] : [],
       participant_name: vt?.name || '',
       participant_team: vt?.team || '',
+      tags: buildGalleryTags(ar),
     };
   });
 

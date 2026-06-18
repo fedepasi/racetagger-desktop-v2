@@ -81,6 +81,8 @@ const validInvokeChannels: string[] = [
   // Auth
   'check-auth-status', // Technically send/receive but can be invoke
   'auth-get-session', // Get current user session for face photos
+  'auth-get-remembered-credentials', // "Keep me signed in" — pre-fill login form
+  'auth-clear-remembered-credentials',
   'login',
   'register',
   'logout',
@@ -261,6 +263,8 @@ const validInvokeChannels: string[] = [
   'get-training-consent',
   'set-training-consent',
   'get-consent-status',
+  'get-privacy-consent-status',
+  'set-privacy-consent',
 
   // Export Destinations Operations
   'export-destinations-create',

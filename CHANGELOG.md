@@ -13,6 +13,37 @@
   per-folder write order and any `{seq}` rename token follow the source folder rather than the
   random completion order.
 
+### 📄 CSV preset: `_Driver_Names` column so comma names survive a round-trip
+
+- **CSV export/import now carries a `_Driver_Names` column (pipe-delimited)** so driver names that themselves contain a comma (`Lastname, Firstname`, e.g. "Kaya, Mustafa Mehmet") survive an export→re-import round-trip instead of being split into two people. The export wrote driver names only into the comma-joined `Driver` column (lossy for comma-names); it now *also* writes the full names pipe-joined into `_Driver_Names`, mirroring the existing hidden `_Driver_IDs` / `_Driver_Metatags` / `_Driver_Nationalities` columns. On import, both the merge path (renderer) and the create-new path (`database-service.ts`) **prefer `_Driver_Names`** (split on `|`, comma-safe) over splitting the `Driver`/`nome` column. The **legacy convention is unchanged**: when `_Driver_Names` is absent, a plain `Driver` cell like `"Max Mustermann, John Doe"` still splits on the comma into two drivers — so existing CSVs behave exactly as before. The create-new path also now materialises the single-driver row when the name contains a comma, so it isn't re-split on a later reload. (For a hand-authored list, `Lastname, Firstname` names are unambiguous only via PDF import or this `_Driver_Names` column — a bare comma in the `Driver` column remains the multi-driver separator by design.)
+
+### 🐛 Fix: PDF entry-list import split "Lastname, Firstname" drivers into two people
+
+- **Importing a PDF entry list whose driver names are in `Lastname, Firstname` form (common in German lists, e.g. "Kaya, Mustafa Mehmet") no longer turns one person into two participants/drivers.** The `parsePdfEntryList` Edge Function already returns a structured per-driver `drivers[]` array, but the desktop import discarded it and rebuilt names by splitting the legacy comma-joined `nome` on `,` — which tears a `Lastname, Firstname` name in two. Both PDF paths (create-new preset **and** merge-into-open-preset) now consume the structured array via a shared `driverNamesFromImportRow()` helper, splitting `nome` only as a fallback. The **legacy CSV convention is unchanged**: a CSV cell like `"Max Mustermann, John Doe"` (no structured array) still means two drivers. PDF create-new now also **always materialises a `preset_participant_drivers` row** for single-driver entries — even without a nationality — so the canonical record shadows the ambiguous `nome` and the name is never re-split on a later reload/edit (previously a lone `Lastname, Firstname` with no nationality wrote no driver row and was re-split by `getDriverNamesFromParticipant` / `autoMigrateDriverRecords`). Renderer-only; no schema / Edge Function / token changes.
+
+### 🔑 "Keep me signed in" — pre-fill login from the OS credential vault
+
+- **New "Keep me signed in" checkbox on the desktop login** (on by default). When ticked, the email + password are saved **encrypted with the OS credential vault** (Electron `safeStorage` → Windows DPAPI / macOS Keychain / Linux libsecret) in `userData/remember.enc`, and the login screen is **pre-filled** after a logout or session expiry (across app restarts the session was already restored). Unticking forgets the saved credentials. New `src/credential-store.ts` + `auth-get-remembered-credentials` / `auth-clear-remembered-credentials` IPC; the `login` channel now carries `rememberMe`. Never written in plaintext — if `safeStorage` is unavailable nothing is persisted.
+- **Hardening:** the persisted Supabase session (`userData/session.json`) is now **encrypted at rest** with the same OS vault instead of plaintext JSON. Backward-compatible: legacy plaintext session files are still read and re-encrypted on the next save; falls back to plaintext only where encryption is unavailable.
+
+### 🔒 Fix: privacy/terms notice re-shown on every login
+
+- **The first-launch Privacy Policy / Terms notice no longer reappears after every logout→login.** It was gated only on a `localStorage` flag that `handleLogout()` wipes via `localStorage.clear()`, so any re-login re-triggered it even when nothing had changed. It's now gated on the DB (`subscribers.accepted_privacy_policy_at` + version, GDPR Art. 7): if the user already accepted the current policy version it's never shown; otherwise it shows once and **records acceptance to the DB** on agree (new `consentService.getPrivacyConsentStatus()` / `setPrivacyConsent()` + `get/set-privacy-consent` IPC). A per-user + per-version local flag (now preserved across logout) is the offline fallback. Policy versions are centralised in `CURRENT_PRIVACY_POLICY_VERSION` / `CURRENT_TERMS_OF_SERVICE_VERSION`. Requires DB migration `20260616120000_grant_authenticated_update_gdpr_consent` (grants `authenticated` column-level UPDATE on the 4 consent columns).
+
+### 🎯 TRAIN-01: capture ONNX-miss + Gemini-hit as a training signal
+
+- **New `training_flags.onnx_miss_gemini_hit`** stamped inline during analysis: when a
+  per-championship ONNX number model produces no/weak number on a subject but Gemini
+  (already run on those LOW/MEDIUM crops) reads one, the row records the flag + the gemini
+  numbers (`onnx_miss_count`, `onnx_miss_numbers`). Derived from `modelSource` on the final
+  results (`v6-fallback-from-low-onnx*`, `onnx+v6-default-gemini*`, `onnx+v6-preset-gemini*`)
+  — **zero extra inference, zero extra Gemini call** (those crops already hit Gemini today).
+  Feeds the per-sport model inbox as a silver, human-gated training candidate. Forward-only.
+
+### 🖼️ Gallery delivery: write IPTC tags so the web filter works
+
+- **Deliveries now populate `gallery_images.tags`** (`sendExecutionToGallery` + `autoRouteImagesToGalleries`). Until now only number/name/team were written, so the public gallery's filter-by-make/model/category/livery/sponsor/plate was dead (`tags='{}'`). A shared `buildGalleryTags()` denormalises the 7 keys the gallery reads — vehicle DNA (make/model/category/liveryPrimary/plateNumber, sponsors unioned across vehicles) parsed from `analysis_results.raw_response.vehicles[]` (V6/V7/ONNX-shape-defensive, primary-vehicle = recognised number else highest confidence) + `cameraModel` from the flat column. No extra queries (the delivery selects were widened), no schema change. Already-published galleries need a separate backfill.
+
 ### 🔌 Edge Function V7 support (Vehicle DNA)
 
 - **Desktop now supports `edge_function_version = 7`**: bumped

@@ -97,6 +97,33 @@ export function registerAppHandlers(): void {
     }
   });
 
+  // Privacy Policy / Terms of Service consent (GDPR Art. 7) — backs the
+  // first-launch notice so it is gated on the DB, not a logout-wiped local flag.
+  ipcMain.handle('get-privacy-consent-status', async () => {
+    try {
+      const { consentService } = await import('../consent-service');
+      return await consentService.getPrivacyConsentStatus();
+    } catch (error) {
+      console.error('[IPC] Error getting privacy consent status:', error);
+      return {
+        acceptedPrivacyPolicyAt: null,
+        privacyPolicyVersion: null,
+        acceptedTermsOfServiceAt: null,
+        termsOfServiceVersion: null
+      };
+    }
+  });
+
+  ipcMain.handle('set-privacy-consent', async (_, data: { privacyPolicyVersion: string; termsOfServiceVersion: string }) => {
+    try {
+      const { consentService } = await import('../consent-service');
+      return await consentService.setPrivacyConsent(data.privacyPolicyVersion, data.termsOfServiceVersion);
+    } catch (error) {
+      console.error('[IPC] Error recording privacy consent:', error);
+      return false;
+    }
+  });
+
   // ==================== USER SETTINGS ====================
 
   ipcMain.handle('get-full-settings', async () => {

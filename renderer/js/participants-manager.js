@@ -4151,7 +4151,7 @@ async function exportPresetCSV(presetId) {
     };
 
     // CSV Header (English column names + hidden driver preservation columns)
-    const csvHeader = 'Number,Driver,Team,Category,Plate_Number,Car_Model,Nationality,Sponsors,Metatag,Folder_1,Folder_2,Folder_3,Folder_1_Path,Folder_2_Path,Folder_3_Path,_Driver_IDs,_Driver_Metatags,_Driver_Nationalities';
+    const csvHeader = 'Number,Driver,Team,Category,Plate_Number,Car_Model,Nationality,Sponsors,Metatag,Folder_1,Folder_2,Folder_3,Folder_1_Path,Folder_2_Path,Folder_3_Path,_Driver_IDs,_Driver_Metatags,_Driver_Nationalities,_Driver_Names';
 
     // Convert participants to CSV rows (fetch drivers for each participant)
     const csvRows = await Promise.all(participants.map(async (p) => {
@@ -4163,6 +4163,10 @@ async function exportPresetCSV(presetId) {
       const driverIds = drivers.map(d => d.id).join('|');
       const driverMetatags = drivers.map(d => d.driver_metatag || '').join('|');
       const driverNationalities = drivers.map(d => d.driver_nationality || '').join('|');
+      // Full driver names, pipe-delimited — lossless even when a name itself contains a
+      // comma ("Cognome, Nome"). Mirrors the other _Driver_* columns; consumed on import
+      // so an export→re-import round-trip never splits a comma-name into two people.
+      const driverNamesPipe = drivers.map(d => d.driver_name || '').join('|');
 
       // Nationality: use first driver's nationality
       const primaryNationality = drivers.length > 0 ? (drivers[0].driver_nationality || '') : '';
@@ -4185,7 +4189,8 @@ async function exportPresetCSV(presetId) {
         escapeCSV(p.folder_3_path || ''),
         escapeCSV(driverIds),
         escapeCSV(driverMetatags),
-        escapeCSV(driverNationalities)
+        escapeCSV(driverNationalities),
+        escapeCSV(driverNamesPipe)
       ].join(',');
     }));
 
@@ -5339,6 +5344,11 @@ function mapCsvRowToParticipantFields(row) {
     nationality: pick('nationality', 'Nationality'),
     driverNationalities: splitPipe('_Driver_Nationalities', '_driver_nationalities'),
     driverMetatags: splitPipe('_Driver_Metatags', '_driver_metatags'),
+    // Structured per-driver names (pipe-delimited): the unambiguous CSV channel for names
+    // that contain a comma ("Cognome, Nome"). driverNamesFromImportRow prefers a non-empty
+    // array over splitting the comma-joined Driver/nome column; an empty array (column
+    // absent) falls back to the legacy comma split, so a plain "A, B" cell still = two drivers.
+    drivers: splitPipe('_Driver_Names', '_driver_names'),
     folders,
   };
 }
@@ -5355,6 +5365,25 @@ function buildDriverMeta(driverNames, f) {
       || '',
     metatag: (f.driverMetatags && f.driverMetatags[i]) || ''
   }));
+}
+
+/**
+ * Resolve driver names from an import row, disambiguating the comma AT THE
+ * SOURCE where the convention is known.
+ *
+ * PDF entry-list rows carry a structured `drivers` array straight from the
+ * parsePdfEntryList Edge Function (one element per real driver), so a name in
+ * "Lastname, Firstname" form (e.g. "Kaya, Mustafa Mehmet") stays ONE driver —
+ * the internal comma is preserved. CSV rows never carry a `drivers` array, so
+ * they fall back to the legacy convention where a comma in `nome` separates
+ * MULTIPLE drivers ("Max Mustermann, John Doe" = two). Both conventions coexist
+ * because each is resolved where it is unambiguous.
+ */
+function driverNamesFromImportRow(row) {
+  if (Array.isArray(row?.drivers) && row.drivers.length > 0) {
+    return row.drivers.map(s => String(s).trim()).filter(Boolean);
+  }
+  return row?.nome ? row.nome.split(',').map(s => s.trim()).filter(Boolean) : [];
 }
 
 /**
@@ -5399,7 +5428,8 @@ function mergeMappedRowsIntoCurrentPreset(mappedRows, missingAction = 'deactivat
 
   (mappedRows || []).forEach(f => {
     const numero = String(f.numero ?? '').trim();
-    const driverNames = f.nome ? f.nome.split(',').map(s => s.trim()).filter(Boolean) : [];
+    const driverNames = driverNamesFromImportRow(f);
+    const hasStructuredDrivers = Array.isArray(f.drivers) && f.drivers.length > 0;
     if (numero) importedNumeros.add(numero);
 
     const existingIdx = numero ? indexByNumero.get(numero) : undefined;
@@ -5408,8 +5438,10 @@ function mergeMappedRowsIntoCurrentPreset(mappedRows, missingAction = 'deactivat
       // empty cells never wipe data the user already has.
       const merged = { ...participantsData[existingIdx] };
       if (reactivateMatched) merged.is_active = true; // present in the list → racing again
-      if (f.nome) {
-        merged.nome = f.nome;
+      if (f.nome || hasStructuredDrivers) {
+        // Keep nome as the legacy fallback; when only the structured array is
+        // present, derive it from the (comma-safe) driver names.
+        merged.nome = f.nome || driverNames.join(', ');
         merged.drivers = driverNames;
         merged.driverMeta = buildDriverMeta(driverNames, f); // nationality/metatag per driver
         // Drop the stale driver-rows snapshot so the Save Preset driver sync
@@ -6680,6 +6712,76 @@ function showPdfValidationError(title, message, details) {
  * Show preview state with extracted data
  * @param {Object} data - Extraction result data
  */
+/**
+ * Compute the merge impact of the pending PDF import against the currently open
+ * preset, keyed by race number (the same key the merge engine uses):
+ *   updated — import numbers already in the preset
+ *   added   — import numbers not yet in the preset (preset smaller than import)
+ *   missing — persisted preset rows (have an id) whose number is NOT in the
+ *             import (preset bigger than import)
+ * Race numbers are matched as exact strings on purpose — "007" and "7" are
+ * different cars (leading zeros are significant in motorsport), so they are
+ * never collapsed.
+ */
+function computePdfMergeImpact() {
+  const imported = (pdfImportData && Array.isArray(pdfImportData.participants)) ? pdfImportData.participants : [];
+  const importNumeros = new Set();
+  imported.forEach(p => { const k = String(p.numero ?? '').trim(); if (k) importNumeros.add(k); });
+
+  const existing = Array.isArray(participantsData) ? participantsData : [];
+  const existingNumeros = new Set();
+  existing.forEach(p => { const k = String(p.numero ?? '').trim(); if (k) existingNumeros.add(k); });
+
+  let updated = 0, added = 0;
+  importNumeros.forEach(n => { if (existingNumeros.has(n)) updated++; else added++; });
+
+  let missing = 0;
+  existing.forEach(p => {
+    const n = String(p.numero ?? '').trim();
+    if (p.id && n && !importNumeros.has(n)) missing++;
+  });
+  return { updated, added, missing };
+}
+
+/**
+ * Render the live merge-impact line in the PDF modal (merge mode only) and keep
+ * the confirm button label honest. Re-runs on "missing participants" change
+ * (the deactivate/remove/keep wording depends on it).
+ */
+function renderPdfMergeImpact() {
+  const box = document.getElementById('pdf-merge-impact');
+  if (!box) return;
+  if (!window.pdfImportMergeMode) { box.style.display = 'none'; return; }
+
+  const { updated, added, missing } = computePdfMergeImpact();
+  const action = document.getElementById('pdf-missing-action')?.value || 'deactivate';
+  const presetName = currentPreset && (currentPreset.name || currentPreset.nome);
+  const presetLabel = presetName ? `"${presetName}"` : 'this preset';
+
+  let missingTxt = '';
+  if (missing > 0) {
+    if (action === 'deactivate') missingTxt = ` · 💤 ${missing} deactivated`;
+    else if (action === 'remove') missingTxt = ` · 🗑️ ${missing} removed`;
+    else missingTxt = ` · ${missing} left unchanged`;
+  }
+  const warn = missing > 0 && action !== 'keep';
+  box.style.display = 'block';
+  box.style.borderColor = warn ? '#f59e0b' : 'var(--border-color)';
+  box.innerHTML =
+    `In ${escapeHtml(presetLabel)}: ✏️ <strong>${updated}</strong> updated · ➕ <strong>${added}</strong> added${missingTxt}.` +
+    (warn
+      ? `<br><span style="color:#f59e0b;">⚠️ ${missing} participant(s) in the preset are NOT in this PDF and will be ${action === 'remove' ? 'removed' : 'deactivated'} on Save.</span>`
+      : '');
+
+  // The "what to do with the missing" selector only matters when some preset
+  // cars are absent from the import — show it right under the impact, only then.
+  const group = document.getElementById('pdf-missing-action-group');
+  if (group) group.style.display = (missing > 0) ? '' : 'none';
+
+  const importBtn = document.getElementById('import-pdf-btn');
+  if (importBtn) importBtn.innerHTML = `<span class="btn-icon">➕</span>➕ ${added} · ✏️ ${updated} in preset`;
+}
+
 function showPdfPreviewState(data) {
   hidePdfStates();
   const previewState = document.getElementById('pdf-preview-state');
@@ -6754,8 +6856,13 @@ function showPdfPreviewState(data) {
   if (nameGroupP) nameGroupP.style.display = pdfMerge ? 'none' : '';
   const missingGroupP = document.getElementById('pdf-missing-action-group');
   if (missingGroupP) missingGroupP.style.display = pdfMerge ? '' : 'none';
-  if (pdfMerge && importBtn) {
-    importBtn.innerHTML = `<span class="btn-icon">➕</span>Add / update ${data.participants.length} in preset`;
+  if (pdfMerge) {
+    // Live add/update/deactivate breakdown vs the open preset, BEFORE confirming
+    // — not just in the post-merge toast. Also sets the confirm button label.
+    renderPdfMergeImpact();
+  } else {
+    const impactBox = document.getElementById('pdf-merge-impact');
+    if (impactBox) impactBox.style.display = 'none';
   }
 }
 
@@ -6825,6 +6932,13 @@ async function importPdfPreset() {
     const mapped = pdfImportData.participants.map(p => ({
       numero: p.numero || '',
       nome: p.nome || '',
+      // Structured per-driver names from the Edge Function — preserves names that
+      // contain a comma ("Kaya, Mustafa Mehmet"). The merge engine prefers this
+      // over splitting `nome`; absent for CSV (legacy comma-split). undefined (not
+      // []) so an empty array never shadows the nome fallback.
+      drivers: (Array.isArray(p.drivers) && p.drivers.length > 0)
+        ? p.drivers.map(s => String(s).trim()).filter(Boolean)
+        : undefined,
       categoria: p.categoria || '',
       squadra: p.squadra || '',
       sponsor: Array.isArray(p.sponsors) ? p.sponsors.join(', ') : (p.sponsor || ''),
@@ -6884,6 +6998,16 @@ async function importPdfPreset() {
       }
     });
 
+    // Build structured per-driver-name lookup, keyed by race number. Used to
+    // create preset_participant_drivers verbatim so names containing a comma
+    // ("Kaya, Mustafa Mehmet") are NOT re-split. `nome` stays the legacy
+    // comma-joined fallback written to the participant row.
+    const pdfDriversByNumero = {};
+    pdfImportData.participants.forEach(p => {
+      const list = driverNamesFromImportRow(p);
+      if (list.length > 0) pdfDriversByNumero[p.numero] = list;
+    });
+
     // Create preset
     const createResponse = await window.api.invoke('supabase-create-participant-preset', {
       name: presetName,
@@ -6931,12 +7055,25 @@ async function importPdfPreset() {
     let driversCreated = 0;
     for (let i = 0; i < savedParticipants.length; i++) {
       const savedP = savedParticipants[i];
-      const driverNames = savedP.nome ? savedP.nome.split(',').map(s => s.trim()).filter(Boolean) : [];
+      // Prefer the structured per-driver names (comma-safe) over re-splitting the
+      // legacy comma-joined nome — this is what stops "Kaya, Mustafa Mehmet" from
+      // being torn into two people. Fall back to the comma split only if no
+      // structured array reached us (defensive / legacy).
+      const structured = pdfDriversByNumero[savedP.numero];
+      const driverNames = (Array.isArray(structured) && structured.length > 0)
+        ? structured
+        : (savedP.nome ? savedP.nome.split(',').map(s => s.trim()).filter(Boolean) : []);
       const nationality = pdfNationalityByNumero[savedP.numero] || '';
 
-      if (driverNames.length > 1) {
-        // Multi-driver detected
-        console.log(`[PDF Import] Creating ${driverNames.length} drivers for #${savedP.numero}`);
+      // Always materialize driver records when we have ≥1 name — INCLUDING a
+      // single driver with no nationality. The canonical preset_participant_drivers
+      // row then shadows the ambiguous `nome` on every later read; without it a
+      // lone "Lastname, Firstname" would be re-split on the comma by
+      // getDriverNamesFromParticipant / autoMigrateDriverRecords after save.
+      if (driverNames.length >= 1) {
+        if (driverNames.length > 1) {
+          console.log(`[PDF Import] Creating ${driverNames.length} drivers for #${savedP.numero}`);
+        }
 
         const syncResult = await window.api.invoke('preset-driver-sync', {
           participantId: savedP.id,
@@ -6946,27 +7083,13 @@ async function importPdfPreset() {
         if (syncResult.success) {
           driversCreated += syncResult.created || 0;
 
-          // Propagate nationality to the first driver record
+          // Propagate the participant-level nationality to the primary driver.
           if (nationality && syncResult.drivers && syncResult.drivers.length > 0) {
             await window.api.invoke('preset-driver-update', {
               driverId: syncResult.drivers[0].id,
               driverNationality: nationality
             });
           }
-        }
-      } else if (driverNames.length === 1 && nationality) {
-        // Single driver with nationality - create driver record to preserve nationality
-        const batchResult = await window.api.invoke('preset-create-drivers-batch', {
-          participantId: savedP.id,
-          drivers: [{
-            driver_name: driverNames[0],
-            driver_nationality: nationality,
-            driver_order: 0
-          }]
-        });
-
-        if (batchResult.success) {
-          driversCreated += batchResult.count || 0;
         }
       }
 

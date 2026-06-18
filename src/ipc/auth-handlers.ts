@@ -11,6 +11,11 @@ import { promises as fsPromises } from 'fs';
 import * as os from 'os';
 import { authService } from '../auth-service';
 import {
+  saveRememberedCredentials,
+  getRememberedCredentials,
+  clearRememberedCredentials
+} from '../credential-store';
+import {
   cacheSupabaseData,
   saveCsvToSupabase,
   getSportCategories,
@@ -70,19 +75,39 @@ export function registerAuthHandlers(): void {
 
   // ==================== Login ====================
 
-  ipcMain.on('login', async (event: IpcMainEvent, credentials: { email: string; password: string }) => {
+  ipcMain.on('login', async (event: IpcMainEvent, credentials: { email: string; password: string; rememberMe?: boolean }) => {
     try {
       const result = await authService.login(credentials.email, credentials.password);
 
       // Wait for data sync BEFORE sending login-result
       if (result.success) {
         await syncUserData();
+
+        // "Keep me signed in": persist credentials (OS-vault encrypted) so the
+        // login screen can be pre-filled after logout / session expiry. If the
+        // box is unticked, forget any previously stored credentials.
+        if (credentials.rememberMe) {
+          saveRememberedCredentials(credentials.email, credentials.password);
+        } else {
+          clearRememberedCredentials();
+        }
       }
 
       event.sender.send('login-result', result);
     } catch (error: any) {
       event.sender.send('login-result', { success: false, error: error.message || 'Login error' });
     }
+  });
+
+  // Return remembered credentials (OS-vault decrypted) to pre-fill the login form.
+  ipcMain.handle('auth-get-remembered-credentials', () => {
+    return getRememberedCredentials();
+  });
+
+  // Forget remembered credentials (e.g. user unticks "Keep me signed in").
+  ipcMain.handle('auth-clear-remembered-credentials', () => {
+    clearRememberedCredentials();
+    return true;
   });
 
   // ==================== Register ====================
