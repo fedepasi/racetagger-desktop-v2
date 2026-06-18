@@ -3574,8 +3574,22 @@ app.whenReady().then(async () => { // Added async here
           }
         }
 
-        // Extract image analysis events
-        const imageAnalysisEvents = logEvents.filter((event: any) => event.type === 'IMAGE_ANALYSIS');
+        // Extract image analysis events.
+        // Sort by filename (natural, numeric-aware) so folder organization
+        // processes photos in the same order the user sees in their file
+        // explorer — NOT in JSONL analysis-completion order, which is
+        // parallel/streaming and reads as random (feedback 2026-06-18).
+        // This keeps any {seq} rename token and the per-folder write order
+        // aligned with the source folder. Destination derivation below uses
+        // imageAnalysisEvents[0].originalPath (dirname only), so reordering
+        // is safe.
+        const _fileNameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+        const imageAnalysisEvents = logEvents
+          .filter((event: any) => event.type === 'IMAGE_ANALYSIS')
+          .sort((a: any, b: any) => _fileNameCollator.compare(
+            a.fileName || a.originalFileName || '',
+            b.fileName || b.originalFileName || ''
+          ));
 
         // Build correction map from MANUAL_CORRECTION events
         const correctionMap = new Map();

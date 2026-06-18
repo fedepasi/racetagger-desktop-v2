@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### 🗂️ Results & folder organization now ordered by filename
+
+- **Analysis Results grid is now sorted by filename** (natural, numeric-aware) instead of
+  analysis-completion order. The JSONL is written as images finish analyzing, which — with the
+  parallel/streaming pipeline — has no relation to filename and looked random to users. Photos
+  now appear in the same order as the file explorer. This also fixes the gallery prev/next order
+  and the export/delivery order (all read the same sorted list). Renderer-only.
+- **Post-analysis "Organize into Folders" now processes photos in filename order too**, so the
+  per-folder write order and any `{seq}` rename token follow the source folder rather than the
+  random completion order.
+
 ### 📄 CSV preset: `_Driver_Names` column so comma names survive a round-trip
 
 - **CSV export/import now carries a `_Driver_Names` column (pipe-delimited)** so driver names that themselves contain a comma (`Lastname, Firstname`, e.g. "Kaya, Mustafa Mehmet") survive an export→re-import round-trip instead of being split into two people. The export wrote driver names only into the comma-joined `Driver` column (lossy for comma-names); it now *also* writes the full names pipe-joined into `_Driver_Names`, mirroring the existing hidden `_Driver_IDs` / `_Driver_Metatags` / `_Driver_Nationalities` columns. On import, both the merge path (renderer) and the create-new path (`database-service.ts`) **prefer `_Driver_Names`** (split on `|`, comma-safe) over splitting the `Driver`/`nome` column. The **legacy convention is unchanged**: when `_Driver_Names` is absent, a plain `Driver` cell like `"Max Mustermann, John Doe"` still splits on the comma into two drivers — so existing CSVs behave exactly as before. The create-new path also now materialises the single-driver row when the name contains a comma, so it isn't re-split on a later reload. (For a hand-authored list, `Lastname, Firstname` names are unambiguous only via PDF import or this `_Driver_Names` column — a bare comma in the `Driver` column remains the multi-driver separator by design.)
