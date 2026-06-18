@@ -4151,7 +4151,7 @@ async function exportPresetCSV(presetId) {
     };
 
     // CSV Header (English column names + hidden driver preservation columns)
-    const csvHeader = 'Number,Driver,Team,Category,Plate_Number,Car_Model,Nationality,Sponsors,Metatag,Folder_1,Folder_2,Folder_3,Folder_1_Path,Folder_2_Path,Folder_3_Path,_Driver_IDs,_Driver_Metatags,_Driver_Nationalities';
+    const csvHeader = 'Number,Driver,Team,Category,Plate_Number,Car_Model,Nationality,Sponsors,Metatag,Folder_1,Folder_2,Folder_3,Folder_1_Path,Folder_2_Path,Folder_3_Path,_Driver_IDs,_Driver_Metatags,_Driver_Nationalities,_Driver_Names';
 
     // Convert participants to CSV rows (fetch drivers for each participant)
     const csvRows = await Promise.all(participants.map(async (p) => {
@@ -4163,6 +4163,10 @@ async function exportPresetCSV(presetId) {
       const driverIds = drivers.map(d => d.id).join('|');
       const driverMetatags = drivers.map(d => d.driver_metatag || '').join('|');
       const driverNationalities = drivers.map(d => d.driver_nationality || '').join('|');
+      // Full driver names, pipe-delimited — lossless even when a name itself contains a
+      // comma ("Cognome, Nome"). Mirrors the other _Driver_* columns; consumed on import
+      // so an export→re-import round-trip never splits a comma-name into two people.
+      const driverNamesPipe = drivers.map(d => d.driver_name || '').join('|');
 
       // Nationality: use first driver's nationality
       const primaryNationality = drivers.length > 0 ? (drivers[0].driver_nationality || '') : '';
@@ -4185,7 +4189,8 @@ async function exportPresetCSV(presetId) {
         escapeCSV(p.folder_3_path || ''),
         escapeCSV(driverIds),
         escapeCSV(driverMetatags),
-        escapeCSV(driverNationalities)
+        escapeCSV(driverNationalities),
+        escapeCSV(driverNamesPipe)
       ].join(',');
     }));
 
@@ -5339,6 +5344,11 @@ function mapCsvRowToParticipantFields(row) {
     nationality: pick('nationality', 'Nationality'),
     driverNationalities: splitPipe('_Driver_Nationalities', '_driver_nationalities'),
     driverMetatags: splitPipe('_Driver_Metatags', '_driver_metatags'),
+    // Structured per-driver names (pipe-delimited): the unambiguous CSV channel for names
+    // that contain a comma ("Cognome, Nome"). driverNamesFromImportRow prefers a non-empty
+    // array over splitting the comma-joined Driver/nome column; an empty array (column
+    // absent) falls back to the legacy comma split, so a plain "A, B" cell still = two drivers.
+    drivers: splitPipe('_Driver_Names', '_driver_names'),
     folders,
   };
 }
