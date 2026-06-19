@@ -1,0 +1,10 @@
+# Never commit the research workspace: images, crops, embeddings, checkpoints, env.
+data/
+.venv/
+*.npz
+*.pt
+*.parquet
+*.faiss
+.env
+__pycache__/
+*.pyc
