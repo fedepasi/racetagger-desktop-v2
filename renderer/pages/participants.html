@@ -1048,6 +1048,26 @@
         <button class="modal-close" onclick="closePdfImportModal()">&times;</button>
       </div>
       <div class="modal-body">
+        <!-- Input State (drop / browse) — shown when the modal opens with no file yet,
+             i.e. "Update participants". The create-new flow uses the page drop-zone and
+             jumps straight to the processing state, so this stays hidden there. -->
+        <div id="pdf-input-state" class="pdf-state" style="display: none;">
+          <div id="pdf-modal-drop-zone" class="pdf-drop-zone">
+            <div class="drop-zone-content">
+              <div class="drop-zone-icon">📄</div>
+              <div class="drop-zone-text">
+                <h4>Drop your entry-list PDF here</h4>
+                <p>or click to browse files</p>
+              </div>
+              <div class="drop-zone-hint">
+                <span class="ai-chip">🤖 AI-Powered</span>
+                Supports official FIA, FIM, and race organizer entry lists
+              </div>
+            </div>
+            <input type="file" id="pdf-modal-file-input" accept=".pdf" style="display: none;">
+          </div>
+        </div>
+
         <!-- Processing State -->
         <div id="pdf-processing-state" class="pdf-state" style="display: none;">
           <div class="processing-animation">
