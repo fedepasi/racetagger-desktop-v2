@@ -3093,31 +3093,36 @@
 .ai-badge-header {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, #a78bfa 0%, #a78bfa 100%);
-  color: white;
-  font-size: 0.75rem;
+  gap: 0.3rem;
+  background: rgba(26, 158, 224, 0.14);
+  color: var(--accent-primary, #1a9ee0);
+  border: 1px solid rgba(26, 158, 224, 0.40);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.7rem;
   font-weight: 700;
-  padding: 0.35rem 0.6rem;
+  letter-spacing: 0.08em;
+  padding: 0.3rem 0.55rem;
   border-radius: 6px;
   margin-right: 0.75rem;
   vertical-align: middle;
 }
+.ai-badge-header svg { width: 14px; height: 14px; }
 
 /* AI Chip in drop zone */
 .ai-chip {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  background: linear-gradient(135deg, rgba(139, 92, 246, 0.15) 0%, rgba(99, 102, 241, 0.15) 100%);
-  color: #8b5cf6;
+  background: rgba(26, 158, 224, 0.14);
+  color: var(--accent-primary, #1a9ee0);
   font-size: 0.75rem;
   font-weight: 600;
   padding: 0.3rem 0.6rem;
-  border-radius: 12px;
-  border: 1px solid rgba(139, 92, 246, 0.3);
+  border-radius: 999px;
+  border: 1px solid rgba(26, 158, 224, 0.35);
   margin-right: 0.5rem;
 }
+.ai-chip svg { width: 13px; height: 13px; }
 
 /* PDF Drop Zone */
 .pdf-drop-zone {
@@ -3126,24 +3131,22 @@
   border-radius: 12px;
   padding: 2rem;
   text-align: center;
-  background: linear-gradient(135deg, var(--surface-color-light) 0%, var(--surface-color) 100%);
+  background: var(--surface-color-light);
   cursor: pointer;
-  transition: all 0.3s ease;
+  transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease;
   margin-bottom: 1.5rem;
 }
 
 .pdf-drop-zone:hover {
-  border-color: var(--accent-color);
-  background: linear-gradient(135deg, rgba(26, 158, 224, 0.05) 0%, var(--surface-color-light) 100%);
-  transform: translateY(-2px);
-  box-shadow: 0 4px 20px rgba(26, 158, 224, 0.15);
+  border-color: var(--accent-primary, #1a9ee0);
+  background: rgba(26, 158, 224, 0.06);
+  transform: translateY(-1px);
 }
 
 .pdf-drop-zone.drag-over {
-  border-color: #8b5cf6;
-  background: linear-gradient(135deg, rgba(139, 92, 246, 0.1) 0%, rgba(99, 102, 241, 0.05) 100%);
-  transform: translateY(-4px);
-  box-shadow: 0 8px 30px rgba(139, 92, 246, 0.25);
+  border-color: var(--accent-primary, #1a9ee0);
+  background: rgba(26, 158, 224, 0.12);
+  transform: translateY(-2px);
 }
 
 .pdf-drop-zone.drag-over .drop-zone-icon {
@@ -3164,9 +3167,11 @@
 }
 
 .drop-zone-icon {
-  font-size: 3rem;
+  color: var(--accent-primary, #1a9ee0);
+  line-height: 0;
   transition: transform 0.3s ease;
 }
+.drop-zone-icon svg { width: 40px; height: 40px; }
 
 .drop-zone-text h4 {
   margin: 0;
@@ -3203,6 +3208,15 @@
   display: block;
   max-height: 70vh;
   overflow-y: auto;
+}
+
+/* Form labels inside the PDF modal need an explicit light colour on the dark
+   surface — the global `.form-group label { color: #1e293b }` (styles.css) would
+   otherwise paint them near-black on the dark modal (≈1:1 contrast → invisible).
+   Scoped to this modal, so no other form is affected. Fixes both the
+   "Preset name" and the "What to do with the ones not in this PDF" labels. */
+.pdf-import-modal .form-group label {
+  color: var(--text-primary, #f1f4fa);
 }
 
 /* PDF States */
@@ -3263,8 +3277,8 @@
   height: 100%;
   border-radius: 50%;
   border: 3px solid transparent;
-  border-top-color: #8b5cf6;
-  border-right-color: #a78bfa;
+  border-top-color: var(--accent-primary, #1a9ee0);
+  border-right-color: rgba(26, 158, 224, 0.45);
   animation: spin 1.2s linear infinite;
 }
 
@@ -3273,9 +3287,11 @@
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  font-size: 2rem;
+  color: var(--accent-primary, #1a9ee0);
+  line-height: 0;
   animation: pulse 1.5s ease-in-out infinite;
 }
+.ai-loader-icon svg { width: 30px; height: 30px; }
 
 @keyframes spin {
   to { transform: rotate(360deg); }
@@ -3296,8 +3312,8 @@
 }
 
 .validation-error-content .error-icon {
-  font-size: 3rem;
   margin-bottom: 1rem;
+  line-height: 0;
 }
 
 .validation-error-content h3 {
@@ -3327,8 +3343,9 @@
 
 /* Preview State */
 .pdf-document-info {
-  background: linear-gradient(135deg, rgba(139, 92, 246, 0.08) 0%, rgba(99, 102, 241, 0.05) 100%);
-  border: 1px solid rgba(139, 92, 246, 0.2);
+  background: var(--surface-color-light, #202a42);
+  border: 1px solid var(--border-color, #2a3551);
+  border-top: 3px solid var(--accent-primary, #1a9ee0);
   border-radius: 10px;
   padding: 1rem 1.25rem;
   margin: 1.5rem 0;
@@ -3339,19 +3356,17 @@
   align-items: center;
   justify-content: space-between;
   margin-bottom: 1rem;
-  padding-bottom: 0.75rem;
-  border-bottom: 1px solid rgba(139, 92, 246, 0.15);
 }
 
 .doc-type-badge {
-  background: linear-gradient(135deg, #a78bfa 0%, #a78bfa 100%);
-  color: white;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  padding: 0.4rem 0.8rem;
-  border-radius: 6px;
+  background: transparent;
+  color: var(--accent-primary, #1a9ee0);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  padding: 0;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.11em;
 }
 
 .doc-info-details {
@@ -3367,17 +3382,26 @@
 }
 
 .doc-info-label {
-  font-size: 0.75rem;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.625rem;
   color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-  font-weight: 500;
+  letter-spacing: 0.08em;
+  font-weight: 700;
 }
 
 .doc-info-value {
   font-size: 0.9375rem;
   color: var(--text-primary);
   font-weight: 600;
+}
+
+#pdf-participants-count {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 1.375rem;
+  font-weight: 700;
+  color: var(--accent-primary, #1a9ee0);
 }
 
 /* PDF Preview Table */
@@ -3407,11 +3431,15 @@
 
 .pdf-preview-table th {
   background: var(--surface-color-light);
-  padding: 0.75rem 1rem;
+  padding: 0.6rem 1rem;
   text-align: left;
-  font-weight: 600;
-  color: var(--text-primary);
-  border-bottom: 2px solid var(--border-color);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color);
   position: sticky;
   top: 0;
   z-index: 10;
@@ -3443,16 +3471,67 @@
 }
 
 .extraction-warning .warning-icon {
-  font-size: 1.25rem;
+  color: var(--accent-warning, #f59e0b);
   flex-shrink: 0;
+  line-height: 0;
 }
+.extraction-warning .warning-icon svg { width: 18px; height: 18px; }
+
+/* PDF preview — brand atoms (numbers mono, driver chips, class tag) */
+.pdf-num {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--accent-primary, #1a9ee0);
+}
+.pdf-dchip {
+  display: inline-block;
+  font-size: 0.75rem;
+  background: var(--surface-color-light, #243049);
+  border: 1px solid var(--border-color, #2f3a57);
+  border-radius: 6px;
+  padding: 2px 8px;
+  margin: 0 5px 4px 0;
+  color: var(--text-primary, #e2e9f6);
+  white-space: nowrap;
+}
+.pdf-tag {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  background: var(--surface-color, #0b1222);
+  border: 1px solid var(--border-color, #2a3551);
+  border-radius: 6px;
+  padding: 2px 7px;
+  color: var(--text-secondary, #9fb3d1);
+}
+.pdf-muted { color: var(--text-secondary, #6b7592); }
+
+/* Section heading with leading icon (replaces the old emoji headings) */
+.pdf-section-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.pdf-section-title svg { width: 16px; height: 16px; color: var(--accent-primary, #1a9ee0); flex-shrink: 0; }
+
+/* Flat brand-blue primary button — scoped to the PDF modal only, so the global
+   gradient button elsewhere is untouched. */
+.pdf-import-modal .modal-footer .btn-primary {
+  background: var(--accent-primary, #1a9ee0);
+}
+.pdf-import-modal .modal-footer .btn-primary:hover {
+  background: #1789c4;
+}
+.pdf-import-modal .modal-footer .btn-primary svg { width: 15px; height: 15px; }
+.pdf-import-modal .modal-footer .btn .pdf-num { color: inherit; }
 
 .extraction-warning .warning-content {
   flex: 1;
 }
 
 .extraction-warning strong {
-  color: #d97706;
+  color: var(--accent-warning, #f59e0b);
   font-weight: 600;
   display: block;
   margin-bottom: 0.25rem;
