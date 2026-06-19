@@ -3481,14 +3481,20 @@ class LogVisualizer {
       });
     }
 
-    // Keyboard shortcuts on the Race Number input:
-    //   Enter → apply best match (exact or prefix), save async, navigate to next image
+    // Keyboard shortcuts on the editable vehicle fields (Race Number AND Drivers):
+    //   Enter → (race number) apply best match, then save async + navigate to next image
+    //   Enter → (drivers) save async + navigate to next image (the field already
+    //           autocompletes on input, so no extra matching needed here)
     //   Empty Enter → save async, navigate to next image
     //   Shift+Enter is handled by the gallery-level listener (goes back), so we ignore it here.
+    // #236: Enter used to fire ONLY on the raceNumber field, so assigning a driver
+    // (e.g. tagging one driver of a 3-driver car) and pressing Enter did nothing —
+    // it neither saved nor advanced, forcing the user onto the mouse.
     newContainer.addEventListener('keydown', (event) => {
       if (event.key !== 'Enter' || event.shiftKey) return;
       const input = event.target;
-      if (input.tagName !== 'INPUT' || input.dataset.field !== 'raceNumber') return;
+      if (input.tagName !== 'INPUT') return;
+      if (input.dataset.field !== 'raceNumber' && input.dataset.field !== 'drivers') return;
 
       event.preventDefault();
       this._handleRaceNumberEnter(input);
@@ -3534,8 +3540,12 @@ class LogVisualizer {
 
     const value = input.value.trim();
 
-    // 1) If the user typed something, apply the first useful match
-    if (value && this.presetParticipants && this.presetParticipants.length > 0 && vehicleEditor) {
+    // 1) If the user typed a RACE NUMBER, apply the first useful number match.
+    //    Gated to the raceNumber field: Enter can now also come from the drivers
+    //    field (#236), where the value is a name — running number-prefix matching
+    //    on it would be wrong. The drivers field already autocompletes on input,
+    //    so it just falls through to the save + advance below.
+    if (input.dataset.field === 'raceNumber' && value && this.presetParticipants && this.presetParticipants.length > 0 && vehicleEditor) {
       const participant = this.findBestMatchByNumberPrefix(value);
       if (participant) {
         if (participant.numero) {

@@ -2,7 +2,9 @@
 
 ## [Unreleased]
 
-### 🐛 Fix: "Update participants" PDF modal had no drop/browse area
+### 🐛 Fix: Enter didn't save/advance when correcting from the Drivers field (review)
+
+- **In the review gallery, pressing Enter while editing the Drivers field did nothing** — it neither saved the correction nor advanced to the next photo, so the user had to reach for the mouse (e.g. tagging a single driver of a 3-driver car). Enter's save-and-advance was wired **only** to the Race Number field; the Drivers field (also a focused input) fell through both the field-level and the gallery-level handlers. Enter now triggers the same save-and-advance from **both** the Race Number and Drivers fields. The race-number autocomplete/number-matching step stays gated to the Race Number field (a driver name must never be matched as a number); the Drivers field already autocompletes on input. Renderer-only.
 
 - **The "Update participants" button (inside the preset editor) opened the PDF-import modal with no way to supply a file** — no drag-and-drop zone and no "browse" button — so updating an existing preset from a PDF was impossible (creating a *new* preset worked, because that flow uses the drop-zone on the presets page). The modal only had the processing / error / preview states; its initial "drop or browse" state was missing. Added an in-modal drop-zone (same look + handlers as the page one, via a shared `wirePdfDropZone()` helper) that shows whenever the modal opens without a file. The create-new flow is unchanged (it jumps straight to the processing state). Renderer-only.
 
