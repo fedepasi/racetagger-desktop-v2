@@ -6383,21 +6383,17 @@ var pdfImportData = null;
 /** Interval ID for cycling processing messages */
 var processingMessageInterval = null;
 
-/** Fun racing-themed messages for PDF processing */
+/** Processing messages cycled while the entry list is being read (no emoji — dry in-product register). */
 const PDF_PROCESSING_MESSAGES = [
-  "🏎️ Warming up the AI engine...",
-  "🔍 Scanning for race numbers...",
-  "📊 Analyzing entry list structure...",
-  "🏁 Checking starting grid positions...",
-  "👀 Looking for names...",
-  "🏆 Identifying competitors...",
-  "📋 Reading team information...",
-  "⚡ Processing at full throttle...",
-  "🎯 Extracting participant data...",
-  "🔧 Fine-tuning the results...",
-  "🚀 Almost at the finish line...",
-  "📝 Double-checking the data...",
-  "🏅 Preparing your entry list..."
+  "Scanning for race numbers…",
+  "Analyzing the entry-list structure…",
+  "Reading driver names…",
+  "Identifying competitors…",
+  "Reading team information…",
+  "Extracting participant data…",
+  "Fine-tuning the results…",
+  "Double-checking the data…",
+  "Preparing your entry list…"
 ];
 
 /**
@@ -6502,7 +6498,7 @@ async function processPdfFile(file) {
 
   // Show modal with processing state
   openPdfImportModal();
-  showPdfProcessingState('📤 Uploading document...', true); // Start cycling messages
+  showPdfProcessingState('Uploading document…', true); // Start cycling messages
 
   try {
     // Convert file to base64
@@ -6774,17 +6770,19 @@ function renderPdfMergeImpact() {
 
   let missingTxt = '';
   if (missing > 0) {
-    if (action === 'deactivate') missingTxt = ` · 💤 ${missing} deactivated`;
-    else if (action === 'remove') missingTxt = ` · 🗑️ ${missing} removed`;
-    else missingTxt = ` · ${missing} left unchanged`;
+    const word = action === 'deactivate' ? 'deactivated' : (action === 'remove' ? 'removed' : 'left unchanged');
+    const col = action === 'keep' ? 'var(--text-secondary)' : (action === 'remove' ? '#ef4444' : '#f59e0b');
+    missingTxt = ` · <span class="pdf-num" style="color:${col};font-weight:700">${missing}</span> ${word}`;
   }
   const warn = missing > 0 && action !== 'keep';
   box.style.display = 'block';
   box.style.borderColor = warn ? '#f59e0b' : 'var(--border-color)';
+  box.style.borderLeft = warn ? '3px solid #f59e0b' : '';
+  box.style.background = warn ? 'rgba(245,158,11,0.10)' : 'rgba(255,255,255,0.04)';
   box.innerHTML =
-    `In ${escapeHtml(presetLabel)}: ✏️ <strong>${updated}</strong> updated · ➕ <strong>${added}</strong> added${missingTxt}.` +
+    `In ${escapeHtml(presetLabel)} — <span class="pdf-num" style="color:#1a9ee0;font-weight:700">${updated}</span> updated · <span class="pdf-num" style="color:#10b981;font-weight:700">${added}</span> added${missingTxt}.` +
     (warn
-      ? `<br><span style="color:#f59e0b;">⚠️ ${missing} participant(s) in the preset are NOT in this PDF and will be ${action === 'remove' ? 'removed' : 'deactivated'} on Save.</span>`
+      ? `<br><span style="color:#f59e0b;"><span class="pdf-num" style="font-weight:700">${missing}</span> participant(s) in the preset aren't in this PDF and will be ${action === 'remove' ? 'removed' : 'deactivated'} on Save.</span>`
       : '');
 
   // The "what to do with the missing" selector only matters when some preset
@@ -6793,7 +6791,7 @@ function renderPdfMergeImpact() {
   if (group) group.style.display = (missing > 0) ? '' : 'none';
 
   const importBtn = document.getElementById('import-pdf-btn');
-  if (importBtn) importBtn.innerHTML = `<span class="btn-icon">➕</span>➕ ${added} · ✏️ ${updated} in preset`;
+  if (importBtn) importBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Add <span class="pdf-num">${added}</span> · update <span class="pdf-num">${updated}</span>`;
 }
 
 function showPdfPreviewState(data) {
@@ -6847,9 +6845,9 @@ function showPdfPreviewState(data) {
   const hintEl = document.getElementById('pdf-preview-hint');
   if (hintEl) {
     if (data.participants.length > 10) {
-      hintEl.textContent = `Showing first 10 of ${data.participants.length} participants.`;
+      hintEl.innerHTML = `Showing first <span class="pdf-num">10</span> of <span class="pdf-num">${data.participants.length}</span> participants.`;
     } else {
-      hintEl.textContent = `Showing all ${data.participants.length} participants.`;
+      hintEl.innerHTML = `Showing all <span class="pdf-num">${data.participants.length}</span> participants.`;
     }
   }
 
@@ -6916,13 +6914,20 @@ function populatePdfPreviewTable(participants) {
 
   previewParticipants.forEach(p => {
     const row = document.createElement('tr');
-    // Display drivers from preset_participant_drivers or fallback to nome
-    const driversDisplay = getDriverNamesFromParticipant(p).join(', ') || '-';
+    // One chip per driver (from the structured drivers array) so a name that
+    // itself contains a comma — "Kaya, Mustafa Mehmet" — stays ONE person and
+    // the driver count is unambiguous at a glance.
+    const names = getDriverNamesFromParticipant(p);
+    const driversCell = names.length
+      ? names.map(n => `<span class="pdf-dchip">${escapeHtml(n)}</span>`).join('')
+      : '<span class="pdf-muted">—</span>';
+    const team = p.squadra ? escapeHtml(p.squadra) : '<span class="pdf-muted">—</span>';
+    const cls = p.categoria ? `<span class="pdf-tag">${escapeHtml(p.categoria)}</span>` : '<span class="pdf-muted">—</span>';
     row.innerHTML = `
-      <td><strong>${escapeHtml(p.numero || '-')}</strong></td>
-      <td>${escapeHtml(driversDisplay)}</td>
-      <td>${escapeHtml(p.squadra || '-')}</td>
-      <td>${escapeHtml(p.categoria || '-')}</td>
+      <td><span class="pdf-num">${escapeHtml(p.numero || '—')}</span></td>
+      <td>${driversCell}</td>
+      <td>${team}</td>
+      <td>${cls}</td>
     `;
     tbody.appendChild(row);
   });
@@ -7137,7 +7142,7 @@ async function importPdfPreset() {
     // Re-enable button
     if (importBtn) {
       importBtn.disabled = false;
-      importBtn.innerHTML = `<span class="btn-icon">📥</span>Import <span id="pdf-import-count">${pdfImportData.participants.length}</span> Participants`;
+      importBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Import <span id="pdf-import-count" class="pdf-num">${pdfImportData.participants.length}</span> participants`;
     }
   }
 }

@@ -24,13 +24,13 @@
       <!-- PDF Drop Zone -->
       <div id="pdf-drop-zone" class="pdf-drop-zone">
         <div class="drop-zone-content">
-          <div class="drop-zone-icon">📄</div>
+          <div class="drop-zone-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/></svg></div>
           <div class="drop-zone-text">
             <h4>Drop your Start List PDF here</h4>
             <p>or click to browse files</p>
           </div>
           <div class="drop-zone-hint">
-            <span class="ai-chip">🤖 AI-Powered</span>
+            <span class="ai-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4l1.6 4.4 4.4 1.6-4.4 1.6L12 16l-1.6-4.4L6 10l4.4-1.6z"/></svg>AI</span>
             Supports official FIA, FIM, and race organizer entry lists
           </div>
         </div>
@@ -1042,8 +1042,8 @@
     <div class="modal-content pdf-import-modal">
       <div class="modal-header">
         <h2>
-          <span class="ai-badge-header">🤖 AI</span>
-          Import Participants from PDF
+          <span class="ai-badge-header"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4l1.6 4.4 4.4 1.6-4.4 1.6L12 16l-1.6-4.4L6 10l4.4-1.6z"/></svg>AI</span>
+          Import participants from PDF
         </h2>
         <button class="modal-close" onclick="closePdfImportModal()">&times;</button>
       </div>
@@ -1054,13 +1054,13 @@
         <div id="pdf-input-state" class="pdf-state" style="display: none;">
           <div id="pdf-modal-drop-zone" class="pdf-drop-zone">
             <div class="drop-zone-content">
-              <div class="drop-zone-icon">📄</div>
+              <div class="drop-zone-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/></svg></div>
               <div class="drop-zone-text">
                 <h4>Drop your entry-list PDF here</h4>
                 <p>or click to browse files</p>
               </div>
               <div class="drop-zone-hint">
-                <span class="ai-chip">🤖 AI-Powered</span>
+                <span class="ai-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4l1.6 4.4 4.4 1.6-4.4 1.6L12 16l-1.6-4.4L6 10l4.4-1.6z"/></svg>AI</span>
                 Supports official FIA, FIM, and race organizer entry lists
               </div>
             </div>
@@ -1073,9 +1073,9 @@
           <div class="processing-animation">
             <div class="ai-loader">
               <div class="ai-loader-ring"></div>
-              <div class="ai-loader-icon">🤖</div>
+              <div class="ai-loader-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4l1.6 4.4 4.4 1.6-4.4 1.6L12 16l-1.6-4.4L6 10l4.4-1.6z"/></svg></div>
             </div>
-            <h3>AI is analyzing your document...</h3>
+            <h3>Reading the entry list…</h3>
             <p id="pdf-processing-status">Validating document type</p>
           </div>
         </div>
@@ -1083,13 +1083,13 @@
         <!-- Validation Error State -->
         <div id="pdf-validation-error" class="pdf-state" style="display: none;">
           <div class="validation-error-content">
-            <div class="error-icon">❌</div>
+            <div class="error-icon"><svg viewBox="0 0 24 24" fill="none" stroke="var(--error-color, #ef4444)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:44px;height:44px" aria-hidden="true"><circle cx="12" cy="12" r="9"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg></div>
             <h3 id="pdf-error-title">Document Not Recognized</h3>
             <p id="pdf-error-message">The uploaded document doesn't appear to be a valid entry list or start list.</p>
             <div class="error-details" id="pdf-error-details"></div>
             <button class="btn btn-secondary" onclick="resetPdfImport()">
-              <span class="btn-icon">🔄</span>
-              Try Another File
+              <span class="btn-icon" style="display:inline-flex;vertical-align:-2px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 4v4h-4"/></svg></span>
+              Try another file
             </button>
           </div>
         </div>
@@ -1099,7 +1099,7 @@
           <!-- Preset Name Section -->
           <div class="form-group text-white" id="pdf-preset-name-group">
             <label for="pdf-preset-name">
-              📋 Preset Name *
+              Preset name *
             </label>
             <input
               type="text"
@@ -1155,8 +1155,9 @@
 
           <!-- Extracted Participants Preview -->
           <div class="pdf-preview-section">
-            <h4>
-              👁️ Extracted Participants (Preview):
+            <h4 class="pdf-section-title">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="9" y1="6" x2="20" y2="6"/><line x1="9" y1="12" x2="20" y2="12"/><line x1="9" y1="18" x2="20" y2="18"/><path d="M5 6h.01M5 12h.01M5 18h.01"/></svg>
+              Extracted participants
             </h4>
             <div class="pdf-preview-table-container">
               <table class="pdf-preview-table">
@@ -1180,9 +1181,9 @@
 
           <!-- Warning for partial extraction -->
           <div id="pdf-extraction-warning" class="extraction-warning" style="display: none;">
-            <span class="warning-icon">⚠️</span>
+            <span class="warning-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg></span>
             <div class="warning-content">
-              <strong>Partial Extraction</strong>
+              <strong>Partial extraction</strong>
               <p id="pdf-warning-message">Some fields could not be extracted. You can edit them after import.</p>
             </div>
           </div>
@@ -1191,8 +1192,8 @@
       <div class="modal-footer" id="pdf-modal-footer">
         <button class="btn btn-secondary" onclick="closePdfImportModal()">Cancel</button>
         <button class="btn btn-primary" onclick="importPdfPreset()" id="import-pdf-btn" disabled>
-          <span class="btn-icon">📥</span>
-          Import <span id="pdf-import-count"></span> Participants
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Import <span id="pdf-import-count" class="pdf-num"></span> participants
         </button>
       </div>
     </div>
