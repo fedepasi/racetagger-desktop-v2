@@ -2,7 +2,9 @@
 
 ## [Unreleased]
 
-### 🗂️ Results & folder organization now ordered by filename
+### 📄 PDF entry-list import now reads the PDF visually (faithful names + numbers)
+
+- **Importing a PDF entry list now sends the document to the AI to read directly, instead of extracting the text locally first.** On column-heavy layouts (e.g. the ACO Le Mans entry list) the local text extractor (`pdf-parse`) **detaches the race-number column** from its row — the numbers came out as a separate block, so the model couldn't associate them and **invented** plausible-but-wrong numbers, while a layout-specific prompt **scrambled driver names** (one 3-driver crew became a mix of first/last names of different people). The vision path reads the real number column and the names exactly as written. Pairs with the `parsePdfEntryList` Edge Function change (one generic, sport-agnostic prompt that never invents a number, on the stable `gemini-3.1-flash-lite` model) — validated on both an ACO (62-car) and a German ADAC (107-car) list. Reads any PDF, including image-only/scanned ones the text path couldn't decode. Desktop change is a one-liner in the PDF-import handler; no schema / token changes.
 
 - **Analysis Results grid is now sorted by filename** (natural, numeric-aware) instead of
   analysis-completion order. The JSONL is written as images finish analyzing, which — with the
