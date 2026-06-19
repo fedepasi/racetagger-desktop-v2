@@ -6404,10 +6404,26 @@ const PDF_PROCESSING_MESSAGES = [
  * Setup PDF drop zone event listeners
  */
 function setupPdfDropZone() {
-  const dropZone = document.getElementById('pdf-drop-zone');
-  const fileInput = document.getElementById('pdf-file-input');
-  const importPdfBtn = document.getElementById('import-pdf-preset-btn');
+  // Two drop zones share identical behaviour: the page one (create-new flow) and
+  // the in-modal one (used when "Update participants" opens the modal with no file
+  // yet — previously the modal had no input UI at all, so the user was stuck).
+  wirePdfDropZone(document.getElementById('pdf-drop-zone'), document.getElementById('pdf-file-input'));
+  wirePdfDropZone(document.getElementById('pdf-modal-drop-zone'), document.getElementById('pdf-modal-file-input'));
 
+  // "Import PDF" button (create flow) opens the page file browser.
+  const importPdfBtn = document.getElementById('import-pdf-preset-btn');
+  const pageFileInput = document.getElementById('pdf-file-input');
+  if (importPdfBtn && pageFileInput) {
+    importPdfBtn.addEventListener('click', () => pageFileInput.click());
+  }
+}
+
+/**
+ * Wire a drop zone + its hidden file input to the shared PDF-import flow.
+ * @param {HTMLElement|null} dropZone
+ * @param {HTMLInputElement|null} fileInput
+ */
+function wirePdfDropZone(dropZone, fileInput) {
   if (!dropZone || !fileInput) {
     return;
   }
@@ -6416,13 +6432,6 @@ function setupPdfDropZone() {
   dropZone.addEventListener('click', () => {
     fileInput.click();
   });
-
-  // Import PDF button click
-  if (importPdfBtn) {
-    importPdfBtn.addEventListener('click', () => {
-      fileInput.click();
-    });
-  }
 
   // File input change
   fileInput.addEventListener('change', async (e) => {
@@ -6567,8 +6576,13 @@ function openPdfImportModal() {
   if (modal) {
     modal.classList.add('show');
   }
-  // Hide all states initially
+  // Hide all states, then show the drop/browse input so the user has somewhere to
+  // supply a PDF. The create-new flow immediately overrides this with the processing
+  // state (processPdfFile → openPdfImportModal → showPdfProcessingState, synchronous);
+  // for "Update participants" (opened with no file) this is the visible entry point.
   hidePdfStates();
+  const inputState = document.getElementById('pdf-input-state');
+  if (inputState) inputState.style.display = 'block';
 }
 
 /**
@@ -6600,7 +6614,7 @@ function hidePdfStates() {
   // Stop message cycling
   stopProcessingMessageCycle();
 
-  const states = ['pdf-processing-state', 'pdf-validation-error', 'pdf-preview-state'];
+  const states = ['pdf-input-state', 'pdf-processing-state', 'pdf-validation-error', 'pdf-preview-state'];
   states.forEach(id => {
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';
