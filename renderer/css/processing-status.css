@@ -1804,6 +1804,40 @@
   color: var(--text-primary);
 }
 
+/* WF-02 — Fast-keys hint. Theme-aware tokens (this panel renders on a light
+   bg in results.html and a dark bg in index.html); keycap chips so the keys
+   read apart from the descriptions instead of one flat run of text. */
+.lv-kbd-hint {
+  font-size: 11px;
+  line-height: 2;
+  color: var(--text-secondary);
+  margin: -2px 0 12px;
+}
+
+.lv-kbd-hint strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.lv-kbd-hint .lv-key {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+  color: var(--text-primary);
+  background: rgba(26, 158, 224, 0.12);
+  border: 1px solid rgba(26, 158, 224, 0.35);
+  border-radius: 4px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+
+/* Second line: what Space does, spelled out (not just the keycap legend). */
+.lv-kbd-hint .lv-kbd-note {
+  display: block;
+  margin-top: 6px;
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+
 .lv-vehicles-container {
   display: flex;
   flex-direction: column;
