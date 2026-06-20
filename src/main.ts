@@ -1,10 +1,11 @@
-import { app, BrowserWindow, ipcMain, IpcMainEvent, IpcMainInvokeEvent, dialog, shell, net } from 'electron';
+import { app, BrowserWindow, ipcMain, IpcMainEvent, IpcMainInvokeEvent, dialog, shell, net, crashReporter } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { promises as fsPromises } from 'fs';
 // import * as os from 'os'; // REMOVED - unused
 import { diagnosticLogger } from './utils/diagnostic-logger';
 import { errorTelemetryService } from './utils/error-telemetry-service';
+import { crashRecovery } from './utils/crash-recovery';
 
 // --- CONSOLE LOGGING DISABLE FOR PRODUCTION ---
 // NOTE: Console logging is now CAPTURED by diagnosticLogger instead of disabled.
@@ -49,6 +50,22 @@ process.stderr.on('error', (error) => {
 // Initialize diagnostic logger EARLY - captures all subsequent console output to file
 // This MUST happen before any significant logging to ensure complete capture
 diagnosticLogger.initialize();
+
+// Start the native crash reporter (Crashpad) as early as possible so it captures
+// HARD crashes — native module segfaults, OOM, GPU process crashes — that JS
+// handlers (uncaughtException / render-process-gone) never see. We do NOT upload:
+// minidumps are written to app.getPath('crashDumps') and surfaced on the next
+// launch by crashRecovery via the existing error-telemetry pipeline.
+try {
+  crashReporter.start({
+    productName: 'RaceTagger',
+    uploadToServer: false,
+    compress: true,
+  });
+} catch (crashReporterErr) {
+  // The crash reporter must never block startup.
+  try { console.warn('[Main] crashReporter.start failed (non-critical):', crashReporterErr); } catch { /* ignore */ }
+}
 
 import {
   createExecutionOnline,
@@ -3375,6 +3392,14 @@ app.whenReady().then(async () => { // Added async here
     console.warn('[Main] Error telemetry init failed (non-critical):', telemetryInitError);
   }
 
+  // Surface any crash from the PREVIOUS launch (native minidump or abnormal
+  // exit) as an automatic error report → GitHub issue. Non-blocking, runs once.
+  try {
+    crashRecovery.detectAndReportPriorCrash();
+  } catch (crashRecoveryError) {
+    console.warn('[Main] Crash recovery scan failed (non-critical):', crashRecoveryError);
+  }
+
   // Track app launch for analytics (non-blocking)
   trackAppLaunch().catch(err => {
     console.warn('[AppLaunch] Failed to track launch (non-critical):', err.message);
@@ -5716,6 +5741,51 @@ process.on('uncaughtException', (error: Error) => {
     // Fallback if mainWindow is not available or already destroyed
     dialog.showErrorBox('Critical Application Error', `A critical unexpected error occurred before the UI could be fully initialized: ${error.message}\n\nPlease report this error.\n\n${error.stack || ''}`);
   }
+});
+
+process.on('unhandledRejection', (reason: unknown) => {
+  safeConsoleError('[Main Process] Unhandled promise rejection:', reason);
+  // Report to telemetry (best-effort, non-blocking). Recoverable severity — an
+  // unhandled rejection usually doesn't take the process down.
+  try {
+    errorTelemetryService.reportCriticalError({
+      errorType: 'uncaught',
+      severity: 'recoverable',
+      error: reason instanceof Error ? reason : new Error(String(reason)),
+      batchPhase: 'unhandled_rejection'
+    });
+  } catch { /* never let telemetry crash the handler */ }
+});
+
+// Renderer process crash (white screen / sudden window close). 'clean-exit' is
+// a normal teardown — skip it; everything else is reported.
+app.on('render-process-gone', (_event, _webContents, details) => {
+  try {
+    if (details.reason === 'clean-exit') return;
+    safeConsoleError('[Main Process] Renderer process gone:', details.reason, details.exitCode);
+    const isOom = details.reason === 'oom';
+    errorTelemetryService.reportCriticalError({
+      errorType: isOom ? 'memory' : 'render_process_gone',
+      severity: 'fatal',
+      error: new Error(`Renderer process gone: reason=${details.reason}, exitCode=${details.exitCode}`),
+      batchPhase: `render_${details.reason}`
+    });
+  } catch { /* never throw from a crash handler */ }
+});
+
+// GPU / utility child process crash.
+app.on('child-process-gone', (_event, details) => {
+  try {
+    if (details.reason === 'clean-exit') return;
+    safeConsoleError('[Main Process] Child process gone:', details.type, details.reason);
+    const isGpu = details.type === 'GPU';
+    errorTelemetryService.reportCriticalError({
+      errorType: isGpu ? 'gpu_crash' : 'render_process_gone',
+      severity: details.reason === 'killed' ? 'warning' : 'fatal',
+      error: new Error(`Child process gone: type=${details.type}, reason=${details.reason}, exitCode=${details.exitCode}`),
+      batchPhase: `child_${details.type}_${details.reason}`
+    });
+  } catch { /* never throw from a crash handler */ }
 });
 
 // --- Graceful Shutdown Handlers ---
