@@ -533,13 +533,14 @@ class LogVisualizer {
             <div class="lv-recognition-panel">
               <h4>Recognition Results</h4>
               <!-- WF-02 — keyboard-correction shortcuts, communicated to the user -->
-              <div class="lv-kbd-hint" style="font-size:11px;color:#9aa5bd;margin:-2px 0 12px;line-height:1.8;">
-                <strong style="color:#f1f4fa;">Fast keys:</strong>
-                <span style="font-family:'JetBrains Mono',ui-monospace,monospace;">type a number</span> correct ·
-                <span style="font-family:'JetBrains Mono',ui-monospace,monospace;">Enter</span> confirm &amp; next ·
-                <span style="font-family:'JetBrains Mono',ui-monospace,monospace;">Space</span> edit ·
-                <span style="font-family:'JetBrains Mono',ui-monospace,monospace;">← →</span> skip ·
-                <span style="font-family:'JetBrains Mono',ui-monospace,monospace;">Esc</span> close
+              <div class="lv-kbd-hint">
+                <strong>Fast keys:</strong>
+                <span class="lv-key">type a number</span> correct ·
+                <span class="lv-key">Enter</span> confirm &amp; next ·
+                <span class="lv-key">Space</span> edit ·
+                <span class="lv-key">← →</span> skip ·
+                <span class="lv-key">Esc</span> close
+                <span class="lv-kbd-note"><span class="lv-key">Space</span> jumps straight to the race number so you can edit it fast — no mouse, just type.</span>
               </div>
 
               <div class="lv-vehicles-container" id="lv-vehicles">
