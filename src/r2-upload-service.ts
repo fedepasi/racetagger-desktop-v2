@@ -367,10 +367,33 @@ class R2UploadService extends EventEmitter {
 
       await Promise.all(uploadPromises);
 
-      // Step 3: Confirm successful uploads with Edge Function
-      const successfulItems = batch.filter((item) => item.status === 'completed');
-      if (successfulItems.length > 0) {
-        await this.confirmUploads(successfulItems, urlMap);
+      // Step 3: Confirm uploaded files with the Edge Function, THEN finalize status.
+      // Items that reached R2 are still 'uploading' here; only a successful confirm
+      // marks them 'completed', so a failed confirm surfaces as an error instead of
+      // a false success.
+      const uploadedItems = batch.filter((item) => item.status !== 'failed');
+      if (uploadedItems.length > 0) {
+        try {
+          await this.confirmUploads(uploadedItems, urlMap);
+
+          // Confirm succeeded — finalize these items as completed.
+          for (const item of uploadedItems) {
+            item.status = 'completed';
+            this.stats.completed++;
+            this.processed.set(item.imageId, 'completed');
+            this.emitUploadProgress(item, 'completed');
+          }
+        } catch (err) {
+          // Confirm failed — files are on R2 but the DB never recorded them.
+          // Mark these items failed and emit so the UI reflects the error.
+          for (const item of uploadedItems) {
+            item.status = 'failed';
+            item.error = err instanceof Error ? err.message : 'Upload confirmation failed';
+            this.stats.failed++;
+            this.processed.set(item.imageId, 'failed');
+            this.emitUploadProgress(item, 'failed');
+          }
+        }
       }
 
       // Emit batch complete event
@@ -471,14 +494,13 @@ class R2UploadService extends EventEmitter {
       try {
         await this.uploadFileToR2(item.localPath, urlInfo.upload_url, urlInfo.content_type);
 
-        item.status = 'completed';
-        this.stats.completed++;
-        this.processed.set(item.imageId, 'completed');
+        // R2 PUT succeeded, but the item is NOT completed yet: completion is
+        // finalized only after confirmUploads() succeeds (see processBatch step 3),
+        // so the UI never shows success for an upload the DB never recorded.
         this.inProgress.delete(item.imageId);
-        this.emitUploadProgress(item, 'completed');
 
         if (DEBUG_MODE) {
-          console.log(`[R2Upload] Successfully uploaded ${item.imageId}`);
+          console.log(`[R2Upload] Successfully uploaded ${item.imageId} (pending confirm)`);
         }
 
         return;
@@ -560,10 +582,8 @@ class R2UploadService extends EventEmitter {
   ): Promise<void> {
     const session = authService.getSession();
     if (!session) {
-      if (DEBUG_MODE) {
-        console.error('[R2Upload] No active session for upload confirmation');
-      }
-      return;
+      console.error('[R2Upload] No active session for upload confirmation');
+      throw new Error('No active session for upload confirmation');
     }
 
     const confirmations: UploadConfirmation[] = successfulItems.map((item) => {
@@ -583,35 +603,31 @@ class R2UploadService extends EventEmitter {
       console.log(`[R2Upload] Confirming ${confirmations.length} uploads`);
     }
 
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({
-          action: 'confirm_uploads',
-          uploads: confirmations,
-        }),
-      });
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({
+        action: 'confirm_uploads',
+        // The Edge Function reads `body.confirmations` — sending `uploads` here
+        // meant confirm silently 400'd and original_upload_status stayed NULL.
+        confirmations,
+      }),
+    });
 
-      if (!response.ok) {
-        const error = await response.text();
-        if (DEBUG_MODE) {
-          console.error(`[R2Upload] Confirmation failed (${response.status}): ${error}`);
-        }
-      }
+    if (!response.ok) {
+      const error = await response.text();
+      // Always log (not only under DEBUG_MODE) and throw so the caller can mark
+      // these items failed instead of reporting a false success.
+      console.error(`[R2Upload] Upload confirmation failed (${response.status}): ${error}`);
+      throw new Error(`Upload confirmation failed (${response.status}): ${error}`);
+    }
 
-      const data = (await response.json()) as { confirmed: string[]; failed: string[] };
-      if (DEBUG_MODE && data.failed && data.failed.length > 0) {
-        console.warn(`[R2Upload] Confirmation failed for ${data.failed.length} images:`, data.failed);
-      }
-    } catch (err) {
-      if (DEBUG_MODE) {
-        console.error('[R2Upload] Error confirming uploads:', err);
-      }
-      // Log but don't throw; files are already on R2, just DB confirmation failed
+    const data = (await response.json()) as { confirmed: string[]; failed: string[] };
+    if (DEBUG_MODE && data.failed && data.failed.length > 0) {
+      console.warn(`[R2Upload] Confirmation reported ${data.failed.length} failed images:`, data.failed);
     }
   }
 

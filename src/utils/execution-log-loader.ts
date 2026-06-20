@@ -87,6 +87,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { app } from 'electron';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
  * Source from which the event stream was loaded. Useful for diagnostics
@@ -200,4 +201,180 @@ function readLocalJsonl(logFilePath: string): ExecutionLogResult {
     source: 'local',
     logFilePath,
   };
+}
+
+// ===========================================================================
+// DB reconstruction (#184 Phase 1 — cross-device read). OFF by default; gated
+// by ENABLE_DB_EXECUTION_FALLBACK at the call site (src/ipc/analysis-handlers.ts).
+// ===========================================================================
+// When the local JSONL is absent (another device ran the analysis, a reinstall,
+// or a lost local file), synthesize the event stream from the DB so the review
+// gallery still renders. The synthesized events mirror the shape the renderer's
+// `extractResultsFromLogs` / `enrichResultsWithLogData` consume: IMAGE_ANALYSIS
+// with `aiResponse.vehicles[]`, each vehicle carrying a `finalResult`.
+//
+// Dependency-injected (supabase client + userId) so the loader stays a leaf
+// module (no import of database-service). NEVER throws — returns null on any
+// failure, so the caller degrades to today's behavior (empty gallery).
+//
+// KNOWN LIMITATION (v1, flag stays off until validated): cross-device thumbnails
+// require signed URLs from `images.storage_path`; for now `supabaseUrl` is null
+// so previews may be blank while the recognized data (numbers/teams/corrections)
+// reconstructs correctly. `raw_response.vehicles[]` shape differs across the
+// onnx/gemini persistence paths, hence the permissive field mapping below.
+
+interface DbReconstructDeps {
+  supabase: SupabaseClient;
+  userId: string;
+}
+
+const DB_RECONSTRUCT_TTL_MS = 5 * 60 * 1000; // 5 min read-through cache
+const dbReconstructCache = new Map<string, { result: ExecutionLogResult; at: number }>();
+
+/** Drop a cached reconstruction (call after a correction save, or for a forced refresh). */
+export function invalidateDbReconstructCache(executionId?: string): void {
+  if (executionId) dbReconstructCache.delete(executionId);
+  else dbReconstructCache.clear();
+}
+
+export async function loadFromDatabaseIfExists(
+  executionId: string,
+  deps: DbReconstructDeps,
+  options: { bypassCache?: boolean } = {}
+): Promise<ExecutionLogResult | null> {
+  try {
+    if (!executionId || !deps?.supabase || !deps?.userId) return null;
+    const { supabase, userId } = deps;
+
+    if (!options.bypassCache) {
+      const cached = dbReconstructCache.get(executionId);
+      if (cached && (Date.now() - cached.at) < DB_RECONSTRUCT_TTL_MS) {
+        return cached.result;
+      }
+    }
+
+    // 1) execution row (user-scoped; RLS also enforces user ownership)
+    const { data: exec, error: execErr } = await supabase
+      .from('executions')
+      .select('id, name, execution_at, created_at, status, total_images, processed_images, category, source_folder, execution_settings')
+      .eq('id', executionId)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (execErr || !exec) return null;
+
+    // 2) images for this execution → image_id + filename
+    const { data: images, error: imgErr } = await supabase
+      .from('images')
+      .select('id, original_filename')
+      .eq('execution_id', executionId);
+    if (imgErr) return null;
+    const imageIds: string[] = (images || []).map((i: any) => i.id);
+    const fileNameById = new Map<string, string>();
+    for (const img of (images || [])) fileNameById.set(img.id, img.original_filename);
+
+    // 3) analysis_results — joined via image_id (analysis_results has NO execution_id)
+    const resultsRows: any[] = [];
+    const CHUNK = 200;
+    for (let i = 0; i < imageIds.length; i += CHUNK) {
+      const chunk = imageIds.slice(i, i + CHUNK);
+      const { data: rows, error: arErr } = await supabase
+        .from('analysis_results')
+        .select('image_id, recognized_number, confidence_score, confidence_level, raw_response, analyzed_at')
+        .in('image_id', chunk);
+      if (arErr) return null;
+      if (rows) resultsRows.push(...rows);
+    }
+
+    // 4) metadata (totals/category for EXECUTION_START) — best-effort
+    const { data: meta } = await supabase
+      .from('analysis_log_metadata')
+      .select('total_images, total_corrections, category')
+      .eq('execution_id', executionId)
+      .maybeSingle();
+
+    const events: any[] = [];
+    const settings = (exec.execution_settings && typeof exec.execution_settings === 'object') ? exec.execution_settings : {};
+    const presetSnapshot = settings.preset_snapshot || null;
+    const startTs = exec.execution_at || exec.created_at || new Date().toISOString();
+
+    events.push({
+      type: 'EXECUTION_START',
+      timestamp: startTs,
+      executionId,
+      totalImages: (meta?.total_images ?? exec.total_images ?? imageIds.length) || 0,
+      category: exec.category || meta?.category || 'motorsport',
+      presetName: presetSnapshot?.name || settings?.participantPresetName || null,
+      participantPresetId: presetSnapshot?.id || settings?.participantPresetId || null,
+      userId,
+      source: 'db',
+    });
+
+    for (const row of resultsRows) {
+      const fileName = fileNameById.get(row.image_id);
+      if (!fileName) continue;
+      const rr = (row.raw_response && typeof row.raw_response === 'object') ? row.raw_response : {};
+      const rawVehicles: any[] = Array.isArray(rr.vehicles) ? rr.vehicles : [];
+
+      // Permissive mapping: prefer finalResult fields, fall back to top-level
+      // vehicle fields and (for the primary vehicle) the row's recognized_number.
+      const vehicles = (rawVehicles.length > 0 ? rawVehicles : [{}]).map((v: any, idx: number) => {
+        const fr = (v.finalResult && typeof v.finalResult === 'object') ? v.finalResult : {};
+        const raceNumber = fr.raceNumber ?? v.raceNumber ?? (idx === 0 ? row.recognized_number : null) ?? null;
+        const team = fr.team ?? v.team ?? v.teamName ?? null;
+        const drivers = fr.drivers ?? v.drivers ?? [];
+        const confidence = (typeof v.confidence === 'number' ? v.confidence : (idx === 0 ? row.confidence_score : 0)) || 0;
+        const isManual = row.confidence_level === 'manual';
+        return {
+          ...v,
+          confidence,
+          participantMatch: v.participantMatch || null,
+          otherPeople: Array.isArray(v.otherPeople) ? v.otherPeople : [],
+          finalResult: {
+            ...fr,
+            raceNumber,
+            team,
+            drivers,
+            matchedBy: fr.matchedBy ?? v.matchedBy ?? (isManual ? 'user_manual' : (raceNumber ? 'ai' : 'none')),
+            matchStatus: fr.matchStatus ?? v.matchStatus ?? (raceNumber && raceNumber !== 'N/A' ? 'matched' : 'no_match'),
+            alternativeCandidates: fr.alternativeCandidates ?? v.alternativeCandidates ?? null,
+          },
+        };
+      });
+
+      events.push({
+        type: 'IMAGE_ANALYSIS',
+        timestamp: row.analyzed_at || startTs,
+        fileName,
+        originalFileName: fileName,
+        dbImageId: row.image_id,
+        imageId: row.image_id,
+        metadataWritten: true,
+        supabaseUrl: null, // cross-device thumbnails (signed URLs) = follow-up
+        aiResponse: { vehicles, totalVehicles: vehicles.length },
+      });
+
+      if (row.confidence_level === 'manual') {
+        events.push({
+          type: 'MANUAL_CORRECTION',
+          timestamp: row.analyzed_at || startTs,
+          fileName,
+          imageId: row.image_id,
+          correctionType: 'USER_MANUAL',
+          changes: { raceNumber: row.recognized_number ?? null },
+          source: 'db-reconstructed',
+        });
+      }
+    }
+
+    if (settings?.organized_at && settings?.organize_mode === 'move') {
+      events.push({ type: 'ORGANIZATION_MOVE_COMPLETED', timestamp: settings.organized_at, executionId });
+    }
+
+    const result: ExecutionLogResult = { events, source: 'db', logFilePath: '' };
+    dbReconstructCache.set(executionId, { result, at: Date.now() });
+    return result;
+  } catch {
+    // Never throw into the gallery — degrade to "no events" (today's behavior).
+    return null;
+  }
 }

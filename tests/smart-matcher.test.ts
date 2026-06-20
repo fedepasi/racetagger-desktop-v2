@@ -193,7 +193,7 @@ describe('SmartMatcher System', () => {
       const driverEvidence = evidence.find(e => e.type === EvidenceType.DRIVER_NAME);
       const teamEvidence = evidence.find(e => e.type === EvidenceType.TEAM);
 
-      expect(numberEvidence?.quality).toBeLessThan(0.8); // Alphanumeric penalty
+      expect(numberEvidence?.quality).toBeGreaterThan(0.8); // Common alphanumeric pattern (42A) — no quality penalty by design
       expect(driverEvidence?.quality).toBeLessThan(0.5); // Too short penalty
       expect(teamEvidence?.quality).toBeGreaterThan(0.8); // Good team name
     });
@@ -368,6 +368,7 @@ describe('SmartMatcher System', () => {
         allCandidates: [],
         multipleHighScores: false,
         resolvedByOverride: false,
+        matchStatus: 'matched',
         debugInfo: {
           totalEvidence: 1,
           evidenceTypes: [],
@@ -540,6 +541,189 @@ describe('SmartMatcher System', () => {
 
       expect(result.bestMatch).toBeTruthy();
       expect(endTime - startTime).toBeLessThan(500); // Should be fast even with complex analysis
+    });
+  });
+
+  // ===================================================================
+  // ACC-01 (Gruppe C) — per-preset "Series sponsors to ignore" list.
+  // SPONSOR evidence matching the list is dropped BEFORE scoring, so an
+  // ignored brand neither adds a bonus nor fires the -30/-15 contradiction
+  // penalties. NOTE: findMatches() only keeps candidates with score > 0
+  // (smart-matcher.ts:1067), so every assertion below inspects a participant
+  // that also has a positive (race-number) match, keeping it in allCandidates
+  // so its contradiction/ghost reasoning is observable.
+  // ===================================================================
+  describe('Series sponsor ignore list (ACC-01, Gruppe C)', () => {
+    type Cand = MatchResult['allCandidates'][number];
+    const candFor = (r: MatchResult, n: number): Cand | undefined =>
+      r.allCandidates.find(c => Number(c.participant.numero) === n);
+    const sponsorEv = (c?: Cand) =>
+      (c?.evidence ?? []).filter(e => e.type === EvidenceType.SPONSOR);
+    const hasContradiction = (c?: Cand) =>
+      (c?.reasoning ?? []).some(s => /contradiction/i.test(s));
+    const anyContradiction = (r: MatchResult) =>
+      r.allCandidates.some(c => hasContradiction(c));
+
+    test('1. removes the contradiction penalty an ignored sponsor would erode a bonus with (money test)', async () => {
+      // #42 has Ferrari; Michelin belongs to no participant → common contradiction
+      // (-15) erodes #42's Ferrari sponsor bonus. The race number keeps #42 in
+      // allCandidates so we can measure the delta directly.
+      const analysis: AnalysisResult = { raceNumber: '42', otherText: ['Ferrari', 'Michelin'], confidence: 0.8 };
+
+      const withoutList = new SmartMatcher('motorsport');
+      const before = await withoutList.findMatches(analysis, mockParticipants);
+      const scoreBefore = candFor(before, 42)!.score;
+      expect(candFor(before, 42)!.reasoning.some(s => /contradiction/i.test(s) && /michelin/i.test(s))).toBe(true);
+
+      const withList = new SmartMatcher('motorsport');
+      withList.setSeriesSponsorIgnoreList(['Michelin']);
+      const after = await withList.findMatches(analysis, mockParticipants);
+      const cand42 = candFor(after, 42)!;
+
+      // The removed -15 penalty (×multi-evidence factor ≥1) is restored to the score.
+      expect(cand42.score).toBeGreaterThanOrEqual(scoreBefore + 15 - 1e-6);
+      // No michelin contradiction reasoning survives anywhere.
+      expect(after.allCandidates.some(c => c.reasoning.some(s => /contradiction/i.test(s) && /michelin/i.test(s)))).toBe(false);
+    });
+
+    test('2. suppresses contradiction reasoning for an ignored sponsor (penalty path)', async () => {
+      // #42 matches by number; Michelin is foreign → -15 contradiction on #42.
+      const analysis: AnalysisResult = { raceNumber: '42', otherText: ['Michelin'], confidence: 0.7 };
+
+      const withoutList = new SmartMatcher('motorsport');
+      const before = await withoutList.findMatches(analysis, mockParticipants);
+      expect(hasContradiction(candFor(before, 42))).toBe(true);
+
+      const withList = new SmartMatcher('motorsport');
+      withList.setSeriesSponsorIgnoreList(['Michelin']);
+      const after = await withList.findMatches(analysis, mockParticipants);
+      expect(hasContradiction(candFor(after, 42))).toBe(false);
+      // #42 gains no sponsor evidence either — the brand never entered scoring.
+      expect(sponsorEv(candFor(after, 42)).length).toBe(0);
+    });
+
+    test('3. drops the sponsor bonus for an ignored sponsor; race-number matching still works', async () => {
+      // Pirelli is #42's (unique) sponsor → a real bonus when not ignored.
+      const analysis: AnalysisResult = { raceNumber: '42', otherText: ['Pirelli'], confidence: 0.7 };
+
+      const withoutList = new SmartMatcher('motorsport');
+      const before = await withoutList.findMatches(analysis, mockParticipants);
+      expect(sponsorEv(candFor(before, 42)).length).toBeGreaterThan(0); // bonus present without the list
+
+      const withList = new SmartMatcher('motorsport');
+      withList.setSeriesSponsorIgnoreList(['Pirelli']);
+      const after = await withList.findMatches(analysis, mockParticipants);
+
+      const cand42 = candFor(after, 42)!;
+      expect(sponsorEv(cand42).length).toBe(0); // no sponsor evidence / no "UNIQUE sponsor match"
+      expect(after.bestMatch?.participant.numero).toBe(42); // number evidence still resolves the match
+    });
+
+    test('4. tier parity — exact, substring and fuzzy variants are all filtered', async () => {
+      // All three are foreign to #42; the race number keeps #42 observable.
+      const analysis: AnalysisResult = {
+        raceNumber: '42',
+        otherText: ['TotalEnergies', 'TOTAL', 'Totalenergiez'], // exact, substring, fuzzy(Levenshtein=1)
+        confidence: 0.7
+      };
+
+      const withoutList = new SmartMatcher('motorsport');
+      const before = await withoutList.findMatches(analysis, mockParticipants);
+      expect(candFor(before, 42)!.reasoning.some(s => /contradiction/i.test(s) && /total/i.test(s))).toBe(true);
+
+      const withList = new SmartMatcher('motorsport');
+      withList.setSeriesSponsorIgnoreList(['TotalEnergies']);
+      const after = await withList.findMatches(analysis, mockParticipants);
+      expect(hasContradiction(candFor(after, 42))).toBe(false);
+      expect(sponsorEv(candFor(after, 42)).length).toBe(0);
+    });
+
+    test('5. non-interference — a non-listed sponsor still bonuses its owner and penalizes non-owners', async () => {
+      // Michelin is in the ignore list but absent from this photo. Shell is #86's
+      // sponsor and foreign to #42.
+      const analysis: AnalysisResult = { raceNumber: '42', otherText: ['Ferrari', 'Shell'], confidence: 0.8 };
+
+      const withList = new SmartMatcher('motorsport');
+      withList.setSeriesSponsorIgnoreList(['Michelin']);
+      const result = await withList.findMatches(analysis, mockParticipants);
+
+      // Penalty path intact for the non-ignored Shell: #42 still gets a contradiction.
+      expect(candFor(result, 42)!.reasoning.some(s => /contradiction/i.test(s) && /shell/i.test(s))).toBe(true);
+      // Bonus path intact: #86 still earns its Shell sponsor evidence.
+      expect(sponsorEv(candFor(result, 86)).some(e => /shell/i.test(e.value))).toBe(true);
+    });
+
+    test('6. ghost-vehicle suppression — two ignored foreign sponsors no longer fire the alert', async () => {
+      // Michelin + Rolex are both foreign to #42 → 2 contradictions, ratio 1.0.
+      const analysis: AnalysisResult = { raceNumber: '42', otherText: ['Michelin', 'Rolex'], confidence: 0.7 };
+
+      const withoutList = new SmartMatcher('motorsport');
+      const before = await withoutList.findMatches(analysis, mockParticipants);
+      expect(candFor(before, 42)!.ghostVehicleWarning).toBe(true);
+
+      const withList = new SmartMatcher('motorsport');
+      withList.setSeriesSponsorIgnoreList(['Michelin', 'Rolex']);
+      const after = await withList.findMatches(analysis, mockParticipants);
+      expect(candFor(after, 42)!.ghostVehicleWarning).toBeFalsy();
+      expect(candFor(after, 42)!.reasoning.some(s => /ghost vehicle/i.test(s))).toBe(false);
+    });
+
+    test('7. regression — no setter (or empty list) is byte-identical to current behavior', async () => {
+      const analysis: AnalysisResult = {
+        raceNumber: '42',
+        drivers: ['John Smith'],
+        teamName: 'Racing Team Alpha',
+        otherText: ['Ferrari', 'Michelin'],
+        confidence: 0.85
+      };
+
+      const neverSet = new SmartMatcher('motorsport');
+      const a = await neverSet.findMatches(analysis, mockParticipants);
+
+      const emptyList = new SmartMatcher('motorsport');
+      emptyList.setSeriesSponsorIgnoreList([]);
+      const b = await emptyList.findMatches(analysis, mockParticipants);
+
+      expect(b.bestMatch?.participant.numero).toBe(a.bestMatch?.participant.numero);
+      expect(b.bestMatch?.score).toBe(a.bestMatch?.score);
+      expect(b.matchStatus).toBe(a.matchStatus);
+      const scores = (r: MatchResult) => r.allCandidates
+        .map(c => ({ n: Number(c.participant.numero), s: c.score }))
+        .sort((x, y) => x.n - y.n);
+      expect(scores(b)).toEqual(scores(a));
+    });
+
+    test('8. no-number path — the 1.5× sponsor boost cannot resurrect an ignored sponsor', async () => {
+      // No race number → sponsor evidence drives matching with a 1.5× boost.
+      const analysis: AnalysisResult = { otherText: ['Pirelli'], confidence: 0.7 };
+
+      const withoutList = new SmartMatcher('motorsport');
+      const before = await withoutList.findMatches(analysis, mockParticipants);
+      expect(sponsorEv(candFor(before, 42)).length).toBeGreaterThan(0); // boosted bonus without the list
+
+      const withList = new SmartMatcher('motorsport');
+      withList.setSeriesSponsorIgnoreList(['Pirelli']);
+      const after = await withList.findMatches(analysis, mockParticipants);
+      // With Pirelli ignored and no other evidence, #42 earns no sponsor score at all.
+      expect(candFor(after, 42)).toBeUndefined();
+      expect(after.allCandidates.every(c => sponsorEv(c).length === 0)).toBe(true);
+    });
+
+    test('9. team→sponsor cross-match guard — an ignored brand misread as a team earns no sponsor bonus', async () => {
+      // teamName "Shell" (no sponsor otherText): the reverse cross-match would
+      // otherwise award #86 (whose sponsor is Shell) a ×0.7 sponsor bonus.
+      const analysis: AnalysisResult = { teamName: 'Shell', confidence: 0.7 };
+
+      const withoutList = new SmartMatcher('motorsport');
+      const before = await withoutList.findMatches(analysis, mockParticipants);
+      expect(sponsorEv(candFor(before, 86)).length).toBeGreaterThan(0);
+      expect(candFor(before, 86)!.reasoning.some(s => /cross-match/i.test(s))).toBe(true);
+
+      const withList = new SmartMatcher('motorsport');
+      withList.setSeriesSponsorIgnoreList(['Shell']);
+      const after = await withList.findMatches(analysis, mockParticipants);
+      // The guard skips the cross-match; with no other evidence #86 drops out.
+      expect(candFor(after, 86)).toBeUndefined();
     });
   });
 });

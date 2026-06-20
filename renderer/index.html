@@ -3,7 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Racetagger Desktop</title>
+  <title>RaceTagger Desktop</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/styles.css">
   <link rel="stylesheet" href="css/sidebar.css">
   <link rel="stylesheet" href="css/auth.css">
@@ -30,6 +33,9 @@
 
   <!-- Feedback Modal -->
   <link rel="stylesheet" href="css/feedback-modal.css">
+
+  <!-- Delivery Page (brand-aligned redesign) -->
+  <link rel="stylesheet" href="css/delivery.css">
 
   <!-- Router Page Container Styles -->
   <style>
@@ -137,6 +143,12 @@
               <div class="form-group">
                 <label for="login-password">Password</label>
                 <input type="password" id="login-password" required autocomplete="current-password">
+              </div>
+              <div class="form-group remember-me">
+                <label class="remember-me-label" for="login-remember-me">
+                  <input type="checkbox" id="login-remember-me" checked>
+                  <span>Keep me signed in</span>
+                </label>
               </div>
               <div class="forgot-password-link">
                 <a href="#" id="forgot-password-link">Forgot your password?</a>
@@ -309,6 +321,9 @@
   <script src="js/vendor/navigo.min.js"></script>
   <script src="js/router.js"></script>
 
+  <!-- Canonical app-wide toast (window.showToast) — load early so every module can call it -->
+  <script src="js/toast.js"></script>
+
   <!-- Preset Controller — single source of truth for participant-preset state.
        MUST load before last-analysis-settings.js, renderer.js and enhanced-file-browser.js. -->
   <script src="js/preset-controller.js"></script>
@@ -389,8 +404,8 @@
   <!-- Unified Support Modal (feedback + diagnostics) -->
   <script src="js/feedback-modal.js"></script>
 
-  <!-- Face Recognition -->
-  <script src="js/vendor/face-api.min.js"></script>
+  <!-- Face Recognition (ONNX pipeline runs in main process — no renderer-side models needed) -->
+  <!-- face-api.min.js REMOVED — replaced by YuNet + AuraFace ONNX in main process -->
   <script src="js/face-detector.js"></script>
   <script src="js/face-recognition-ui.js"></script>
 

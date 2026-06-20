@@ -243,11 +243,12 @@ export class EvidenceCollector {
       quality *= 0.5;
     }
 
-    // Penalize numbers with non-numeric characters (unless part of common patterns)
+    // Penalize numbers with non-numeric characters
     if (!/^[0-9]+$/.test(numStr)) {
-      // Allow common patterns like "42A", "P1", etc.
-      if (!/^[0-9]+[A-Z]?$|^[A-Z][0-9]+$/.test(numStr)) {
-        quality *= 0.3;
+      if (/^[0-9]+[A-Z]?$|^[A-Z][0-9]+$/.test(numStr)) {
+        quality *= 0.8; // Mild penalty for common alphanumeric patterns (42A, P1)
+      } else {
+        quality *= 0.3; // Heavy penalty for garbage patterns
       }
     }
 
@@ -312,6 +313,12 @@ export class EvidenceCollector {
 
     // Too short to be meaningful sponsor
     if (cleanText.length < 3) {
+      return false;
+    }
+
+    // Reject race category / class codes (GT3, LMP2, F1, GTE-alike etc.)
+    // Pattern: 0-4 letters + digits + 0-2 trailing letters, max 6 chars total.
+    if (/^[a-z]{0,4}\d+[a-z]{0,2}$/.test(cleanText) && cleanText.length <= 6) {
       return false;
     }
 

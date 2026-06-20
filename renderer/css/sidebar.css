@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Racetagger Desktop - Enhanced Sidebar Component
  * Modern navigation with glassmorphism and smooth transitions
  */
@@ -23,7 +23,7 @@
   background: linear-gradient(
     180deg, 
     transparent 0%, 
-    rgba(59, 130, 246, 0.4) 25%,
+    rgba(26, 158, 224, 0.4) 25%,
     rgba(99, 102, 241, 0.4) 75%, 
     transparent 100%
   );
@@ -42,7 +42,7 @@
   align-items: center;
   justify-content: center;
   border-bottom: 1px solid rgba(51, 65, 85, 0.5);
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, transparent 100%);
+  background: linear-gradient(135deg, rgba(26, 158, 224, 0.1) 0%, transparent 100%);
   position: relative;
 }
 
@@ -122,12 +122,12 @@
 }
 
 .nav-item:hover {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.15) 0%, rgba(99, 102, 241, 0.1) 100%);
+  background: linear-gradient(135deg, rgba(26, 158, 224, 0.15) 0%, rgba(99, 102, 241, 0.1) 100%);
   color: var(--text-primary);
   transform: translateX(8px);
   border-radius: var(--border-radius-lg);
   box-shadow: 
-    0 4px 12px rgba(59, 130, 246, 0.15),
+    0 4px 12px rgba(26, 158, 224, 0.15),
     0 2px 4px rgba(0, 0, 0, 0.1),
     inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
@@ -142,14 +142,14 @@
 
 /* Active state with enhanced styling */
 .nav-item.active {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.2) 0%, rgba(99, 102, 241, 0.15) 100%);
+  background: linear-gradient(135deg, rgba(26, 158, 224, 0.2) 0%, rgba(99, 102, 241, 0.15) 100%);
   color: var(--text-primary);
   font-weight: 600;
   box-shadow: 
-    0 4px 16px rgba(59, 130, 246, 0.2),
+    0 4px 16px rgba(26, 158, 224, 0.2),
     0 2px 8px rgba(0, 0, 0, 0.1),
     inset 0 1px 0 rgba(255, 255, 255, 0.15);
-  border: 1px solid rgba(59, 130, 246, 0.3);
+  border: 1px solid rgba(26, 158, 224, 0.3);
   transform: translateX(4px);
 }
 
@@ -176,21 +176,21 @@
 
 .nav-item:hover .nav-icon {
   transform: scale(1.05);
-  filter: drop-shadow(0 2px 4px rgba(59, 130, 246, 0.3));
-  background: rgba(59, 130, 246, 0.15);
-  border-color: rgba(59, 130, 246, 0.3);
+  filter: drop-shadow(0 2px 4px rgba(26, 158, 224, 0.3));
+  background: rgba(26, 158, 224, 0.15);
+  border-color: rgba(26, 158, 224, 0.3);
   box-shadow: 
-    0 2px 8px rgba(59, 130, 246, 0.2),
+    0 2px 8px rgba(26, 158, 224, 0.2),
     inset 0 1px 0 rgba(255, 255, 255, 0.15);
 }
 
 .nav-item.active .nav-icon {
   transform: scale(1.02);
-  filter: drop-shadow(0 2px 6px rgba(59, 130, 246, 0.4));
-  background: rgba(59, 130, 246, 0.2);
-  border-color: rgba(59, 130, 246, 0.4);
+  filter: drop-shadow(0 2px 6px rgba(26, 158, 224, 0.4));
+  background: rgba(26, 158, 224, 0.2);
+  border-color: rgba(26, 158, 224, 0.4);
   box-shadow: 
-    0 2px 12px rgba(59, 130, 246, 0.3),
+    0 2px 12px rgba(26, 158, 224, 0.3),
     inset 0 1px 0 rgba(255, 255, 255, 0.2);
 }
 
@@ -224,7 +224,7 @@
   transform: translateX(-50%);
   width: 60%;
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.4), transparent);
+  background: linear-gradient(90deg, transparent, rgba(26, 158, 224, 0.4), transparent);
 }
 
 /* Modern user avatar with gradient background */
@@ -241,7 +241,7 @@
   color: white;
   font-size: 14px;
   box-shadow: 
-    0 4px 12px rgba(59, 130, 246, 0.3),
+    0 4px 12px rgba(26, 158, 224, 0.3),
     0 2px 4px rgba(0, 0, 0, 0.1),
     inset 0 1px 0 rgba(255, 255, 255, 0.2);
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -262,7 +262,7 @@
 .sidebar-footer:hover .user-avatar {
   transform: scale(1.05);
   box-shadow: 
-    0 6px 16px rgba(59, 130, 246, 0.4),
+    0 6px 16px rgba(26, 158, 224, 0.4),
     0 3px 6px rgba(0, 0, 0, 0.15),
     inset 0 1px 0 rgba(255, 255, 255, 0.3);
 }
@@ -336,7 +336,7 @@
 }
 
 .sidebar-nav::-webkit-scrollbar-thumb:hover {
-  background: rgba(59, 130, 246, 0.5);
+  background: rgba(26, 158, 224, 0.5);
 }
 
 /* Responsive adjustments */
@@ -401,7 +401,7 @@
   min-width: 18px;
   height: 18px;
   border-radius: 9px;
-  background: var(--accent-primary, #3b82f6);
+  background: var(--accent-primary, #1a9ee0);
   color: white;
   font-size: 9px;
   display: flex;
@@ -413,21 +413,21 @@
 }
 
 @keyframes uploadBadgePulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.5); }
-  50% { box-shadow: 0 0 0 5px rgba(59, 130, 246, 0); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(26, 158, 224, 0.5); }
+  50% { box-shadow: 0 0 0 5px rgba(26, 158, 224, 0); }
 }
 
 .nav-upload-mini {
   margin: 2px 12px 6px;
   padding: 8px 10px;
-  background: rgba(59, 130, 246, 0.08);
+  background: rgba(26, 158, 224, 0.08);
   border-radius: 8px;
-  border: 1px solid rgba(59, 130, 246, 0.15);
+  border: 1px solid rgba(26, 158, 224, 0.15);
 }
 
 .nav-upload-mini-title {
   font-size: 10px;
-  color: var(--accent-primary, #60a5fa);
+  color: var(--accent-primary, #1a9ee0);
   font-weight: 600;
   margin-bottom: 5px;
 }
@@ -442,7 +442,7 @@
 .nav-upload-mini-fill {
   height: 100%;
   border-radius: 4px;
-  background: linear-gradient(90deg, #3b82f6, #60a5fa);
+  background: linear-gradient(90deg, #1a9ee0, #1a9ee0);
   transition: width 0.4s ease;
 }
 
@@ -473,5 +473,5 @@
   border-radius: 50%;
   opacity: 0.8;
   border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: 0 2px 4px rgba(59, 130, 246, 0.3);
+  box-shadow: 0 2px 4px rgba(26, 158, 224, 0.3);
 }

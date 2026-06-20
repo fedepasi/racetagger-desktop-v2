@@ -30,8 +30,33 @@ import { ModelManager, getModelManager, ModelStatus } from './model-manager';
 import { GenericSegmenter, getGenericSegmenter, SegmentationResult, GenericSegmenterOutput } from './generic-segmenter';
 import { parseSegmentationConfig, getDefaultModelId } from './yolo-model-registry';
 import { createComponentLogger } from './utils/logger';
-import { getFaceDetectionBridge, FaceRecognitionResult } from './face-detection-bridge';
+import { FaceRecognitionOnnxProcessor, FaceRecognitionOnnxResult, FaceWithEmbedding } from './face-recognition-onnx-processor';
+import { faceRecognitionProcessor, FaceContext, PersonMatch } from './face-recognition-processor';
 import { SyntheticPresetBuilder } from './matching/synthetic-preset-builder';
+import { cascadeEntryToVehicle } from './matching/entry-cascade';
+
+// Bridge-compatible result type for face recognition (replaces old face-detection-bridge)
+interface FaceRecognitionResult {
+  success: boolean;
+  matches: Array<{
+    matched: boolean;
+    driverInfo?: {
+      driverId: string;
+      driverName: string;
+      teamName: string;
+      raceNumber: string;
+      /** Provenance of the matched descriptor — drives FACE_MATCH evidence
+       *  weighting in SmartMatcher (global face DB vs per-preset upload). */
+      source?: 'global' | 'preset';
+    };
+    similarity: number;
+    faceIndex: number;
+  }>;
+  detectionTimeMs: number;
+  matchingTimeMs: number;
+  totalTimeMs: number;
+  error?: string;
+}
 import { consentService } from './consent-service';
 import {
   extractCropContext,
@@ -58,6 +83,7 @@ import {
   DEFAULT_SHARPNESS_FILTER_CONFIG,
 } from './utils/crop-context-extractor';
 import { AdaptiveUploadSemaphore, AdaptiveUploadConfig } from './utils/adaptive-upload-semaphore';
+import { isEdgeFunctionRetryable, isUploadRetryable, isDeferredUploadRetryCandidate } from './utils/upload-retry-classifier';
 
 // Create component loggers for macro-flow visibility
 const log = createComponentLogger('Processor');
@@ -165,66 +191,6 @@ async function extractEdgeFunctionErrorDetails(error: any): Promise<string> {
     // If reading the body fails, return what we have
     return error?.message || error?.statusText || 'Unknown Edge Function error';
   }
-}
-
-/**
- * Determine if an Edge Function error is retryable.
- * Covers both network failures and capacity/rate-limit errors (429, 503).
- * Issues: #55 (timeout), #57 (429 Resource Exhausted), #58 (Failed to send)
- */
-function isEdgeFunctionRetryable(errorMessage: string): boolean {
-  const msg = errorMessage.toLowerCase();
-  // Network errors
-  if (msg.includes('fetch failed') || msg.includes('econnrefused') ||
-      msg.includes('etimedout') || msg.includes('failed to send') ||
-      msg.includes('econnreset') || msg.includes('socket hang up') ||
-      msg.includes('failed to load image') || msg.includes('error reading a body') ||
-      msg.includes('connection error') || msg.includes('connection reset')) {
-    return true;
-  }
-  // HTTP capacity/rate-limit errors
-  if (msg.includes('429') || msg.includes('503') ||
-      msg.includes('resource exhausted') || msg.includes('resource_exhausted') ||
-      msg.includes('overloaded') || msg.includes('quota') ||
-      msg.includes('rate limit') || msg.includes('rate_limit') ||
-      msg.includes('too many requests') || msg.includes('service unavailable')) {
-    return true;
-  }
-  // Supabase Edge Function boot timeout (issue #55)
-  if (msg.includes('function invocation timeout') || msg.includes('boot error') ||
-      msg.includes('worker limit')) {
-    return true;
-  }
-  return false;
-}
-
-/**
- * Determine if an upload-to-storage error is retryable.
- * Extends `isEdgeFunctionRetryable` with storage-gateway failures that surface
- * as HTML error pages being parsed as JSON.
- *
- * Issues covered:
- *  - #108, #103, #95  "fetch failed" in UnifiedImageWorker.uploadToStorage
- *  - #107, #106, #100, #98  "Unexpected token '<', \"<!DOCTYPE ...\" is not valid JSON"
- *    (storage/edge gateway returns an HTML error page that the SDK tries to JSON.parse)
- */
-function isUploadRetryable(errorMessage: string): boolean {
-  if (isEdgeFunctionRetryable(errorMessage)) return true;
-  const msg = errorMessage.toLowerCase();
-  // JSON parse errors indicating HTML response from gateway (502/503/504 pages)
-  if (msg.includes("unexpected token '<'") ||
-      msg.includes('unexpected token <') ||
-      msg.includes('<!doctype') ||
-      msg.includes('is not valid json') ||
-      msg.includes('unexpected end of json input')) {
-    return true;
-  }
-  // Common transient HTTP 5xx/gateway responses
-  if (msg.includes('502') || msg.includes('504') ||
-      msg.includes('bad gateway') || msg.includes('gateway timeout')) {
-    return true;
-  }
-  return false;
 }
 
 const sharp = getSharp();
@@ -365,6 +331,10 @@ export interface UnifiedProcessorConfig {
   // (b) strips the field from the response, and the sanity filter on the desktop
   // additionally removes any driver name not present in `participantsData`.
   allowExternalPersonRecognition?: boolean;
+  // ACC-01 (Gruppe C): preset-level list of series-wide sponsor brands the
+  // SmartMatcher excludes from SPONSOR evidence before scoring (propagated from
+  // participant_presets.series_sponsor_ignore). Empty/undefined = no filtering.
+  seriesSponsorIgnore?: string[];
 }
 
 /**
@@ -407,9 +377,10 @@ class UnifiedImageWorker extends EventEmitter {
   private genericSegmenterLoaded: boolean = false;
   // Cache for segmentation results (avoid running segmentation twice per image)
   private cachedSegmentationResults: SegmentedDetection[] | null = null;
-  // Face Recognition (browser-based detection via IPC bridge)
+  // Face Recognition (ONNX-based: YuNet detection + AuraFace embedding)
   private faceRecognitionEnabled: boolean = false;
   private faceDescriptorsLoaded: boolean = false;
+  private _dimMismatchWarned: boolean = false;
   // RAW preview calibration strategy (set by processor from calibration results)
   private rawPreviewStrategies: Map<string, RawPreviewStrategy> = new Map();
   private faceDescriptorCount: number = 0;
@@ -513,6 +484,12 @@ class UnifiedImageWorker extends EventEmitter {
       this.sceneClassificationEnabled = false;
       return;
     }
+
+    // TRAIN-01 (D3): per-sport crowd-skip threshold, read from segmentation_config.
+    // Literal 0.75 default so an unconfigured/offline category reproduces the
+    // previous hardcoded behaviour exactly (no accuracy regression).
+    const sst = this.currentSportCategory?.segmentation_config?.scene_skip_threshold;
+    this.sceneSkipThreshold = typeof sst === 'number' ? sst : 0.75;
 
     try {
       this.sceneClassifier = SceneClassifierONNX.getInstance();
@@ -655,35 +632,71 @@ class UnifiedImageWorker extends EventEmitter {
   }
 
   /**
-   * PERFORMANCE: Quick check of how many face descriptors are stored for the
-   * given preset. Returning 0 lets us skip the heavy face-api.js initialization
-   * (saves 200-500ms per session); returning -1 means the query failed and the
-   * caller should proceed with full initialization as a safe fallback.
-   *
-   * Counts photos in preset_participant_face_photos joined via preset_participants
-   * for the preset.
+   * PERFORMANCE: Quick check descriptor count before full initialization.
+   * Queries the database for the number of face descriptors (512-dim or 128-dim)
+   * in the given preset. Returns 0 if none, >0 if found, -1 on error.
    */
   private async checkPresetDescriptorCount(presetId: string): Promise<number> {
     try {
-      const { count, error } = await this.supabase
-        .from('preset_participant_face_photos')
-        .select('id, preset_participants!inner(preset_id)', { count: 'exact', head: true })
-        .eq('preset_participants.preset_id', presetId);
+      // Query through preset_participants → preset_participant_face_photos
+      // Photos can be linked via participant_id OR via driver_id (through preset_participant_drivers)
+      const { data: participants, error: pError } = await this.supabase
+        .from('preset_participants')
+        .select('id')
+        .eq('preset_id', presetId);
 
-      if (error) {
-        log.warn(`[FaceRec] Pre-check descriptor count query failed: ${error.message} — proceeding with full init`);
-        return -1;
+      if (pError || !participants || participants.length === 0) {
+        if (pError) log.warn(`[FaceRecognition] Pre-check participants query failed: ${pError.message}`);
+        return participants?.length === 0 ? 0 : -1;
       }
-      return count ?? 0;
-    } catch (err) {
-      log.warn(`[FaceRec] Pre-check descriptor count threw — proceeding with full init`, err);
+
+      const participantIds = participants.map((p: any) => p.id);
+      let totalCount = 0;
+
+      // 1. Count participant-level face photos (linked via participant_id)
+      const { count: participantPhotoCount, error: fError } = await this.supabase
+        .from('preset_participant_face_photos')
+        .select('id', { count: 'exact', head: true })
+        .in('participant_id', participantIds)
+        .or('face_descriptor_512.not.is.null,face_descriptor.not.is.null');
+
+      if (fError) {
+        log.warn(`[FaceRecognition] Pre-check participant photos query failed: ${fError.message}`);
+      } else {
+        totalCount += participantPhotoCount ?? 0;
+      }
+
+      // 2. Count driver-level face photos (linked via driver_id through preset_participant_drivers)
+      const { data: drivers, error: dError } = await this.supabase
+        .from('preset_participant_drivers')
+        .select('id')
+        .in('participant_id', participantIds);
+
+      if (!dError && drivers && drivers.length > 0) {
+        const driverIds = drivers.map((d: any) => d.id);
+        const { count: driverPhotoCount, error: dfError } = await this.supabase
+          .from('preset_participant_face_photos')
+          .select('id', { count: 'exact', head: true })
+          .in('driver_id', driverIds)
+          .or('face_descriptor_512.not.is.null,face_descriptor.not.is.null');
+
+        if (dfError) {
+          log.warn(`[FaceRecognition] Pre-check driver photos query failed: ${dfError.message}`);
+        } else {
+          totalCount += driverPhotoCount ?? 0;
+        }
+      }
+
+      return totalCount;
+    } catch (err: any) {
+      log.warn(`[FaceRecognition] Pre-check error: ${err.message || err}`);
       return -1;
     }
   }
 
   /**
    * Initialize Face Recognition for driver identification
-   * Uses face-api.js in renderer (via IPC bridge) for detection + main process matching
+   * Uses ONNX pipeline (YuNet detection + AuraFace embedding) in main process.
    *
    * Face descriptors are loaded ONLY from the participant preset.
    * Each preset has its own face recognition database.
@@ -717,14 +730,40 @@ class UnifiedImageWorker extends EventEmitter {
       }
 
       if (preCheckCount > 0) {
-        log.info(`Face recognition: ${preCheckCount} descriptors found, initializing bridge...`);
+        log.info(`Face recognition: ${preCheckCount} descriptors found, initializing ONNX pipeline...`);
       }
       // If -1 (error), proceed with full initialization (safe fallback)
 
-      await getFaceDetectionBridge().initialize();
+      // Initialize ONNX face recognition processor (YuNet + AuraFace)
+      const onnxProcessor = FaceRecognitionOnnxProcessor.getInstance();
+      const onnxInitOk = await onnxProcessor.initialize();
+      if (!onnxInitOk) {
+        log.warn('Face recognition: ONNX pipeline failed to initialize (YuNet not loaded) - disabling');
+        this.faceRecognitionEnabled = false;
+        return;
+      }
+      // Ensure AuraFace embedder is loaded (may not have loaded during initialize
+      // if the model was still downloading). FAIL CLEARLY if it can't load: without
+      // the embedder, detection still runs but every embedding is empty, producing
+      // zero matches with NO error — a silent failure. The app is online-required
+      // for analysis (offline policy), so a missing model = disable, not pretend.
+      const embedderReady = await onnxProcessor.ensureEmbedderReady();
+      if (!embedderReady) {
+        log.warn(
+          'Face recognition: AuraFace embedder not available (offline or model download failed) — ' +
+          'disabling face recognition for this run instead of returning silent zero-matches.'
+        );
+        this.faceRecognitionEnabled = false;
+        return;
+      }
+      const onnxStatus = onnxProcessor.getStatus();
+      log.info(`Face recognition: ONNX pipeline initialized (detector: ${onnxStatus.detectorLoaded}, embedder: ${onnxStatus.embedderLoaded})`);
+
+      // Initialize matching processor
+      await faceRecognitionProcessor.initialize();
 
       // Load face descriptors from the participant preset
-      const descriptorCount = await getFaceDetectionBridge().loadDescriptorsForPreset(this.config.presetId);
+      const descriptorCount = await faceRecognitionProcessor.loadFromPreset(this.config.presetId);
       log.info(`Face recognition: Loaded ${descriptorCount} descriptors from preset ${this.config.presetId}`);
 
       if (descriptorCount > 0) {
@@ -819,11 +858,84 @@ class UnifiedImageWorker extends EventEmitter {
     }
 
     try {
-      const result = await getFaceDetectionBridge().detectAndMatch(imagePath, context);
-      if (result.success && result.matches.length > 0) {
-        const matchedCount = result.matches.filter((m: any) => m.matched).length;
+      const startTime = Date.now();
+
+      // Step 1: Detect faces + generate embeddings via ONNX (main process)
+      const onnxProcessor = FaceRecognitionOnnxProcessor.getInstance();
+      const onnxResult = await onnxProcessor.detectAndEmbed(imagePath);
+
+      if (!onnxResult.success || onnxResult.faces.length === 0) {
+        log.info(`[FaceRecognition] No faces detected in image (detection: ${onnxResult.detectionTimeMs}ms)`);
+        return {
+          success: true,
+          matches: [],
+          detectionTimeMs: onnxResult.detectionTimeMs,
+          matchingTimeMs: 0,
+          totalTimeMs: Date.now() - startTime
+        };
+      }
+
+      log.info(`[FaceRecognition] Detected ${onnxResult.faces.length} face(s), generating embeddings...`);
+
+      // Step 2: Match embeddings against loaded descriptors
+      const matchStartTime = Date.now();
+      const embeddings = onnxResult.faces
+        .filter(f => f.embedding && f.embedding.length > 0)
+        .map(f => ({ faceIndex: f.faceIndex, embedding: f.embedding }));
+
+      // Warn once about dimension mismatch (512-dim AuraFace vs 128-dim face-api.js)
+      if (embeddings.length > 0 && !this._dimMismatchWarned) {
+        const storedDim = faceRecognitionProcessor.getDescriptorDimension();
+        const queryDim = embeddings[0].embedding.length;
+        if (storedDim > 0 && storedDim !== queryDim) {
+          log.warn(`[FaceRecognition] ⚠️  Dimension mismatch: stored descriptors are ${storedDim}-dim but AuraFace generates ${queryDim}-dim. Re-upload face photos to generate 512-dim descriptors.`);
+          this._dimMismatchWarned = true;
+        }
+      }
+
+      const personMatches = faceRecognitionProcessor.matchEmbeddings(embeddings, context as FaceContext);
+      const matchingTimeMs = Date.now() - matchStartTime;
+
+      // Convert to bridge-compatible format
+      const matches: FaceRecognitionResult['matches'] = personMatches.map((pm: PersonMatch) => ({
+        matched: true,
+        driverInfo: {
+          driverId: pm.personId,
+          driverName: pm.personName,
+          teamName: pm.team,
+          raceNumber: pm.carNumber,
+          // Propagate provenance so the FACE_MATCH evidence downstream can tell
+          // a global-DB match from a per-preset one (was silently lost → always 'preset').
+          source: pm.source
+        },
+        similarity: pm.confidence,
+        faceIndex: pm.faceIndex
+      }));
+
+      // Add unmatched faces
+      for (let i = 0; i < onnxResult.faces.length; i++) {
+        if (!matches.some(m => m.faceIndex === i)) {
+          matches.push({
+            matched: false,
+            similarity: 0,
+            faceIndex: i
+          });
+        }
+      }
+
+      const result: FaceRecognitionResult = {
+        success: true,
+        matches,
+        detectionTimeMs: onnxResult.detectionTimeMs,
+        matchingTimeMs,
+        totalTimeMs: Date.now() - startTime
+      };
+
+      if (result.matches.length > 0) {
+        const matchedCount = result.matches.filter(m => m.matched).length;
         log.info(`Face recognition: ${matchedCount}/${result.matches.length} faces matched in ${result.totalTimeMs}ms`);
       }
+
       return result;
     } catch (error) {
       log.warn('Face recognition failed:', error);
@@ -1240,6 +1352,13 @@ class UnifiedImageWorker extends EventEmitter {
       confidence: number;
       detectionId: string;
     }>;
+    // TRAIN-01: detections found just below the confidence threshold (no mask).
+    nearMiss?: Array<{
+      bbox: { x: number; y: number; width: number; height: number };
+      classId: number;
+      className: string;
+      confidence: number;
+    }>;
   } | null = null;
 
   private async runGenericSegmentation(imageBuffer: Buffer): Promise<SegmentedDetection[]> {
@@ -1254,8 +1373,8 @@ class UnifiedImageWorker extends EventEmitter {
     try {
       const startTime = Date.now();
 
-      // PERFORMANCE: Timeout segmentation to prevent hanging (30s max)
-      const SEGMENTATION_TIMEOUT_MS = 30000;
+      // PERFORMANCE: Timeout segmentation to prevent hanging (15s max, reduced from 30s)
+      const SEGMENTATION_TIMEOUT_MS = 15000;
       const result: GenericSegmenterOutput = await Promise.race([
         this.genericSegmenter.detect(imageBuffer),
         new Promise<GenericSegmenterOutput>((_, reject) =>
@@ -1276,7 +1395,10 @@ class UnifiedImageWorker extends EventEmitter {
           modelId,
           detectionsCount: 0,
           inferenceMs: result.inferenceTimeMs,
-          masksApplied: false
+          masksApplied: false,
+          // TRAIN-01: even with 0 passing detections the model often had a
+          // near-miss — capture it (this is the highest-value fallback signal).
+          nearMiss: result.nearMissDetections || []
         };
         return [];
       }
@@ -1316,7 +1438,8 @@ class UnifiedImageWorker extends EventEmitter {
           className: det.className,
           confidence: det.confidence,
           detectionId: det.detectionId,
-        }))
+        })),
+        nearMiss: result.nearMissDetections || []
       };
 
       return segmentedDetections;
@@ -1943,8 +2066,8 @@ class UnifiedImageWorker extends EventEmitter {
           // YOLO-seg found no subjects - handle fallback based on sport_categories settings
           log.info(`[CropContext] ${segModelId} found no subjects, checking fallback strategy`);
 
-          // V6 Baseline 2026: Send fullImage to V6 instead of returning null
-          if (this.currentSportCategory?.edge_function_version === 6) {
+          // V6 Baseline 2026: Send fullImage to the crop-context EF instead of returning null
+          if (this.isCropContextVersion()) {
             log.info(`[CropContext] V6: Sending full image (no subjects detected by ${segModelId})`);
             const v6FullResult = await this.sendFullImageToV6(imageFile, compressedBuffer, effectivePath, storagePath, mimeType);
             // FIX: If V6 returned 0 vehicles, return null to trigger standard analyzeImage fallback
@@ -1988,8 +2111,8 @@ class UnifiedImageWorker extends EventEmitter {
 
         // If no detections, fallback to standard analysis or V6 fullImage
         if (detections.length === 0) {
-          // V6 Baseline 2026: Send fullImage to V6 instead of returning null
-          if (this.currentSportCategory?.edge_function_version === 6) {
+          // V6 Baseline 2026: Send fullImage to the crop-context EF instead of returning null
+          if (this.isCropContextVersion()) {
             log.info(`[CropContext] V6: Sending full image (no subjects detected by ONNX)`);
             const v6FullResult = await this.sendFullImageToV6(imageFile, compressedBuffer, effectivePath, storagePath, mimeType);
             // FIX: If V6 returned 0 vehicles, return null to trigger standard analyzeImage fallback
@@ -2333,7 +2456,7 @@ class UnifiedImageWorker extends EventEmitter {
           log.info(`[CropContext] Sequential call ${i + 1}/${cropsPayload.length}`);
 
           const response = await Promise.race([
-            this.supabase.functions.invoke('analyzeImageDesktopV6', { body: singleCropPayload }),
+            this.supabase.functions.invoke(this.cropContextFunctionName(), { body: singleCropPayload }),
             new Promise((_, reject) =>
               setTimeout(() => reject(new Error('V6 function invocation timeout')), 60000)
             )
@@ -2484,7 +2607,7 @@ class UnifiedImageWorker extends EventEmitter {
             await new Promise(resolve => setTimeout(resolve, backoffMs));
           }
           response = await Promise.race([
-            this.supabase.functions.invoke('analyzeImageDesktopV6', { body: v6Payload }),
+            this.supabase.functions.invoke(this.cropContextFunctionName(), { body: v6Payload }),
             new Promise((_, reject) =>
               setTimeout(() => reject(new Error('V6 function invocation timeout')), 60000)
             )
@@ -2788,6 +2911,8 @@ class UnifiedImageWorker extends EventEmitter {
         masksApplied: this.lastSegmentationMetadata.masksApplied,
         // Include detection bboxes for visualization (always available when detections exist)
         ...(this.lastSegmentationMetadata.detections ? { detections: this.lastSegmentationMetadata.detections } : {}),
+        // TRAIN-01: carry the near-miss band through so computeTrainingFlags sees it
+        ...(this.lastSegmentationMetadata.nearMiss?.length ? { nearMiss: this.lastSegmentationMetadata.nearMiss } : {}),
         // Include RLE mask data only if available (non-empty array)
         ...(extractedMasks.length > 0 ? { masks: extractedMasks } : {}),
         // Sharpness filter results (only present when multiple crops were analyzed)
@@ -2810,6 +2935,27 @@ class UnifiedImageWorker extends EventEmitter {
       // Return null to signal fallback to standard flow
       return null;
     }
+  }
+
+  /**
+   * Crop+Context Edge Function family (V6, V7+). V7 is a strict superset of V6:
+   * it sends the exact same crop+context request and returns a backward-compatible
+   * response (adding vehicle-DNA fields). Both flow through this path, so version
+   * checks gate on "is this a crop-context version" rather than "=== 6".
+   */
+  private isCropContextVersion(): boolean {
+    const v = this.currentSportCategory?.edge_function_version;
+    return v === 6 || v === 7;
+  }
+
+  /**
+   * Resolves the crop+context Edge Function name for the active sport category.
+   * Defaults to V6 (the established baseline); V7 opts in via edge_function_version.
+   */
+  private cropContextFunctionName(): string {
+    return this.currentSportCategory?.edge_function_version === 7
+      ? 'analyzeImageDesktopV7'
+      : 'analyzeImageDesktopV6';
   }
 
   /**
@@ -2855,7 +3001,7 @@ class UnifiedImageWorker extends EventEmitter {
 
     try {
       const response = await Promise.race([
-        this.supabase.functions.invoke('analyzeImageDesktopV6', { body: fullImagePayload }),
+        this.supabase.functions.invoke(this.cropContextFunctionName(), { body: fullImagePayload }),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('V6 fullImage function invocation timeout')), 60000)
         )
@@ -2907,6 +3053,19 @@ class UnifiedImageWorker extends EventEmitter {
         strategy: 'full-image',
         usedFullImage: true,
         recognitionMethod: 'gemini-v6-full-image',
+        // TRAIN-01: carry the near-miss band from the (empty) segmentation attempt
+        // so the full-image fallback still records crop_near_miss in training_flags.
+        // This is the highest-value case: YOLO missed, Gemini found it on the full
+        // image, and Gemini's box_2d (already persisted in raw_response.vehicles
+        // since v1.1.10) can be triangulated against the near-miss box downstream.
+        segmentationPreprocessing: this.lastSegmentationMetadata ? {
+          used: this.lastSegmentationMetadata.used,
+          modelId: this.lastSegmentationMetadata.modelId,
+          detectionsCount: this.lastSegmentationMetadata.detectionsCount,
+          inferenceMs: this.lastSegmentationMetadata.inferenceMs,
+          masksApplied: this.lastSegmentationMetadata.masksApplied,
+          ...(this.lastSegmentationMetadata.nearMiss?.length ? { nearMiss: this.lastSegmentationMetadata.nearMiss } : {})
+        } : undefined,
         imageId: v6Result.imageId  // Pass DB UUID for analysis_log UPDATE
       };
 
@@ -3023,6 +3182,11 @@ class UnifiedImageWorker extends EventEmitter {
    * Initialize sport configurations from Supabase sport categories
    */
   private async initializeSportConfigurations() {
+    // ACC-01 (Gruppe C): apply the preset's series-sponsor ignore list to this
+    // worker's matcher. Set BEFORE the try block (and before the empty-categories
+    // early return) so the list still applies even if sport-category fetch fails.
+    this.smartMatcher?.setSeriesSponsorIgnoreList(this.config.seriesSponsorIgnore ?? []);
+
     try {
       // PERFORMANCE: Use pre-fetched categories if available (batch optimization)
       // This avoids redundant Supabase calls when processing multiple images
@@ -3240,11 +3404,24 @@ class UnifiedImageWorker extends EventEmitter {
       // ============================================
       phaseStart = Date.now();
       let sceneClassification: SceneClassificationResult | null = null;
+      let sceneTrainingCandidate = false;
       let shouldSkipAI = false;
 
       if (this.sceneClassificationEnabled && this.sceneClassifier) {
         try {
           sceneClassification = await this.sceneClassifier.classify(buffer);
+
+          // TRAIN-01: mark a future scene-classifier training candidate when the
+          // model was unsure — low top1, torn margin, or a crowd_scene sitting
+          // just under the skip line (the exact boundary that decides a credit).
+          const u = sceneClassification.uncertainty;
+          sceneTrainingCandidate = !!u && (
+            u.top1 < 0.60 ||
+            u.margin < 0.15 ||
+            (sceneClassification.category === SceneCategory.CROWD_SCENE &&
+             sceneClassification.confidence >= 0.60 &&
+             sceneClassification.confidence < this.sceneSkipThreshold)
+          );
 
           // Log scene classification result
           workerLog.info(`Scene: ${sceneClassification.category} (${(sceneClassification.confidence * 100).toFixed(0)}%) - ${imageFile.fileName}`);
@@ -3319,7 +3496,7 @@ class UnifiedImageWorker extends EventEmitter {
                   skipVisualTagsResult = await this.invokeVisualTagging(skipStoragePath, {
                     imageId: skipImageId,
                     analysis: []
-                  });
+                  }, this.buildVisualTaggingAnchor(processor, imageFile.originalPath));
                   if (skipVisualTagsResult) {
                     workerLog.info(`[SceneSkip] Visual tags extracted: ${Object.values(skipVisualTagsResult.tags).flat().length} tags`);
                   }
@@ -3347,6 +3524,8 @@ class UnifiedImageWorker extends EventEmitter {
                   modelSource: 'scene_classifier_onnx',
                   sceneCategory: sceneClassification.category,
                   sceneConfidence: sceneClassification.confidence,
+                  sceneUncertainty: sceneClassification.uncertainty || null,
+                  sceneTrainingCandidate,
                   visualTags: skipVisualTagsResult?.tags || null,
                   inferenceTimeMs: sceneClassification.inferenceTimeMs || 0
                 },
@@ -3419,7 +3598,7 @@ class UnifiedImageWorker extends EventEmitter {
       }
 
       // ============================================
-      // Fase 2.8: Determine Recognition Strategy based on Scene + Segmentation
+      // Fase 2.7: Segmentation for Recognition Strategy
       // ============================================
       phaseStart = Date.now();
 
@@ -3445,6 +3624,12 @@ class UnifiedImageWorker extends EventEmitter {
           segmentationForStrategy = null;
         }
       }
+      timing['2.7_segmentationStrategy'] = Date.now() - phaseStart;
+
+      // ============================================
+      // Fase 2.8: Face Recognition (ONNX - YuNet + AuraFace)
+      // ============================================
+      phaseStart = Date.now();
 
       // STEP 2: Determine recognition strategy (using segmentation results if available)
       const recognitionStrategy = this.getRecognitionStrategy(
@@ -3454,12 +3639,15 @@ class UnifiedImageWorker extends EventEmitter {
       let faceRecognitionResult: FaceRecognitionResult | null = null;
 
       // STEP 3: Perform face recognition if strategy dictates
+      workerLog.info(`[RecogStrategy] useFaceRecognition=${recognitionStrategy.useFaceRecognition}, useNumberRecognition=${recognitionStrategy.useNumberRecognition}, context=${recognitionStrategy.context} for ${imageFile.fileName}`);
       if (recognitionStrategy.useFaceRecognition) {
         workerLog.info(`Face recognition enabled for ${sceneClassification?.category || 'unknown'} scene`);
         faceRecognitionResult = await this.performFaceRecognition(
           uploadReadyPath,
           recognitionStrategy.context
         );
+        const matchedCount = faceRecognitionResult?.matches?.filter(m => m.matched).length || 0;
+        workerLog.info(`[FaceRecogResult] success=${faceRecognitionResult?.success}, totalMatches=${faceRecognitionResult?.matches?.length || 0}, matchedFaces=${matchedCount} for ${imageFile.fileName}`);
 
         // Persist face matches into the per-image cache so findIntelligentMatches()
         // can feed them to SmartMatcher as FACE_MATCH evidence. Only keep matches
@@ -3498,6 +3686,7 @@ class UnifiedImageWorker extends EventEmitter {
 
         // FIX: Only use face-only results if we actually found matches
         // Otherwise, fall through to AI analysis for number recognition
+        workerLog.info(`[FaceOnlyPath] matchedDrivers=${matchedDrivers.length}, useNumberRecognition=${recognitionStrategy.useNumberRecognition} for ${imageFile.fileName}`);
         if (matchedDrivers.length > 0) {
           const processingTimeMs = Date.now() - startTime;
           workerLog.info(`Face-only recognition: ${matchedDrivers.length} drivers identified for ${imageFile.fileName}`);
@@ -3508,6 +3697,7 @@ class UnifiedImageWorker extends EventEmitter {
           // Write metadata from face recognition matches
           for (const match of matchedDrivers) {
             const raceNumber = match.raceNumber;
+            workerLog.info(`[FaceOnlyMeta] Writing metadata for raceNumber="${raceNumber}", drivers=${JSON.stringify(match.drivers)}, participantsData.length=${this.participantsData.length}`);
 
             // Find participant in preset data
             const participant = this.participantsData.length > 0
@@ -3516,6 +3706,8 @@ class UnifiedImageWorker extends EventEmitter {
                   String(p.number) === String(raceNumber)
                 )
               : null;
+
+            workerLog.info(`[FaceOnlyMeta] Participant lookup: raceNumber="${raceNumber}" → ${participant ? `FOUND (numero=${participant.numero}, nome=${participant.nome}, metatag=${participant.metatag || 'none'})` : 'NOT FOUND'}`);
 
             // Write metatag to XMP:Description if available
             if (participant?.metatag) {
@@ -3586,6 +3778,9 @@ class UnifiedImageWorker extends EventEmitter {
           // ============================================
           let faceRecognitionStoragePath: string | null = null;
           let faceRecognitionImageId: string | null = null;
+          // Issue #136: hoisted above the try so the JSONL log (moved out of the
+          // try/catch below) can still read the visual tags after the catch.
+          let faceVisualTagsResult: { tags: any; usage: any } | null = null;
 
           try {
             // Get userId from authService (same as other flows)
@@ -3665,13 +3860,12 @@ class UnifiedImageWorker extends EventEmitter {
             }
 
             // 5. Visual Tagging for face recognition path (same as standard flow)
-            let faceVisualTagsResult: { tags: any; usage: any } | null = null;
             if (this.config.visualTagging?.enabled && faceRecognitionStoragePath) {
               try {
                 faceVisualTagsResult = await this.invokeVisualTagging(faceRecognitionStoragePath, {
                   imageId: faceRecognitionImageId,
                   analysis: matchedDrivers
-                });
+                }, this.buildVisualTaggingAnchor(processor, imageFile.originalPath));
                 if (faceVisualTagsResult) {
                   workerLog.info(`[FaceRecognition] Visual tags extracted: ${Object.values(faceVisualTagsResult.tags).flat().length} tags`);
                 }
@@ -3680,51 +3874,60 @@ class UnifiedImageWorker extends EventEmitter {
               }
             }
 
-            // 6. Log to JSONL with real Supabase URL
-            if (this.analysisLogger) {
-              const { SUPABASE_CONFIG } = await import('./config');
-              const faceSupabaseUrl = faceRecognitionStoragePath
-                ? `${SUPABASE_CONFIG.url}/storage/v1/object/public/uploaded-images/${faceRecognitionStoragePath}`
-                : `local://${imageFile.originalPath}`;
-
-              const faceVehiclesForLog = matchedDrivers.map((driver, idx) => ({
-                vehicleIndex: idx,
-                raceNumber: driver.raceNumber ?? undefined,
-                drivers: driver.drivers,
-                team: driver.teamName ?? undefined,
-                confidence: driver.confidence,
-                corrections: [] as any[],
-                finalResult: {
-                  raceNumber: driver.raceNumber ?? undefined,
-                  team: driver.teamName ?? undefined,
-                  drivers: driver.drivers,
-                  matchedBy: 'face_recognition'
-                }
-              }));
-
-              this.analysisLogger.logImageAnalysis({
-                imageId: imageFile.id,
-                fileName: imageFile.fileName,
-                originalFileName: path.basename(imageFile.originalPath),
-                originalPath: imageFile.originalPath,
-                supabaseUrl: faceSupabaseUrl,
-                aiResponse: {
-                  rawText: `FACE_RECOGNITION: ${matchedDrivers.length} drivers identified`,
-                  totalVehicles: matchedDrivers.length,
-                  vehicles: faceVehiclesForLog
-                },
-                thumbnailPath,
-                microThumbPath,
-                compressedPath,
-                visualTags: faceVisualTagsResult?.tags,
-                recognitionMethod: 'face_recognition'
-              });
-              workerLog.info(`[FaceRecognition] Logged to JSONL with URL: ${faceSupabaseUrl}`);
-            }
-
           } catch (uploadError: any) {
             workerLog.error(`[FaceRecognition] Error during Supabase upload/save: ${uploadError.message}`);
             // Non bloccare il processing per errori di upload
+          }
+
+          // 6. Log to JSONL — ALWAYS, even if the upload/DB steps in the try
+          // above threw. Issue #136: this JSONL entry is the local source of
+          // truth for the review report. Previously it was the last step INSIDE
+          // the try, so a failed uploadToStorage()/images insert (transient
+          // "max connections" / HTML-error / network — see #144/#116/#113/#164)
+          // was swallowed by the catch and the log was skipped, making
+          // face-matched photos vanish from the report even though their
+          // metadata was already written above. Decoupled so every processed
+          // photo stays reviewable/correctable (falls back to a local:// URL
+          // when the upload didn't land).
+          if (this.analysisLogger) {
+            const { SUPABASE_CONFIG } = await import('./config');
+            const faceSupabaseUrl = faceRecognitionStoragePath
+              ? `${SUPABASE_CONFIG.url}/storage/v1/object/public/uploaded-images/${faceRecognitionStoragePath}`
+              : `local://${imageFile.originalPath}`;
+
+            const faceVehiclesForLog = matchedDrivers.map((driver, idx) => ({
+              vehicleIndex: idx,
+              raceNumber: driver.raceNumber ?? undefined,
+              drivers: driver.drivers,
+              team: driver.teamName ?? undefined,
+              confidence: driver.confidence,
+              corrections: [] as any[],
+              finalResult: {
+                raceNumber: driver.raceNumber ?? undefined,
+                team: driver.teamName ?? undefined,
+                drivers: driver.drivers,
+                matchedBy: 'face_recognition'
+              }
+            }));
+
+            this.analysisLogger.logImageAnalysis({
+              imageId: imageFile.id,
+              fileName: imageFile.fileName,
+              originalFileName: path.basename(imageFile.originalPath),
+              originalPath: imageFile.originalPath,
+              supabaseUrl: faceSupabaseUrl,
+              aiResponse: {
+                rawText: `FACE_RECOGNITION: ${matchedDrivers.length} drivers identified`,
+                totalVehicles: matchedDrivers.length,
+                vehicles: faceVehiclesForLog
+              },
+              thumbnailPath,
+              microThumbPath,
+              compressedPath,
+              visualTags: faceVisualTagsResult?.tags,
+              recognitionMethod: 'face_recognition'
+            });
+            workerLog.info(`[FaceRecognition] Logged to JSONL with URL: ${faceSupabaseUrl}`);
           }
 
           return {
@@ -3752,6 +3955,7 @@ class UnifiedImageWorker extends EventEmitter {
       // ============================================
       // Fase 3 & 4: Analysis (Local ONNX, Crop-Context V6, or Standard Cloud API)
       // ============================================
+      workerLog.info(`[FlowTrace] Reached AI analysis phase for ${imageFile.fileName} (faceRecognitionResult=${faceRecognitionResult ? `{success:${faceRecognitionResult.success}, matches:${faceRecognitionResult.matches?.length || 0}, matched:${faceRecognitionResult.matches?.filter(m => m.matched).length || 0}}` : 'null'})`);
       phaseStart = Date.now();
       let analysisResult: any;
       let storagePath: string | null = null;
@@ -3793,7 +3997,7 @@ class UnifiedImageWorker extends EventEmitter {
         const [cropContextResult, parallelVisualTags] = await Promise.all([
           this.analyzeWithCropContext(imageFile, buffer, mimeType, uploadReadyPath, storagePath, processor),
           visualTaggingEnabled
-            ? this.invokeVisualTagging(storagePath, null).catch(err => {
+            ? this.invokeVisualTagging(storagePath, null, this.buildVisualTaggingAnchor(processor, imageFile.originalPath)).catch(err => {
                 log.warn(`[VisualTagging] Failed in parallel (continuing): ${err.message}`);
                 return null;
               })
@@ -3856,7 +4060,7 @@ class UnifiedImageWorker extends EventEmitter {
         const [onnxResult, onnxParallelVisualTags] = await Promise.all([
           this.analyzeImageLocal(buffer, imageFile.fileName, mimeType, storagePath),
           onnxVisualTaggingEnabled
-            ? this.invokeVisualTagging(storagePath, null).catch(err => {
+            ? this.invokeVisualTagging(storagePath, null, this.buildVisualTaggingAnchor(processor, imageFile.originalPath)).catch(err => {
                 log.warn(`[VisualTagging] Failed in parallel with ONNX (continuing): ${err.message}`);
                 return null;
               })
@@ -3915,7 +4119,7 @@ class UnifiedImageWorker extends EventEmitter {
         const [stdAnalysisResult, stdParallelVisualTags] = await Promise.all([
           this.analyzeImage(imageFile.fileName, storagePath, buffer.length, mimeType),
           stdVisualTaggingEnabled
-            ? this.invokeVisualTagging(storagePath, null).catch(err => {
+            ? this.invokeVisualTagging(storagePath, null, this.buildVisualTaggingAnchor(processor, imageFile.originalPath)).catch(err => {
                 log.warn(`[VisualTagging] Failed in parallel (continuing): ${err.message}`);
                 return null;
               })
@@ -3988,7 +4192,7 @@ class UnifiedImageWorker extends EventEmitter {
       } else if (this.config.visualTagging?.enabled && storagePath && !this.shouldUseCropContext() && !this.shouldUseLocalOnnx()) {
         // Fallback: Only run sequentially if not already parallelized (shouldn't happen normally)
         try {
-          visualTagsResult = await this.invokeVisualTagging(storagePath, analysisResult);
+          visualTagsResult = await this.invokeVisualTagging(storagePath, analysisResult, this.buildVisualTaggingAnchor(processor, imageFile.originalPath));
         } catch (err: any) {
           log.warn(`[VisualTagging] Failed (continuing without tags): ${err.message}`);
         }
@@ -4003,7 +4207,8 @@ class UnifiedImageWorker extends EventEmitter {
         uploadReadyPath,
         processor,
         temporalContext,
-        visualTagsResult
+        visualTagsResult,
+        faceRecognitionResult
       );
       timing['6_smartMatcher'] = Date.now() - phaseStart;
 
@@ -4157,11 +4362,29 @@ class UnifiedImageWorker extends EventEmitter {
       console.log(`[DBUpdate] Check: dbImageId=${dbImageId}, vehicles.length=${vehicles.length}`);
 
       if (dbImageId && vehicles.length > 0) {
+        // ── TRAIN-01: onnx_miss_gemini_hit — local ONNX gave no/weak number on a subject
+        //    but Gemini (already run on LOW/MEDIUM crops) read one. Free, forward-only
+        //    signal for the per-championship number model, derived from modelSource on the
+        //    final results (no extra inference / no extra Gemini call). modelSource patterns
+        //    (seq + batch): 'v6-fallback-from-low-onnx*' (ONNX absent/low → Gemini sole) and
+        //    'onnx+v6-default-gemini*' / 'onnx+v6-preset-gemini*' (Gemini won over weak ONNX).
+        const ONNX_MISS_RE = /(fallback-from-low-onnx|onnx\+v6-(?:default-gemini|preset-gemini))/;
+        const onnxMissNumbers: string[] = [];
+        for (const v of filteredAnalysis) {
+          if (v?.raceNumber && ONNX_MISS_RE.test(String(v.modelSource || ''))) {
+            onnxMissNumbers.push(String(v.raceNumber));
+          }
+        }
+
         // ── Compute training_flags for YOLO-seg retraining pipeline ──
         const trainingFlags = computeTrainingFlags(
           analysisResult.segmentationPreprocessing,
           analysisResult.recognitionMethod,
-          filteredAnalysis.length
+          filteredAnalysis.length,
+          sceneClassification
+            ? { candidate: sceneTrainingCandidate, category: sceneClassification.category, uncertainty: sceneClassification.uncertainty ?? null }
+            : null,
+          onnxMissNumbers
         );
 
         // Photo / camera / exposure / AF metadata extracted upfront from EXIF.
@@ -4334,6 +4557,7 @@ class UnifiedImageWorker extends EventEmitter {
                    error.message?.includes('token') ? 'token_reservation' :
                    error.message?.includes('ONNX') || error.message?.includes('onnx') ? 'onnx_model' :
                    error.message?.includes('memory') || error.message?.includes('ENOMEM') ? 'memory' :
+                   error.code === 'ENOSPC' || error.message?.includes('No space left') || error.message?.includes('ENOSPC') ? 'filesystem' :
                    'uncaught',
         severity: 'recoverable',
         error: error,
@@ -5129,7 +5353,9 @@ class UnifiedImageWorker extends EventEmitter {
 
     if (this.currentSportCategory?.edge_function_version) {
       const version = this.currentSportCategory.edge_function_version;
-      if (version === 6) {
+      if (version === 7) {
+        functionName = 'analyzeImageDesktopV7';
+      } else if (version === 6) {
         functionName = 'analyzeImageDesktopV6';
       } else if (version === 5) {
         functionName = 'analyzeImageDesktopV5';
@@ -5230,12 +5456,41 @@ class UnifiedImageWorker extends EventEmitter {
   }
 
   /**
+   * Build the calendar-anchor metadata payload for the visualTagging edge function.
+   * `processor` exposes `getPhotoMetadataForDB(path)` which reads EXIF data populated
+   * during temporal-clustering. Returns only the 3 fields the edge function consumes
+   * for grounding (photo_taken_at, photo_latitude, photo_longitude). Issue #159.
+   */
+  private buildVisualTaggingAnchor(
+    processor: UnifiedImageProcessor | undefined,
+    originalPath: string
+  ): { photo_taken_at?: string; photo_latitude?: number; photo_longitude?: number } {
+    if (!processor) return {};
+    const meta = processor.getPhotoMetadataForDB(originalPath) || {};
+    const out: { photo_taken_at?: string; photo_latitude?: number; photo_longitude?: number } = {};
+    if (typeof meta.photo_taken_at === 'string') out.photo_taken_at = meta.photo_taken_at;
+    if (typeof meta.photo_latitude === 'number') out.photo_latitude = meta.photo_latitude;
+    if (typeof meta.photo_longitude === 'number') out.photo_longitude = meta.photo_longitude;
+    return out;
+  }
+
+  /**
    * Visual Tagging: Invokes the visualTagging edge function to extract visual descriptive tags
    * Runs in parallel with recognition for zero additional latency
+   *
+   * `anchorMeta` (optional) enables the calendar anchor in the edge function:
+   * we forward preset_name + sport_category + photo_taken_at + GPS (when available)
+   * so the edge function can ground location_tags via event_calendar lookup.
+   * Issue #159.
    */
   private async invokeVisualTagging(
     storagePath: string,
-    analysisResult: any | null  // Now accepts null for parallel execution
+    analysisResult: any | null,  // Now accepts null for parallel execution
+    anchorMeta?: {
+      photo_taken_at?: string;
+      photo_latitude?: number;
+      photo_longitude?: number;
+    } | null
   ): Promise<{ tags: any; usage: any } | null> {
     // Only run if visual tagging is enabled
     if (!this.config.visualTagging?.enabled) {
@@ -5269,6 +5524,25 @@ class UnifiedImageWorker extends EventEmitter {
         };
       }
 
+      // Calendar anchor grounding signals (issue #159).
+      // Caller pre-extracts photo_taken_at/lat/lon from EXIF metadata; we forward
+      // them to the edge function alongside preset_name + sport_category.
+      // All fields are optional — edge function falls back to vanilla Gemini if missing.
+      const anchorFields: {
+        preset_name?: string;
+        sport_category?: string;
+        photo_taken_at?: string;
+        photo_latitude?: number;
+        photo_longitude?: number;
+      } = {};
+      if (this.config.presetName) anchorFields.preset_name = this.config.presetName;
+      if (this.config.category) anchorFields.sport_category = this.config.category;
+      if (anchorMeta) {
+        if (anchorMeta.photo_taken_at) anchorFields.photo_taken_at = anchorMeta.photo_taken_at;
+        if (typeof anchorMeta.photo_latitude === 'number') anchorFields.photo_latitude = anchorMeta.photo_latitude;
+        if (typeof anchorMeta.photo_longitude === 'number') anchorFields.photo_longitude = anchorMeta.photo_longitude;
+      }
+
       const response = await Promise.race([
         this.supabase.functions.invoke('visualTagging', {
           body: {
@@ -5276,7 +5550,8 @@ class UnifiedImageWorker extends EventEmitter {
             imageId: analysisResult?.imageId || '',
             executionId: this.config.executionId || '',
             userId: userId || '',
-            recognitionResult  // undefined when running in parallel (edge function handles this)
+            recognitionResult,  // undefined when running in parallel (edge function handles this)
+            ...anchorFields
           }
         }),
         new Promise((_, reject) =>
@@ -5393,7 +5668,8 @@ class UnifiedImageWorker extends EventEmitter {
     processedImagePath: string,
     processor?: UnifiedImageProcessor,
     temporalContext?: { imageTimestamp: ImageTimestamp; temporalNeighbors: ImageTimestamp[] } | null,
-    visualTags?: { tags: any; usage: any } | null
+    visualTags?: { tags: any; usage: any } | null,
+    faceRecognitionResult?: FaceRecognitionResult | null
   ): Promise<{
     analysis: any[];
     csvMatch: any | null;
@@ -5403,6 +5679,45 @@ class UnifiedImageWorker extends EventEmitter {
   }> {
     let csvMatch: any = null;
     let description: string | null = null;
+
+    // DEBUG: Log what processAnalysisResults receives
+    log.info(`[processAnalysisResults] Called for ${imageFile.fileName}: faceRecognitionResult=${faceRecognitionResult ? `present(success=${faceRecognitionResult.success}, matches=${faceRecognitionResult.matches?.length || 0}, matchedFaces=${faceRecognitionResult.matches?.filter(m => m.matched).length || 0})` : 'NULL'}, analysisResult.analysis=${analysisResult?.analysis?.length || 0} items`);
+
+    // Merge face recognition matches into csvMatches
+    // This ensures face-matched participants are included in metadata even when number recognition also runs
+    const faceMatchedCsvEntries: any[] = [];
+    if (faceRecognitionResult?.success && faceRecognitionResult.matches) {
+      const matchedFaces = faceRecognitionResult.matches.filter(m => m.matched && m.driverInfo);
+      log.info(`[FaceRecognition→Metadata] Processing ${matchedFaces.length} face match(es) for merge (total matches in result: ${faceRecognitionResult.matches.length})`);
+      for (const faceMatch of matchedFaces) {
+        const raceNumber = faceMatch.driverInfo?.raceNumber;
+        const driverName = faceMatch.driverInfo?.driverName;
+        log.info(`[FaceRecognition→Metadata] Looking up: raceNumber="${raceNumber}", driverName="${driverName}" in ${this.participantsData.length} participants`);
+
+        // Find matching participant in preset data
+        const participant = this.participantsData.find((p: any) =>
+          (raceNumber && (String(p.numero) === String(raceNumber) || String(p.number) === String(raceNumber))) ||
+          (driverName && (
+            (p.nome && p.nome.includes(driverName)) ||
+            (p.drivers && p.drivers.some((d: any) => d.nome?.includes(driverName)))
+          ))
+        );
+
+        if (participant) {
+          faceMatchedCsvEntries.push({
+            entry: participant,
+            matchedNumber: raceNumber || participant.numero,
+            confidence: faceMatch.similarity,
+            matchedBy: 'face_recognition'
+          });
+          log.info(`[FaceRecognition→Metadata] ✅ Face match merged: ${driverName} → participant #${participant.numero}`);
+        } else {
+          log.warn(`[FaceRecognition→Metadata] ❌ No participant found for raceNumber="${raceNumber}", driverName="${driverName}"`);
+        }
+      }
+    } else if (faceRecognitionResult) {
+      log.info(`[FaceRecognition→Metadata] No face matches to merge (success=${faceRecognitionResult.success}, matches=${faceRecognitionResult.matches?.length || 0})`);
+    }
 
     if (analysisResult.analysis && analysisResult.analysis.length > 0) {
       // Sanitize garbage race numbers from AI responses before any matching
@@ -5447,7 +5762,31 @@ class UnifiedImageWorker extends EventEmitter {
       }
 
       // Enhanced intelligent matching using SmartMatcher with temporal context for ALL vehicles
-      const csvMatches = await this.findIntelligentMatches(analysisResult.analysis, imageFile, processor, temporalContext);
+      let csvMatches = await this.findIntelligentMatches(analysisResult.analysis, imageFile, processor, temporalContext);
+
+      // Merge face recognition matches (avoid duplicates by race number)
+      if (faceMatchedCsvEntries.length > 0) {
+        const existingNumbers = new Set(
+          (Array.isArray(csvMatches) ? csvMatches : csvMatches ? [csvMatches] : [])
+            .filter((m: any) => m?.entry?.numero)
+            .map((m: any) => String(m.entry.numero))
+        );
+
+        for (const faceEntry of faceMatchedCsvEntries) {
+          if (!existingNumbers.has(String(faceEntry.entry.numero))) {
+            if (Array.isArray(csvMatches)) {
+              csvMatches.push(faceEntry);
+            } else if (csvMatches) {
+              csvMatches = [csvMatches, faceEntry];
+            } else {
+              csvMatches = [faceEntry];
+            }
+            log.info(`[FaceRecognition→Metadata] Added face-only match for #${faceEntry.entry.numero} (not found by number recognition)`);
+          } else {
+            log.info(`[FaceRecognition→Metadata] Skipping #${faceEntry.entry.numero} - already matched by number recognition`);
+          }
+        }
+      }
 
       // Costruisci i keywords usando la logica esistente (utilizzeremo tutti i matches)
       const keywords = this.buildMetatag(analysisResult.analysis, csvMatches);
@@ -5455,6 +5794,12 @@ class UnifiedImageWorker extends EventEmitter {
 
       // Store all matches for further processing
       csvMatch = csvMatches;
+    } else if (faceMatchedCsvEntries.length > 0) {
+      // No AI analysis results, but face recognition found matches — use them directly
+      log.info(`[FaceRecognition→Metadata] No AI analysis results, using ${faceMatchedCsvEntries.length} face-only match(es)`);
+      csvMatch = faceMatchedCsvEntries;
+      const keywords = this.buildMetatag([], faceMatchedCsvEntries);
+      description = keywords && keywords.length > 0 ? keywords.join(', ') : null;
     } else if (
       // TEMPORAL BACKFILL: When YOLO detected a vehicle but AI returned 0 results,
       // check temporal neighbors for a high-confidence match and create a needs_review entry.
@@ -5581,6 +5926,12 @@ class UnifiedImageWorker extends EventEmitter {
           // If no match and using preset, vehicle was filtered out - don't include in csvMatch
         }
 
+        // Preserve face recognition matches appended beyond the analysis array
+        for (let i = originalAnalysis.length; i < csvMatch.length; i++) {
+          if (csvMatch[i]?.matchedBy === 'face_recognition' && csvMatch[i]?.entry) {
+            filteredCsvMatch.push(csvMatch[i]);
+          }
+        }
       }
     }
 
@@ -5884,43 +6235,21 @@ class UnifiedImageWorker extends EventEmitter {
         teamName: vehicle.teamName
       };
 
-      // Track corrections for this vehicle
+      // ACC-04 Phase 1: cascade ALL entry fields onto the vehicle in one call.
+      // clearMissing=true means an absent entry field (e.g. empty squadra) clears
+      // the vehicle field to null — killing "number+driver right, team wrong".
+      const preCascade = {
+        raceNumber: correctedVehicle.raceNumber,
+        drivers: JSON.stringify(correctedVehicle.drivers ?? []),
+        teamName: correctedVehicle.teamName,
+      };
+      cascadeEntryToVehicle(correctedVehicle, participant, { clearMissing: true, source: 'auto-match' });
       const corrections = {
         vehicleIndex: index,
-        raceNumber: false,
-        drivers: false,
-        team: false
+        raceNumber: correctedVehicle.raceNumber !== preCascade.raceNumber,
+        drivers: JSON.stringify(correctedVehicle.drivers ?? []) !== preCascade.drivers,
+        team: correctedVehicle.teamName !== preCascade.teamName,
       };
-
-      // Apply race number correction
-      if (participant.numero || participant.number) {
-        const correctedNumber = String(participant.numero || participant.number);
-        if (correctedVehicle.raceNumber !== correctedNumber) {
-          correctedVehicle.raceNumber = correctedNumber;
-          corrections.raceNumber = true;
-        }
-      }
-
-      // Apply driver corrections from preset_participant_drivers
-      const correctedDrivers: string[] = getParticipantDriverNames(participant);
-
-      if (correctedDrivers.length > 0) {
-        const originalDrivers = vehicle.drivers || [];
-        const driversChanged = JSON.stringify(originalDrivers.sort()) !== JSON.stringify(correctedDrivers.sort());
-        if (driversChanged) {
-          correctedVehicle.drivers = correctedDrivers;
-          corrections.drivers = true;
-        }
-      }
-
-      // Apply team correction
-      if (participant.squadra) {
-        const originalTeam = vehicle.teamName || '';
-        if (originalTeam !== participant.squadra) {
-          correctedVehicle.teamName = participant.squadra;
-          corrections.team = true;
-        }
-      }
 
       // Add corrections metadata for logging
       correctedVehicle._corrections = corrections;
@@ -9133,6 +9462,18 @@ export class UnifiedImageProcessor extends EventEmitter {
       }
     }
 
+    // ==================== DEFERRED UPLOAD RETRY DRAIN ====================
+    // The high-concurrency main pass can transiently exhaust the Supabase
+    // connection pool (issues #142/#143/#144 — Nürburgring 24h batch), making a
+    // handful of uploads fail outright and produce ghost images + 0 results.
+    // Now that the main loop is done and upload pressure is gone, re-run just
+    // those hard transient upload failures once more, gently (sequential), so the
+    // batch completes whole without the user lifting a finger. Runs BEFORE the
+    // flush/finalize below (recovered rows persist normally) and BEFORE token
+    // finalization in the outer processBatch() (so a recovered image is charged
+    // exactly once, within the existing pre-authorization).
+    await this.drainDeferredUploads(results, imageFiles);
+
     console.log(`\n${'='.repeat(60)}`);
     console.log(`[FINALIZE] 🏁 Batch processing complete: ${results.length} images. Starting finalization...`);
     console.log(`${'='.repeat(60)}`);
@@ -9401,13 +9742,10 @@ export class UnifiedImageProcessor extends EventEmitter {
           console.log(`[TemporalRescore] image ${dbId}: vehicle ${flip.vehicleIndex} flipped #${flip.from} → #${flip.to} (score ${flip.oldScore.toFixed(1)} → ${flip.newScore.toFixed(1)})`);
           rescoreFlipsLog.push({ imageId: dbId, vehicleIndex: flip.vehicleIndex, from: flip.from, to: flip.to });
 
-          v.raceNumber = flip.to;
+          // ACC-04 Phase 1: cascade ALL entry fields (team, drivers, category, make/model, sponsors…)
+          // via cascadeEntryToVehicle; also syncs v.finalResult automatically.
+          cascadeEntryToVehicle(v, newParticipant, { clearMissing: true, source: 'temporal-rescore' });
           v.confidence = newConfidence;
-          v.teamName = newParticipant.squadra || null;
-          v.team = newParticipant.squadra || null;
-          v.drivers = newParticipant.nome
-            ? String(newParticipant.nome).split(/[,&]/).map((d: string) => d.trim()).filter(Boolean)
-            : [];
           if (v.participantMatch) {
             v.participantMatch.matchedValue = flip.to;
             v.participantMatch.entry = newParticipant;
@@ -9422,9 +9760,6 @@ export class UnifiedImageProcessor extends EventEmitter {
             }
           }
           if (v.finalResult) {
-            v.finalResult.raceNumber = flip.to;
-            v.finalResult.team = newParticipant.squadra || null;
-            v.finalResult.drivers = newParticipant.nome ? [newParticipant.nome] : [];
             v.finalResult.matchedBy = 'temporal_rescore';
           }
         }
@@ -10063,6 +10398,104 @@ export class UnifiedImageProcessor extends EventEmitter {
   /**
    * Processa una singola immagine con un worker
    */
+  /**
+   * End-of-batch "deferred upload retry" drain.
+   *
+   * Re-runs the per-image pipeline for images that failed with a HARD, transient
+   * upload error during the high-concurrency main pass (e.g. Supabase connection-
+   * pool exhaustion — issues #142/#143/#144). Detection is conservative and
+   * token-safe (see isDeferredUploadRetryCandidate): only `success:false` results
+   * whose error was minted by uploadToStorage and is classified transient. Those
+   * never reached analyzeImage, so their pre-authorized token is unspent and the
+   * re-run is charged exactly once — never twice — and creates no duplicate row.
+   *
+   * Recovered results are merged back into `results` IN PLACE (by fileId), so the
+   * downstream temporal-backfill / flush / execution-finalize / ghost-detection
+   * all see the corrected rows. The re-run goes through the SAME processWithWorker
+   * path, so it appends a fresh successful IMAGE_ANALYSIS entry to the JSONL —
+   * which means the existing resume flow treats a recovered image as done, and an
+   * un-recovered one (e.g. app killed mid-drain) as still-to-do. No new table, no
+   * second source of truth.
+   *
+   * Gentle by design: sequential (effective upload concurrency 1) so we don't
+   * re-saturate the pool we just relieved, with an early-abort if the pool is
+   * clearly still down.
+   */
+  private async drainDeferredUploads(
+    results: UnifiedProcessingResult[],
+    imageFiles: UnifiedImageFile[]
+  ): Promise<void> {
+    if (this.config.isCancelled && this.config.isCancelled()) return;
+
+    // Map results → original UnifiedImageFile so we can re-run the pipeline.
+    // Prefer fileId (always present on the common processImage() return path);
+    // fall back to fileName for the rare worker-rejection result that omits it.
+    const byId = new Map(imageFiles.map(f => [f.id, f]));
+    const byName = new Map(imageFiles.map(f => [f.fileName, f]));
+
+    const candidates: Array<{ index: number; original: UnifiedImageFile }> = [];
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      if (!isDeferredUploadRetryCandidate(r)) continue;
+      const original = (r.fileId ? byId.get(r.fileId) : undefined) || byName.get(r.fileName);
+      if (!original) {
+        log.warn(`[DeferredDrain] Cannot locate source file for failed upload "${r.fileName}" — skipping retry`);
+        continue;
+      }
+      candidates.push({ index: i, original });
+    }
+
+    if (candidates.length === 0) return;
+
+    log.warn(
+      `[DeferredDrain] ${candidates.length} image(s) failed to upload with a transient error during the ` +
+      `high-concurrency pass. Retrying now at low concurrency (sequential)…`
+    );
+
+    // Early-abort guard: if the pool is still saturated the first retries will all
+    // fail their own internal backoff (3 attempts each). Bail after a short run of
+    // consecutive failures with nothing recovered, so we don't burn minutes
+    // re-failing — un-recovered images keep their ERROR JSONL entry and are picked
+    // up by the normal resume flow.
+    const ABORT_AFTER_CONSECUTIVE_FAILURES = 5;
+    let recovered = 0;
+    let consecutiveFailures = 0;
+
+    for (let n = 0; n < candidates.length; n++) {
+      if (this.config.isCancelled && this.config.isCancelled()) {
+        log.warn(`[DeferredDrain] Cancelled by user — stopping drain (${candidates.length - n} image(s) left for resume).`);
+        break;
+      }
+
+      const { index, original } = candidates[n];
+      try {
+        const retried = await this.processWithWorker(original);
+        results[index] = retried; // merge in place
+        const stillGhost = (retried.supabaseUrl || '').startsWith('local://');
+        if (retried.success && !stillGhost) {
+          recovered++;
+          consecutiveFailures = 0;
+          log.info(`[DeferredDrain] Recovered ${original.fileName} (${recovered}/${candidates.length})`);
+        } else {
+          consecutiveFailures++;
+        }
+      } catch (err: any) {
+        consecutiveFailures++;
+        log.error(`[DeferredDrain] Retry still failed for ${original.fileName}: ${err?.message || err}`);
+      }
+
+      if (recovered === 0 && consecutiveFailures >= ABORT_AFTER_CONSECUTIVE_FAILURES) {
+        log.warn(
+          `[DeferredDrain] First ${consecutiveFailures} retries all failed and nothing recovered — pool likely ` +
+          `still saturated. Aborting drain; ${candidates.length - (n + 1)} image(s) left for resume.`
+        );
+        break;
+      }
+    }
+
+    log.warn(`[DeferredDrain] Done: recovered ${recovered}/${candidates.length} previously-failed upload(s).`);
+  }
+
   private async processWithWorker(imageFile: UnifiedImageFile): Promise<UnifiedProcessingResult> {
     let worker: UnifiedImageWorker;
     let usePool = false;
@@ -10204,7 +10637,9 @@ export class UnifiedImageProcessor extends EventEmitter {
 function computeTrainingFlags(
   segmentationPreprocessing: any,
   recognitionMethod: string | undefined,
-  totalVehiclesFound: number
+  totalVehiclesFound: number,
+  scene?: { candidate: boolean; category: string | null; uncertainty: any } | null,
+  onnxMissNumbers?: string[]
 ): Record<string, any> | null {
   const flags: Record<string, any> = {};
 
@@ -10276,8 +10711,38 @@ function computeTrainingFlags(
     }
   }
 
+  // ── Flag: scene_training_candidate (TRAIN-01) ──
+  // The local scene classifier was unsure on this image — a future scene-model
+  // training candidate. Derived locally (no Gemini cost); see scene-classifier-onnx.
+  if (scene?.candidate) {
+    flags.scene_training_candidate = true;
+    flags.scene_category = scene.category ?? null;
+    if (scene.uncertainty) flags.scene_uncertainty = scene.uncertainty;
+  }
+
+  // ── Flag: crop_near_miss (TRAIN-01) ──
+  // Detector found subject(s) just below the confidence threshold and discarded
+  // them — strong crop hard-examples (especially when no detection passed).
+  const nearMiss = Array.isArray(segPre?.nearMiss) ? segPre.nearMiss : [];
+  if (nearMiss.length > 0) {
+    flags.crop_near_miss = true;
+    flags.near_miss_count = nearMiss.length;
+    flags.near_miss_top_conf = Math.round(Math.max(...nearMiss.map((d: any) => d.confidence || 0)) * 1000) / 1000;
+  }
+
+  // ── Flag: onnx_miss_gemini_hit (TRAIN-01) ──
+  // The per-championship ONNX number model produced no/weak number on a subject but
+  // Gemini (already run on those crops) read one — a silver label for that sport's
+  // number model, medium reliability, human-gated in the inbox. Forward-only; zero
+  // extra cost (derived from modelSource on results already computed).
+  if (onnxMissNumbers && onnxMissNumbers.length > 0) {
+    flags.onnx_miss_gemini_hit = true;
+    flags.onnx_miss_count = onnxMissNumbers.length;
+    flags.onnx_miss_numbers = onnxMissNumbers;
+  }
+
   // Return null if no actual problem flags were set (only metadata)
-  const hasProblems = flags.no_yolo || flags.seg_fallback || flags.low_confidence || flags.split_bbox;
+  const hasProblems = flags.no_yolo || flags.seg_fallback || flags.low_confidence || flags.split_bbox || flags.scene_training_candidate || flags.crop_near_miss || flags.onnx_miss_gemini_hit;
   if (!hasProblems) return null;
 
   return flags;

@@ -14,6 +14,7 @@ import { OCRCorrector } from './ocr-corrector';
 import { SportConfig, MatchingConfig, DNASettings, DEFAULT_DNA_SETTINGS } from './sport-config';
 import { TemporalClusterManager, ImageTimestamp } from './temporal-clustering';
 import { CorrectionData } from '../utils/analysis-logger';
+import { normalizeSponsor } from './sponsor-canonical';
 
 export interface AnalysisResult {
   raceNumber?: string;
@@ -242,6 +243,13 @@ export class SmartMatcher {
     teamOccurrences: Map<string, number>;
   } | null = null;
 
+  // ACC-01 (Gruppe C): per-preset list of series-wide sponsor brands (Michelin,
+  // Rolex, TotalEnergies …) that appear on every car / trackside banner. SPONSOR
+  // evidence matching one of these is dropped in findMatches() BEFORE any scoring,
+  // so it neither adds match bonuses nor fires the -30/-15 contradiction penalties.
+  // Stored normalized (see setSeriesSponsorIgnoreList). Empty = no filtering.
+  private seriesSponsorIgnore: string[] = [];
+
   constructor(sport: string = 'motorsport') {
     this.sport = sport;
     this.sportConfig = new SportConfig();
@@ -277,6 +285,27 @@ export class SmartMatcher {
     if (this.temporalManager) {
       this.temporalManager.initializeFromSportCategories(sportCategories);
     }
+  }
+
+  /**
+   * ACC-01 (Gruppe C): set the per-preset list of series-wide sponsor brands to
+   * exclude from SPONSOR evidence. Entries are normalized (see
+   * normalizeSponsorValue) and empties dropped. Idempotent — safe to call on
+   * every worker before a batch; passing [] clears the filter (current behavior).
+   */
+  setSeriesSponsorIgnoreList(list: string[]): void {
+    if (!Array.isArray(list)) {
+      this.seriesSponsorIgnore = [];
+      return;
+    }
+    const normalized: string[] = [];
+    for (const entry of list) {
+      const norm = this.normalizeSponsorValue(String(entry ?? ''));
+      if (norm.length > 0 && !normalized.includes(norm)) {
+        normalized.push(norm);
+      }
+    }
+    this.seriesSponsorIgnore = normalized;
   }
 
   /**
@@ -753,6 +782,46 @@ export class SmartMatcher {
   }
 
   /**
+   * ACC-01: match-time normalization for sponsor values, applied to BOTH the
+   * ignore-list entries (in the setter) and detected sponsor values (in
+   * isIgnoredSponsor): NFD diacritic strip → lowercase → collapse internal
+   * whitespace → trim.
+   *
+   * ACC-04: delegates to sponsor-canonical.normalizeSponsor (identical behaviour,
+   * single canonical implementation).
+   */
+  private normalizeSponsorValue(value: string): string {
+    return normalizeSponsor(value);
+  }
+
+  /**
+   * ACC-01 (Gruppe C): is this detected sponsor value one of the preset's
+   * series-wide brands to ignore? Uses the SAME three tiers as the contradiction
+   * check (evaluateAllSponsors Step 3) so a fuzzy-detected variant can't slip the
+   * filter yet still fire a -15 penalty:
+   *   (a) exact normalized equality
+   *   (b) bidirectional substring, ≥3-char guard on the shorter string
+   *   (c) isFuzzySponsorMatch (abbreviations + Levenshtein)
+   * Ignore-list entries are already normalized by setSeriesSponsorIgnoreList.
+   */
+  private isIgnoredSponsor(value: string): boolean {
+    if (this.seriesSponsorIgnore.length === 0) return false;
+    const normValue = this.normalizeSponsorValue(value);
+    if (normValue.length === 0) return false;
+
+    for (const entry of this.seriesSponsorIgnore) {
+      // (a) exact normalized equality
+      if (normValue === entry) return true;
+      // (b) bidirectional substring with a ≥3-char guard on the shorter string
+      const shorterLen = Math.min(normValue.length, entry.length);
+      if (shorterLen >= 3 && (normValue.includes(entry) || entry.includes(normValue))) return true;
+      // (c) fuzzy match — tier parity with the contradiction check
+      if (this.isFuzzySponsorMatch(normValue, entry)) return true;
+    }
+    return false;
+  }
+
+  /**
    * Check if a participant has a specific driver name in their driver list
    * Used for coherence validation when applying uniqueness boost
    */
@@ -936,7 +1005,20 @@ export class SmartMatcher {
     this.currentFaceMatches = analysisResult.faceMatches ?? [];
 
     // Step 1: Collect all evidence from analysis result
-    const evidence = this.evidenceCollector.extractEvidence(analysisResult);
+    let evidence = this.evidenceCollector.extractEvidence(analysisResult);
+
+    // ACC-01 (Gruppe C): drop SPONSOR evidence matching the preset's series-wide
+    // ignore list BEFORE any scoring. One choke point covers every downstream
+    // consumer — evaluateSponsor bonuses + unique boost, the -30/-15 contradiction
+    // penalties, the no-number 1.5× sponsor boost, the sponsor→team cross-match,
+    // and the ghost-vehicle ratio. Empty list = no-op (byte-identical behavior).
+    if (this.seriesSponsorIgnore.length > 0) {
+      const ignored = evidence.filter(e => e.type === EvidenceType.SPONSOR && this.isIgnoredSponsor(e.value));
+      if (ignored.length > 0) {
+        evidence = evidence.filter(e => !(e.type === EvidenceType.SPONSOR && this.isIgnoredSponsor(e.value)));
+        console.log(`[SmartMatcher] Ignored ${ignored.length} series sponsor(s): [${ignored.map(e => e.value).join(', ')}]`);
+      }
+    }
 
     // Step 1.5: Check if the recognized race number exists in the participant database
     const raceNumberEvidence = evidence.find(e => e.type === EvidenceType.RACE_NUMBER);
@@ -1214,6 +1296,12 @@ export class SmartMatcher {
     const teamEvidence = nonSponsorEvidence.filter(e => e.type === EvidenceType.TEAM);
     for (const tEvidence of teamEvidence) {
       if (matchedEvidenceValues.has(tEvidence.value.toLowerCase().trim())) continue; // Already matched
+      // ACC-01 (Gruppe C): the SPONSOR-only filter in findMatches() never touches
+      // TEAM evidence, so a series brand Gemini misread as a team name could still
+      // earn a ×0.7 sponsor bonus here. Skip it. (Direct team matching via
+      // evaluateTeam stays untouched — a team genuinely named after a sponsor
+      // still matches normally as a team.)
+      if (this.isIgnoredSponsor(tEvidence.value)) continue;
       const sponsorMatch = this.evaluateSponsor(participant, { ...tEvidence, type: EvidenceType.SPONSOR });
       if (sponsorMatch.score > 0) {
         const crossScore = sponsorMatch.score * 0.7; // Discount for cross-field match

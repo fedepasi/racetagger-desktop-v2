@@ -14,6 +14,8 @@
 
 import * as crypto from 'crypto';
 import * as os from 'os';
+import * as fs from 'fs';
+import * as path from 'path';
 import { app } from 'electron';
 import { getSystemInfo, SystemInfo } from './system-info';
 import { diagnosticLogger } from './diagnostic-logger';
@@ -32,8 +34,13 @@ export type ErrorType =
   | 'zero_results'
   | 'ghost_images'
   | 'memory'
+  | 'filesystem'
   | 'pdf_parser'
   | 'renderer_action'
+  | 'native_crash'         // hard native crash captured via Crashpad minidump
+  | 'abnormal_exit'        // previous session never wrote SESSION END (OOM/kill/power-loss)
+  | 'render_process_gone'  // Electron renderer process died
+  | 'gpu_crash'            // Electron GPU/child process died
   | 'uncaught';
 
 export type ErrorSeverity = 'fatal' | 'recoverable' | 'warning';
@@ -48,6 +55,12 @@ export interface CriticalErrorReport {
   totalImages?: number;
   categoryName?: string;
   presetName?: string;
+  /**
+   * Pre-built log context used verbatim instead of the live diagnostic-log
+   * snapshot. Crash recovery uses it to attach the *previous* session's log
+   * (the live log at boot is the new session). Sanitized before sending.
+   */
+  logSnapshotOverride?: string;
 }
 
 interface QueuedReport {
@@ -69,6 +82,7 @@ interface QueuedReport {
   logSnapshot: string;
   executionContext: Record<string, unknown>;
   queuedAt: number;
+  attempts: number;
 }
 
 interface TelemetryStatus {
@@ -88,6 +102,11 @@ const MAX_QUEUE_SIZE = 5;               // Flush when queue reaches this
 const LOG_SNAPSHOT_LINES = 2000;        // Lines to read from diagnostic log
 const LOG_SNAPSHOT_MAX_OUTPUT = 100;    // Max lines in final snapshot
 const LOG_CONTEXT_WINDOW_S = 30;        // Seconds before error to include
+
+// Durable (write-ahead) queue — survives a hard crash before the 30s flush.
+const MAX_PENDING_ITEMS = 50;
+const MAX_PENDING_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const MAX_PENDING_ATTEMPTS = 5;
 
 // ============================================================
 // Privacy Sanitization
@@ -130,6 +149,8 @@ export class ErrorTelemetryService {
   private supabaseGetter: (() => any) | null = null;
   private authStateGetter: (() => any) | null = null;
   private disposed = false;
+  private pendingPath = '';
+  private pendingStore: QueuedReport[] = []; // durable mirror of unsent reports
 
   private constructor() {
     this.resetDailyCounter();
@@ -153,6 +174,14 @@ export class ErrorTelemetryService {
   ): void {
     this.supabaseGetter = supabaseGetter;
     this.authStateGetter = authStateGetter;
+    // Reload any reports queued but not confirmed sent before a previous hard
+    // crash / quit, and re-attempt them this session.
+    try {
+      this.pendingPath = path.join(app.getPath('userData'), 'telemetry-pending.json');
+      this.loadPending();
+    } catch (err) {
+      console.warn('[ErrorTelemetry] Failed to load pending queue (safe):', err);
+    }
     console.log('[ErrorTelemetry] Service initialized');
   }
 
@@ -227,8 +256,11 @@ export class ErrorTelemetryService {
         };
       }
 
-      // Smart log snapshot
-      const logSnapshot = this.getSmartLogSnapshot(errorMessage);
+      // Log context: an explicit override (crash recovery → previous session's
+      // log) wins; otherwise build a smart snapshot from the live diagnostic log.
+      const logSnapshot = report.logSnapshotOverride
+        ? sanitize(report.logSnapshotOverride).substring(0, 6000)
+        : this.getSmartLogSnapshot(errorMessage);
 
       // Build execution context
       const executionContext: Record<string, unknown> = {};
@@ -253,10 +285,15 @@ export class ErrorTelemetryService {
         ramAvailableGb: Math.round((os.freemem() / (1024 * 1024 * 1024)) * 10) / 10,
         logSnapshot,
         executionContext,
-        queuedAt: Date.now()
+        queuedAt: Date.now(),
+        attempts: 0
       };
 
       this.queue.push(queuedReport);
+      // Write-ahead: persist immediately so a hard crash before the next flush
+      // doesn't lose the report (it's re-queued on the next launch).
+      this.pendingStore.push(queuedReport);
+      this.persistPending();
 
       // Also track in error-tracker for local visibility
       errorTracker.trackError(
@@ -421,6 +458,18 @@ export class ErrorTelemetryService {
       return;
     }
 
+    // Don't drain the queue until we can actually authenticate — otherwise the
+    // reports are lost before login completes. They stay queued (and durable on
+    // disk) until auth is ready.
+    try {
+      const authState = this.authStateGetter();
+      if (!authState?.isAuthenticated || !authState?.session?.access_token) {
+        return;
+      }
+    } catch {
+      return;
+    }
+
     // Take all queued reports
     const batch = this.queue.splice(0);
 
@@ -450,7 +499,11 @@ export class ErrorTelemetryService {
       try {
         await this.sendSingleReport(supabase, authState, report);
         this.sentToday++;
+        this.removeFromPending(report); // confirmed sent → drop from durable store
       } catch (err) {
+        // Keep it in the durable store so it retries on the next launch.
+        report.attempts = (report.attempts || 0) + 1;
+        this.persistPending();
         console.warn(`[ErrorTelemetry] Failed to send report ${report.fingerprint}:`, err);
       }
     }
@@ -495,6 +548,67 @@ export class ErrorTelemetryService {
       const isNew = data.isNewFingerprint ? ' (NEW)' : '';
       console.log(`[ErrorTelemetry] Report sent: ${report.errorType}${isNew} → Issue #${data.issueNumber || 'pending'}`);
     }
+  }
+
+  // ============================================================
+  // Private: Durable (write-ahead) Pending Queue
+  // ============================================================
+
+  /**
+   * Load reports persisted from a previous session that weren't confirmed sent,
+   * drop the stale/exhausted ones, and re-queue the rest for this session.
+   */
+  private loadPending(): void {
+    try {
+      if (!this.pendingPath || !fs.existsSync(this.pendingPath)) return;
+      const parsed = JSON.parse(fs.readFileSync(this.pendingPath, 'utf-8'));
+      if (!Array.isArray(parsed)) return;
+
+      const now = Date.now();
+      const fresh: QueuedReport[] = parsed
+        .filter((r: any) =>
+          r &&
+          typeof r.fingerprint === 'string' &&
+          typeof r.queuedAt === 'number' &&
+          now - r.queuedAt < MAX_PENDING_AGE_MS &&
+          (r.attempts || 0) < MAX_PENDING_ATTEMPTS
+        )
+        .slice(-MAX_PENDING_ITEMS)
+        .map((r: any) => ({ ...r, attempts: r.attempts || 0 }));
+
+      this.pendingStore = fresh;
+      // Same object references → in-flight attempt bumps stay in sync.
+      for (const r of fresh) this.queue.push(r);
+
+      if (fresh.length > 0) {
+        console.log(`[ErrorTelemetry] Reloaded ${fresh.length} pending report(s) from disk`);
+      }
+      this.persistPending();
+      // Try to send now (no-op if not authenticated yet — stays queued).
+      this.flushQueue();
+    } catch (err) {
+      console.warn('[ErrorTelemetry] loadPending failed (safe):', err);
+    }
+  }
+
+  private persistPending(): void {
+    try {
+      if (!this.pendingPath) return;
+      if (this.pendingStore.length > MAX_PENDING_ITEMS) {
+        this.pendingStore = this.pendingStore.slice(-MAX_PENDING_ITEMS);
+      }
+      fs.writeFileSync(this.pendingPath, JSON.stringify(this.pendingStore));
+    } catch {
+      // never throw from telemetry
+    }
+  }
+
+  private removeFromPending(report: QueuedReport): void {
+    const before = this.pendingStore.length;
+    this.pendingStore = this.pendingStore.filter(
+      (r) => !(r.fingerprint === report.fingerprint && r.queuedAt === report.queuedAt)
+    );
+    if (this.pendingStore.length !== before) this.persistPending();
   }
 
   // ============================================================

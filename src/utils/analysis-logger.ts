@@ -189,6 +189,26 @@ export interface ImageAnalysisEvent extends LogEvent {
   };
   // Visual tags extracted by AI (location, weather, scene, subjects, style, emotion)
   visualTags?: VisualTagsData;
+  // Always-on face recognition observability — present whenever face rec ran
+  // (or was strategically skipped while enabled for the category). Includes
+  // below-threshold best candidates so the portal can show face confidence
+  // even when no match was accepted.
+  faceRecognition?: {
+    skipped?: 'vehicles_only_scene';
+    context?: 'portrait' | 'action' | 'podium' | 'auto';
+    facesDetected?: number;
+    matchedCount?: number;
+    detectionTimeMs?: number;
+    matchingTimeMs?: number;
+    faces?: Array<{
+      faceIndex: number;
+      matched: boolean;
+      personName?: string;
+      score: number;
+      metric: 'cosine' | 'euclidean';
+      threshold: number;
+    }>;
+  };
   // Backward compatibility fields (uses first vehicle data)
   primaryVehicle?: VehicleAnalysisData;
   // Scene classification (ONNX) — populated when sport_categories.scene_classifier_enabled = true

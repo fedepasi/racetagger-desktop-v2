@@ -22,6 +22,17 @@ export const DEBUG_MODE = !isPackaged && process.env.DEBUG_MODE === 'true';
 // =============================================================================
 export const SEND_PRESET_TO_AI = process.env.RACETAGGER_SEND_PRESET_TO_AI !== 'false';
 
+// =============================================================================
+// DB EXECUTION FALLBACK (#184 Phase 1 — cross-device read) — OFF by default.
+// When ON, opening an execution whose local JSONL is missing reconstructs its
+// event stream from the Supabase DB so the review gallery still renders
+// (cross-device / reinstall / lost local file). Ships DARK: with the flag off
+// the behavior is identical to today (missing local JSONL → empty gallery).
+// Enable for testing with RACETAGGER_DB_EXECUTION_FALLBACK=true in .env.
+// Online-only by policy (see CLAUDE.md → Offline Capability Policy).
+// =============================================================================
+export const ENABLE_DB_EXECUTION_FALLBACK = process.env.RACETAGGER_DB_EXECUTION_FALLBACK === 'true';
+
 // Function to get configuration values
 function getConfigValue(envVar: string, productionKey: keyof typeof PRODUCTION_CONFIG): string {
   if (isPackaged) {
@@ -110,14 +121,15 @@ export const SUPABASE_CONFIG = {
 // - V4: RF-DETR support (app 1.0.9+) [deprecated path, kept for history]
 // - V5: Vehicle recognition, face recognition (app 1.0.11+)
 // - V6: Crop + Context multi-image analysis (app 1.0.12+)
-export const MAX_SUPPORTED_EDGE_FUNCTION_VERSION = 6;
+// - V7: Vehicle DNA (make/model/livery) — strict superset of V6's crop+context contract (app 1.1.11+)
+export const MAX_SUPPORTED_EDGE_FUNCTION_VERSION = 7;
 
 // App Version Number (for category visibility control)
 // Integer representation of app version: major*10000 + minor*100 + patch
 // Used to filter sport_categories by min_app_version field
 // Examples: v1.0.0 = 10000, v1.1.2 = 10102, v2.0.0 = 20000
 // IMPORTANT: Update this when changing version in package.json
-export const APP_VERSION_NUMBER = 10109; // v1.1.9
+export const APP_VERSION_NUMBER = 10110; // v1.1.10
 
 // Resize presets for image optimization before upload
 export enum ResizePreset {
@@ -348,7 +360,27 @@ export const APP_CONFIG = {
   // Feature flags for experimental functionality
   features: {
     // ADMIN FEATURE: Folder organization - Easy to remove by setting to false
-    ENABLE_FOLDER_ORGANIZATION: true  // Enable folder organization by race number (admin-only)
+    ENABLE_FOLDER_ORGANIZATION: true,  // Enable folder organization by race number (admin-only)
+    // NOTE: face recognition is NOT gated here. The real switches are two DB flags:
+    //   • sport_categories.face_recognition_enabled  (per-category, main-process gate)
+    //   • per-user face_recognition_enabled via delivery-get-plan-limits (renderer/UI gate)
+    // The old config-level AURAFACE_ENABLED was dead (never read) and was removed.
+  },
+  // Face Recognition ONNX model configuration
+  faceRecognition: {
+    // YuNet face detector (~90KB, bundled with app)
+    yunetModelName: 'face_detection_yunet_2023mar.onnx',
+    yunetConfidenceThreshold: 0.7,
+    yunetNmsThreshold: 0.5,
+    // AuraFace v1 face embedder (~250MB, downloaded on-demand)
+    aurafaceModelName: 'auraface_v1.onnx',
+    aurafaceEmbeddingDim: 512,
+    aurafaceInputSize: 112,  // 112x112 px
+    // Supabase Storage bucket for model downloads (same bucket as other ONNX models)
+    modelStorageBucket: 'onnx-models',
+    modelStoragePath: 'face-recognition/auraface-v1/',
+    // Local cache directory: ~/.racetagger/models/
+    localModelCacheDir: 'models',
   },
   // Legacy performance optimizations (kept for backward compatibility)
   performance: {

@@ -416,6 +416,93 @@ class DiagnosticLogger {
   }
 
   /**
+   * Diagnose the PREVIOUS session for crash recovery.
+   *
+   * MUST be called AFTER initialize() has written the current [SESSION START].
+   * The current session is the LAST [SESSION START]; the previous session is
+   * the one before it. A session ended cleanly iff a [SESSION END] marker sits
+   * between its start and the next start — otherwise it crashed / was killed.
+   *
+   * Returns null when there is no detectable previous session (first ever run,
+   * or it was rotated away). Reads current + the one rotated file (.1).
+   */
+  getPreviousSessionDiagnosis(maxLogLines: number = 200): {
+    abnormalExit: boolean;
+    log: string;
+    lastPhase: string;
+  } | null {
+    try {
+      this.flush(); // ensure buffer is on disk first
+
+      // Concatenate rotated (.1) + current in chronological order
+      const parts: string[] = [];
+      const rotated = this.logFile + '.1';
+      if (fs.existsSync(rotated)) {
+        try { parts.push(fs.readFileSync(rotated, 'utf-8')); } catch { /* skip */ }
+      }
+      if (fs.existsSync(this.logFile)) {
+        try { parts.push(fs.readFileSync(this.logFile, 'utf-8')); } catch { /* skip */ }
+      }
+      if (parts.length === 0) return null;
+
+      const lines = parts.join('').split('\n');
+
+      // Index every session marker
+      const startIdx: number[] = [];
+      const endIdx: number[] = [];
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].indexOf('[SESSION START]') !== -1) startIdx.push(i);
+        else if (lines[i].indexOf('[SESSION END]') !== -1) endIdx.push(i);
+      }
+
+      // Need the current session start + at least one before it
+      if (startIdx.length < 2) return null;
+
+      const currentStart = startIdx[startIdx.length - 1];
+      const prevStart = startIdx[startIdx.length - 2];
+
+      // Clean shutdown iff a [SESSION END] sits between prev and current start
+      const cleanEnd = endIdx.some((e) => e > prevStart && e < currentStart);
+
+      // Capped tail of the previous session's log
+      let sessionLines = lines.slice(prevStart, currentStart).filter((l) => l.trim().length > 0);
+      if (sessionLines.length > maxLogLines) {
+        sessionLines = sessionLines.slice(-maxLogLines);
+      }
+
+      return {
+        abnormalExit: !cleanEnd,
+        log: sessionLines.join('\n'),
+        lastPhase: this.inferLastPhase(sessionLines),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Best-effort guess of what the app was doing last, from known log tags.
+   * Returns '' when nothing recognisable is found.
+   */
+  private inferLastPhase(sessionLines: string[]): string {
+    const phaseTags: Array<{ re: RegExp; phase: string }> = [
+      { re: /\[RawPreview\]|\[RawConverter\]|raw[_-]?preview/i, phase: 'raw_preview' },
+      { re: /\[GenericSegmenter\]|segmentation/i, phase: 'segmentation' },
+      { re: /\[ModelManager\]|onnx/i, phase: 'onnx_model' },
+      { re: /\[EdgeFunction\]|analyzeImageDesktop/i, phase: 'edge_function' },
+      { re: /\[SmartMatcher\]|matching/i, phase: 'matching' },
+      { re: /\[Export\]|\[FolderOrganizer\]/i, phase: 'export' },
+      { re: /\[UnifiedProcessor\]/i, phase: 'processing' },
+    ];
+    for (let i = sessionLines.length - 1; i >= 0; i--) {
+      for (const { re, phase } of phaseTags) {
+        if (re.test(sessionLines[i])) return phase;
+      }
+    }
+    return '';
+  }
+
+  /**
    * Clean up resources on app quit.
    */
   shutdown(): void {

@@ -238,12 +238,14 @@ JSONL per execution (`exec_{execution_id}.jsonl`). Entry types: `EXECUTION_START
 
 ## Automatic Error Telemetry
 
-Proactive: desktop (fire-and-forget) → Edge Function `report-automatic-error` → Supabase + GitHub Issues.
+Proactive: desktop (fire-and-forget) → Edge Function `report-automatic-error` → Supabase + GitHub Issues. Catches both handled errors **and hard crashes** (the app closing unexpectedly).
 
-- **Files:** `src/utils/error-telemetry-service.ts` (fingerprinting, rate limiting, sanitization), `src/ipc/error-telemetry-handlers.ts` (3 handlers), `supabase/functions/report-automatic-error/`.
+- **Files:** `src/utils/error-telemetry-service.ts` (fingerprinting, rate limiting, sanitization, durable write-ahead queue), `src/utils/crash-recovery.ts` (next-launch crash detection), `src/ipc/error-telemetry-handlers.ts` (3 handlers), `supabase/functions/report-automatic-error/`. Crash detection reuses `diagnosticLogger.getPreviousSessionDiagnosis()` + the diagnostic log's `[SESSION START]`/`[SESSION END]` markers.
 - **Tables:** `error_reports` (deduped by SHA-256 fingerprint, one row per unique error globally), `error_occurrences` (per user per event), `error_issue_mappings` (fingerprint → GitHub issue #).
-- **Monitored:** RAW preview failure, Edge Function errors, zero recognitions on batch >20, ONNX download/checksum failure, token reservation failure, segmentation load failure, uncaught exceptions.
-- **Dedup:** global cross-user. One GitHub issue per fingerprint; repeat users add a comment + count. `widespread` label when ≥5 users.
+- **Monitored (handled, live):** RAW preview failure, Edge Function errors, zero recognitions on batch >20, ONNX download/checksum failure, token reservation failure, segmentation load failure, uncaught exceptions + unhandled rejections, renderer crashes (`render-process-gone`), GPU/child-process crashes (`child-process-gone`).
+- **Monitored (hard crashes, surfaced on next launch):** native crashes via Electron `crashReporter` (Crashpad minidump, **local-only** — never uploaded; reported as `native_crash`); abnormal exits with no minidump — OOM / kill / power-loss — detected via a missing `[SESSION END]` marker (`abnormal_exit`, warning), with a "last activity" phase hint + a capped tail of the crashed session's log.
+- **Durability:** queued reports are persisted to disk (`telemetry-pending.json`) so a crash in the ~30s before the network flush re-sends them next launch; the flush waits for auth instead of dropping reports queued before login.
+- **Dedup:** global cross-user. One GitHub issue per fingerprint; repeat users add a comment + count. `widespread` label when ≥5 users. Crash issues are labeled `crash` + a specific tag (`native-crash` / `abnormal-exit` / `renderer-crash` / `gpu-crash`).
 - **Limits:** 5/execution, 20/day/user. 100% non-blocking. All logs sanitized (paths/emails/names via regex); opt-out in Settings → Privacy. Uses `GITHUB_PAT`.
 
 ## Environment Variables

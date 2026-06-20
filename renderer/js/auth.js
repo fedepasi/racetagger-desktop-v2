@@ -18,6 +18,12 @@ let backToLogin;
 // Low token warning - show only once per session
 let lowTokenWarningShown = false;
 
+// Current Privacy Policy / Terms of Service versions (GDPR Art. 7 proof).
+// Bump these when the policy text changes: the first-launch notice re-appears
+// only when the version the user accepted (in DB / local flag) differs from these.
+const CURRENT_PRIVACY_POLICY_VERSION = '2026-03-27';
+const CURRENT_TERMS_OF_SERVICE_VERSION = '2026-03-27';
+
 // Auth state
 let authState = {
   isAuthenticated: false,
@@ -146,7 +152,8 @@ function handleLogin(event) {
   // Normalize email (lowercase + trim) to ensure consistent authentication
   const email = document.getElementById('login-email').value.toLowerCase().trim();
   const password = document.getElementById('login-password').value;
-  
+  const rememberMe = document.getElementById('login-remember-me')?.checked ?? true;
+
   if (!email || !password) {
     showAuthError('login', 'Email e password sono obbligatorie');
     return;
@@ -163,7 +170,7 @@ function handleLogin(event) {
   
   // Send login request to main process
   if (window.api) {
-    window.api.send('login', { email, password });
+    window.api.send('login', { email, password, rememberMe });
   }
   
   // Reset form state after timeout (in case of no response)
@@ -171,6 +178,27 @@ function handleLogin(event) {
     submitBtn.textContent = originalText;
     submitBtn.disabled = false;
   }, 10000);
+}
+
+// Pre-fill the login form from the OS-vault-stored credentials ("Keep me
+// signed in"). Only fills empty fields so it never clobbers what the user is
+// typing. Safe no-op when nothing is stored or safeStorage is unavailable.
+async function prefillRememberedCredentials() {
+  try {
+    if (!window.api || !window.api.invoke) return;
+    const creds = await window.api.invoke('auth-get-remembered-credentials');
+    if (!creds || !creds.email) return;
+
+    const emailEl = document.getElementById('login-email');
+    const passwordEl = document.getElementById('login-password');
+    const rememberEl = document.getElementById('login-remember-me');
+
+    if (emailEl && !emailEl.value) emailEl.value = creds.email;
+    if (passwordEl && !passwordEl.value && creds.password) passwordEl.value = creds.password;
+    if (rememberEl) rememberEl.checked = true;
+  } catch (error) {
+    console.error('[Auth] Error pre-filling remembered credentials:', error);
+  }
 }
 
 // Validate password strength
@@ -343,8 +371,8 @@ function handleRegister(event) {
       referralCode,
       acceptedPrivacyPolicy: true,
       acceptedTermsOfService: true,
-      privacyPolicyVersion: '2026-03-27',
-      termsOfServiceVersion: '2026-03-27'
+      privacyPolicyVersion: CURRENT_PRIVACY_POLICY_VERSION,
+      termsOfServiceVersion: CURRENT_TERMS_OF_SERVICE_VERSION
     });
   }
 
@@ -365,7 +393,22 @@ function handleLogout() {
   // are never carried into the next session.
   try {
     if (typeof localStorage !== 'undefined') {
+      // Preserve the privacy/terms consent flags across logout. They are keyed
+      // per user + policy version (so they never leak between users), and keeping
+      // them stops the first-launch notice from reappearing on every login for
+      // users whose consent isn't recorded in the DB yet. Everything else is
+      // wiped as before.
+      const preservedConsent = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('racetagger_privacy_consent_accepted')) {
+          preservedConsent.push([k, localStorage.getItem(k)]);
+        }
+      }
       localStorage.clear();
+      preservedConsent.forEach(([k, v]) => {
+        try { localStorage.setItem(k, v); } catch (e) { /* ignore */ }
+      });
     }
   } catch (e) {
     console.warn('[Auth] localStorage.clear() failed on logout:', e);
@@ -932,7 +975,11 @@ function updateUIForAuthState() {
     if (authContainer) {
       authContainer.style.display = 'flex';
     }
-    
+
+    // Pre-fill saved credentials whenever the login screen is shown
+    // (covers logout and session-expiry, not just cold start).
+    prefillRememberedCredentials();
+
     if (userBar) {
       userBar.style.display = 'none';
     }
@@ -1132,37 +1179,94 @@ window.recheckAuthStatus = recheckAuthStatus;
 // Training Consent Management
 // ============================================
 
-// Show privacy/terms consent dialog on first launch
-function showPrivacyConsentIfNeeded() {
-  const CONSENT_KEY = 'racetagger_privacy_consent_accepted';
-  if (localStorage.getItem(CONSENT_KEY)) return;
+// Build the per-user + per-version localStorage key for the privacy notice.
+// Per-user so a different account on the same machine is still asked once;
+// per-version so a policy update re-asks. handleLogout() preserves these keys.
+function privacyConsentLocalKey() {
+  const uid = (authState.user && authState.user.id) ? authState.user.id : 'anon';
+  return `racetagger_privacy_consent_accepted:${uid}:${CURRENT_PRIVACY_POLICY_VERSION}`;
+}
 
+// Show privacy/terms consent notice on first launch — DB-backed.
+//
+// The DB (subscribers.accepted_privacy_policy_at / *_version) is the source of
+// truth, so the notice is NOT re-shown on every login. It used to rely only on
+// a localStorage flag that handleLogout() wipes via localStorage.clear(), which
+// made it reappear after every logout→login even when nothing had changed.
+//
+// Decision order:
+//   1. Ask the DB for the current user. If they accepted the CURRENT version of
+//      BOTH Privacy Policy and Terms → never show (authoritative + cross-device).
+//   2. Otherwise (legacy NULL consent, or DB unreachable) fall back to a
+//      per-user + per-version local flag → prompt at most once per device.
+//   3. On accept → persist to the DB (best-effort, GDPR Art. 7 proof) AND set
+//      the local flag.
+async function showPrivacyConsentIfNeeded() {
   const modal = document.getElementById('privacy-consent-modal');
   if (!modal) return;
 
+  // 1. DB is authoritative.
+  let acceptedInDb = false;
+  try {
+    const status = await window.api.invoke('get-privacy-consent-status');
+    acceptedInDb = !!(status &&
+      status.acceptedPrivacyPolicyAt &&
+      status.privacyPolicyVersion === CURRENT_PRIVACY_POLICY_VERSION &&
+      status.acceptedTermsOfServiceAt &&
+      status.termsOfServiceVersion === CURRENT_TERMS_OF_SERVICE_VERSION);
+  } catch (e) {
+    console.error('[Auth] Error checking privacy consent status:', e);
+  }
+
+  if (acceptedInDb) {
+    // Refresh the local fast-path flag and skip.
+    try { localStorage.setItem(privacyConsentLocalKey(), new Date().toISOString()); } catch (e) { /* ignore */ }
+    return;
+  }
+
+  // 2. Not accepted in DB (or DB unreachable) → use the per-user local flag.
+  let hasLocalFlag = false;
+  try { hasLocalFlag = !!localStorage.getItem(privacyConsentLocalKey()); } catch (e) { /* ignore */ }
+  if (hasLocalFlag) return;
+
+  // 3. Show the notice.
   modal.style.display = 'flex';
 
-  // External link handlers
+  // External link handlers — guard against duplicate binding across re-renders.
   const privacyLink = document.getElementById('consent-privacy-link');
-  if (privacyLink) {
+  if (privacyLink && !privacyLink.hasAttribute('data-listener-attached')) {
+    privacyLink.setAttribute('data-listener-attached', 'true');
     privacyLink.addEventListener('click', (e) => {
       e.preventDefault();
       window.api.send('open-external-url', 'https://www.racetagger.cloud/privacy-policy');
     });
   }
   const termsLink = document.getElementById('consent-terms-link');
-  if (termsLink) {
+  if (termsLink && !termsLink.hasAttribute('data-listener-attached')) {
+    termsLink.setAttribute('data-listener-attached', 'true');
     termsLink.addEventListener('click', (e) => {
       e.preventDefault();
       window.api.send('open-external-url', 'https://www.racetagger.cloud/terms-of-service');
     });
   }
 
-  // Accept button
+  // Accept button — guard so a stale session can't double-bind; the key is
+  // recomputed at click time so it always targets the currently logged-in user.
   const acceptBtn = document.getElementById('privacy-consent-accept');
-  if (acceptBtn) {
-    acceptBtn.addEventListener('click', () => {
-      localStorage.setItem(CONSENT_KEY, new Date().toISOString());
+  if (acceptBtn && !acceptBtn.hasAttribute('data-listener-attached')) {
+    acceptBtn.setAttribute('data-listener-attached', 'true');
+    acceptBtn.addEventListener('click', async () => {
+      // Persist to the DB (GDPR Art. 7 proof). Best-effort: even if it fails
+      // (offline / RLS), the local flag below still prevents re-prompting here.
+      try {
+        await window.api.invoke('set-privacy-consent', {
+          privacyPolicyVersion: CURRENT_PRIVACY_POLICY_VERSION,
+          termsOfServiceVersion: CURRENT_TERMS_OF_SERVICE_VERSION
+        });
+      } catch (e) {
+        console.error('[Auth] Error saving privacy consent:', e);
+      }
+      try { localStorage.setItem(privacyConsentLocalKey(), new Date().toISOString()); } catch (e) { /* ignore */ }
       modal.style.display = 'none';
     });
   }
@@ -1246,6 +1350,10 @@ async function handleTrainingConsentChange(event) {
 // Inizializza quando il documento è pronto
 document.addEventListener('DOMContentLoaded', () => {
   initializeAuth();
+
+  // Pre-fill the login form from saved credentials (the login screen is the
+  // default-visible view until auth status resolves).
+  prefillRememberedCredentials();
 
   // Ricontrolla auth status dopo 2 secondi per assicurarsi che il userRole sia determinato
   setTimeout(() => {

@@ -27,6 +27,7 @@ import {
   submitFeatureInterestSurvey,
   checkFeatureInterestSurvey,
   getGalleryExecutions,
+  getGalleryHdStatus,
   syncDeliveryRulesFromPreset,
   createClientUser,
   getClientUsersForProject,
@@ -76,6 +77,7 @@ export function registerDeliveryHandlers(): void {
   createHandler('delivery-auto-route', ({ projectId, executionId }: { projectId: string; executionId: string }) => autoRouteImagesToGalleries(projectId, executionId));
   createHandler('delivery-send-execution-to-gallery', ({ galleryId, executionId }: { galleryId: string; executionId: string }) => sendExecutionToGallery(galleryId, executionId));
   createHandler('delivery-get-gallery-executions', (galleryId: string) => getGalleryExecutions(galleryId));
+  createHandler('delivery-gallery-hd-status', (galleryId: string) => getGalleryHdStatus(galleryId));
 
   // ==================== PLAN LIMITS & EXECUTIONS ====================
   createHandler('delivery-get-plan-limits', () => getUserPlanLimits());

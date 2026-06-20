@@ -31,6 +31,7 @@ const validSendReceiveChannels: string[] = [
   // General processing channels
   'processing-started', 'processing-progress', 'processing-file-started',
   'processing-phase-changed', 'processing-completed', 'processing-error',
+  'processing-warning',
   'processing-paused', 'processing-resumed', 'analysis-aborted',
   // Unified processor and temporal analysis channels
   'unified-processing-started',
@@ -44,10 +45,11 @@ const validSendReceiveChannels: string[] = [
   'categories-updated',
   'auth-refresh-completed',
   'auth-session-expired',
-  // Face Detection IPC channels (main -> renderer -> main)
-  'face-detection-request', 'face-detection-response',
-  'face-detection-single-request', 'face-detection-single-response',
-  'face-descriptor-request', 'face-descriptor-response',
+  // Face Detection IPC channels — REMOVED: ONNX pipeline runs in main process
+  // Legacy channels kept for backward compatibility (no-op):
+  // 'face-detection-request', 'face-detection-response',
+  // 'face-detection-single-request', 'face-detection-single-response',
+  // 'face-descriptor-request', 'face-descriptor-response',
   // Export Destinations progress channels
   'export-started',
   'export-progress',
@@ -79,6 +81,8 @@ const validInvokeChannels: string[] = [
   // Auth
   'check-auth-status', // Technically send/receive but can be invoke
   'auth-get-session', // Get current user session for face photos
+  'auth-get-remembered-credentials', // "Keep me signed in" — pre-fill login form
+  'auth-clear-remembered-credentials',
   'login',
   'register',
   'logout',
@@ -172,6 +176,7 @@ const validInvokeChannels: string[] = [
   'supabase-get-participant-presets',
   'supabase-get-participant-preset-by-id',
   'supabase-save-preset-participants',
+  'supabase-upsert-preset-participant',   // BUG-02: immediate single-row persist from the participant editor
   'supabase-bulk-assign-folders',
   'supabase-update-participant-preset',
   'supabase-update-preset-last-used',
@@ -211,13 +216,17 @@ const validInvokeChannels: string[] = [
   // Local Thumbnail Operations
   'find-local-thumbnails',
 
-  // Face Recognition Operations
+  // Face Recognition Operations (ONNX pipeline — main process)
   'face-recognition-initialize',
   'face-recognition-load-descriptors',
   'face-recognition-match',
   'face-recognition-status',
   'face-recognition-clear',
   'face-recognition-load-from-database',
+  'face-recognition-detect-and-embed',
+  'face-recognition-migrate-descriptors',
+  'face-recognition-cancel-migration',
+  'face-recognition-download-model',
 
   // Preset Face Photos Operations
   'preset-face-upload-photo',
@@ -254,6 +263,8 @@ const validInvokeChannels: string[] = [
   'get-training-consent',
   'set-training-consent',
   'get-consent-status',
+  'get-privacy-consent-status',
+  'set-privacy-consent',
 
   // Export Destinations Operations
   'export-destinations-create',
@@ -283,6 +294,8 @@ const validInvokeChannels: string[] = [
   'preset-iptc-save',
   'preset-iptc-import-xmp',
   'iptc-finalize-batch',
+  'iptc-defaults-get',       // UX-04: account-level default IPTC template
+  'iptc-defaults-save',      // UX-04: account-level default IPTC template
 
   // Folder Path Validation
   'validate-preset-folder-paths',
@@ -305,6 +318,7 @@ const validInvokeChannels: string[] = [
   'delivery-auto-route',
   'delivery-send-execution-to-gallery',
   'delivery-get-gallery-executions',
+  'delivery-gallery-hd-status',
   'delivery-get-plan-limits',
   'delivery-get-recent-executions',
   'delivery-r2-upload-start',

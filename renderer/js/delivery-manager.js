@@ -10,6 +10,64 @@
   let projects = [];
   let selectedProjectId = null;
 
+  // ── Inline SVG icons (Tabler/Feather-style, MIT). The desktop renderer has no
+  //    icon font, so the brand-aligned UI uses these instead of emoji. ──────────
+  var DL_ICONS = {
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>',
+    clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    eye: '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/>',
+    download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/>',
+    globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 4 9 15 15 0 0 1-4 9 15 15 0 0 1-4-9 15 15 0 0 1 4-9z"/>',
+    lock: '<rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+    key: '<circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L20 3"/><path d="M16 7l3 3"/><path d="M14 9l2 2"/>',
+    check: '<path d="M5 12l5 5L20 7"/>',
+    arrowUp: '<path d="M12 19V5"/><path d="M6 11l6-6 6 6"/>',
+    briefcase: '<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><path d="M3 12h18"/>',
+    users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="8" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 4.13a4 4 0 0 1 0 7.75"/>',
+    x: '<path d="M18 6L6 18M6 6l12 12"/>',
+    copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+    refresh: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>',
+    trash: '<path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14"/>',
+    cloudUp: '<path d="M20 17.5a4.5 4.5 0 0 0-2-8.5h-1.3A7 7 0 1 0 5 16"/><path d="M12 12v9"/><path d="M8 16l4-4 4 4"/>',
+    link: '<path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/>',
+    eyeOff: '<path d="M17 17A10 10 0 0 1 12 19c-7 0-11-7-11-7a18 18 0 0 1 5-5"/><path d="M9.9 4.2A10 10 0 0 1 12 4c7 0 11 7 11 7a18 18 0 0 1-2.3 3.3"/><path d="M1 1l22 22"/>',
+    mail: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 7l-10 5L2 7"/>',
+    pause: '<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>',
+    play: '<path d="M6 4l14 8-14 8z"/>',
+    folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+    edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  };
+
+  function dlIcon(name, size) {
+    var inner = DL_ICONS[name] || '';
+    var s = size || 16;
+    return '<svg viewBox="0 0 24 24" width="' + s + '" height="' + s + '" fill="none" stroke="currentColor" ' +
+      'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + inner + '</svg>';
+  }
+
+  // Rotating livery-stripe colours (the "each gallery has its own livery" motif)
+  var DL_STRIPES = ['blue', 'amber', 'green', 'purple'];
+  var DL_AVATAR = [
+    { bg: 'rgba(26,158,224,0.16)', fg: '#1a9ee0' },
+    { bg: 'rgba(167,139,250,0.16)', fg: '#a78bfa' },
+    { bg: 'rgba(16,185,129,0.16)', fg: '#10b981' },
+    { bg: 'rgba(245,158,11,0.16)', fg: '#f59e0b' },
+  ];
+
+  function dlInitials(name) {
+    var parts = String(name || '?').trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return '?';
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+
+  // Toast helper — uses the canonical global toast (toast.js), falls back to alert().
+  function dlNotify(message, type) {
+    if (typeof window.showToast === 'function') window.showToast(message, type);
+    else alert(message);
+  }
+
   // Init on page load
   window.addEventListener('page-loaded', async (e) => {
     if (e.detail && e.detail.page === 'delivery') {
@@ -106,73 +164,121 @@
   function renderGalleries() {
     const grid = document.getElementById('galleries-grid');
     const empty = document.getElementById('galleries-empty');
+    const countEl = document.getElementById('galleries-count');
+    const head = document.getElementById('delivery-galleries-head');
     if (!grid) return;
+
+    if (countEl) countEl.textContent = galleries.length;
 
     if (galleries.length === 0) {
       grid.innerHTML = '';
       if (empty) empty.style.display = 'block';
+      if (head) head.style.display = 'none';
       return;
     }
     if (empty) empty.style.display = 'none';
+    if (head) head.style.display = 'flex';
 
-    grid.innerHTML = galleries.map(function(g) {
-      var statusColor = g.status === 'published' ? '#10b981' : '#f59e0b';
-      var statusBg = g.status === 'published' ? 'rgba(16,185,129,0.2)' : 'rgba(245,158,11,0.2)';
-      return '<div class="delivery-card" data-id="' + g.id + '" style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 16px; transition: border-color 0.2s; cursor: pointer;">' +
-        '<div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">' +
-          '<h4 style="color: var(--text-primary); font-size: 14px; font-weight: 600; margin: 0;">' + escapeHtml(g.title) + '</h4>' +
-          '<span style="font-size: 10px; padding: 2px 8px; border-radius: 99px; background: ' + statusBg + '; color: ' + statusColor + ';">' + g.status + '</span>' +
-        '</div>' +
-        '<div style="display: flex; gap: 16px; color: var(--text-muted); font-size: 12px;">' +
-          '<span>👁 ' + (g.total_views || 0) + ' views</span>' +
-          '<span>⬇ ' + (g.total_downloads || 0) + ' downloads</span>' +
-        '</div>' +
-        '<div style="margin-top: 8px; color: var(--text-muted); font-size: 11px;">' +
-          (g.access_type === 'unrestricted' ? '🌐 Public' : '🔒 Code required') +
+    grid.innerHTML = galleries.map(function(g, i) {
+      var isLive = g.status === 'published';
+      var stripe = DL_STRIPES[i % DL_STRIPES.length];
+      var photoCount = g.image_count != null ? g.image_count
+        : (g.gallery_image_count != null ? g.gallery_image_count
+        : (g.photo_count != null ? g.photo_count : null));
+
+      // Honest chips: only render what the gallery object actually carries.
+      var chips = '';
+      chips += g.access_type === 'unrestricted'
+        ? '<span class="dl-chip dl-chip--neutral">' + dlIcon('globe', 13) + 'Public</span>'
+        : '<span class="dl-chip dl-chip--neutral">' + dlIcon('lock', 13) + 'Code</span>';
+      // HD readiness — a placeholder filled async from the real aggregate
+      // (delivery-gallery-hd-status); HD state lives on the image rows, not the gallery.
+      chips += '<span class="dl-chip dl-chip--dim" data-hd-chip="' + g.id + '">' + dlIcon('clock', 13) + 'HD…</span>';
+      var clientName = g.client_name || g.project_name;
+      if (clientName) {
+        chips += '<span class="dl-chip dl-chip--neutral">' + dlIcon('briefcase', 13) + escapeHtml(clientName) + '</span>';
+      }
+
+      var statsHtml = '';
+      if (photoCount != null) {
+        statsHtml += '<span><b>' + photoCount + '</b> photos</span>';
+      }
+      statsHtml += '<span>' + dlIcon('eye', 13) + ' <b>' + (g.total_views || 0) + '</b></span>';
+      statsHtml += '<span>' + dlIcon('download', 13) + ' <b>' + (g.total_downloads || 0) + '</b></span>';
+
+      return '<div class="dl-card" data-id="' + g.id + '">' +
+        '<div class="dl-card__stripe dl-card__stripe--' + stripe + '"></div>' +
+        '<div class="dl-card__body">' +
+          '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:10px;">' +
+            '<h4 class="dl-card__title">' + escapeHtml(g.title) + '</h4>' +
+            '<span class="dl-pill ' + (isLive ? 'dl-pill--live' : 'dl-pill--draft') + '"><span class="dl-pill__dot"></span>' + (isLive ? 'Live' : 'Draft') + '</span>' +
+          '</div>' +
+          '<div class="dl-card__stats dl-num" style="margin-bottom:10px;">' + statsHtml + '</div>' +
+          (g.slug ? '<div class="dl-card__url dl-num" style="margin-bottom:11px;">photos.racetagger.cloud/' + escapeHtml(g.slug) + '</div>' : '') +
+          '<div style="display:flex;flex-wrap:wrap;gap:6px;">' + chips + '</div>' +
         '</div>' +
       '</div>';
     }).join('');
 
-    // Add hover effects and click handlers
-    grid.querySelectorAll('.delivery-card').forEach(function(card) {
-      card.addEventListener('mouseenter', function() { this.style.borderColor = 'var(--accent-primary)'; });
-      card.addEventListener('mouseleave', function() { this.style.borderColor = 'var(--border-color)'; });
+    grid.querySelectorAll('.dl-card').forEach(function(card) {
       card.addEventListener('click', function() { openGalleryDetail(this.dataset.id); });
+    });
+
+    updateGalleryHdChips();
+  }
+
+  // Fill each card's HD chip from the real aggregate (images linked via
+  // gallery_images, read by original_upload_status). Async + per-card so the
+  // list renders immediately; the same R2 object is shared across galleries,
+  // so this reflects true readiness without any double-counting.
+  function updateGalleryHdChips() {
+    galleries.forEach(function(g) {
+      window.api.invoke('delivery-gallery-hd-status', g.id).then(function(r) {
+        var chip = document.querySelector('[data-hd-chip="' + g.id + '"]');
+        if (!chip) return;
+        var st = (r && r.success) ? r.data : null;
+        if (!st || !st.total) { chip.remove(); return; }
+        if (st.completed === st.total) {
+          chip.className = 'dl-chip dl-chip--green';
+          chip.innerHTML = dlIcon('check', 13) + 'HD ready';
+        } else if (st.completed === 0) {
+          chip.className = 'dl-chip dl-chip--dim';
+          chip.innerHTML = dlIcon('eyeOff', 13) + 'Previews only';
+        } else {
+          chip.className = 'dl-chip dl-chip--amber';
+          chip.innerHTML = dlIcon('arrowUp', 13) + 'HD <b class="dl-num" style="font-weight:700">' + st.completed + '/' + st.total + '</b>';
+        }
+      }).catch(function() {
+        var chip = document.querySelector('[data-hd-chip="' + g.id + '"]');
+        if (chip) chip.remove();
+      });
     });
   }
 
   function renderProjects() {
     var grid = document.getElementById('projects-grid');
+    var countEl = document.getElementById('projects-count');
     if (!grid) return;
 
+    if (countEl) countEl.textContent = projects.length;
+
     if (projects.length === 0) {
-      grid.innerHTML = '<div style="color: var(--text-muted); font-size: 13px; padding: 20px; text-align: center;">No clients yet. Create one to start organizing multi-client delivery.</div>';
+      grid.innerHTML = '<div style="color: var(--text-muted); font-size: 12px;">No clients yet — add one to group galleries by team or sponsor.</div>';
       return;
     }
 
-    var clientTypeIcons = { team: '🏎️', sponsor: '💰', organizer: '🏟️', media: '📷', other: '📋' };
-
-    grid.innerHTML = projects.map(function(p) {
-      var typeIcon = clientTypeIcons[p.client_type] || '📋';
+    grid.innerHTML = projects.map(function(p, i) {
       var galCount = p.galleries ? p.galleries.length : 0;
-
-      return '<div class="project-card" data-id="' + p.id + '" style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 16px; cursor: pointer; transition: border-color 0.2s;">' +
-        '<div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">' +
-          '<h4 style="color: var(--text-primary); font-size: 14px; font-weight: 600; margin: 0;">' + typeIcon + ' ' + escapeHtml(p.name) + '</h4>' +
-        '</div>' +
-        (p.client_contact_email ? '<div style="color: var(--text-muted); font-size: 11px; margin-bottom: 4px;">✉ ' + escapeHtml(p.client_contact_email) + '</div>' : '') +
-        '<div style="display: flex; gap: 12px; color: var(--text-muted); font-size: 11px; margin-top: 6px;">' +
-          '<span>🖼 ' + galCount + ' galler' + (galCount !== 1 ? 'ies' : 'y') + '</span>' +
-          '<span style="text-transform: capitalize;">' + escapeHtml(p.client_type || 'team') + '</span>' +
-        '</div>' +
-      '</div>';
+      var av = DL_AVATAR[i % DL_AVATAR.length];
+      return '<span class="dl-client-chip" data-id="' + p.id + '">' +
+        '<span class="dl-client-chip__avatar" style="background:' + av.bg + ';color:' + av.fg + ';">' + escapeHtml(dlInitials(p.name)) + '</span>' +
+        '<span style="font-size:12px;color:var(--text-primary);">' + escapeHtml(p.name) + '</span>' +
+        '<span class="dl-num" style="font-size:11px;color:var(--text-muted);">' + galCount + '</span>' +
+      '</span>';
     }).join('');
 
-    // Bind click + hover on project cards
-    grid.querySelectorAll('.project-card').forEach(function(card) {
+    grid.querySelectorAll('.dl-client-chip').forEach(function(card) {
       card.addEventListener('click', function() { openProjectDetail(this.dataset.id); });
-      card.addEventListener('mouseenter', function() { this.style.borderColor = 'var(--accent-primary)'; });
-      card.addEventListener('mouseleave', function() { this.style.borderColor = 'var(--border-color)'; });
     });
   }
 
@@ -293,12 +399,16 @@
       var galleryEventDate = document.getElementById('input-gallery-event-date').value || null;
       if (!title) return;
       try {
+        var autoHdEl = document.getElementById('input-gallery-auto-hd');
         var galleryData = {
           title: title,
           access_type: access,
           gallery_type: access === 'unrestricted' ? 'open' : 'private',
           season: gallerySeason || null,
-          event_date: galleryEventDate
+          event_date: galleryEventDate,
+          // Per-gallery opt-in: when on, adding an execution auto-uploads its HD
+          // originals (decision #1). Off by default → HD stays a manual choice.
+          settings: { auto_hd_upload: !!(autoHdEl && autoHdEl.checked) }
         };
         // If we're inside a project, associate the gallery
         if (selectedProjectId) {
@@ -312,16 +422,44 @@
           if (seasonInput) seasonInput.value = '';
           var dateInput = document.getElementById('input-gallery-event-date');
           if (dateInput) dateInput.value = '';
+          if (autoHdEl) autoHdEl.checked = false;
           await loadGalleries();
           // Refresh project detail if we were inside one
           if (selectedProjectId) {
             await openProjectDetail(selectedProjectId);
           }
+          dlNotify('Gallery "' + title + '" created.', 'success');
         } else {
-          alert('Error: ' + (result ? result.error : 'Unknown'));
+          dlNotify('Couldn\'t create the gallery: ' + (result ? result.error : 'unknown error'), 'error');
         }
       } catch (e) {
-        alert('Error creating gallery');
+        dlNotify('Couldn\'t create the gallery.', 'error');
+      }
+    });
+
+    // Gallery-detail "Auto HD upload" toggle → persist on settings.auto_hd_upload.
+    // Reuses the existing delivery-update-gallery IPC; merges client-side so other
+    // settings keys are preserved (updateGallery does a full-column replace).
+    var galleryAutoHdToggle = document.getElementById('gallery-detail-auto-hd');
+    if (galleryAutoHdToggle) galleryAutoHdToggle.addEventListener('change', async function() {
+      var el = this;
+      var modal = document.getElementById('modal-gallery-detail');
+      var gid = modal && modal.dataset ? modal.dataset.galleryId : null;
+      if (!gid) return;
+      var gal = galleries.find(function(g) { return g.id === gid; });
+      var merged = Object.assign({}, (gal && gal.settings) || {}, { auto_hd_upload: el.checked });
+      try {
+        var res = await window.api.invoke('delivery-update-gallery', { id: gid, data: { settings: merged } });
+        if (res && res.success) {
+          if (gal) gal.settings = merged;
+          dlNotify(el.checked ? 'Auto HD upload is on for this gallery.' : 'Auto HD upload is off.', 'success');
+        } else {
+          el.checked = !el.checked;
+          dlNotify('Couldn\'t update the setting.', 'error');
+        }
+      } catch (e) {
+        el.checked = !el.checked;
+        dlNotify('Couldn\'t update the setting.', 'error');
       }
     });
 
@@ -354,11 +492,12 @@
           var selectEl = document.getElementById('input-project-client-type');
           if (selectEl) selectEl.value = 'team';
           await loadProjects();
+          dlNotify('Client "' + name + '" added.', 'success');
         } else {
-          alert('Error: ' + (result ? result.error : 'Unknown'));
+          dlNotify('Couldn\'t add the client: ' + (result ? result.error : 'unknown error'), 'error');
         }
       } catch (e) {
-        alert('Error creating client');
+        dlNotify('Couldn\'t add the client.', 'error');
       }
     });
 
@@ -444,7 +583,7 @@
     var isActive = document.getElementById('input-rule-active').checked;
 
     if (!name || !galleryId) {
-      alert('Rule name and target gallery are required');
+      dlNotify('Rule name and target gallery are required', 'warning');
       return;
     }
 
@@ -491,10 +630,10 @@
           openProjectDetail(selectedProjectId);
         }
       } else {
-        alert('Error: ' + (result ? result.error : 'Unknown'));
+        dlNotify('Error: ' + (result ? result.error : 'Unknown'), 'error');
       }
     }).catch(function(e) {
-      alert('Error saving rule');
+      dlNotify('Error saving rule', 'error');
       console.error('[Delivery] Rule save error:', e);
     });
   }
@@ -508,10 +647,10 @@
     document.getElementById('input-rule-active').checked = true;
     // Reset modal to "create" mode
     var modalTitle = document.querySelector('#modal-create-rule h3');
-    if (modalTitle) modalTitle.textContent = 'Create Delivery Rule';
+    if (modalTitle) modalTitle.textContent = 'Create delivery rule';
     var btnSave = document.getElementById('btn-save-rule');
     if (btnSave) {
-      btnSave.textContent = 'Create Rule';
+      btnSave.textContent = 'Create rule';
       delete btnSave.dataset.editRuleId;
     }
   }
@@ -536,6 +675,10 @@
     if (accessSelect) {
       accessSelect.value = gallery.access_type || 'unrestricted';
     }
+
+    // Reflect the per-gallery auto-HD-upload flag (settings.auto_hd_upload)
+    var autoHdToggle = document.getElementById('gallery-detail-auto-hd');
+    if (autoHdToggle) autoHdToggle.checked = !!(gallery.settings && gallery.settings.auto_hd_upload);
 
     // Update status badge color
     var statusEl = document.getElementById('gallery-detail-status');
@@ -564,7 +707,53 @@
     showModal('modal-gallery-detail');
   }
 
-  function loadGalleryLinkedExecutions(galleryId) {
+  // Render the HD (R2) status line + context-aware action for one execution.
+  // st = { total, completed, failed, queued, pending } | null (from getR2UploadStatus).
+  // HD state lives on the image rows (original_upload_status), so this is the
+  // real per-execution status — not an assumption.
+  function renderHdRow(execId, st) {
+    if (!st || !st.total) {
+      return '<div style="margin-top:6px;font-size:10px;color:var(--text-muted);">HD status unavailable.</div>';
+    }
+    var total = st.total, completed = st.completed || 0, failed = st.failed || 0, queued = st.queued || 0;
+    var allDone = completed === total;
+    var line, btn = '';
+
+    if (allDone) {
+      line = '<span style="color:#10b981;display:inline-flex;align-items:center;gap:3px;">' + dlIcon('check', 12) + 'HD ready</span> ' +
+             '<span class="dl-num" style="color:var(--text-muted);">' + completed + '/' + total + '</span>';
+    } else if (failed > 0) {
+      line = '<span style="color:#ef4444;">' + failed + ' failed</span> · ' +
+             '<span class="dl-num" style="color:var(--text-muted);">' + completed + '/' + total + ' HD ready</span>';
+    } else if (queued > 0) {
+      line = '<span style="color:#f59e0b;">' + queued + ' uploading…</span> · ' +
+             '<span class="dl-num" style="color:var(--text-muted);">' + completed + '/' + total + '</span>';
+    } else if (completed === 0) {
+      line = '<span style="color:#f59e0b;">HD not uploaded</span> ' +
+             '<span class="dl-num" style="color:var(--text-muted);">0/' + total + '</span>';
+    } else {
+      line = '<span style="color:#f59e0b;">' + (total - completed) + ' HD missing</span> · ' +
+             '<span class="dl-num" style="color:var(--text-muted);">' + completed + '/' + total + '</span>';
+    }
+
+    // Action only when there is something to upload and nothing is in flight.
+    // The label is context-aware (Upload / Upload missing / Retry) instead of
+    // an unconditional "Retry" that wrongly implies a prior attempt.
+    if (!allDone && queued === 0) {
+      var label = failed > 0
+        ? 'Retry (' + failed + ')'
+        : (completed === 0 ? 'Upload HD (' + total + ')' : 'Upload missing (' + (total - completed) + ')');
+      btn = '<div style="margin-top:6px;">' +
+        '<button data-hd-exec="' + execId + '" onclick="dlStartHdUpload(\'' + execId + '\')" ' +
+        'class="dl-btn dl-btn--ghost dl-btn--sm">' + dlIcon('cloudUp', 13) + label + '</button>' +
+        '</div>';
+    }
+
+    return '<div style="margin-top:6px;font-size:10px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' +
+      line + '</div>' + btn;
+  }
+
+  async function loadGalleryLinkedExecutions(galleryId) {
     var container = document.getElementById('gallery-linked-executions');
     var emptyMsg = document.getElementById('gallery-linked-empty');
     if (!container) return;
@@ -572,7 +761,8 @@
     // Show loading state
     if (emptyMsg) emptyMsg.textContent = 'Loading...';
 
-    window.api.invoke('delivery-get-gallery-executions', galleryId).then(function(result) {
+    try {
+      var result = await window.api.invoke('delivery-get-gallery-executions', galleryId);
       if (!result || !result.success || !result.data || result.data.length === 0) {
         container.innerHTML = '';
         if (emptyMsg) {
@@ -586,7 +776,15 @@
       var linkedExecs = result.data;
       var linkedIds = linkedExecs.map(function(e) { return e.id; });
 
-      var html = linkedExecs.map(function(exec) {
+      // Fetch the real per-execution HD (R2) status in parallel so each row
+      // shows actual state instead of an unconditional "Retry" button.
+      var statuses = await Promise.all(linkedExecs.map(function(e) {
+        return window.api.invoke('delivery-r2-upload-status', e.id)
+          .then(function(r) { return (r && r.success) ? r.data : null; })
+          .catch(function() { return null; });
+      }));
+
+      var html = linkedExecs.map(function(exec, i) {
         var date = exec.execution_at ? exec.execution_at.split('T')[0] : '';
         return '<div style="background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; padding: 8px 12px;">' +
           '<div style="display: flex; align-items: center; justify-content: space-between;">' +
@@ -594,27 +792,62 @@
               '<div style="color: var(--text-primary); font-size: 12px; font-weight: 600;">' + escapeHtml(exec.name || 'Execution') + '</div>' +
               '<div style="color: var(--text-muted); font-size: 10px;">' + date + ' • ' + (exec.gallery_image_count || 0) + ' photos in gallery</div>' +
             '</div>' +
-            '<span style="color: #10b981; font-size: 10px; font-weight: 600;">✓ Added</span>' +
+            '<span style="color: #10b981; font-size: 10px; font-weight: 600;">Added</span>' +
           '</div>' +
-          '<div style="margin-top: 6px; display: flex; gap: 6px;">' +
-            '<button onclick="retryHDUpload(\'' + exec.id + '\')" style="flex: 1; background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-secondary); padding: 4px 8px; border-radius: 6px; font-size: 10px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.borderColor=\'#06b6d4\';this.style.color=\'#06b6d4\'" onmouseout="this.style.borderColor=\'var(--border-color)\';this.style.color=\'var(--text-secondary)\'">' +
-              '☁️ Retry HD Upload' +
-            '</button>' +
-          '</div>' +
+          renderHdRow(exec.id, statuses[i]) +
         '</div>';
       }).join('');
 
       container.innerHTML = html;
       loadAddExecutionDropdown(galleryId, linkedIds);
-    }).catch(function(e) {
+    } catch (e) {
       console.error('[Delivery] Failed to load gallery executions:', e);
       if (emptyMsg) {
         emptyMsg.textContent = 'Failed to load.';
         container.innerHTML = '';
         container.appendChild(emptyMsg);
       }
-    });
+    }
   }
+
+  // Context-aware HD upload trigger for the gallery-detail execution list.
+  // Queues the not-yet-uploaded originals for an execution (null/pending/failed);
+  // the list refreshes afterwards to reflect the new status. Upload reads the
+  // LOCAL originals, so a missing source folder surfaces as a clear error.
+  window.dlStartHdUpload = async function(executionId) {
+    if (!executionId) return;
+    var btn = document.querySelector('button[data-hd-exec="' + executionId + '"]');
+    if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
+    try {
+      var result = await window.api.invoke('delivery-r2-upload-start', executionId);
+      if (result && result.success && result.data) {
+        var queued = result.data.queued || 0;
+        var error = result.data.error || null;
+        if (queued > 0) {
+          dlNotify(queued + ' HD originals uploading…', 'info');
+          // Nudge the upload monitor to pick up the new upload.
+          if (window.dispatchEvent) {
+            window.dispatchEvent(new CustomEvent('page-loaded', { detail: { page: 'delivery' } }));
+          }
+        } else if (error) {
+          dlNotify(error, 'error');
+        } else {
+          dlNotify('HD originals already uploaded.', 'success');
+        }
+      } else {
+        dlNotify('Upload failed: ' + (result ? result.error : 'Unknown error'), 'error');
+      }
+    } catch (e) {
+      console.error('[Delivery] dlStartHdUpload error:', e);
+      dlNotify('HD upload error: ' + (e.message || e), 'error');
+    } finally {
+      // Refresh the linked list so the row reflects the new HD status.
+      var modal = document.getElementById('modal-gallery-detail');
+      var gid = modal && modal.dataset ? modal.dataset.galleryId : null;
+      if (gid) setTimeout(function() { loadGalleryLinkedExecutions(gid); }, 1500);
+      else if (btn) { btn.disabled = false; }
+    }
+  };
 
   function loadAddExecutionDropdown(galleryId, excludeIds) {
     var execSelect = document.getElementById('gallery-detail-execution-select');
@@ -650,10 +883,10 @@
           openGalleryDetail(galleryId);
         }
       } else {
-        alert('Error updating gallery: ' + (result ? result.error : 'Unknown'));
+        dlNotify('Error updating gallery: ' + (result ? result.error : 'Unknown'), 'error');
       }
     } catch (e) {
-      alert('Error updating gallery: ' + (e.message || e));
+      dlNotify('Error updating gallery: ' + (e.message || e), 'error');
       console.error('[Delivery] Update error:', e);
     }
   }
@@ -668,21 +901,21 @@
           hideModal('modal-gallery-detail');
           loadGalleries();
         } else {
-          alert('Error: ' + (result ? result.error : 'Unknown'));
+          dlNotify('Error: ' + (result ? result.error : 'Unknown'), 'error');
         }
       }).catch(function(e) {
-        alert('Error deleting gallery');
+        dlNotify('Error deleting gallery', 'error');
         console.error('[Delivery] Delete error:', e);
       });
     } catch (e) {
-      alert('Error deleting gallery');
+      dlNotify('Error deleting gallery', 'error');
       console.error('[Delivery] Delete error:', e);
     }
   }
 
   function sendExecutionToGallery(galleryId, executionId) {
     if (!executionId) {
-      alert('Please select an execution');
+      dlNotify('Please select an execution', 'warning');
       return;
     }
 
@@ -705,17 +938,39 @@
 
           // Refresh the linked executions list
           loadGalleryLinkedExecutions(galleryId);
+
+          // Decision #1: HD upload stays a manual choice UNLESS the gallery has
+          // settings.auto_hd_upload. Decision #2: if the photos are already on R2,
+          // say so (linked, no re-upload) instead of implying a new upload.
+          var addedGallery = galleries.find(function(g) { return g.id === galleryId; });
+          var autoHd = !!(addedGallery && addedGallery.settings && addedGallery.settings.auto_hd_upload);
+          window.api.invoke('delivery-r2-upload-status', executionId).then(function(r) {
+            var st = (r && r.success) ? r.data : null;
+            var missing = st ? (st.total - (st.completed || 0)) : 0;
+            if (st && st.completed > 0 && missing === 0) {
+              dlNotify('These photos are already on R2 — linked, no new upload.', 'info');
+            } else if (autoHd && missing > 0) {
+              // Gallery opted into auto-upload — start it. dlStartHdUpload reports
+              // progress and surfaces a clear error if the originals aren't local.
+              dlNotify('Added ' + added + ' photos.', 'success');
+              if (window.dlStartHdUpload) window.dlStartHdUpload(executionId);
+            } else {
+              dlNotify('Added ' + added + ' photos to the gallery.', 'success');
+            }
+          }).catch(function() {
+            dlNotify('Added ' + added + ' photos to the gallery.', 'success');
+          });
         } else {
-          alert('Error: ' + (result ? result.error : 'Unknown'));
+          dlNotify('Error: ' + (result ? result.error : 'Unknown'), 'error');
         }
       }).catch(function(e) {
-        alert('Error sending images');
+        dlNotify('Error sending images', 'error');
         console.error('[Delivery] Send error:', e);
       }).finally(function() {
         if (btnAdd) { btnAdd.disabled = false; btnAdd.textContent = 'Add'; }
       });
     } catch (e) {
-      alert('Error sending images');
+      dlNotify('Error sending images', 'error');
       console.error('[Delivery] Send error:', e);
       if (btnAdd) { btnAdd.disabled = false; btnAdd.textContent = 'Add'; }
     }
@@ -749,7 +1004,7 @@
       }
       if (mc.numbers && mc.numbers.length) {
         criteriaTags += mc.numbers.map(function(n) {
-          return '<span style="display: inline-block; font-size: 10px; padding: 2px 6px; border-radius: 4px; background: rgba(59,130,246,0.15); color: #60a5fa; margin-right: 4px;"># ' + escapeHtml(n) + '</span>';
+          return '<span style="display: inline-block; font-size: 10px; padding: 2px 6px; border-radius: 4px; background: rgba(26,158,224,0.15); color: #1a9ee0; margin-right: 4px;"># ' + escapeHtml(n) + '</span>';
         }).join('');
       }
       if (mc.participants && mc.participants.length) {
@@ -763,7 +1018,7 @@
 
       // Source badge for auto-generated rules
       var sourceBadge = isAuto
-        ? '<span style="font-size: 9px; padding: 2px 6px; border-radius: 99px; background: rgba(6,182,212,0.15); color: #06b6d4; font-weight: 600; margin-left: 4px;">FROM PRESET</span>'
+        ? '<span style="font-size: 9px; padding: 2px 6px; border-radius: 99px; background: rgba(26,158,224,0.15); color: #1a9ee0; font-weight: 600; margin-left: 4px;">FROM PRESET</span>'
         : '';
 
       // Action buttons: auto-generated rules only get toggle, manual rules get all actions
@@ -771,15 +1026,15 @@
       if (isAuto) {
         // Read-only: only toggle on/off allowed
         actionButtons =
-          '<button class="rule-toggle-btn" data-rule-id="' + r.id + '" data-active="' + (r.is_active ? '1' : '0') + '" title="' + (r.is_active ? 'Disable rule' : 'Enable rule') + '" style="background: none; border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: var(--text-muted); font-size: 12px; transition: color 0.2s, border-color 0.2s;">' + (r.is_active ? '⏸' : '▶') + '</button>';
+          '<button class="rule-toggle-btn" data-rule-id="' + r.id + '" data-active="' + (r.is_active ? '1' : '0') + '" title="' + (r.is_active ? 'Disable rule' : 'Enable rule') + '" style="background: none; border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: var(--text-muted); font-size: 12px; transition: color 0.2s, border-color 0.2s;">' + (r.is_active ? dlIcon('pause', 13) : dlIcon('play', 13)) + '</button>';
       } else {
         actionButtons =
-          '<button class="rule-toggle-btn" data-rule-id="' + r.id + '" data-active="' + (r.is_active ? '1' : '0') + '" title="' + (r.is_active ? 'Disable rule' : 'Enable rule') + '" style="background: none; border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: var(--text-muted); font-size: 12px; transition: color 0.2s, border-color 0.2s;">' + (r.is_active ? '⏸' : '▶') + '</button>' +
-          '<button class="rule-edit-btn" data-rule-id="' + r.id + '" title="Edit rule" style="background: none; border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: var(--text-muted); font-size: 12px; transition: color 0.2s, border-color 0.2s;">✏️</button>' +
-          '<button class="rule-delete-btn" data-rule-id="' + r.id + '" title="Delete rule" style="background: none; border: 1px solid rgba(239,68,68,0.3); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: #f87171; font-size: 12px; transition: opacity 0.2s;">🗑</button>';
+          '<button class="rule-toggle-btn" data-rule-id="' + r.id + '" data-active="' + (r.is_active ? '1' : '0') + '" title="' + (r.is_active ? 'Disable rule' : 'Enable rule') + '" style="background: none; border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: var(--text-muted); font-size: 12px; transition: color 0.2s, border-color 0.2s;">' + (r.is_active ? dlIcon('pause', 13) : dlIcon('play', 13)) + '</button>' +
+          '<button class="rule-edit-btn" data-rule-id="' + r.id + '" title="Edit rule" style="background: none; border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: var(--text-muted); font-size: 12px; transition: color 0.2s, border-color 0.2s;">' + dlIcon('edit', 13) + '</button>' +
+          '<button class="rule-delete-btn" data-rule-id="' + r.id + '" title="Delete rule" style="background: none; border: 1px solid rgba(239,68,68,0.3); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: #f87171; font-size: 12px; transition: opacity 0.2s;">' + dlIcon('trash', 13) + '</button>';
       }
 
-      var cardBorder = isAuto ? 'border-left: 3px solid rgba(6,182,212,0.5);' : '';
+      var cardBorder = isAuto ? 'border-left: 3px solid rgba(26,158,224,0.5);' : '';
 
       return '<div class="delivery-rule-card" data-rule-id="' + r.id + '" style="background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 10px; padding: 14px; transition: border-color 0.2s; ' + cardBorder + '">' +
         '<div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 8px;">' +
@@ -836,11 +1091,11 @@
       if (result && result.success) {
         if (selectedProjectId) openProjectDetail(selectedProjectId);
       } else {
-        alert('Error: ' + (result ? result.error : 'Unknown'));
+        dlNotify('Error: ' + (result ? result.error : 'Unknown'), 'error');
       }
     } catch (e) {
       console.error('[Delivery] Toggle rule error:', e);
-      alert('Error toggling rule');
+      dlNotify('Error toggling rule', 'error');
     }
   }
 
@@ -868,10 +1123,10 @@
 
       // Change modal title and save button to "edit" mode
       var modalTitle = document.querySelector('#modal-create-rule h3');
-      if (modalTitle) modalTitle.textContent = 'Edit Delivery Rule';
+      if (modalTitle) modalTitle.textContent = 'Edit delivery rule';
       var btnSave = document.getElementById('btn-save-rule');
       if (btnSave) {
-        btnSave.textContent = 'Save Changes';
+        btnSave.textContent = 'Save changes';
         btnSave.dataset.editRuleId = ruleId;
       }
 
@@ -886,11 +1141,11 @@
       if (result && result.success) {
         if (selectedProjectId) openProjectDetail(selectedProjectId);
       } else {
-        alert('Error: ' + (result ? result.error : 'Unknown'));
+        dlNotify('Error: ' + (result ? result.error : 'Unknown'), 'error');
       }
     } catch (e) {
       console.error('[Delivery] Delete rule error:', e);
-      alert('Error deleting rule');
+      dlNotify('Error deleting rule', 'error');
     }
   }
 
@@ -905,14 +1160,14 @@
 
     var text = '';
     if (routed > 0) {
-      text = '✅ ' + routed + ' photo' + (routed !== 1 ? 's' : '') + ' routed to ' + galleriesCount + ' galler' + (galleriesCount !== 1 ? 'ies' : 'y');
+      text = routed + ' photo' + (routed !== 1 ? 's' : '') + ' routed to ' + galleriesCount + ' galler' + (galleriesCount !== 1 ? 'ies' : 'y');
       if (unmatched > 0) {
         text += '. ' + unmatched + ' photo' + (unmatched !== 1 ? 's' : '') + ' did not match any rule.';
       } else {
         text += '.';
       }
     } else {
-      text = '⚠️ No photos matched any delivery rule. ' + unmatched + ' photo' + (unmatched !== 1 ? 's' : '') + ' unmatched.';
+      text = 'No photos matched any delivery rule. ' + unmatched + ' photo' + (unmatched !== 1 ? 's' : '') + ' unmatched.';
     }
     message.textContent = text;
     banner.style.display = 'block';
@@ -977,10 +1232,10 @@
             var g = galleries.find(function(x) { return x.id === galleryId; });
             if (g) g.access_type = newAccess;
           } else {
-            alert('Error updating access: ' + (result ? result.error : 'Unknown'));
+            dlNotify('Error updating access: ' + (result ? result.error : 'Unknown'), 'error');
           }
         } catch (e) {
-          alert('Error updating access type');
+          dlNotify('Error updating access type', 'error');
           console.error('[Delivery] Access type update error:', e);
         }
       });
@@ -1071,7 +1326,7 @@
     // Check at least one interest is selected
     var hasAny = Object.values(interests).some(function(v) { return v; });
     if (!hasAny && !workflow && !comment) {
-      alert('Please select at least one option or leave a comment.');
+      dlNotify('Please select at least one option or leave a comment.', 'warning');
       return;
     }
 
@@ -1094,18 +1349,18 @@
         document.getElementById('survey-form').style.display = 'none';
         document.getElementById('survey-submitted').style.display = 'block';
       } else {
-        alert('Error submitting. Please try again.');
+        dlNotify('Error submitting. Please try again.', 'error');
         if (btnSubmit) {
           btnSubmit.disabled = false;
-          btnSubmit.textContent = 'Submit Feedback';
+          btnSubmit.textContent = 'Submit feedback';
         }
       }
     } catch (e) {
-      alert('Error submitting. Please try again.');
+      dlNotify('Error submitting. Please try again.', 'error');
       console.error('[Delivery] Survey submission error:', e);
       if (btnSubmit) {
         btnSubmit.disabled = false;
-        btnSubmit.textContent = 'Submit Feedback';
+        btnSubmit.textContent = 'Submit feedback';
       }
     }
   }
@@ -1161,11 +1416,11 @@
         hideModal('modal-link-gallery');
         await openProjectDetail(selectedProjectId);
       } else {
-        alert('Error linking gallery: ' + (result ? result.error : 'Unknown'));
+        dlNotify('Error linking gallery: ' + (result ? result.error : 'Unknown'), 'error');
       }
     } catch (e) {
       console.error('[Delivery] Link gallery error:', e);
-      alert('Error linking gallery');
+      dlNotify('Error linking gallery', 'error');
     }
   }
 
@@ -1224,7 +1479,7 @@
 
     var newSlug = slugInput.value.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
     if (!newSlug) {
-      alert('Please enter a valid slug');
+      dlNotify('Please enter a valid slug', 'warning');
       return;
     }
 
@@ -1241,11 +1496,11 @@
         }
         exitSlugEditMode();
       } else {
-        alert('Error saving slug: ' + (result ? result.error : 'Unknown'));
+        dlNotify('Error saving slug: ' + (result ? result.error : 'Unknown'), 'error');
       }
     } catch (e) {
       console.error('[Delivery] Slug save error:', e);
-      alert('Error saving shareable link');
+      dlNotify('Error saving shareable link', 'error');
     }
   }
 
@@ -1255,7 +1510,7 @@
     if (navigator.clipboard) {
       navigator.clipboard.writeText(fullUrl).then(function() {
         var btn = document.getElementById('btn-copy-client-link');
-        if (btn) { btn.textContent = '✓'; setTimeout(function() { btn.textContent = '📋'; }, 1500); }
+        if (btn) { btn.innerHTML = dlIcon('check', 13); setTimeout(function() { btn.innerHTML = dlIcon('copy', 13); }, 1500); }
       });
     }
   }
@@ -1309,9 +1564,9 @@
             '<div style="font-size: 11px; color: var(--text-muted);">' + detailParts.join(' &bull; ') + '</div>' +
           '</div>' +
           '<div style="display: flex; gap: 4px; flex-shrink: 0; margin-left: 12px;">' +
-            (status === 'invited' ? '<button class="client-user-resend-btn" data-user-id="' + u.id + '" title="Resend invitation" style="background: none; border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: var(--text-muted); font-size: 12px;">✉️</button>' : '') +
-            (status !== 'invited' ? '<button class="client-user-toggle-btn" data-user-id="' + u.id + '" data-status="' + status + '" title="' + (status === 'active' ? 'Disable' : 'Enable') + '" style="background: none; border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: var(--text-muted); font-size: 12px;">' + (status === 'active' ? '⏸' : '▶') + '</button>' : '') +
-            '<button class="client-user-delete-btn" data-user-id="' + u.id + '" data-name="' + escapeHtml(displayName) + '" title="Remove user" style="background: none; border: 1px solid rgba(239,68,68,0.3); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: #f87171; font-size: 12px;">🗑</button>' +
+            (status === 'invited' ? '<button class="client-user-resend-btn" data-user-id="' + u.id + '" title="Resend invitation" style="background: none; border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: var(--text-muted); font-size: 12px;">' + dlIcon('mail', 13) + '</button>' : '') +
+            (status !== 'invited' ? '<button class="client-user-toggle-btn" data-user-id="' + u.id + '" data-status="' + status + '" title="' + (status === 'active' ? 'Disable' : 'Enable') + '" style="background: none; border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: var(--text-muted); font-size: 12px;">' + (status === 'active' ? dlIcon('pause', 13) : dlIcon('play', 13)) + '</button>' : '') +
+            '<button class="client-user-delete-btn" data-user-id="' + u.id + '" data-name="' + escapeHtml(displayName) + '" title="Remove user" style="background: none; border: 1px solid rgba(239,68,68,0.3); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: #f87171; font-size: 12px;">' + dlIcon('trash', 13) + '</button>' +
           '</div>' +
         '</div>';
       }).join('');
@@ -1336,11 +1591,11 @@
           try {
             var result = await window.api.invoke('delivery-resend-client-invite', userId);
             if (result && result.success) {
-              this.textContent = '✓';
+              this.innerHTML = dlIcon('check', 13);
               var self = this;
-              setTimeout(function() { self.textContent = '✉️'; }, 2000);
+              setTimeout(function() { self.innerHTML = dlIcon('mail', 13); }, 2000);
             } else {
-              alert('Error resending invite: ' + (result ? result.error : 'Unknown'));
+              dlNotify('Error resending invite: ' + (result ? result.error : 'Unknown'), 'error');
             }
           } catch (e) { console.error('[Delivery] Resend invite error:', e); }
         });
@@ -1377,13 +1632,13 @@
     var email = document.getElementById('input-client-email').value.trim();
 
     if (!displayName || !email) {
-      alert('Name and email are required.');
+      dlNotify('Name and email are required.', 'warning');
       return;
     }
 
     // Basic email validation
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      alert('Please enter a valid email address.');
+      dlNotify('Please enter a valid email address.', 'warning');
       return;
     }
 
@@ -1421,14 +1676,14 @@
       } else {
         var errorMsg = result ? result.error : 'Unknown error';
         if (errorMsg.includes('duplicate') || errorMsg.includes('unique')) {
-          alert('This email has already been invited for this client.');
+          dlNotify('This email has already been invited for this client.', 'warning');
         } else {
-          alert('Error: ' + errorMsg);
+          dlNotify('Error: ' + errorMsg, 'error');
         }
       }
     } catch (e) {
       console.error('[Delivery] Invite client user error:', e);
-      alert('Error sending invitation');
+      dlNotify('Error sending invitation', 'error');
     }
   }
 
@@ -1448,8 +1703,8 @@
     navigator.clipboard.writeText(fullUrl).then(function() {
       var icon = document.getElementById('gallery-slug-copy-icon');
       if (icon) {
-        icon.textContent = '✅';
-        setTimeout(function() { icon.textContent = '📋'; }, 1500);
+        icon.innerHTML = dlIcon('check', 13);
+        setTimeout(function() { icon.innerHTML = dlIcon('copy', 13); }, 1500);
       }
     }).catch(function() {
       // Fallback
@@ -1461,8 +1716,8 @@
       document.body.removeChild(ta);
       var icon = document.getElementById('gallery-slug-copy-icon');
       if (icon) {
-        icon.textContent = '✅';
-        setTimeout(function() { icon.textContent = '📋'; }, 1500);
+        icon.innerHTML = dlIcon('check', 13);
+        setTimeout(function() { icon.innerHTML = dlIcon('copy', 13); }, 1500);
       }
     });
   };
@@ -1481,7 +1736,7 @@
 
     if (btn) {
       btn.disabled = true;
-      btn.textContent = '⏳ Starting upload...';
+      btn.textContent = 'Starting upload…';
       btn.style.color = '#f59e0b';
       btn.style.borderColor = '#f59e0b';
     }
@@ -1493,7 +1748,7 @@
         var error = result.data ? result.data.error : null;
         if (queued > 0) {
           if (btn) {
-            btn.textContent = '☁️ ' + queued + ' files uploading...';
+            btn.textContent = queued + ' files uploading…';
             btn.style.color = '#10b981';
             btn.style.borderColor = '#10b981';
           }
@@ -1502,35 +1757,35 @@
             window.dispatchEvent(new CustomEvent('page-loaded', { detail: { page: 'delivery' } }));
           }
         } else if (error) {
-          alert(error);
+          dlNotify(error, 'error');
           if (btn) {
             btn.disabled = false;
-            btn.textContent = '☁️ Retry HD Upload';
+            btn.textContent = 'Retry HD upload';
             btn.style.color = 'var(--text-secondary)';
             btn.style.borderColor = 'var(--border-color)';
           }
         } else {
           if (btn) {
-            btn.textContent = '✓ Already uploaded';
+            btn.textContent = 'Already uploaded';
             btn.style.color = '#10b981';
             btn.style.borderColor = '#10b981';
           }
         }
       } else {
-        alert('Upload failed: ' + (result ? result.error : 'Unknown error'));
+        dlNotify('Upload failed: ' + (result ? result.error : 'Unknown error'), 'error');
         if (btn) {
           btn.disabled = false;
-          btn.textContent = '☁️ Retry HD Upload';
+          btn.textContent = 'Retry HD upload';
           btn.style.color = 'var(--text-secondary)';
           btn.style.borderColor = 'var(--border-color)';
         }
       }
     } catch (e) {
       console.error('[Delivery] retryHDUpload error:', e);
-      alert('HD Upload error: ' + (e.message || e));
+      dlNotify('HD Upload error: ' + (e.message || e), 'error');
       if (btn) {
         btn.disabled = false;
-        btn.textContent = '☁️ Retry HD Upload';
+        btn.textContent = 'Retry HD upload';
         btn.style.color = 'var(--text-secondary)';
         btn.style.borderColor = 'var(--border-color)';
       }
@@ -1577,14 +1832,14 @@
           var pct = st.total > 0 ? Math.round((st.completed / st.total) * 100) : 0;
           var hasIssues = st.failed > 0 || st.queued > 0;
           var allDone = st.completed === st.total;
-          var borderColor = allDone ? 'rgba(34, 197, 94, 0.3)' : hasIssues ? 'rgba(239, 68, 68, 0.3)' : 'rgba(255,255,255,0.06)';
+          var borderColor = allDone ? 'rgba(16, 185, 129, 0.3)' : hasIssues ? 'rgba(239, 68, 68, 0.3)' : 'rgba(255,255,255,0.06)';
           var statusBadge = allDone
-            ? '<span style="font-size:10px;padding:3px 8px;border-radius:10px;background:rgba(34,197,94,0.15);color:#4ade80;font-weight:600;">✓ Complete</span>'
+            ? '<span style="font-size:10px;padding:3px 8px;border-radius:10px;background:rgba(16,185,129,0.15);color:#10b981;font-weight:600;">Complete</span>'
             : st.failed > 0
-            ? '<span style="font-size:10px;padding:3px 8px;border-radius:10px;background:rgba(239,68,68,0.15);color:#f87171;font-weight:600;">⚠ ' + st.failed + ' Failed</span>'
+            ? '<span style="font-size:10px;padding:3px 8px;border-radius:10px;background:rgba(239,68,68,0.15);color:#ef4444;font-weight:600;">' + st.failed + ' failed</span>'
             : st.queued > 0
-            ? '<span style="font-size:10px;padding:3px 8px;border-radius:10px;background:rgba(251,191,36,0.15);color:#fbbf24;font-weight:600;">⏳ ' + st.queued + ' Queued</span>'
-            : '<span style="font-size:10px;padding:3px 8px;border-radius:10px;background:rgba(148,163,184,0.15);color:#94a3b8;font-weight:600;">○ Pending</span>';
+            ? '<span style="font-size:10px;padding:3px 8px;border-radius:10px;background:rgba(245,158,11,0.15);color:#f59e0b;font-weight:600;">' + st.queued + ' queued</span>'
+            : '<span style="font-size:10px;padding:3px 8px;border-radius:10px;background:rgba(148,163,184,0.15);color:#94a3b8;font-weight:600;">Pending</span>';
 
           var execDate = exec.execution_at ? new Date(exec.execution_at).toLocaleDateString('en-US', { day:'numeric', month:'short', year:'numeric' }) : '';
           var execName = exec.name || 'Execution';
@@ -1600,32 +1855,32 @@
           // Source folder path + update button (only if not all completed)
           if (!allDone) {
             html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;padding:6px 8px;background:rgba(255,255,255,0.03);border-radius:6px;border:1px solid rgba(255,255,255,0.04);">';
-            html += '<span style="font-size:10px;color:var(--text-muted);white-space:nowrap;">📁</span>';
+            html += '<span style="font-size:10px;color:var(--text-muted);white-space:nowrap;">' + dlIcon('folder', 11) + '</span>';
             html += '<span id="r2-folder-' + exec.id + '" style="font-size:10px;color:' + (sourceFolder ? 'var(--text-muted)' : '#f87171') + ';overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;" title="' + escapeHtml(sourceFolder || 'No folder set') + '">';
             html += sourceFolder ? escapeHtml(sourceFolder) : '<em>No source folder set</em>';
             html += '</span>';
-            html += '<button onclick="window.__r2UpdateFolder(\'' + exec.id + '\')" style="background:none;border:1px solid rgba(148,163,184,0.2);color:#94a3b8;padding:2px 8px;border-radius:5px;font-size:9px;cursor:pointer;white-space:nowrap;flex-shrink:0;" title="Browse for new folder location">📂 Update</button>';
+            html += '<button onclick="window.__r2UpdateFolder(\'' + exec.id + '\')" style="background:none;border:1px solid rgba(148,163,184,0.2);color:#94a3b8;padding:2px 8px;border-radius:5px;font-size:9px;cursor:pointer;white-space:nowrap;flex-shrink:0;" title="Browse for new folder location">Update</button>';
             html += '</div>';
           }
 
           // Progress bar
           html += '<div style="background:rgba(255,255,255,0.06);border-radius:4px;height:4px;overflow:hidden;margin-bottom:8px;">';
-          var barColor = allDone ? '#22c55e' : hasIssues ? '#f59e0b' : '#3b82f6';
+          var barColor = allDone ? '#10b981' : hasIssues ? '#f59e0b' : '#1a9ee0';
           html += '<div style="height:100%;border-radius:4px;background:' + barColor + ';width:' + pct + '%;transition:width 0.4s ease;"></div>';
           html += '</div>';
 
           // Stats row
           html += '<div style="display:flex;gap:12px;font-size:11px;color:var(--text-muted);align-items:center;flex-wrap:wrap;">';
-          html += '<span>📷 ' + st.total + ' images</span>';
-          html += '<span style="color:#4ade80;">✓ ' + st.completed + '</span>';
-          if (st.failed > 0) html += '<span style="color:#f87171;">✗ ' + st.failed + '</span>';
-          if (st.queued > 0) html += '<span style="color:#fbbf24;">⏳ ' + st.queued + '</span>';
-          if (st.pending > 0) html += '<span>○ ' + st.pending + ' pending</span>';
+          html += '<span>' + st.total + ' images</span>';
+          html += '<span style="color:#10b981;">' + st.completed + '</span>';
+          if (st.failed > 0) html += '<span style="color:#ef4444;">' + st.failed + '</span>';
+          if (st.queued > 0) html += '<span style="color:#f59e0b;">' + st.queued + '</span>';
+          if (st.pending > 0) html += '<span>' + st.pending + ' pending</span>';
 
           // Action buttons
           if (st.failed > 0 || st.queued > 0) {
             html += '<div style="margin-left:auto;display:flex;gap:6px;">';
-            html += '<button onclick="window.__r2RetryExecution(\'' + exec.id + '\')" style="background:none;border:1px solid rgba(59,130,246,0.3);color:#60a5fa;padding:3px 10px;border-radius:6px;font-size:10px;cursor:pointer;font-weight:600;">↻ Retry</button>';
+            html += '<button onclick="window.__r2RetryExecution(\'' + exec.id + '\')" style="background:none;border:1px solid rgba(26,158,224,0.3);color:#1a9ee0;padding:3px 10px;border-radius:6px;font-size:10px;cursor:pointer;font-weight:600;">Retry</button>';
             html += '<button onclick="window.__r2ResetExecution(\'' + exec.id + '\')" style="background:none;border:1px solid rgba(239,68,68,0.2);color:#f87171;padding:3px 10px;border-radius:6px;font-size:10px;cursor:pointer;">Reset</button>';
             html += '</div>';
           }
@@ -1653,7 +1908,7 @@
       var result = await window.api.invoke('delivery-r2-upload-start', executionId);
       if (result && result.success && result.data) {
         if (result.data.error) {
-          alert('R2 Upload: ' + result.data.error);
+          dlNotify('R2 Upload: ' + result.data.error, 'error');
         } else {
           console.log('[R2] Retry queued: ' + (result.data.queued || 0) + ' images');
         }
@@ -1661,7 +1916,7 @@
       // Refresh the status display after a short delay
       setTimeout(loadR2ExecutionStatus, 1500);
     } catch (e) {
-      alert('Retry failed: ' + (e.message || e));
+      dlNotify('Retry failed: ' + (e.message || e), 'error');
     }
   };
 
@@ -1674,7 +1929,7 @@
         await loadR2ExecutionStatus();
       }
     } catch (e) {
-      alert('Reset failed: ' + (e.message || e));
+      dlNotify('Reset failed: ' + (e.message || e), 'error');
     }
   };
 
@@ -1695,7 +1950,7 @@
 
       console.log('[R2] Source folder updated to: ' + data.sourceFolder);
     } catch (e) {
-      alert('Failed to update folder: ' + (e.message || e));
+      dlNotify('Failed to update folder: ' + (e.message || e), 'error');
     }
   };
 

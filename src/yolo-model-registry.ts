@@ -277,6 +277,7 @@ export interface SegmentationConfig {
   confidence_threshold: number;
   iou_threshold: number;
   max_detections: number;
+  near_miss_floor: number;   // TRAIN-01: lower bound of the near-miss capture band
 }
 
 /**
@@ -301,5 +302,8 @@ export function parseSegmentationConfig(dbConfig: any): SegmentationConfig | nul
     max_detections: typeof dbConfig.max_detections === 'number'
       ? dbConfig.max_detections
       : 5,
+    near_miss_floor: typeof dbConfig.near_miss_floor === 'number'
+      ? dbConfig.near_miss_floor
+      : 0.15,
   };
 }

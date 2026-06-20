@@ -7,6 +7,22 @@ var currentPreset = null;
 var participantsData = [];
 var isEditingPreset = false;
 var customFolders = []; // Array of {name, path?} objects for custom folders
+var seriesSponsorIgnore = []; // ACC-01 (Gruppe C): series-wide sponsor names to ignore in matching
+
+// =====================================================================
+// BUG-02 — immediate per-row persist of participant edits.
+// "Save & Next" / "Save Changes" used to only touch participantsData in
+// memory; nothing reached the DB until the preset-level "Save Preset", so a
+// crash or a stray Escape mid-session lost every edit. The state below backs a
+// FIFO, single-in-flight persist queue that writes each edited row to Supabase
+// in the background without ever blocking the keyboard-driven editor flow.
+// =====================================================================
+var participantPersistQueue = [];          // FIFO of participant OBJECT references awaiting persist
+var participantPersistInFlight = null;     // Promise of the row currently being written, or null
+var participantPersistDraining = false;    // Guards against two concurrent drain loops
+var participantPersistKeyCounter = 0;      // Monotonic source of __persistKey (see below)
+var presetEditorReadOnly = false;          // Mirror of the #preset-editor-modal .preset-read-only state
+var presetHasUnpersistedChanges = false;   // True when in-memory state isn't yet on the preset (close-guard)
 
 // =====================================================================
 // Preset Save Progress Overlay
@@ -1122,8 +1138,18 @@ function showEmptyPresetsState() {
 function createNewPreset() {
   currentPreset = null;
   isEditingPreset = false;
+  resetParticipantPersistState(); // BUG-02 — fresh editing session
   participantsData = [];
   customFolders = [];
+
+  // ACC-01 (Gruppe C) — reset the series-sponsor ignore list for a fresh preset
+  seriesSponsorIgnore = [];
+  renderSeriesSponsorChips();
+  const seriesSponsorInputNew = document.getElementById('series-sponsor-input');
+  if (seriesSponsorInputNew) {
+    seriesSponsorInputNew.value = '';
+    seriesSponsorInputNew.disabled = false;
+  }
 
   // Reset form
   document.getElementById('preset-name').value = '';
@@ -1150,10 +1176,23 @@ function createNewPreset() {
   clearParticipantsTable();
   addParticipantRow(); // Add one empty row
 
-  // Clear IPTC metadata form (if preset-iptc-editor.js is loaded)
-  if (typeof clearIptcForm === 'function') {
-    clearIptcForm();
-  }
+  // Mount the shared IPTC form markup (UX-04, Option B), clear it, then prefill
+  // from the account-level default template. Ordering is load-bearing:
+  // ensureIptcFormMarkup() must finish BEFORE clearIptcForm()/prefill — values
+  // set on missing elements are silently lost. Runs async so the modal opens
+  // immediately; the IPTC section (collapsed by default) fills in right after.
+  (async () => {
+    const iptcBody = document.getElementById('iptc-section-body');
+    if (typeof ensureIptcFormMarkup === 'function') {
+      await ensureIptcFormMarkup(iptcBody);
+    }
+    if (typeof clearIptcForm === 'function') {
+      clearIptcForm();
+    }
+    if (typeof prefillIptcFromDefaults === 'function') {
+      prefillIptcFromDefaults();
+    }
+  })();
 
   // V1: open the editable form for new presets (user has nothing to read yet),
   // and refresh the summary strip with empty values.
@@ -1991,6 +2030,205 @@ function populateFolderSelects() {
 }
 
 /**
+ * BUG-02 — single source of truth for the per-participant DB payload.
+ *
+ * Used by BOTH savePreset (bulk) and the per-row persist queue so the two
+ * mappings can NEVER drift. Mirrors what the DB layer
+ * (savePresetParticipantsSupabase → applyDualWriteFolders) expects: canonical
+ * folders[] drives the legacy folder_1/2/3(+_path) dual-write, so we only
+ * forward the legacy slots when folders[] is absent.
+ */
+function buildParticipantSavePayload(p) {
+  const hasNewFolders = Array.isArray(p.folders);
+  return {
+    id: p.id || undefined, // ✅ Include ID for UPSERT logic
+    numero: p.numero || '',
+    nome: getDriverNamesFromParticipant(p).join(', ') || p.nome || '',
+    categoria: p.categoria || '',
+    squadra: p.squadra || '',
+    plate_number: p.plate_number || '',
+    sponsor: p.sponsor || '',
+    metatag: p.metatag || '',
+
+    // 1.2.0 canonical folder array — drives the dual-write at the DB layer.
+    folders: hasNewFolders ? p.folders : undefined,
+    // 1.2.0 per-participant additive-default flag. Default true when missing.
+    include_default_folder: p.include_default_folder !== false,
+
+    // Legacy slots: only forward when folders[] is absent (i.e. the user hasn't
+    // touched the new chip editor yet). When folders[] IS present, the DB layer
+    // derives these from it via applyDualWriteFolders.
+    folder_1: hasNewFolders ? undefined : (p.folder_1 || ''),
+    folder_2: hasNewFolders ? undefined : (p.folder_2 || ''),
+    folder_3: hasNewFolders ? undefined : (p.folder_3 || ''),
+    folder_1_path: hasNewFolders ? undefined : (getFolderPath(p.folder_1) || p.folder_1_path || ''),
+    folder_2_path: hasNewFolders ? undefined : (getFolderPath(p.folder_2) || p.folder_2_path || ''),
+    folder_3_path: hasNewFolders ? undefined : (getFolderPath(p.folder_3) || p.folder_3_path || ''),
+
+    delivery_to_client_id: p.delivery_to_client_id || null,
+
+    // Soft-disable flag (manual Active toggle or BUG-03 entry-list re-import).
+    // undefined is treated as active.
+    is_active: p.is_active !== false
+  };
+}
+
+/**
+ * BUG-02 — true when two participant objects would persist identically.
+ * Compares the full save payload (which encodes driver names via `nome` and all
+ * folder/field state) MINUS the id. Conservative by design: any doubt returns
+ * false, so the worst case is a redundant write, never a lost edit.
+ */
+function participantPersistedFieldsEqual(a, b) {
+  try {
+    const pa = buildParticipantSavePayload(a);
+    const pb = buildParticipantSavePayload(b);
+    delete pa.id;
+    delete pb.id;
+    return JSON.stringify(pa) === JSON.stringify(pb);
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * BUG-02 — read-only guard for the persist hook. Mirrors the
+ * `.preset-read-only` class that setPresetEditorReadOnly() toggles; the module
+ * boolean is the cheap canonical read.
+ */
+function isPresetEditorReadOnly() {
+  return presetEditorReadOnly === true;
+}
+
+/**
+ * BUG-02 — enqueue an async, non-blocking persist of ONE participant row.
+ * Pushes the object REFERENCE (saveParticipantEdit replaces objects on edit, so
+ * identity is the dedup key). Never blocks the caller — the editor stays
+ * instant; the write happens in the background drain loop.
+ */
+function enqueueParticipantPersist(participantObj) {
+  if (!participantObj) return;
+  if (participantPersistQueue.indexOf(participantObj) !== -1) return; // already queued
+  participantPersistQueue.push(participantObj);
+  if (!participantPersistDraining) {
+    // Fire-and-forget; drainParticipantPersistQueue guards re-entrancy itself.
+    drainParticipantPersistQueue();
+  }
+}
+
+/**
+ * BUG-02 — FIFO drain, single task in flight at a time.
+ * Skip-if-detached at dequeue: an object no longer identity-present in
+ * participantsData was superseded by a newer edit (a newer task sits behind it)
+ * or the editor was closed — either way its write is stale, skip it.
+ */
+async function drainParticipantPersistQueue() {
+  if (participantPersistDraining) return;
+  participantPersistDraining = true;
+  try {
+    while (participantPersistQueue.length > 0) {
+      const obj = participantPersistQueue.shift();
+      // Skip-if-detached: preset closed, row removed, or this exact object was
+      // replaced by a newer edit (the newer object is queued behind us).
+      if (!currentPreset || !currentPreset.id) continue;
+      if (!Array.isArray(participantsData) || participantsData.indexOf(obj) === -1) continue;
+      participantPersistInFlight = persistSingleParticipant(obj);
+      try {
+        await participantPersistInFlight;
+      } finally {
+        participantPersistInFlight = null;
+      }
+    }
+  } finally {
+    participantPersistDraining = false;
+  }
+}
+
+/**
+ * BUG-02 — persist one participant row, then sync its driver names.
+ *
+ * The returned-id write-back is the critical invariant: a newly-created row's
+ * DB id MUST land on the in-memory object before any later savePreset, or the
+ * bulk merge double-creates the row (and its delete-diff can delete the row we
+ * just inserted). We also propagate that id to any object in participantsData
+ * sharing the same __persistKey — i.e. a re-edit that superseded this object
+ * while its insert was in flight — so that re-edit becomes a harmless UPSERT
+ * instead of a second INSERT (duplicate-insert race).
+ *
+ * On success the preset_participant_drivers snapshot is reattached so
+ * savePreset's BUG-01 driver-sync loop skips this row. On ANY failure the
+ * snapshot is left absent (Save Preset is the documented retry path) and the
+ * preset is marked dirty so the close-guard warns.
+ */
+async function persistSingleParticipant(obj) {
+  try {
+    // If a prior in-flight insert for this same logical row already completed
+    // and propagated its id onto us, this resolves to an UPSERT.
+    const payload = buildParticipantSavePayload(obj);
+    const result = await window.api.invoke('supabase-upsert-preset-participant', {
+      presetId: currentPreset.id,
+      participant: payload
+    });
+    if (!result || !result.success) {
+      throw new Error((result && result.error) || 'Upsert failed');
+    }
+
+    const newId = result.data && result.data.id;
+    if (newId) {
+      obj.id = newId;
+      // Propagate to a superseding re-edit that's still waiting in the queue.
+      if (obj.__persistKey) {
+        participantsData.forEach(p => {
+          if (p !== obj && !p.id && p.__persistKey === obj.__persistKey) {
+            p.id = newId;
+          }
+        });
+      }
+    }
+
+    // Sync driver names into preset_participant_drivers (mirrors savePreset's
+    // BUG-01 loop). driverMeta is carried only when present (CSV/PDF merge).
+    const driverNames = (Array.isArray(obj.drivers) && obj.drivers.length > 0 && typeof obj.drivers[0] === 'string')
+      ? obj.drivers
+      : getDriverNamesFromParticipant(obj);
+    if (obj.id && driverNames.length > 0) {
+      const syncResult = await window.api.invoke('preset-driver-sync', {
+        participantId: obj.id,
+        driverNames: driverNames,
+        ...(Array.isArray(obj.driverMeta) ? { driverMeta: obj.driverMeta } : {})
+      });
+      if (syncResult && syncResult.success && Array.isArray(syncResult.drivers)) {
+        // Reattach the snapshot so savePreset's BUG-01 loop treats this row as
+        // already-current and skips the (now redundant) re-sync.
+        obj.preset_participant_drivers = syncResult.drivers;
+      }
+    }
+  } catch (err) {
+    console.warn('[Participants] Per-row persist failed (kept in session):', err);
+    presetHasUnpersistedChanges = true;
+    if (typeof showNotification === 'function') {
+      showNotification(
+        `Couldn't save #${obj.numero || '?'} — kept in this session. Save Preset will retry.`,
+        'warning'
+      );
+    }
+    // Leave the driver snapshot absent — Save Preset IS the retry path.
+  }
+}
+
+/**
+ * BUG-02 — reset the per-row persist state when a (different) preset is loaded
+ * into the editor. The fresh participantsData replaces every object reference,
+ * so any still-queued/in-flight task is skip-if-detached against the new array;
+ * we additionally drop the pending queue and clear the dirty flag so the new
+ * session starts clean.
+ */
+function resetParticipantPersistState() {
+  participantPersistQueue.length = 0;
+  presetHasUnpersistedChanges = false;
+}
+
+/**
  * Save participant edit
  * @param {boolean} closeAfterSave - Whether to close modal after save (default: true)
  * @returns {Promise<boolean>} true on success, false if validation aborted the save
@@ -2060,14 +2298,27 @@ async function saveParticipantEdit(closeAfterSave = true) {
   // Check if this is a new participant (no existing ID)
   const isNewParticipant = editingRowIndex === -1 || !participantsData[editingRowIndex]?.id;
 
+  // BUG-02 — capture the pre-replacement object so we can (a) detect an
+  // unchanged row (skip the persist + carry its driver snapshot forward) and
+  // (b) carry the __persistKey across the replacement (links a re-edit to its
+  // still-in-flight insert so the returned id propagates and we never double-
+  // create the row).
+  const previousParticipant = editingRowIndex >= 0 ? participantsData[editingRowIndex] : null;
+  let savedObjectRef;
+
   if (editingRowIndex === -1) {
     // Add new participant
+    participant.__persistKey = ++participantPersistKeyCounter;
     participantsData.push(participant);
     editingRowIndex = participantsData.length - 1; // Update index to new position
+    savedObjectRef = participant;
   } else {
     // Update existing participant - preserve ID if exists
     const existingId = participantsData[editingRowIndex]?.id;
-    participantsData[editingRowIndex] = { ...participant, id: existingId };
+    const replacement = { ...participant, id: existingId };
+    replacement.__persistKey = previousParticipant?.__persistKey || (++participantPersistKeyCounter);
+    participantsData[editingRowIndex] = replacement;
+    savedObjectRef = replacement;
   }
 
   // Refresh table display
@@ -2086,6 +2337,31 @@ async function saveParticipantEdit(closeAfterSave = true) {
 
   // Scorri al pilota modificato dopo un breve delay per permettere il re-render
   setTimeout(() => scrollToParticipant(participantNumero), 150);
+
+  // BUG-02 — persist this row to the DB immediately (async, non-blocking).
+  // Gated on an existing preset id (a brand-new, not-yet-created preset has
+  // nothing to upsert into) and a writable (non read-only) editor. This single
+  // hook covers Save Changes / Save & Next / Save & Previous uniformly.
+  if (currentPreset?.id && !isPresetEditorReadOnly()) {
+    // Skip-if-unchanged: a pure review walk (open → Save & Next without editing)
+    // must cost 0 round-trips. When the persisted fields are identical, carry
+    // the previous driver-rows snapshot across the replacement so savePreset's
+    // BUG-01 loop also skips re-syncing this untouched row.
+    const unchanged = !!previousParticipant
+      && !!previousParticipant.id
+      && participantPersistedFieldsEqual(previousParticipant, savedObjectRef);
+    if (unchanged) {
+      if (Array.isArray(previousParticipant.preset_participant_drivers)) {
+        savedObjectRef.preset_participant_drivers = previousParticipant.preset_participant_drivers;
+      }
+    } else {
+      enqueueParticipantPersist(savedObjectRef);
+    }
+  } else if (currentPreset && !currentPreset.id) {
+    // Brand-new preset not yet created → nothing to upsert into. Keep in memory;
+    // Save Preset creates the preset and all rows. Mark dirty for the close-guard.
+    presetHasUnpersistedChanges = true;
+  }
 
   if (closeAfterSave) {
     closeParticipantEditModal();
@@ -2119,6 +2395,14 @@ async function saveParticipantAndStay() {
   }
 
   try {
+    // BUG-02 — same drain as savePreset: await any in-flight per-row write so its
+    // id write-back lands before this full save, and drop the pending queue (this
+    // bulk save covers every row). Defensive: the face flow is disabled app-wide.
+    participantPersistQueue.length = 0;
+    if (participantPersistInFlight) {
+      try { await participantPersistInFlight; } catch (_) { /* failure already toasted */ }
+    }
+
     // Get current user ID for face photos
     let currentUserId = null;
     const sessionResult = await window.api.invoke('auth-get-session');
@@ -3234,6 +3518,102 @@ function renderCustomFolders() {
   });
 }
 
+// =====================================================================
+// ACC-01 (Gruppe C) — "Series sponsors to ignore" chip input
+// Per-preset list of series-wide sponsor brands (Michelin, Rolex …) that the
+// SmartMatcher excludes from SPONSOR evidence. Mirrors the folder-chip visuals.
+// =====================================================================
+
+var SERIES_SPONSOR_MAX_ENTRIES = 50;
+var SERIES_SPONSOR_MAX_LEN = 60;
+
+/**
+ * Render the current seriesSponsorIgnore list as removable chips. Removal is
+ * by index to avoid quoting issues with names containing apostrophes/quotes.
+ */
+function renderSeriesSponsorChips() {
+  const container = document.getElementById('series-sponsor-chips');
+  if (!container) return;
+  container.innerHTML = '';
+  seriesSponsorIgnore.forEach((name, idx) => {
+    const chip = document.createElement('div');
+    chip.className = 'sponsor-chip';
+    chip.innerHTML = `
+      <span class="sponsor-chip-name">${escapeHtml(name)}</span>
+      <button type="button" class="sponsor-chip-remove" onclick="removeSeriesSponsorAt(${idx})" title="Remove sponsor">×</button>
+    `;
+    container.appendChild(chip);
+  });
+  ensureSeriesSponsorInputBound();
+}
+
+/**
+ * Add one or more sponsor names from a raw string. Splits on commas (so a
+ * pasted "Michelin, Rolex" becomes two chips), trims, drops empties, caps each
+ * entry at 60 chars, dedupes case-insensitively, and caps the list at 50.
+ */
+function addSeriesSponsorsFromText(text) {
+  if (!text) return;
+  let added = false;
+  String(text).split(',').forEach(part => {
+    const name = part.trim().slice(0, SERIES_SPONSOR_MAX_LEN).trim();
+    if (!name) return;
+    if (seriesSponsorIgnore.length >= SERIES_SPONSOR_MAX_ENTRIES) return;
+    const exists = seriesSponsorIgnore.some(s => s.toLowerCase() === name.toLowerCase());
+    if (!exists) {
+      seriesSponsorIgnore.push(name);
+      added = true;
+    }
+  });
+  if (added) renderSeriesSponsorChips();
+}
+
+/**
+ * Remove the chip at the given index.
+ */
+function removeSeriesSponsorAt(idx) {
+  if (idx >= 0 && idx < seriesSponsorIgnore.length) {
+    seriesSponsorIgnore.splice(idx, 1);
+    renderSeriesSponsorChips();
+  }
+}
+
+/**
+ * Bind the input's Enter / comma / paste / blur behavior once. Disabled inputs
+ * (official read-only view) receive no keyboard/focus events, so this is inert
+ * there even though the listeners are attached.
+ */
+function ensureSeriesSponsorInputBound() {
+  const input = document.getElementById('series-sponsor-input');
+  if (!input || input.dataset.sponsorBound === '1') return;
+  input.dataset.sponsorBound = '1';
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault();
+      addSeriesSponsorsFromText(input.value);
+      input.value = '';
+    }
+  });
+
+  input.addEventListener('paste', (e) => {
+    const text = (e.clipboardData || window.clipboardData)?.getData('text') || '';
+    if (text.indexOf(',') !== -1) {
+      e.preventDefault();
+      addSeriesSponsorsFromText(text);
+      input.value = '';
+    }
+  });
+
+  // Commit a typed-but-not-entered value on blur so it isn't silently lost on save.
+  input.addEventListener('blur', () => {
+    if (input.value.trim()) {
+      addSeriesSponsorsFromText(input.value);
+      input.value = '';
+    }
+  });
+}
+
 /**
  * Clear all custom folders
  */
@@ -3286,6 +3666,7 @@ async function editPreset(presetId) {
 
     currentPreset = response.data;
     isEditingPreset = true;
+    resetParticipantPersistState(); // BUG-02 — fresh editing session
     // Base order is always race-number ascending. The DB returns participants in
     // insertion/sort_order, so the FIRST open (before any saved sort exists)
     // could otherwise show them unsorted. Sorting the DATA here makes the base
@@ -3332,6 +3713,17 @@ async function editPreset(presetId) {
       allowExternalElEdit.disabled = false;
     }
 
+    // ACC-01 (Gruppe C) — load the series-sponsor ignore list (editable)
+    seriesSponsorIgnore = Array.isArray(currentPreset.series_sponsor_ignore)
+      ? [...currentPreset.series_sponsor_ignore]
+      : [];
+    renderSeriesSponsorChips();
+    const seriesSponsorInputEdit = document.getElementById('series-sponsor-input');
+    if (seriesSponsorInputEdit) {
+      seriesSponsorInputEdit.value = '';
+      seriesSponsorInputEdit.disabled = false;
+    }
+
     // (1.2.0 — the additive-default-folder flag is now per-participant,
     // loaded from `participant.include_default_folder` inside the edit
     // modal — see openParticipantEditModal.)
@@ -3345,7 +3737,12 @@ async function editPreset(presetId) {
     // Apply saved sort preference (or default: number ascending)
     applySortState(loadSortPreference(currentPreset.id));
 
-    // Load IPTC metadata into form (if preset-iptc-editor.js is loaded)
+    // Load IPTC metadata into form (if preset-iptc-editor.js is loaded).
+    // UX-04, Option B: mount the shared IPTC form markup FIRST — ordering is
+    // load-bearing, values set on missing elements are silently lost.
+    if (typeof ensureIptcFormMarkup === 'function') {
+      await ensureIptcFormMarkup(document.getElementById('iptc-section-body'));
+    }
     if (typeof loadIptcDataIntoForm === 'function') {
       loadIptcDataIntoForm(currentPreset.iptc_metadata || null);
     }
@@ -3392,6 +3789,7 @@ async function viewOfficialPreset(presetId) {
 
     currentPreset = response.data;
     isEditingPreset = false;
+    resetParticipantPersistState(); // BUG-02 — fresh (read-only) session
     participantsData = currentPreset.participants || [];
 
     // Load custom folders, merge with localStorage paths (per-device)
@@ -3416,6 +3814,17 @@ async function viewOfficialPreset(presetId) {
     if (allowExternalElView) {
       allowExternalElView.checked = currentPreset.allow_external_person_recognition === true;
       allowExternalElView.disabled = true;
+    }
+
+    // ACC-01 (Gruppe C) — load the series-sponsor ignore list (read-only view)
+    seriesSponsorIgnore = Array.isArray(currentPreset.series_sponsor_ignore)
+      ? [...currentPreset.series_sponsor_ignore]
+      : [];
+    renderSeriesSponsorChips();
+    const seriesSponsorInputView = document.getElementById('series-sponsor-input');
+    if (seriesSponsorInputView) {
+      seriesSponsorInputView.value = '';
+      seriesSponsorInputView.disabled = true;
     }
 
     // Populate sport category dropdown
@@ -3467,11 +3876,17 @@ async function viewOfficialPreset(presetId) {
  * Disables form inputs, hides add/delete buttons, etc.
  */
 function setPresetEditorReadOnly(readOnly) {
+  // BUG-02 — keep the module mirror in sync so the per-row persist hook can
+  // cheaply skip official/read-only presets without a DOM read.
+  presetEditorReadOnly = !!readOnly;
+
   const modal = document.getElementById('preset-editor-modal');
   if (!modal) return;
 
   // Disable/enable form fields
-  const fields = ['preset-name', 'preset-description', 'preset-sport-category'];
+  // ACC-01: include the series-sponsor input so it's locked in the read-only
+  // (official preset) view alongside name/description/category.
+  const fields = ['preset-name', 'preset-description', 'preset-sport-category', 'series-sponsor-input'];
   fields.forEach(id => {
     const el = document.getElementById(id);
     if (el) el.disabled = readOnly;
@@ -3495,8 +3910,9 @@ async function duplicateAndEditOfficialPreset(presetId) {
     const response = await window.api.invoke('supabase-duplicate-official-preset', presetId);
 
     if (response.success && response.data) {
-      // Close the read-only view
-      closePresetEditor();
+      // Close the read-only view (force: read-only views never carry unsaved
+      // changes, and this is a programmatic close mid-duplicate-flow).
+      closePresetEditor(true);
 
       showNotification(`Created "${response.data.name}" - opening for editing...`, 'success');
 
@@ -3735,7 +4151,7 @@ async function exportPresetCSV(presetId) {
     };
 
     // CSV Header (English column names + hidden driver preservation columns)
-    const csvHeader = 'Number,Driver,Team,Category,Plate_Number,Car_Model,Nationality,Sponsors,Metatag,Folder_1,Folder_2,Folder_3,Folder_1_Path,Folder_2_Path,Folder_3_Path,_Driver_IDs,_Driver_Metatags,_Driver_Nationalities';
+    const csvHeader = 'Number,Driver,Team,Category,Plate_Number,Car_Model,Nationality,Sponsors,Metatag,Folder_1,Folder_2,Folder_3,Folder_1_Path,Folder_2_Path,Folder_3_Path,_Driver_IDs,_Driver_Metatags,_Driver_Nationalities,_Driver_Names';
 
     // Convert participants to CSV rows (fetch drivers for each participant)
     const csvRows = await Promise.all(participants.map(async (p) => {
@@ -3747,6 +4163,10 @@ async function exportPresetCSV(presetId) {
       const driverIds = drivers.map(d => d.id).join('|');
       const driverMetatags = drivers.map(d => d.driver_metatag || '').join('|');
       const driverNationalities = drivers.map(d => d.driver_nationality || '').join('|');
+      // Full driver names, pipe-delimited — lossless even when a name itself contains a
+      // comma ("Cognome, Nome"). Mirrors the other _Driver_* columns; consumed on import
+      // so an export→re-import round-trip never splits a comma-name into two people.
+      const driverNamesPipe = drivers.map(d => d.driver_name || '').join('|');
 
       // Nationality: use first driver's nationality
       const primaryNationality = drivers.length > 0 ? (drivers[0].driver_nationality || '') : '';
@@ -3769,7 +4189,8 @@ async function exportPresetCSV(presetId) {
         escapeCSV(p.folder_3_path || ''),
         escapeCSV(driverIds),
         escapeCSV(driverMetatags),
-        escapeCSV(driverNationalities)
+        escapeCSV(driverNationalities),
+        escapeCSV(driverNamesPipe)
       ].join(',');
     }));
 
@@ -4338,6 +4759,8 @@ function removeParticipant(rowIndex) {
     if (sortState) {
       applySortState(sortState);
     }
+    // BUG-02 — a removal only reaches the DB via Save Preset's delete-diff.
+    presetHasUnpersistedChanges = true;
   }
 }
 
@@ -4358,6 +4781,8 @@ function clearAllParticipants() {
     if (confirmed) {
       participantsData = [];
       clearParticipantsTable();
+      // BUG-02 — clearing only commits via Save Preset's delete-diff.
+      presetHasUnpersistedChanges = true;
     }
   }
 }
@@ -4373,6 +4798,14 @@ async function savePreset() {
     // Issue #104 — preset-scope driver filter flag
     const allowExternalPersons = document.getElementById('preset-allow-external-persons')?.checked === true;
 
+    // ACC-01 (Gruppe C) — flush any text typed into the series-sponsor input but
+    // not yet committed (Enter/blur), so a last-typed value isn't lost on save.
+    const seriesSponsorInputSave = document.getElementById('series-sponsor-input');
+    if (seriesSponsorInputSave && !seriesSponsorInputSave.disabled && seriesSponsorInputSave.value.trim()) {
+      addSeriesSponsorsFromText(seriesSponsorInputSave.value);
+      seriesSponsorInputSave.value = '';
+    }
+
     // Validation
     if (!presetName) {
       showNotification('Please enter a preset name', 'error');
@@ -4382,55 +4815,21 @@ async function savePreset() {
 
     // Sport category is optional - no validation needed
 
-    // Use participants data from memory (already updated via modal)
-    // ⚠️ CRITICAL FIX: Include ID to enable UPSERT (UPDATE existing instead of INSERT new)
-    //
-    // 1.2.0 — Forward both the canonical `folders` array (set by the
-    // chip editor) AND the per-participant `include_default_folder`
-    // flag. The DB layer (savePresetParticipantsSupabase →
-    // applyDualWriteFolders) will derive folder_1/2/3 from folders[]
-    // for 1.1.4 backward compatibility, so we no longer need to
-    // populate the legacy slots here. Falling back to the legacy
-    // fields only when folders[] is missing protects rows that
-    // haven't been opened in the new chip editor yet.
-    const participants = participantsData.map(p => {
-      const hasNewFolders = Array.isArray(p.folders);
-      return {
-        id: p.id || undefined, // ✅ Include ID for UPSERT logic
-        numero: p.numero || '',
-        nome: getDriverNamesFromParticipant(p).join(', ') || p.nome || '',
-        categoria: p.categoria || '',
-        squadra: p.squadra || '',
-        plate_number: p.plate_number || '',
-        sponsor: p.sponsor || '',
-        metatag: p.metatag || '',
+    // BUG-02 — coordinate with the per-row persist queue BEFORE building the
+    // bulk payload. Clearing the pending FIFO alone is NOT enough: an in-flight
+    // insert for a new row completing mid-bulk-save would create a duplicate the
+    // delete-diff can miss. Awaiting the in-flight task means its returned-id
+    // write-back lands first, turning the bulk path into a harmless UPSERT.
+    participantPersistQueue.length = 0;
+    if (participantPersistInFlight) {
+      try { await participantPersistInFlight; } catch (_) { /* failure already toasted */ }
+    }
 
-        // 1.2.0 canonical folder array — drives the dual-write at the DB layer.
-        folders: hasNewFolders ? p.folders : undefined,
-        // 1.2.0 per-participant additive-default flag. Default true
-        // when the field is missing (matches the DB column default).
-        include_default_folder: p.include_default_folder !== false,
-
-        // Legacy slots: only forward when folders[] is absent (i.e. the
-        // user hasn't touched the new chip editor yet). When folders[]
-        // IS present, the DB layer derives these from it via
-        // applyDualWriteFolders, so we leave them undefined to avoid
-        // overwriting that derivation with stale renderer state.
-        folder_1: hasNewFolders ? undefined : (p.folder_1 || ''),
-        folder_2: hasNewFolders ? undefined : (p.folder_2 || ''),
-        folder_3: hasNewFolders ? undefined : (p.folder_3 || ''),
-        folder_1_path: hasNewFolders ? undefined : (getFolderPath(p.folder_1) || p.folder_1_path || ''),
-        folder_2_path: hasNewFolders ? undefined : (getFolderPath(p.folder_2) || p.folder_2_path || ''),
-        folder_3_path: hasNewFolders ? undefined : (getFolderPath(p.folder_3) || p.folder_3_path || ''),
-
-        delivery_to_client_id: p.delivery_to_client_id || null,
-
-        // Persist the soft-disable flag so deactivations — whether from the
-        // manual Active toggle or a round-to-round entry-list re-import (BUG-03)
-        // — survive a Save Preset. undefined is treated as active.
-        is_active: p.is_active !== false
-      };
-    });
+    // Use participants data from memory (already updated via modal).
+    // buildParticipantSavePayload is the SINGLE source of truth shared with the
+    // per-row persist path so the two mappings can never drift (folders[]
+    // dual-write, id-for-UPSERT, is_active, etc. all live there).
+    const participants = participantsData.map(p => buildParticipantSavePayload(p));
 
     // Disable save button during operation
     const saveBtn = document.getElementById('save-preset-btn');
@@ -4450,6 +4849,8 @@ async function savePreset() {
         custom_folders: customFolders,
         // Issue #104 — preset-scope driver filter flag
         allow_external_person_recognition: allowExternalPersons,
+        // ACC-01 (Gruppe C) — series-wide sponsors to ignore in matching
+        series_sponsor_ignore: seriesSponsorIgnore,
       };
 
       const updateResponse = await window.api.invoke('supabase-update-participant-preset', {
@@ -4469,6 +4870,8 @@ async function savePreset() {
         custom_folders: customFolders,
         // Issue #104 — preset-scope driver filter flag
         allow_external_person_recognition: allowExternalPersons,
+        // ACC-01 (Gruppe C) — series-wide sponsors to ignore in matching
+        series_sponsor_ignore: seriesSponsorIgnore,
       };
 
       const createResponse = await window.api.invoke('supabase-create-participant-preset', presetData);
@@ -4603,7 +5006,10 @@ async function savePreset() {
       );
     }
 
-    closePresetEditor();
+    // BUG-02 — everything in memory is now on the preset; force-close past the
+    // unsaved-changes guard (this IS the save).
+    presetHasUnpersistedChanges = false;
+    closePresetEditor(true);
     await loadParticipantPresets(); // Refresh list
 
   } catch (error) {
@@ -4673,14 +5079,38 @@ function collectParticipantsFromTable() {
 }
 
 /**
- * Close preset editor modal
+ * Close preset editor modal.
+ *
+ * BUG-02 — when there are changes not yet on the preset (a pending/failed per-row
+ * persist, an unreviewed CSV/PDF merge, a removal, or a brand-new preset that
+ * was never saved), warn before discarding. This finally defuses the silent-wipe
+ * vector: the X button, Cancel, a global Escape, and a modal-backdrop click all
+ * route here (the last two via closeAllModals) and now inherit the guard.
+ * Programmatic callers that legitimately discard in-memory state (savePreset
+ * success, duplicateAndEditOfficialPreset) pass force = true to skip it.
+ *
+ * @param {boolean} force - skip the unsaved-changes confirm (default false)
  */
-function closePresetEditor() {
+function closePresetEditor(force = false) {
+  const dirty = presetHasUnpersistedChanges
+    || participantPersistQueue.length > 0
+    || !!participantPersistInFlight;
+  if (dirty && !force) {
+    const ok = confirm("You have changes that aren't saved to this preset yet. Close and discard them?");
+    if (!ok) return; // abort the close — keep the editor open with its state intact
+  }
+
   const modal = document.getElementById('preset-editor-modal');
   modal.classList.remove('show');
   currentPreset = null;
   isEditingPreset = false;
   participantsData = [];
+
+  // BUG-02 — drop any queued per-row persists and clear dirty state. An
+  // already in-flight write is harmless: its target object is now detached from
+  // participantsData, so its id write-back lands on a discarded object.
+  participantPersistQueue.length = 0;
+  presetHasUnpersistedChanges = false;
 
   // Reset read-only state
   setPresetEditorReadOnly(false);
@@ -4914,6 +5344,11 @@ function mapCsvRowToParticipantFields(row) {
     nationality: pick('nationality', 'Nationality'),
     driverNationalities: splitPipe('_Driver_Nationalities', '_driver_nationalities'),
     driverMetatags: splitPipe('_Driver_Metatags', '_driver_metatags'),
+    // Structured per-driver names (pipe-delimited): the unambiguous CSV channel for names
+    // that contain a comma ("Cognome, Nome"). driverNamesFromImportRow prefers a non-empty
+    // array over splitting the comma-joined Driver/nome column; an empty array (column
+    // absent) falls back to the legacy comma split, so a plain "A, B" cell still = two drivers.
+    drivers: splitPipe('_Driver_Names', '_driver_names'),
     folders,
   };
 }
@@ -4930,6 +5365,25 @@ function buildDriverMeta(driverNames, f) {
       || '',
     metatag: (f.driverMetatags && f.driverMetatags[i]) || ''
   }));
+}
+
+/**
+ * Resolve driver names from an import row, disambiguating the comma AT THE
+ * SOURCE where the convention is known.
+ *
+ * PDF entry-list rows carry a structured `drivers` array straight from the
+ * parsePdfEntryList Edge Function (one element per real driver), so a name in
+ * "Lastname, Firstname" form (e.g. "Kaya, Mustafa Mehmet") stays ONE driver —
+ * the internal comma is preserved. CSV rows never carry a `drivers` array, so
+ * they fall back to the legacy convention where a comma in `nome` separates
+ * MULTIPLE drivers ("Max Mustermann, John Doe" = two). Both conventions coexist
+ * because each is resolved where it is unambiguous.
+ */
+function driverNamesFromImportRow(row) {
+  if (Array.isArray(row?.drivers) && row.drivers.length > 0) {
+    return row.drivers.map(s => String(s).trim()).filter(Boolean);
+  }
+  return row?.nome ? row.nome.split(',').map(s => s.trim()).filter(Boolean) : [];
 }
 
 /**
@@ -4974,7 +5428,8 @@ function mergeMappedRowsIntoCurrentPreset(mappedRows, missingAction = 'deactivat
 
   (mappedRows || []).forEach(f => {
     const numero = String(f.numero ?? '').trim();
-    const driverNames = f.nome ? f.nome.split(',').map(s => s.trim()).filter(Boolean) : [];
+    const driverNames = driverNamesFromImportRow(f);
+    const hasStructuredDrivers = Array.isArray(f.drivers) && f.drivers.length > 0;
     if (numero) importedNumeros.add(numero);
 
     const existingIdx = numero ? indexByNumero.get(numero) : undefined;
@@ -4983,8 +5438,10 @@ function mergeMappedRowsIntoCurrentPreset(mappedRows, missingAction = 'deactivat
       // empty cells never wipe data the user already has.
       const merged = { ...participantsData[existingIdx] };
       if (reactivateMatched) merged.is_active = true; // present in the list → racing again
-      if (f.nome) {
-        merged.nome = f.nome;
+      if (f.nome || hasStructuredDrivers) {
+        // Keep nome as the legacy fallback; when only the structured array is
+        // present, derive it from the (comma-safe) driver names.
+        merged.nome = f.nome || driverNames.join(', ');
         merged.drivers = driverNames;
         merged.driverMeta = buildDriverMeta(driverNames, f); // nationality/metatag per driver
         // Drop the stale driver-rows snapshot so the Save Preset driver sync
@@ -5040,6 +5497,13 @@ function mergeMappedRowsIntoCurrentPreset(mappedRows, missingAction = 'deactivat
   loadParticipantsIntoTable(participantsData);
   if (sortState && typeof applySortState === 'function') applySortState(sortState);
   if (typeof renderCustomFolders === 'function') renderCustomFolders();
+
+  // BUG-02 — a merge mutates the roster purely in memory; its "remove"/
+  // "deactivate" results are committed ONLY by Save Preset's delete-diff behind
+  // the review gate. Mark dirty so the close-guard warns before discarding.
+  if (added || updated || deactivated || removed) {
+    presetHasUnpersistedChanges = true;
+  }
 
   return { added, updated, deactivated, removed };
 }
@@ -5919,31 +6383,43 @@ var pdfImportData = null;
 /** Interval ID for cycling processing messages */
 var processingMessageInterval = null;
 
-/** Fun racing-themed messages for PDF processing */
+/** Processing messages cycled while the entry list is being read (no emoji — dry in-product register). */
 const PDF_PROCESSING_MESSAGES = [
-  "🏎️ Warming up the AI engine...",
-  "🔍 Scanning for race numbers...",
-  "📊 Analyzing entry list structure...",
-  "🏁 Checking starting grid positions...",
-  "👀 Looking for names...",
-  "🏆 Identifying competitors...",
-  "📋 Reading team information...",
-  "⚡ Processing at full throttle...",
-  "🎯 Extracting participant data...",
-  "🔧 Fine-tuning the results...",
-  "🚀 Almost at the finish line...",
-  "📝 Double-checking the data...",
-  "🏅 Preparing your entry list..."
+  "Scanning for race numbers…",
+  "Analyzing the entry-list structure…",
+  "Reading driver names…",
+  "Identifying competitors…",
+  "Reading team information…",
+  "Extracting participant data…",
+  "Fine-tuning the results…",
+  "Double-checking the data…",
+  "Preparing your entry list…"
 ];
 
 /**
  * Setup PDF drop zone event listeners
  */
 function setupPdfDropZone() {
-  const dropZone = document.getElementById('pdf-drop-zone');
-  const fileInput = document.getElementById('pdf-file-input');
-  const importPdfBtn = document.getElementById('import-pdf-preset-btn');
+  // Two drop zones share identical behaviour: the page one (create-new flow) and
+  // the in-modal one (used when "Update participants" opens the modal with no file
+  // yet — previously the modal had no input UI at all, so the user was stuck).
+  wirePdfDropZone(document.getElementById('pdf-drop-zone'), document.getElementById('pdf-file-input'));
+  wirePdfDropZone(document.getElementById('pdf-modal-drop-zone'), document.getElementById('pdf-modal-file-input'));
 
+  // "Import PDF" button (create flow) opens the page file browser.
+  const importPdfBtn = document.getElementById('import-pdf-preset-btn');
+  const pageFileInput = document.getElementById('pdf-file-input');
+  if (importPdfBtn && pageFileInput) {
+    importPdfBtn.addEventListener('click', () => pageFileInput.click());
+  }
+}
+
+/**
+ * Wire a drop zone + its hidden file input to the shared PDF-import flow.
+ * @param {HTMLElement|null} dropZone
+ * @param {HTMLInputElement|null} fileInput
+ */
+function wirePdfDropZone(dropZone, fileInput) {
   if (!dropZone || !fileInput) {
     return;
   }
@@ -5952,13 +6428,6 @@ function setupPdfDropZone() {
   dropZone.addEventListener('click', () => {
     fileInput.click();
   });
-
-  // Import PDF button click
-  if (importPdfBtn) {
-    importPdfBtn.addEventListener('click', () => {
-      fileInput.click();
-    });
-  }
 
   // File input change
   fileInput.addEventListener('change', async (e) => {
@@ -6029,7 +6498,7 @@ async function processPdfFile(file) {
 
   // Show modal with processing state
   openPdfImportModal();
-  showPdfProcessingState('📤 Uploading document...', true); // Start cycling messages
+  showPdfProcessingState('Uploading document…', true); // Start cycling messages
 
   try {
     // Convert file to base64
@@ -6103,8 +6572,13 @@ function openPdfImportModal() {
   if (modal) {
     modal.classList.add('show');
   }
-  // Hide all states initially
+  // Hide all states, then show the drop/browse input so the user has somewhere to
+  // supply a PDF. The create-new flow immediately overrides this with the processing
+  // state (processPdfFile → openPdfImportModal → showPdfProcessingState, synchronous);
+  // for "Update participants" (opened with no file) this is the visible entry point.
   hidePdfStates();
+  const inputState = document.getElementById('pdf-input-state');
+  if (inputState) inputState.style.display = 'block';
 }
 
 /**
@@ -6136,7 +6610,7 @@ function hidePdfStates() {
   // Stop message cycling
   stopProcessingMessageCycle();
 
-  const states = ['pdf-processing-state', 'pdf-validation-error', 'pdf-preview-state'];
+  const states = ['pdf-input-state', 'pdf-processing-state', 'pdf-validation-error', 'pdf-preview-state'];
   states.forEach(id => {
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';
@@ -6248,6 +6722,78 @@ function showPdfValidationError(title, message, details) {
  * Show preview state with extracted data
  * @param {Object} data - Extraction result data
  */
+/**
+ * Compute the merge impact of the pending PDF import against the currently open
+ * preset, keyed by race number (the same key the merge engine uses):
+ *   updated — import numbers already in the preset
+ *   added   — import numbers not yet in the preset (preset smaller than import)
+ *   missing — persisted preset rows (have an id) whose number is NOT in the
+ *             import (preset bigger than import)
+ * Race numbers are matched as exact strings on purpose — "007" and "7" are
+ * different cars (leading zeros are significant in motorsport), so they are
+ * never collapsed.
+ */
+function computePdfMergeImpact() {
+  const imported = (pdfImportData && Array.isArray(pdfImportData.participants)) ? pdfImportData.participants : [];
+  const importNumeros = new Set();
+  imported.forEach(p => { const k = String(p.numero ?? '').trim(); if (k) importNumeros.add(k); });
+
+  const existing = Array.isArray(participantsData) ? participantsData : [];
+  const existingNumeros = new Set();
+  existing.forEach(p => { const k = String(p.numero ?? '').trim(); if (k) existingNumeros.add(k); });
+
+  let updated = 0, added = 0;
+  importNumeros.forEach(n => { if (existingNumeros.has(n)) updated++; else added++; });
+
+  let missing = 0;
+  existing.forEach(p => {
+    const n = String(p.numero ?? '').trim();
+    if (p.id && n && !importNumeros.has(n)) missing++;
+  });
+  return { updated, added, missing };
+}
+
+/**
+ * Render the live merge-impact line in the PDF modal (merge mode only) and keep
+ * the confirm button label honest. Re-runs on "missing participants" change
+ * (the deactivate/remove/keep wording depends on it).
+ */
+function renderPdfMergeImpact() {
+  const box = document.getElementById('pdf-merge-impact');
+  if (!box) return;
+  if (!window.pdfImportMergeMode) { box.style.display = 'none'; return; }
+
+  const { updated, added, missing } = computePdfMergeImpact();
+  const action = document.getElementById('pdf-missing-action')?.value || 'deactivate';
+  const presetName = currentPreset && (currentPreset.name || currentPreset.nome);
+  const presetLabel = presetName ? `"${presetName}"` : 'this preset';
+
+  let missingTxt = '';
+  if (missing > 0) {
+    const word = action === 'deactivate' ? 'deactivated' : (action === 'remove' ? 'removed' : 'left unchanged');
+    const col = action === 'keep' ? 'var(--text-secondary)' : (action === 'remove' ? '#ef4444' : '#f59e0b');
+    missingTxt = ` · <span class="pdf-num" style="color:${col};font-weight:700">${missing}</span> ${word}`;
+  }
+  const warn = missing > 0 && action !== 'keep';
+  box.style.display = 'block';
+  box.style.borderColor = warn ? '#f59e0b' : 'var(--border-color)';
+  box.style.borderLeft = warn ? '3px solid #f59e0b' : '';
+  box.style.background = warn ? 'rgba(245,158,11,0.10)' : 'rgba(255,255,255,0.04)';
+  box.innerHTML =
+    `In ${escapeHtml(presetLabel)} — <span class="pdf-num" style="color:#1a9ee0;font-weight:700">${updated}</span> updated · <span class="pdf-num" style="color:#10b981;font-weight:700">${added}</span> added${missingTxt}.` +
+    (warn
+      ? `<br><span style="color:#f59e0b;"><span class="pdf-num" style="font-weight:700">${missing}</span> participant(s) in the preset aren't in this PDF and will be ${action === 'remove' ? 'removed' : 'deactivated'} on Save.</span>`
+      : '');
+
+  // The "what to do with the missing" selector only matters when some preset
+  // cars are absent from the import — show it right under the impact, only then.
+  const group = document.getElementById('pdf-missing-action-group');
+  if (group) group.style.display = (missing > 0) ? '' : 'none';
+
+  const importBtn = document.getElementById('import-pdf-btn');
+  if (importBtn) importBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Add <span class="pdf-num">${added}</span> · update <span class="pdf-num">${updated}</span>`;
+}
+
 function showPdfPreviewState(data) {
   hidePdfStates();
   const previewState = document.getElementById('pdf-preview-state');
@@ -6299,9 +6845,9 @@ function showPdfPreviewState(data) {
   const hintEl = document.getElementById('pdf-preview-hint');
   if (hintEl) {
     if (data.participants.length > 10) {
-      hintEl.textContent = `Showing first 10 of ${data.participants.length} participants.`;
+      hintEl.innerHTML = `Showing first <span class="pdf-num">10</span> of <span class="pdf-num">${data.participants.length}</span> participants.`;
     } else {
-      hintEl.textContent = `Showing all ${data.participants.length} participants.`;
+      hintEl.innerHTML = `Showing all <span class="pdf-num">${data.participants.length}</span> participants.`;
     }
   }
 
@@ -6322,8 +6868,13 @@ function showPdfPreviewState(data) {
   if (nameGroupP) nameGroupP.style.display = pdfMerge ? 'none' : '';
   const missingGroupP = document.getElementById('pdf-missing-action-group');
   if (missingGroupP) missingGroupP.style.display = pdfMerge ? '' : 'none';
-  if (pdfMerge && importBtn) {
-    importBtn.innerHTML = `<span class="btn-icon">➕</span>Add / update ${data.participants.length} in preset`;
+  if (pdfMerge) {
+    // Live add/update/deactivate breakdown vs the open preset, BEFORE confirming
+    // — not just in the post-merge toast. Also sets the confirm button label.
+    renderPdfMergeImpact();
+  } else {
+    const impactBox = document.getElementById('pdf-merge-impact');
+    if (impactBox) impactBox.style.display = 'none';
   }
 }
 
@@ -6363,13 +6914,20 @@ function populatePdfPreviewTable(participants) {
 
   previewParticipants.forEach(p => {
     const row = document.createElement('tr');
-    // Display drivers from preset_participant_drivers or fallback to nome
-    const driversDisplay = getDriverNamesFromParticipant(p).join(', ') || '-';
+    // One chip per driver (from the structured drivers array) so a name that
+    // itself contains a comma — "Kaya, Mustafa Mehmet" — stays ONE person and
+    // the driver count is unambiguous at a glance.
+    const names = getDriverNamesFromParticipant(p);
+    const driversCell = names.length
+      ? names.map(n => `<span class="pdf-dchip">${escapeHtml(n)}</span>`).join('')
+      : '<span class="pdf-muted">—</span>';
+    const team = p.squadra ? escapeHtml(p.squadra) : '<span class="pdf-muted">—</span>';
+    const cls = p.categoria ? `<span class="pdf-tag">${escapeHtml(p.categoria)}</span>` : '<span class="pdf-muted">—</span>';
     row.innerHTML = `
-      <td><strong>${escapeHtml(p.numero || '-')}</strong></td>
-      <td>${escapeHtml(driversDisplay)}</td>
-      <td>${escapeHtml(p.squadra || '-')}</td>
-      <td>${escapeHtml(p.categoria || '-')}</td>
+      <td><span class="pdf-num">${escapeHtml(p.numero || '—')}</span></td>
+      <td>${driversCell}</td>
+      <td>${team}</td>
+      <td>${cls}</td>
     `;
     tbody.appendChild(row);
   });
@@ -6393,6 +6951,13 @@ async function importPdfPreset() {
     const mapped = pdfImportData.participants.map(p => ({
       numero: p.numero || '',
       nome: p.nome || '',
+      // Structured per-driver names from the Edge Function — preserves names that
+      // contain a comma ("Kaya, Mustafa Mehmet"). The merge engine prefers this
+      // over splitting `nome`; absent for CSV (legacy comma-split). undefined (not
+      // []) so an empty array never shadows the nome fallback.
+      drivers: (Array.isArray(p.drivers) && p.drivers.length > 0)
+        ? p.drivers.map(s => String(s).trim()).filter(Boolean)
+        : undefined,
       categoria: p.categoria || '',
       squadra: p.squadra || '',
       sponsor: Array.isArray(p.sponsors) ? p.sponsors.join(', ') : (p.sponsor || ''),
@@ -6452,6 +7017,16 @@ async function importPdfPreset() {
       }
     });
 
+    // Build structured per-driver-name lookup, keyed by race number. Used to
+    // create preset_participant_drivers verbatim so names containing a comma
+    // ("Kaya, Mustafa Mehmet") are NOT re-split. `nome` stays the legacy
+    // comma-joined fallback written to the participant row.
+    const pdfDriversByNumero = {};
+    pdfImportData.participants.forEach(p => {
+      const list = driverNamesFromImportRow(p);
+      if (list.length > 0) pdfDriversByNumero[p.numero] = list;
+    });
+
     // Create preset
     const createResponse = await window.api.invoke('supabase-create-participant-preset', {
       name: presetName,
@@ -6499,12 +7074,25 @@ async function importPdfPreset() {
     let driversCreated = 0;
     for (let i = 0; i < savedParticipants.length; i++) {
       const savedP = savedParticipants[i];
-      const driverNames = savedP.nome ? savedP.nome.split(',').map(s => s.trim()).filter(Boolean) : [];
+      // Prefer the structured per-driver names (comma-safe) over re-splitting the
+      // legacy comma-joined nome — this is what stops "Kaya, Mustafa Mehmet" from
+      // being torn into two people. Fall back to the comma split only if no
+      // structured array reached us (defensive / legacy).
+      const structured = pdfDriversByNumero[savedP.numero];
+      const driverNames = (Array.isArray(structured) && structured.length > 0)
+        ? structured
+        : (savedP.nome ? savedP.nome.split(',').map(s => s.trim()).filter(Boolean) : []);
       const nationality = pdfNationalityByNumero[savedP.numero] || '';
 
-      if (driverNames.length > 1) {
-        // Multi-driver detected
-        console.log(`[PDF Import] Creating ${driverNames.length} drivers for #${savedP.numero}`);
+      // Always materialize driver records when we have ≥1 name — INCLUDING a
+      // single driver with no nationality. The canonical preset_participant_drivers
+      // row then shadows the ambiguous `nome` on every later read; without it a
+      // lone "Lastname, Firstname" would be re-split on the comma by
+      // getDriverNamesFromParticipant / autoMigrateDriverRecords after save.
+      if (driverNames.length >= 1) {
+        if (driverNames.length > 1) {
+          console.log(`[PDF Import] Creating ${driverNames.length} drivers for #${savedP.numero}`);
+        }
 
         const syncResult = await window.api.invoke('preset-driver-sync', {
           participantId: savedP.id,
@@ -6514,27 +7102,13 @@ async function importPdfPreset() {
         if (syncResult.success) {
           driversCreated += syncResult.created || 0;
 
-          // Propagate nationality to the first driver record
+          // Propagate the participant-level nationality to the primary driver.
           if (nationality && syncResult.drivers && syncResult.drivers.length > 0) {
             await window.api.invoke('preset-driver-update', {
               driverId: syncResult.drivers[0].id,
               driverNationality: nationality
             });
           }
-        }
-      } else if (driverNames.length === 1 && nationality) {
-        // Single driver with nationality - create driver record to preserve nationality
-        const batchResult = await window.api.invoke('preset-create-drivers-batch', {
-          participantId: savedP.id,
-          drivers: [{
-            driver_name: driverNames[0],
-            driver_nationality: nationality,
-            driver_order: 0
-          }]
-        });
-
-        if (batchResult.success) {
-          driversCreated += batchResult.count || 0;
         }
       }
 
@@ -6568,7 +7142,7 @@ async function importPdfPreset() {
     // Re-enable button
     if (importBtn) {
       importBtn.disabled = false;
-      importBtn.innerHTML = `<span class="btn-icon">📥</span>Import <span id="pdf-import-count">${pdfImportData.participants.length}</span> Participants`;
+      importBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Import <span id="pdf-import-count" class="pdf-num">${pdfImportData.participants.length}</span> participants`;
     }
   }
 }

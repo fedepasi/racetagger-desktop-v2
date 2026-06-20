@@ -1,4 +1,4 @@
-import * as crypto from 'crypto';
+﻿import * as crypto from 'crypto';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CONFIG, DEBUG_MODE } from './config';
 import { authService } from './auth-service'; // Per ottenere user_id
@@ -64,7 +64,7 @@ export interface PresetParticipantDriver {
   driver_nationality?: string | null;
   driver_order: number;
   created_at?: string;
-  // v1.1.4 — Preset Participant Toggle: soft-disable flag. When false, this
+  // v1.1.4 â€” Preset Participant Toggle: soft-disable flag. When false, this
   // driver is excluded from AI matching (face recognition, name matching)
   // but kept in the preset so the user can re-enable it without re-entry.
   is_active?: boolean;
@@ -77,7 +77,7 @@ export interface PresetParticipant {
   preset_participant_drivers?: PresetParticipantDriver[];
   nome?: string; // Legacy CSV fallback (single name from CSV import)
   squadra?: string;
-  car_model?: string;        // Vehicle model (RB20, Ferrari 296 GT3, etc.) — {car_model} in IPTC templates
+  car_model?: string;        // Vehicle model (RB20, Ferrari 296 GT3, etc.) â€” {car_model} in IPTC templates
   sponsors?: string[]; // Array di sponsor
   metatag?: string;
   categoria?: string;        // Category (GT3, F1, MotoGP, etc.)
@@ -87,7 +87,7 @@ export interface PresetParticipant {
   // folder_1/2/3 columns below are kept dual-written for 1.1.4 backward
   // compatibility. See POST-1.1.4-BACKLOG.md for the full strategy.
   folders?: { name: string; path?: string }[];
-  // ⚠️ Legacy columns (pre-1.2.0) — do NOT read these directly in business
+  // âš ï¸ Legacy columns (pre-1.2.0) â€” do NOT read these directly in business
   // logic. Always go through `participant.folders[]` (already normalized
   // at fetch). They exist solely so 1.1.4 clients keep working.
   folder_1?: string;         // Custom folder 1 (legacy slot 1)
@@ -98,7 +98,7 @@ export interface PresetParticipant {
   folder_3_path?: string;    // Absolute path (legacy slot 3)
   delivery_to_client_id?: string | null; // FK to projects (client) for auto-delivery routing
   created_at?: string;
-  // v1.1.4 — Preset Participant Toggle: soft-disable flag. When false, the
+  // v1.1.4 â€” Preset Participant Toggle: soft-disable flag. When false, the
   // entire participant (car/crew) is excluded from AI matching (numero, livrea,
   // faces) but kept in the preset for reversibility. Defaults TRUE on the DB.
   is_active?: boolean;
@@ -152,14 +152,14 @@ async function withRetry<T>(
   throw lastError || new Error(`${operationName} failed after ${maxRetries} attempts`);
 }
 
-// --- Helper per verificare se l'utente è autenticato e ha un token valido ---
+// --- Helper per verificare se l'utente Ã¨ autenticato e ha un token valido ---
 async function ensureAuthenticated(): Promise<boolean> {
   const authState = authService.getAuthState();
   if (!authState.isAuthenticated || !authState.session) {
     return false;
   }
 
-  // Verifica se il token è scaduto
+  // Verifica se il token Ã¨ scaduto
   if (authState.session.expires_at) {
     const expiresAt = new Date(authState.session.expires_at);
     const now = new Date();
@@ -277,12 +277,12 @@ export async function updateExecutionOnline(id: string, executionUpdateData: Par
 /**
  * Recover analysis executions interrupted ON THIS DEVICE: runs left stuck as `processing`
  * (or `running`) because the app was closed/crashed mid-batch before they could finalize.
- * Left alone such a row is a zombie — it looks like work still in progress. We flip it to
+ * Left alone such a row is a zombie â€” it looks like work still in progress. We flip it to
  * `failed` so it stops looking active and surfaces as "Interrupted".
  *
  * The caller passes `locallyIncompleteIds`: execution ids it has PROVEN are interrupted
  * here, because a local `exec_<id>.jsonl` exists that started but never logged completion.
- * That file is on THIS machine and the process has since restarted, so the run died here —
+ * That file is on THIS machine and the process has since restarted, so the run died here â€”
  * it cannot still be live. (A run live in the CURRENT session is excluded by the caller's
  * boot-time guard, and survives a laptop sleep because the same process resumes it: its id
  * is never in this list.) `running` is included because the local JSONL is written before
@@ -294,7 +294,7 @@ export async function updateExecutionOnline(id: string, executionUpdateData: Par
  * by the TTL cron while a run is still genuinely live (e.g. the laptop slept past the 30-min
  * TTL floor, and small batches never refresh `updated_at` mid-run), so reservation status is
  * NOT a safe liveness signal and must never drive a `failed` write. Those runs are instead
- * surfaced as "Interrupted" by the home page's display-only staleness heuristic — no DB write,
+ * surfaced as "Interrupted" by the home page's display-only staleness heuristic â€” no DB write,
  * no risk of clobbering a live run.
  *
  * Best-effort and non-throwing; fired-and-forgotten from the home-open handler.
@@ -697,7 +697,7 @@ export async function saveExecutionSettings(settings: Omit<ExecutionSettings, 'i
   } catch (error) {
     console.error('[DB] Error saving execution settings:', error);
     // Non lanciamo l'errore per non bloccare l'execution principale
-    // Il tracciamento è facoltativo
+    // Il tracciamento Ã¨ facoltativo
     throw error;
   }
 }
@@ -768,10 +768,10 @@ export async function getUserSettingsAnalytics(userId?: string): Promise<any> {
     const analytics = {
       total_executions: data.length,
       
-      // Modelli AI più usati
+      // Modelli AI piÃ¹ usati
       most_used_models: getMostUsedValues(data, 'ai_model'),
       
-      // Categorie sport più usate
+      // Categorie sport piÃ¹ usate
       most_used_categories: getMostUsedValues(data, 'sport_category'),
       
       // Strategie metadati preferite
@@ -783,7 +783,7 @@ export async function getUserSettingsAnalytics(userId?: string): Promise<any> {
       // Livelli ottimizzazione preferiti
       preferred_optimization_levels: getMostUsedValues(data, 'optimization_level'),
       
-      // Percentuali utilizzo funzionalità
+      // Percentuali utilizzo funzionalitÃ 
       feature_usage_rates: {
         resize_enabled: calculateUsageRate(data, 'resize_enabled'),
         parallel_processing: calculateUsageRate(data, 'parallel_processing_enabled'),
@@ -812,7 +812,7 @@ export async function getUserSettingsAnalytics(userId?: string): Promise<any> {
 }
 
 /**
- * Helper per calcolare i valori più usati
+ * Helper per calcolare i valori piÃ¹ usati
  */
 function getMostUsedValues(data: any[], field: string, limit: number = 5): { value: string; count: number; percentage: number }[] {
   const counts: { [key: string]: number } = {};
@@ -836,7 +836,7 @@ function getMostUsedValues(data: any[], field: string, limit: number = 5): { val
 }
 
 /**
- * Helper per calcolare il tasso di utilizzo di una funzionalità
+ * Helper per calcolare il tasso di utilizzo di una funzionalitÃ 
  */
 function calculateUsageRate(data: any[], field: string): number {
   if (data.length === 0) return 0;
@@ -1048,12 +1048,18 @@ export interface ParticipantPresetSupabase {
   sport_categories?: SportCategory;
   is_official?: boolean;
   iptc_metadata?: any;  // PresetIptcMetadata stored as JSONB
+  person_shown_template?: string | null;  // Template for IPTC PersonInImage field (e.g. "{name} {team} {car_model}")
 
   // Issue #104: When true, Gemini is allowed to identify persons outside the
   // preset participant list (team principals, VIPs, celebrities). Results go
   // into a separate `otherPeople[]` field in the V6 response, never into
   // `drivers[]`. Default false = strict preset-only mode.
   allow_external_person_recognition?: boolean;
+
+  // ACC-01 (Gruppe C): per-preset list of series-wide sponsor brands (Michelin,
+  // Rolex â€¦) the SmartMatcher excludes from SPONSOR evidence before scoring.
+  // Stored JSONB; empty array = no filtering. Reads pick it up via select('*').
+  series_sponsor_ignore?: string[];
 }
 
 export interface PresetParticipantSupabase {
@@ -1067,15 +1073,15 @@ export interface PresetParticipantSupabase {
   sponsor?: string;
   metatag?: string;
   plate_number?: string;     // License plate for car recognition
-  // 1.2.0+ canonical folder array — see PresetParticipantSupabase note above.
+  // 1.2.0+ canonical folder array â€” see PresetParticipantSupabase note above.
   folders?: { name: string; path?: string }[];
-  // 1.2.0 — when true (default), photos of this participant go to BOTH
+  // 1.2.0 â€” when true (default), photos of this participant go to BOTH
   // the custom folders[] above AND the default pattern-based folder
   // (e.g. {number}). When false, custom folders REPLACE the default
   // (legacy 1.1.4 behavior). Per-participant override; both the
   // FolderOrganizer (analysis time) and Export & IPTC honor it.
   include_default_folder?: boolean;
-  // ⚠️ Legacy slots — kept for 1.1.4 backward compatibility, do not read
+  // âš ï¸ Legacy slots â€” kept for 1.1.4 backward compatibility, do not read
   // directly. Always use `folders[]` after normalization.
   folder_1?: string;
   folder_2?: string;
@@ -1088,7 +1094,7 @@ export interface PresetParticipantSupabase {
   sort_order?: number;
   created_at?: string;
   face_photo_count?: number; // Cached count of face photos
-  // v1.1.4 — Preset Participant Toggle: soft-disable flag mirrored from the
+  // v1.1.4 â€” Preset Participant Toggle: soft-disable flag mirrored from the
   // Supabase row. Consumers MUST filter on is_active !== false before feeding
   // the participant into smart-matcher / prompt-builder.
   is_active?: boolean;
@@ -1104,7 +1110,9 @@ export interface PresetParticipantFacePhoto {
   driver_id: string | null;
   photo_url: string;
   storage_path: string;
-  face_descriptor: number[] | null;
+  face_descriptor: number[] | null;         // Legacy 128-dim (face-api.js)
+  face_descriptor_512: number[] | null;     // AuraFace v1 512-dim
+  descriptor_model: string | null;          // 'face-api-js' | 'auraface-v1'
   photo_type: 'reference' | 'action' | 'podium' | 'helmet_off';
   detection_confidence: number | null;
   is_primary: boolean;
@@ -1120,7 +1128,9 @@ export interface CreatePresetFacePhotoParams {
   user_id: string; // Required for RLS policy
   photo_url: string;
   storage_path: string;
-  face_descriptor?: number[];
+  face_descriptor?: number[];        // Legacy 128-dim (face-api.js)
+  face_descriptor_512?: number[];    // AuraFace v1 512-dim
+  descriptor_model?: string;         // 'face-api-js' | 'auraface-v1'
   photo_type?: 'reference' | 'action' | 'podium' | 'helmet_off';
   detection_confidence?: number;
   is_primary?: boolean;
@@ -1131,6 +1141,13 @@ let categoriesCache: SportCategory[] = [];
 let presetsCache: ParticipantPresetSupabase[] = [];
 let cacheLastUpdated: number = 0;
 let cacheIncludesInactive: boolean = false; // Track if cache includes inactive categories (admin mode)
+
+// BUG-02 â€” preset ids whose ownership has been verified this app session.
+// The per-row save path (upsertSinglePresetParticipantSupabase) fires once per
+// "Save & Next", so memoizing the ownership SELECT here avoids paying +1
+// round-trip on every keystroke-fast save. RLS is the real backstop on the
+// write itself; this is only a redundant courtesy check we don't want to repeat.
+const verifiedOwnedPresetIds = new Set<string>();
 
 /**
  * Invalidate the presets cache so next fetch returns fresh data from Supabase.
@@ -1203,7 +1220,7 @@ export async function cacheSupabaseData(): Promise<void> {
           ...preset,
           participants: preset.preset_participants || []
         }));
-        // 1.2.0 — normalize folders[] eagerly at startup pre-warm so the
+        // 1.2.0 â€” normalize folders[] eagerly at startup pre-warm so the
         // cache is already in canonical shape by the time any consumer
         // reads it. Without this, the very first cache-hit fetch returns
         // un-normalized data, and the lazy-migration UPDATEs never fire
@@ -1399,14 +1416,14 @@ export async function createParticipantPresetSupabase(presetData: Omit<Participa
  * @param includeAllForAdmin - If true and user is admin, returns all presets (not just user's own)
  */
 // ============================================================================
-// FOLDER NORMALIZATION (1.1.4 → 1.2.0 compatibility layer)
+// FOLDER NORMALIZATION (1.1.4 â†’ 1.2.0 compatibility layer)
 // ============================================================================
 //
 // Background:
 //   Pre-1.2.0 stored a participant's custom folders in three rigid columns
 //   (folder_1/2/3 + folder_*_path). 1.2.0 introduces a canonical jsonb
 //   array `folders` with no length limit. Migration is purely additive
-//   in SQL — no backfill — so the 1.1.4 column stays as the source of
+//   in SQL â€” no backfill â€” so the 1.1.4 column stays as the source of
 //   truth for clients that don't know about `folders`. This function
 //   reconciles the two representations every time a preset is fetched
 //   from the DB (or read from cache, before being handed to a 1.2.0
@@ -1414,21 +1431,21 @@ export async function createParticipantPresetSupabase(presetData: Omit<Participa
 //
 // Three states per participant:
 //
-//   1. lazy migration — folders[] empty + at least one legacy column
+//   1. lazy migration â€” folders[] empty + at least one legacy column
 //      populated. Happens to (a) every participant the first time this
 //      function sees them post-migration, (b) any new participant a
 //      1.1.4 client creates after migration. We rebuild folders[] from
 //      legacy and remember the row in `needsUpdate` so we can push the
 //      consolidation to the DB once for the whole preset.
 //
-//   2. drift — folders[] populated but its first three entries differ
+//   2. drift â€” folders[] populated but its first three entries differ
 //      from the legacy columns. Signal: a 1.1.4 client modified the
 //      legacy columns after our last 1.2.0 write. We rebuild folders[]
 //      as `[legacy[0..2], ...folders[3..]]` (legacy wins for slots
 //      0/1/2, anything beyond is preserved from folders[]) and queue a
 //      DB push.
 //
-//   3. steady state — folders[] populated and first three entries match
+//   3. steady state â€” folders[] populated and first three entries match
 //      legacy. Nothing to do, return as-is.
 //
 // After processing all participants, if any of them needed an update we
@@ -1521,11 +1538,11 @@ export function normalizeParticipantPresetFolders(preset: ParticipantPresetSupab
     let stateChanged = false;
 
     if (existing.length === 0 && fromLegacy.length > 0) {
-      // Lazy migration — never normalized before, take legacy as-is.
+      // Lazy migration â€” never normalized before, take legacy as-is.
       canonical = fromLegacy;
       stateChanged = true;
     } else if (existing.length > 0 && !legacyMatchesFirstThree(participant, existing)) {
-      // Drift — a 1.1.4 client wrote to legacy after our last write.
+      // Drift â€” a 1.1.4 client wrote to legacy after our last write.
       // Treat legacy as authoritative for slots 0/1/2, preserve the
       // tail (folders beyond the third) that 1.1.4 cannot represent.
       const tail = existing.slice(3);
@@ -1592,7 +1609,7 @@ export async function getUserParticipantPresetsSupabase(includeAllForAdmin: bool
       // In admin mode, return all cached presets without filtering
       if (includeAllForAdmin) {
         const result = ensureParticipants(presetsCache);
-        // 1.2.0 — normalize on the cache hit path too. Idempotent: if the
+        // 1.2.0 â€” normalize on the cache hit path too. Idempotent: if the
         // cache entry was already normalized on a previous call, this is
         // a steady-state O(1) check. Without this, presets cached by an
         // earlier app session (or by the startup pre-warm) would never
@@ -1711,24 +1728,24 @@ export async function getParticipantPresetByIdSupabase(presetId: string): Promis
     }
 
     // Check cache first - look for either participants or preset_participants
-    console.log('[DB Reload] 🔵 getParticipantPresetByIdSupabase called for preset', presetId);
+    console.log('[DB Reload] ðŸ”µ getParticipantPresetByIdSupabase called for preset', presetId);
     const cached = presetsCache.find(p => p.id === presetId);
     if (cached) {
       const cachedParticipants = cached.participants || (cached as any).preset_participants;
       if (cachedParticipants && cachedParticipants.length > 0) {
-        console.log(`[DB Reload] 📦 CACHE HIT - Returning cached preset with ${cachedParticipants.length} participants`);
+        console.log(`[DB Reload] ðŸ“¦ CACHE HIT - Returning cached preset with ${cachedParticipants.length} participants`);
         // Ensure participants property is set for UI compatibility
         if (!cached.participants) {
           cached.participants = cachedParticipants;
         }
-        // Idempotent — if the cached preset was already normalized on a
+        // Idempotent â€” if the cached preset was already normalized on a
         // previous fetch this becomes a no-op steady-state pass.
         normalizeParticipantPresetFolders(cached);
         return cached;
       }
     }
 
-    console.log('[DB Reload] 🌐 CACHE MISS - Fetching fresh data from Supabase with drivers included');
+    console.log('[DB Reload] ðŸŒ CACHE MISS - Fetching fresh data from Supabase with drivers included');
 
     // Use authenticated client from authService for RLS policy compliance
     const authenticatedClient = authService.getSupabaseClient();
@@ -1763,8 +1780,8 @@ export async function getParticipantPresetByIdSupabase(presetId: string): Promis
     if (data) {
       data.participants = data.preset_participants || [];
       const participantsWithDrivers = data.participants.filter((p: any) => p.preset_participant_drivers?.length > 0);
-      console.log(`[DB Reload] ✅ Loaded preset with ${data.participants.length} participants from Supabase`);
-      console.log(`[DB Reload] 🚗 ${participantsWithDrivers.length} participants have driver records`);
+      console.log(`[DB Reload] âœ… Loaded preset with ${data.participants.length} participants from Supabase`);
+      console.log(`[DB Reload] ðŸš— ${participantsWithDrivers.length} participants have driver records`);
       if (participantsWithDrivers.length > 0) {
         console.log('[DB Reload] Driver details:', participantsWithDrivers.map((p: any) =>
           `#${p.numero}: ${p.preset_participant_drivers?.length} drivers`
@@ -1792,13 +1809,13 @@ export async function getParticipantPresetByIdSupabase(presetId: string): Promis
  * for them). When folders[] is empty/missing, the legacy columns are
  * cleared. When the caller already set the legacy columns explicitly
  * (e.g. legacy code path from 1.1.4 UI we haven't migrated yet), we leave
- * them alone — only override when folders[] is the source of truth.
+ * them alone â€” only override when folders[] is the source of truth.
  *
  * See POST-1.1.4-BACKLOG.md for the full strategy.
  */
 function applyDualWriteFolders<T extends Partial<PresetParticipantSupabase>>(record: T): T {
   if (!Array.isArray(record.folders)) {
-    // Caller didn't set folders[] — assume they're using the legacy
+    // Caller didn't set folders[] â€” assume they're using the legacy
     // path, leave folder_1/2/3 alone.
     return record;
   }
@@ -1807,7 +1824,7 @@ function applyDualWriteFolders<T extends Partial<PresetParticipantSupabase>>(rec
     (f: any) => f && typeof f === 'object' && typeof f.name === 'string' && f.name.trim() !== ''
   ) as Array<{ name: string; path?: string }>;
 
-  // Always rewrite folders[] with the cleaned subset — this is what gets
+  // Always rewrite folders[] with the cleaned subset â€” this is what gets
   // persisted as the canonical source.
   (record as any).folders = cleaned;
 
@@ -1833,18 +1850,18 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
   };
 
   try {
-    console.log('[DB Save] 🔵 START savePresetParticipantsSupabase:', {
+    console.log('[DB Save] ðŸ”µ START savePresetParticipantsSupabase:', {
       presetId,
       participantCount: participants.length,
       participantNumbers: participants.map(p => p.numero).join(', ')
     });
-    sendProgress('start', 2, `Starting save of ${participants.length} participants…`, { total: participants.length });
+    sendProgress('start', 2, `Starting save of ${participants.length} participantsâ€¦`, { total: participants.length });
 
     const userId = getCurrentUserId();
     if (!userId) throw new Error('User not authenticated');
 
     // Verify preset ownership
-    sendProgress('verify', 8, 'Verifying preset access…');
+    sendProgress('verify', 8, 'Verifying preset accessâ€¦');
     const { data: preset, error: presetError } = await supabase
       .from('participant_presets')
       .select('id, user_id')
@@ -1865,24 +1882,24 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
       throw new Error('Access denied: preset belongs to another user');
     }
 
-    // ⚠️ CRITICAL FIX: Replace "nuclear delete" with intelligent UPSERT
+    // âš ï¸ CRITICAL FIX: Replace "nuclear delete" with intelligent UPSERT
     // This preserves existing participant IDs and their associated drivers/photos
-    console.log('[DB Save] 🔄 UPSERT mode: preserving existing participant IDs');
+    console.log('[DB Save] ðŸ”„ UPSERT mode: preserving existing participant IDs');
 
     // Get current participants from database
-    sendProgress('fetch', 18, 'Loading current participants…');
+    sendProgress('fetch', 18, 'Loading current participantsâ€¦');
     const { data: currentInDb, error: fetchError } = await supabase
       .from('preset_participants')
       .select('id, numero')
       .eq('preset_id', presetId);
 
     if (fetchError) {
-      console.error('[DB Save] ❌ Error fetching current participants:', fetchError);
+      console.error('[DB Save] âŒ Error fetching current participants:', fetchError);
       throw fetchError;
     }
 
     const currentIds = new Set((currentInDb || []).map(p => p.id));
-    console.log('[DB Save] 📋 Current participants in DB:', currentInDb?.length || 0, 'records');
+    console.log('[DB Save] ðŸ“‹ Current participants in DB:', currentInDb?.length || 0, 'records');
 
     // Separate participants into existing (have IDs) vs new (no IDs)
     const existingParticipants = participants.filter(p => (p as any).id);
@@ -1892,13 +1909,13 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
     // Find participants to delete (in DB but not in current list)
     const toDelete = [...currentIds].filter(id => !keepIds.has(id));
 
-    console.log('[DB Save] 📊 Operation breakdown:', {
+    console.log('[DB Save] ðŸ“Š Operation breakdown:', {
       update: existingParticipants.length,
       insert: newParticipants.length,
       delete: toDelete.length
     });
     sendProgress('analyze', 28,
-      `Update ${existingParticipants.length} · Insert ${newParticipants.length} · Delete ${toDelete.length}`,
+      `Update ${existingParticipants.length} Â· Insert ${newParticipants.length} Â· Delete ${toDelete.length}`,
       { update: existingParticipants.length, insert: newParticipants.length, delete: toDelete.length }
     );
 
@@ -1907,8 +1924,8 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
     // 1. UPDATE existing participants (preserves IDs and associated data)
     // Bulk UPSERT in a single round-trip instead of N sequential UPDATE calls.
     if (existingParticipants.length > 0) {
-      console.log('[DB Save] 🔄 Bulk-upserting', existingParticipants.length, 'existing participants');
-      sendProgress('update', 40, `Updating ${existingParticipants.length} participants…`);
+      console.log('[DB Save] ðŸ”„ Bulk-upserting', existingParticipants.length, 'existing participants');
+      sendProgress('update', 40, `Updating ${existingParticipants.length} participantsâ€¦`);
 
       const updatePayload = existingParticipants.map(p => {
         const data: any = { ...(p as any), preset_id: presetId };
@@ -1924,20 +1941,20 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
         .select();
 
       if (updateError) {
-        console.error('[DB Save] ❌ Error bulk-updating participants:', updateError);
+        console.error('[DB Save] âŒ Error bulk-updating participants:', updateError);
         throw updateError;
       }
 
       if (updated) {
         savedParticipants.push(...updated);
       }
-      console.log('[DB Save] ✅ Updated', existingParticipants.length, 'participants in 1 round-trip');
+      console.log('[DB Save] âœ… Updated', existingParticipants.length, 'participants in 1 round-trip');
     }
 
     // 2. INSERT new participants
     if (newParticipants.length > 0) {
-      sendProgress('insert', 60, `Inserting ${newParticipants.length} new participants…`);
-      console.log('[DB Save] 💾 Inserting', newParticipants.length, 'new participants');
+      sendProgress('insert', 60, `Inserting ${newParticipants.length} new participantsâ€¦`);
+      console.log('[DB Save] ðŸ’¾ Inserting', newParticipants.length, 'new participants');
       const insertPayload = newParticipants.map(p => {
         const { id, created_at, ...cleanData } = p as any;
         // FIX #78: Explicitly remove id and created_at to ensure Postgres uses DEFAULT gen_random_uuid()
@@ -1954,7 +1971,7 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
 
       // Log first record shape for debugging (omit actual data values)
       if (insertPayload.length > 0) {
-        console.log('[DB Save] 📋 Insert record keys:', Object.keys(insertPayload[0]).join(', '),
+        console.log('[DB Save] ðŸ“‹ Insert record keys:', Object.keys(insertPayload[0]).join(', '),
           '| has id?', 'id' in insertPayload[0]);
       }
 
@@ -1964,13 +1981,13 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
         .select();
 
       if (insertError) {
-        console.error('[DB Save] ❌ Error inserting participants:', insertError);
+        console.error('[DB Save] âŒ Error inserting participants:', insertError);
         throw insertError;
       }
 
       if (insertedData) {
         savedParticipants.push(...insertedData);
-        console.log('[DB Save] ✅ Inserted', insertedData.length, 'participants with new IDs:',
+        console.log('[DB Save] âœ… Inserted', insertedData.length, 'participants with new IDs:',
           insertedData.map(p => `#${p.numero} (${p.id?.substring(0, 8) || 'no-id'}...)`).join(', ')
         );
       }
@@ -1978,18 +1995,18 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
 
     // 3. DELETE removed participants (surgical delete, not nuclear)
     if (toDelete.length > 0) {
-      sendProgress('delete', 75, `Removing ${toDelete.length} obsolete participants…`);
-      console.log('[DB Save] 🗑️  Deleting', toDelete.length, 'removed participants');
+      sendProgress('delete', 75, `Removing ${toDelete.length} obsolete participantsâ€¦`);
+      console.log('[DB Save] ðŸ—‘ï¸  Deleting', toDelete.length, 'removed participants');
       const { error: deleteError } = await supabase
         .from('preset_participants')
         .delete()
         .in('id', toDelete);
 
       if (deleteError) {
-        console.error('[DB Save] ❌ Error deleting participants:', deleteError);
+        console.error('[DB Save] âŒ Error deleting participants:', deleteError);
         // Don't throw - deletes are less critical than updates/inserts
       } else {
-        console.log('[DB Save] ✅ Deleted', toDelete.length, 'participants');
+        console.log('[DB Save] âœ… Deleted', toDelete.length, 'participants');
       }
     }
 
@@ -2003,20 +2020,20 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
       console.error('[DB] Error updating preset timestamp:', updateError);
     }
 
-    // ⚠️ CRITICAL FIX: Invalidate cache to force reload with complete driver data
-    console.log('[DB Save] 🧹 Invalidating cache for preset', presetId);
+    // âš ï¸ CRITICAL FIX: Invalidate cache to force reload with complete driver data
+    console.log('[DB Save] ðŸ§¹ Invalidating cache for preset', presetId);
     const cacheIndex = presetsCache.findIndex(p => p.id === presetId);
     if (cacheIndex !== -1) {
       presetsCache.splice(cacheIndex, 1);
-      console.log('[DB Save] ✅ Removed preset from cache');
+      console.log('[DB Save] âœ… Removed preset from cache');
     }
     cacheLastUpdated = 0;
 
-    // ⚠️ NEW: Reload preset with complete driver data
+    // âš ï¸ NEW: Reload preset with complete driver data
     // savedParticipants from UPSERT doesn't include preset_participant_drivers
     // Do fresh query with drivers included to return complete data
-    sendProgress('reload', 88, 'Reloading complete driver data…');
-    console.log('[DB Save] 🔄 Reloading preset with complete driver data');
+    sendProgress('reload', 88, 'Reloading complete driver dataâ€¦');
+    console.log('[DB Save] ðŸ”„ Reloading preset with complete driver data');
     const { data: reloadedPreset, error: reloadError } = await supabase
       .from('participant_presets')
       .select(`
@@ -2030,21 +2047,21 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
       .single();
 
     if (reloadError) {
-      console.error('[DB Save] ⚠️  Error reloading preset (returning basic data):', reloadError);
+      console.error('[DB Save] âš ï¸  Error reloading preset (returning basic data):', reloadError);
       // Fall back to returning what we have
-      console.log('[DB Save] 🟢 COMPLETE savePresetParticipantsSupabase - returning', savedParticipants.length, 'participants (basic data)');
+      console.log('[DB Save] ðŸŸ¢ COMPLETE savePresetParticipantsSupabase - returning', savedParticipants.length, 'participants (basic data)');
       sendProgress('complete', 100, `Saved ${savedParticipants.length} participants`, { count: savedParticipants.length });
       return savedParticipants;
     }
 
     if (reloadedPreset?.participants) {
-      console.log('[DB Save] ✅ Reloaded', reloadedPreset.participants.length, 'participants with complete driver data');
-      console.log('[DB Save] 🟢 COMPLETE savePresetParticipantsSupabase - returning complete data with drivers');
+      console.log('[DB Save] âœ… Reloaded', reloadedPreset.participants.length, 'participants with complete driver data');
+      console.log('[DB Save] ðŸŸ¢ COMPLETE savePresetParticipantsSupabase - returning complete data with drivers');
       sendProgress('complete', 100, `Saved ${reloadedPreset.participants.length} participants`, { count: reloadedPreset.participants.length });
       return reloadedPreset.participants;
     }
 
-    console.log('[DB Save] 🟢 COMPLETE savePresetParticipantsSupabase - returning', savedParticipants.length, 'participants');
+    console.log('[DB Save] ðŸŸ¢ COMPLETE savePresetParticipantsSupabase - returning', savedParticipants.length, 'participants');
     sendProgress('complete', 100, `Saved ${savedParticipants.length} participants`, { count: savedParticipants.length });
     return savedParticipants;
 
@@ -2056,8 +2073,112 @@ export async function savePresetParticipantsSupabase(presetId: string, participa
   }
 }
 
+/**
+ * BUG-02 â€” persist a SINGLE preset participant immediately.
+ *
+ * The participant-editor's "Save & Next" / "Save Changes" buttons used to only
+ * mutate the in-memory list; nothing reached the DB until the preset-level
+ * "Save Preset". A crash or a stray Escape mid-session lost every edit. This is
+ * the narrow write that backs the new per-row persist: ONE row, upsert-or-insert,
+ * no delete-diff, no touching of sibling rows.
+ *
+ * Deliberately NOT a thin wrapper over savePresetParticipantsSupabase:
+ *   - It must NEVER run the delete-diff. The bulk path deletes DB rows absent
+ *     from the in-memory array, which would commit CSV/PDF-merge "remove"
+ *     results before the user reviews them (the documented merge gate).
+ *   - It must NOT bump participant_presets.updated_at â€” that stays owned by the
+ *     preset-level Save (Federico's default).
+ * It otherwise mirrors the bulk path field-for-field: applyDualWriteFolders for
+ * legacy 1.1.4 folder slots, FIX #78 id/created_at stripping on insert, and the
+ * exact same presetsCache invalidation so an analysis started within the 30s TTL
+ * never reads a stale roster.
+ *
+ * Ownership is verified once per preset per app session (memoized in
+ * verifiedOwnedPresetIds); RLS is the real backstop on the write.
+ */
+export async function upsertSinglePresetParticipantSupabase(
+  presetId: string,
+  participant: Partial<PresetParticipantSupabase> & { id?: string }
+): Promise<PresetParticipantSupabase> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+  if (!presetId) throw new Error('presetId is required');
+
+  const supabase = getSupabaseClient();
+
+  // Ownership check â€” memoized for the session so fast repeated saves don't
+  // each pay a round-trip. Mirrors savePresetParticipantsSupabase's check.
+  if (!verifiedOwnedPresetIds.has(presetId)) {
+    const { data: preset, error: presetError } = await supabase
+      .from('participant_presets')
+      .select('id, user_id')
+      .eq('id', presetId)
+      .single();
+
+    if (presetError) {
+      console.error('[DB UpsertOne] preset lookup failed:', presetError);
+      throw new Error(`Preset lookup failed: ${presetError.message}`);
+    }
+    if (!preset) {
+      throw new Error(`Preset ${presetId} not found`);
+    }
+    if (preset.user_id !== userId) {
+      console.error(`[DB UpsertOne] user mismatch: preset.user_id=${preset.user_id}, userId=${userId}`);
+      throw new Error('Access denied: preset belongs to another user');
+    }
+    verifiedOwnedPresetIds.add(presetId);
+  }
+
+  // Build the row. Dual-write derives the legacy folder_1/2/3(+_path) columns
+  // from the canonical folders[] for 1.1.4 clients. We deliberately do NOT set
+  // sort_order (the bulk path omits it too).
+  const record: any = { ...participant, preset_id: presetId };
+  applyDualWriteFolders(record);
+
+  let saved: PresetParticipantSupabase | null = null;
+
+  if (participant.id) {
+    // Update-or-insert by primary key. The row already exists â†’ this resolves
+    // to an UPDATE, preserving the id and its associated drivers/photos.
+    const { data, error } = await supabase
+      .from('preset_participants')
+      .upsert([record], { onConflict: 'id' })
+      .select()
+      .single();
+    if (error) {
+      console.error('[DB UpsertOne] upsert failed:', error);
+      throw error;
+    }
+    saved = data as PresetParticipantSupabase;
+  } else {
+    // FIX #78: strip id/created_at so Postgres uses DEFAULT gen_random_uuid().
+    delete record.id;
+    delete record.created_at;
+    const { data, error } = await supabase
+      .from('preset_participants')
+      .insert(record)
+      .select()
+      .single();
+    if (error) {
+      console.error('[DB UpsertOne] insert failed:', error);
+      throw error;
+    }
+    saved = data as PresetParticipantSupabase;
+  }
+
+  // Invalidate the presets cache exactly like the bulk path, so a subsequent
+  // analysis (or list read) within the 30s TTL doesn't serve a stale roster.
+  const cacheIndex = presetsCache.findIndex(p => p.id === presetId);
+  if (cacheIndex !== -1) {
+    presetsCache.splice(cacheIndex, 1);
+  }
+  cacheLastUpdated = 0;
+
+  return saved;
+}
+
 // ============================================================================
-// Bulk folder assignment (PR2 — foundation for the split-view UI in PR3)
+// Bulk folder assignment (PR2 â€” foundation for the split-view UI in PR3)
 // ============================================================================
 
 /**
@@ -2069,7 +2190,7 @@ export interface BulkAssignFoldersResult {
   ok: number;
   failed: { id: string; error: string }[];
   /** Folder names from the input that didn't exist in the preset's
-   *  custom_folders pool. The handler refuses these silently — surfacing
+   *  custom_folders pool. The handler refuses these silently â€” surfacing
    *  them lets the UI show a clear "create folder X first" hint. */
   unknownFolderNames: string[];
 }
@@ -2082,7 +2203,7 @@ export interface BulkAssignFoldersResult {
  *
  * Append mode: keep existing folders, add only those whose name is not
  * already present (case-insensitive name comparison). Path on the existing
- * entry wins — we don't overwrite a path the user may have customised.
+ * entry wins â€” we don't overwrite a path the user may have customised.
  *
  * Replace mode: drop everything, set to exactly the requested folders in the
  * given order.
@@ -2128,7 +2249,7 @@ export function computeFolderUpdate(
  *
  * Folder names are looked up in the preset's `custom_folders` pool to attach
  * the canonical filesystem path. Names not found in the pool are reported in
- * `unknownFolderNames` and skipped — the caller is expected to surface them
+ * `unknownFolderNames` and skipped â€” the caller is expected to surface them
  * as a "create folder first" hint rather than failing the whole request.
  *
  * The legacy folder_1/2/3 columns are kept dual-written via the existing
@@ -2161,7 +2282,7 @@ export async function bulkAssignFoldersSupabase(
     throw new Error(`Invalid mode: ${mode} (expected 'append' or 'replace')`);
   }
 
-  // Empty target set → no-op, return clean result so callers don't have to
+  // Empty target set â†’ no-op, return clean result so callers don't have to
   // special-case it before invoking us.
   if (!Array.isArray(participantIds) || participantIds.length === 0) {
     return { ok: 0, failed: [], unknownFolderNames: [] };
@@ -2171,7 +2292,7 @@ export async function bulkAssignFoldersSupabase(
 
   // 1. Verify preset ownership and load custom_folders pool. The same query
   //    serves two purposes: ownership check (404/403 if the user doesn't own
-  //    the preset) and folder-name → path lookup table for the assignment.
+  //    the preset) and folder-name â†’ path lookup table for the assignment.
   const { data: preset, error: presetError } = await authenticatedClient
     .from('participant_presets')
     .select('id, user_id, custom_folders')
@@ -2190,8 +2311,8 @@ export async function bulkAssignFoldersSupabase(
     throw new Error('Access denied: preset belongs to another user');
   }
 
-  // 2. Resolve folder names → {name, path} objects via the preset's pool.
-  //    Unknown names are reported back to the caller, not thrown — this lets
+  // 2. Resolve folder names â†’ {name, path} objects via the preset's pool.
+  //    Unknown names are reported back to the caller, not thrown â€” this lets
   //    the UI show "Folder X doesn't exist yet, create it first" inline.
   const pool: { name: string; path?: string }[] = Array.isArray(preset.custom_folders)
     ? (preset.custom_folders as any[]).filter(
@@ -2219,7 +2340,7 @@ export async function bulkAssignFoldersSupabase(
 
   // Replace mode with no resolvable folders is a legitimate "clear all
   // folders for these participants" action and proceeds. Append mode with
-  // nothing resolvable is a no-op — we return early to avoid an UPSERT that
+  // nothing resolvable is a no-op â€” we return early to avoid an UPSERT that
   // would just rewrite the same values.
   if (mode === 'append' && requestedFolders.length === 0) {
     return { ok: 0, failed: [], unknownFolderNames };
@@ -2244,7 +2365,7 @@ export async function bulkAssignFoldersSupabase(
     currentById.set(row.id, { folders: (row as any).folders });
   }
 
-  // Participants requested but not found under this preset → reported as
+  // Participants requested but not found under this preset â†’ reported as
   // failures rather than silently dropped. Either RLS hid them, or the
   // caller passed a stale or cross-preset ID.
   const failed: { id: string; error: string }[] = [];
@@ -2259,7 +2380,7 @@ export async function bulkAssignFoldersSupabase(
   //    NOT NULL constraints on the INSERT side BEFORE the conflict resolves
   //    to UPDATE, so omitting `numero` (NOT NULL) blows up with a constraint
   //    violation even though every row already exists. UPDATE doesn't have
-  //    that problem — unspecified columns are simply preserved.
+  //    that problem â€” unspecified columns are simply preserved.
   //
   //    Each row goes through applyDualWriteFolders so the legacy
   //    folder_1/2/3 columns stay in sync for 1.1.4 clients.
@@ -2278,7 +2399,7 @@ export async function bulkAssignFoldersSupabase(
     return { ok: 0, failed, unknownFolderNames };
   }
 
-  // 5. Run the UPDATEs in parallel — one round-trip per participant, but
+  // 5. Run the UPDATEs in parallel â€” one round-trip per participant, but
   //    Supabase pools connections so the wall-clock cost is dominated by
   //    network latency, not query count. Per-row error reporting lets the
   //    renderer surface partial failure (RLS deny, transient network blip).
@@ -2303,7 +2424,7 @@ export async function bulkAssignFoldersSupabase(
     throw new Error(`Bulk folder assignment failed: ${failed[0].error}`);
   }
 
-  // 6. Cache invalidation — without this, a subsequent read inside the 30s
+  // 6. Cache invalidation â€” without this, a subsequent read inside the 30s
   //    TTL window would return stale folders. Mirrors the pattern used by
   //    togglePresetParticipantActive et al.
   invalidatePresetCacheEntry(presetId);
@@ -2315,9 +2436,9 @@ export async function bulkAssignFoldersSupabase(
     .eq('id', presetId);
 
   console.log(
-    `[DB BulkAssign] ✅ ${okCount} participants × ${requestedFolders.length} folders (${mode})` +
-    (failed.length > 0 ? ` · ${failed.length} failed` : '') +
-    (unknownFolderNames.length > 0 ? ` · skipped unknown names: ${unknownFolderNames.join(', ')}` : '')
+    `[DB BulkAssign] âœ… ${okCount} participants Ã— ${requestedFolders.length} folders (${mode})` +
+    (failed.length > 0 ? ` Â· ${failed.length} failed` : '') +
+    (unknownFolderNames.length > 0 ? ` Â· skipped unknown names: ${unknownFolderNames.join(', ')}` : '')
   );
 
   return {
@@ -2353,7 +2474,7 @@ export async function updatePresetLastUsedSupabase(presetId: string): Promise<vo
 /**
  * Update participant preset details in Supabase
  */
-export async function updateParticipantPresetSupabase(presetId: string, updateData: Partial<Pick<ParticipantPresetSupabase, 'name' | 'description' | 'category_id' | 'custom_folders' | 'iptc_metadata' | 'allow_external_person_recognition'>>): Promise<void> {
+export async function updateParticipantPresetSupabase(presetId: string, updateData: Partial<Pick<ParticipantPresetSupabase, 'name' | 'description' | 'category_id' | 'custom_folders' | 'iptc_metadata' | 'allow_external_person_recognition' | 'series_sponsor_ignore'>>): Promise<void> {
   const userId = getCurrentUserId();
   if (!userId) throw new Error('User not authenticated');
 
@@ -2411,7 +2532,7 @@ export async function deleteParticipantPresetSupabase(presetId: string): Promise
 }
 
 // ============================================================================
-// PRESET PARTICIPANT TOGGLE (v1.1.4) — soft-disable API
+// PRESET PARTICIPANT TOGGLE (v1.1.4) â€” soft-disable API
 // ----------------------------------------------------------------------------
 // Four entry points the renderer / IPC layer uses to flip is_active on
 // preset_participants and preset_participant_drivers without deleting data.
@@ -2448,7 +2569,7 @@ function invalidatePresetCacheEntry(presetId: string): void {
  * @param participantId UUID of the preset_participants row.
  * @param isActive New value. `false` = excluded from AI matching; `true` = default/re-enable.
  * @throws when the user is unauthenticated or RLS rejects the update
- *         (which happens for public/official presets — callers should treat
+ *         (which happens for public/official presets â€” callers should treat
  *         that as a UX "read-only" signal and prompt the user to duplicate).
  */
 export async function togglePresetParticipantActive(
@@ -2478,7 +2599,7 @@ export async function togglePresetParticipantActive(
   const presetId = (data as any)?.preset_id;
   if (presetId) invalidatePresetCacheEntry(presetId);
 
-  console.log(`[DB] Participant ${participantId} is_active → ${isActive}`);
+  console.log(`[DB] Participant ${participantId} is_active â†’ ${isActive}`);
   return data as PresetParticipantSupabase;
 }
 
@@ -2487,7 +2608,7 @@ export async function togglePresetParticipantActive(
  * participant (e.g. WEC endurance crews).
  *
  * Note: disabling the last active driver in a crew does NOT automatically
- * disable the parent participant — that's a UI-layer concern and the caller
+ * disable the parent participant â€” that's a UI-layer concern and the caller
  * should surface a warning ("all drivers disabled, car will still be
  * matched by numero/livrea"). Keeping the two flags independent lets the
  * user disable just face recognition for one pilot without affecting the
@@ -2518,7 +2639,7 @@ export async function togglePresetDriverActive(
   const presetId = (data as any)?.preset_participants?.preset_id;
   if (presetId) invalidatePresetCacheEntry(presetId);
 
-  console.log(`[DB] Driver ${driverId} is_active → ${isActive}`);
+  console.log(`[DB] Driver ${driverId} is_active â†’ ${isActive}`);
   return data as PresetParticipantDriver;
 }
 
@@ -2527,8 +2648,8 @@ export async function togglePresetDriverActive(
  * trip. Used by the "Disable all from team X" / "Re-enable all" UI action.
  *
  * @param presetId UUID of the participant_presets row the IDs must belong to.
- *   Passed separately so we can narrow the UPDATE — RLS still verifies
- *   ownership via the preset — and so the server can reject cross-preset IDs
+ *   Passed separately so we can narrow the UPDATE â€” RLS still verifies
+ *   ownership via the preset â€” and so the server can reject cross-preset IDs
  *   injected by a rogue payload.
  * @param participantIds UUIDs of preset_participants rows to update. Must all
  *   belong to `presetId`.
@@ -2567,7 +2688,7 @@ export async function bulkSetPresetParticipantsActive(
 /**
  * Bulk set `include_default_folder` on many participants of the same
  * preset in one round-trip. Used by the "Also export to default folder"
- * checkbox in the Assign Folder side panel — when the user changes the
+ * checkbox in the Assign Folder side panel â€” when the user changes the
  * value there, the new state is applied to every selected participant
  * as part of the same action.
  *
@@ -2615,7 +2736,7 @@ export async function bulkSetPresetParticipantsIncludeDefaultFolder(
  *
  * This is the "Ripristina tutti" action in the editor header: it's one
  * confirmation away from undoing every soft-disable. We deliberately do NOT
- * require the caller to list IDs — the operation is scoped to `presetId` and
+ * require the caller to list IDs â€” the operation is scoped to `presetId` and
  * RLS keeps it constrained to presets owned by the current user.
  */
 export async function resetPresetActiveStates(presetId: string): Promise<{
@@ -2632,7 +2753,7 @@ export async function resetPresetActiveStates(presetId: string): Promise<{
     .from('preset_participants')
     .update({ is_active: true })
     .eq('preset_id', presetId)
-    .eq('is_active', false) // no-op rows skipped — cheaper + updated_at stays clean
+    .eq('is_active', false) // no-op rows skipped â€” cheaper + updated_at stays clean
     .select('id');
 
   if (partErr) {
@@ -2741,6 +2862,107 @@ export async function savePresetIptcMetadata(presetId: string, iptcMetadata: any
   }, 'savePresetIptcMetadata', 3, 1000);
 }
 
+// ============================================================================
+// ACCOUNT-LEVEL DEFAULT IPTC TEMPLATE (UX-04)
+// ============================================================================
+// Stored in public.user_iptc_templates (owner-only RLS). The template is the
+// PresetIptcMetadata shape MINUS the per-preset behavior overrides
+// (writingTiming / faceScope). It is copied into new presets and used as the
+// Export & IPTC fallback â€” precedence is always preset profile > user default.
+//
+// IMPORTANT: every read/write here uses authService.getSupabaseClient() (the
+// authenticated client), so auth.uid() resolves and RLS accepts the row.
+
+/**
+ * Get the current user's default IPTC template, or null if none is configured.
+ * Tolerant by design (mirrors getPresetIptcMetadata): logs and returns null on
+ * error so the caller can silently fall back to an empty form.
+ */
+export async function getUserDefaultIptcTemplate(): Promise<any | null> {
+  try {
+    const userId = getCurrentUserId();
+    if (!userId) return null;
+
+    const authenticatedClient = authService.getSupabaseClient();
+
+    const { data, error } = await authenticatedClient
+      .from('user_iptc_templates')
+      .select('template')
+      .eq('user_id', userId)
+      .eq('is_default', true)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[DB] Error getting default IPTC template:', error);
+      return null;
+    }
+
+    return data?.template ?? null;
+  } catch (error) {
+    console.error('[DB] Error getting default IPTC template:', error);
+    return null;
+  }
+}
+
+/**
+ * Save (or clear) the current user's default IPTC template.
+ *
+ * - `template === null` deletes the existing default row.
+ * - Otherwise it updates the existing default row, or inserts one if none
+ *   exists yet (the DB defaults cover name/is_default).
+ *
+ * supabase-js `upsert` cannot target the partial unique index
+ * (user_iptc_templates_one_default), so this uses update-then-insert.
+ */
+export async function saveUserDefaultIptcTemplate(template: any | null): Promise<void> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+
+  await withRetry(async () => {
+    const authenticatedClient = authService.getSupabaseClient();
+
+    // Clear: delete the default row (Settings â†’ "Clear").
+    if (template === null) {
+      const { error } = await authenticatedClient
+        .from('user_iptc_templates')
+        .delete()
+        .eq('user_id', userId)
+        .eq('is_default', true);
+
+      if (error) {
+        console.error('[DB] Error clearing default IPTC template:', error);
+        throw error;
+      }
+      return;
+    }
+
+    // Update the existing default row.
+    const { data: updated, error: updateError } = await authenticatedClient
+      .from('user_iptc_templates')
+      .update({ template, updated_at: new Date().toISOString() })
+      .eq('user_id', userId)
+      .eq('is_default', true)
+      .select('id');
+
+    if (updateError) {
+      console.error('[DB] Error updating default IPTC template:', updateError);
+      throw updateError;
+    }
+
+    // No default row yet â†’ insert one (name/is_default fall back to DB defaults).
+    if (!updated || updated.length === 0) {
+      const { error: insertError } = await authenticatedClient
+        .from('user_iptc_templates')
+        .insert({ user_id: userId, template });
+
+      if (insertError) {
+        console.error('[DB] Error inserting default IPTC template:', insertError);
+        throw insertError;
+      }
+    }
+  }, 'saveUserDefaultIptcTemplate', 3, 1000);
+}
+
 /**
  * Duplicate any preset for the current user
  * Creates a personal copy of a preset (official or user-owned) that the user can customize
@@ -2764,13 +2986,22 @@ export async function duplicateOfficialPresetSupabase(sourcePresetId: string): P
       throw new Error('Source preset not found');
     }
 
-    // Create the new preset (personal copy)
+    // Create the new preset (personal copy).
+    // Carry over the preset-level profile fields too â€” without these the copy
+    // silently lost the curated IPTC Pro profile, the PersonInImage template and
+    // the external-recognition flag, leaving the photographer to rebuild them.
     const newPreset = await createParticipantPresetSupabase({
       user_id: userId,
       name: `${sourcePreset.name} (My Copy)`,
       description: sourcePreset.description || `Duplicated from: ${sourcePreset.name}`,
       category_id: sourcePreset.category_id,
-      custom_folders: sourcePreset.custom_folders || []
+      custom_folders: sourcePreset.custom_folders || [],
+      iptc_metadata: sourcePreset.iptc_metadata ?? null,
+      person_shown_template: sourcePreset.person_shown_template ?? null,
+      allow_external_person_recognition: sourcePreset.allow_external_person_recognition ?? false,
+      // ACC-01 (Gruppe C): keep the curated series-sponsor ignore list when
+      // duplicating an official preset so the copy starts pre-seeded.
+      series_sponsor_ignore: sourcePreset.series_sponsor_ignore || []
     });
 
     // Copy participants
@@ -2879,7 +3110,7 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
       custom_fields: {
         // Store any additional CSV fields
         ...Object.keys(row).reduce((acc, key) => {
-          const knownFields = ['numero', 'Number', 'number', 'race_number', 'bib', 'Bib', 'nome', 'Driver', 'driver', 'Person', 'person', 'Name', 'name', 'categoria', 'Category', 'category', 'class', 'Class', 'squadra', 'team', 'Team', 'sponsor', 'Sponsors', 'sponsors', 'metatag', 'Metatag', 'plate_number', 'Plate_Number', 'plate', 'Plate', 'folder_1', 'Folder_1', 'folder_2', 'Folder_2', 'folder_3', 'Folder_3', 'folder_1_path', 'Folder_1_Path', 'folder_2_path', 'Folder_2_Path', 'folder_3_path', 'Folder_3_Path', '_Driver_IDs', '_driver_ids', '_Driver_Metatags', '_driver_metatags', '_Driver_Nationalities', '_driver_nationalities', 'car_model', 'Car_Model', 'nationality', 'Nationality'];
+          const knownFields = ['numero', 'Number', 'number', 'race_number', 'bib', 'Bib', 'nome', 'Driver', 'driver', 'Person', 'person', 'Name', 'name', 'categoria', 'Category', 'category', 'class', 'Class', 'squadra', 'team', 'Team', 'sponsor', 'Sponsors', 'sponsors', 'metatag', 'Metatag', 'plate_number', 'Plate_Number', 'plate', 'Plate', 'folder_1', 'Folder_1', 'folder_2', 'Folder_2', 'folder_3', 'Folder_3', 'folder_1_path', 'Folder_1_Path', 'folder_2_path', 'Folder_2_Path', 'folder_3_path', 'Folder_3_Path', '_Driver_IDs', '_driver_ids', '_Driver_Metatags', '_driver_metatags', '_Driver_Nationalities', '_driver_nationalities', '_Driver_Names', '_driver_names', 'car_model', 'Car_Model', 'nationality', 'Nationality'];
           if (!knownFields.includes(key)) {
             acc[key] = row[key];
           }
@@ -2903,9 +3134,13 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
     const driverMetatagsRaw = row._Driver_Metatags || row._driver_metatags || '';
     const driverNationalitiesRaw = row._Driver_Nationalities || row._driver_nationalities || '';
     const driverNamesRaw = row.nome || row.Driver || '';
+    const driverNamesPipeRaw = row._Driver_Names || row._driver_names || '';
 
-    // Parse driver names (comma-separated)
-    const driverNames = driverNamesRaw ? driverNamesRaw.split(',').map((s: string) => s.trim()).filter(Boolean) : [];
+    // Prefer the structured pipe-delimited names (comma-safe — a "Lastname, Firstname"
+    // name stays ONE driver); fall back to splitting the legacy comma-joined column.
+    const driverNames = driverNamesPipeRaw
+      ? driverNamesPipeRaw.split('|').map((s: string) => s.trim()).filter(Boolean)
+      : (driverNamesRaw ? driverNamesRaw.split(',').map((s: string) => s.trim()).filter(Boolean) : []);
 
     if (driverIdsRaw && driverNames.length > 0) {
       // PRESERVE MODE: CSV has driver IDs - reuse them
@@ -2950,11 +3185,13 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
 
       console.log(`[DB] CSV Import: Created ${driversToCreate.length} new drivers for participant ${savedParticipant.numero}`);
     } else if (driverNames.length === 1) {
-      // SINGLE DRIVER: Still check for nationality to preserve
+      // SINGLE DRIVER: preserve nationality if present, and ALWAYS materialise the
+      // canonical row when the name itself contains a comma ("Lastname, Firstname") —
+      // otherwise the comma-joined `nome` would be re-split into two people on later reads.
       const nationalityRaw = row.Nationality || row.nationality || '';
       const singleNationality = driverNationalitiesRaw ? driverNationalitiesRaw.split('|')[0]?.trim() : nationalityRaw;
 
-      if (singleNationality) {
+      if (singleNationality || driverNames[0].includes(',')) {
         const driverToCreate = {
           id: crypto.randomUUID(),
           participant_id: savedParticipant.id,
@@ -2967,7 +3204,7 @@ export async function importParticipantsFromCSVSupabase(csvData: any[], presetNa
         };
 
         await supabase.from('preset_participant_drivers').insert([driverToCreate]);
-        console.log(`[DB] CSV Import: Created single driver with nationality for participant ${savedParticipant.numero}`);
+        console.log(`[DB] CSV Import: Created single driver for participant ${savedParticipant.numero}`);
       }
     }
   }
@@ -3583,19 +3820,30 @@ export async function addPresetParticipantFacePhoto(params: CreatePresetFacePhot
     // Use authenticated client from authService for RLS policy compliance
     const authenticatedClient = authService.getSupabaseClient();
 
+    // Build insert object with optional 512-dim fields
+    const insertData: Record<string, any> = {
+      participant_id: params.participant_id,
+      driver_id: params.driver_id,
+      user_id: params.user_id,
+      photo_url: params.photo_url,
+      storage_path: params.storage_path,
+      face_descriptor: params.face_descriptor || null,
+      photo_type: params.photo_type || 'reference',
+      detection_confidence: params.detection_confidence || null,
+      is_primary: params.is_primary || false
+    };
+
+    // Include 512-dim descriptor if provided (AuraFace v1)
+    if (params.face_descriptor_512) {
+      insertData.face_descriptor_512 = params.face_descriptor_512;
+    }
+    if (params.descriptor_model) {
+      insertData.descriptor_model = params.descriptor_model;
+    }
+
     const { data, error } = await authenticatedClient
       .from('preset_participant_face_photos')
-      .insert({
-        participant_id: params.participant_id,
-        driver_id: params.driver_id,
-        user_id: params.user_id,
-        photo_url: params.photo_url,
-        storage_path: params.storage_path,
-        face_descriptor: params.face_descriptor || null,
-        photo_type: params.photo_type || 'reference',
-        detection_confidence: params.detection_confidence || null,
-        is_primary: params.is_primary || false
-      })
+      .insert(insertData)
       .select()
       .single();
 
@@ -3710,7 +3958,7 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
     }> = [];
 
     // 1. Get all participants with their direct face photos (backward compatibility)
-    // v1.1.4 — Preset Participant Toggle: exclude soft-disabled participants so
+    // v1.1.4 â€” Preset Participant Toggle: exclude soft-disabled participants so
     // their face descriptors are NOT loaded into the recognizer's memory
     // vector. This is the critical cut for "disable an entire car/crew".
     const { data: participants, error: participantsError } = await authenticatedClient
@@ -3725,6 +3973,8 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
           id,
           photo_url,
           face_descriptor,
+          face_descriptor_512,
+          descriptor_model,
           photo_type,
           is_primary,
           detection_confidence
@@ -3743,17 +3993,25 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
       const facePhotos = (participant as any).preset_participant_face_photos || [];
 
       for (const photo of facePhotos) {
-        // Skip photos without descriptors
-        if (!photo.face_descriptor || !Array.isArray(photo.face_descriptor) || photo.face_descriptor.length !== 128) {
-          continue;
+        // Dual-read: prefer face_descriptor_512 (AuraFace 512-dim), fallback to face_descriptor (128-dim)
+        const descriptor512 = photo.face_descriptor_512;
+        const descriptor128 = photo.face_descriptor;
+
+        let descriptor: number[] | null = null;
+        if (descriptor512 && Array.isArray(descriptor512) && descriptor512.length === 512) {
+          descriptor = Array.from(descriptor512);
+        } else if (descriptor128 && Array.isArray(descriptor128) && descriptor128.length === 128) {
+          descriptor = Array.from(descriptor128);
         }
+
+        if (!descriptor) continue;
 
         descriptors.push({
           personId: participant.id,
           personName: participant.nome || `#${participant.numero}`,
           team: participant.squadra || '',
           carNumber: participant.numero,
-          descriptor: Array.from(photo.face_descriptor),
+          descriptor,
           referencePhotoUrl: photo.photo_url,
           source: 'preset',
           photoType: photo.photo_type || 'reference',
@@ -3771,7 +4029,7 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
 
     if (participantIds.length > 0) {
       // 2b. Get drivers for these participants (no join on preset_participants needed)
-      // v1.1.4 — also exclude soft-disabled drivers so their face descriptors
+      // v1.1.4 â€” also exclude soft-disabled drivers so their face descriptors
       // aren't added to the recognizer. Belt-and-braces: participant_id is
       // already filtered to active participants above, but a driver can be
       // disabled individually while the parent crew stays active (endurance).
@@ -3802,12 +4060,13 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
             driver_id,
             photo_url,
             face_descriptor,
+            face_descriptor_512,
+            descriptor_model,
             photo_type,
             is_primary,
             detection_confidence
           `)
-          .in('driver_id', driverIds)
-          .not('face_descriptor', 'is', null);
+          .in('driver_id', driverIds);
 
         if (photosError) {
           console.error('[DB] Error loading driver face photos:', photosError);
@@ -3821,10 +4080,18 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
             const facePhotos = (driverPhotos || []).filter(p => p.driver_id === driver.id);
 
             for (const photo of facePhotos) {
-              // Skip photos without valid descriptors
-              if (!photo.face_descriptor || !Array.isArray(photo.face_descriptor) || photo.face_descriptor.length !== 128) {
-                continue;
+              // Dual-read: prefer face_descriptor_512 (AuraFace 512-dim), fallback to face_descriptor (128-dim)
+              const descriptor512 = photo.face_descriptor_512;
+              const descriptor128 = photo.face_descriptor;
+
+              let descriptor: number[] | null = null;
+              if (descriptor512 && Array.isArray(descriptor512) && descriptor512.length === 512) {
+                descriptor = Array.from(descriptor512);
+              } else if (descriptor128 && Array.isArray(descriptor128) && descriptor128.length === 128) {
+                descriptor = Array.from(descriptor128);
               }
+
+              if (!descriptor) continue;
 
               descriptors.push({
                 personId: driver.id,
@@ -3832,7 +4099,7 @@ export async function loadPresetFaceDescriptors(presetId: string): Promise<Array
                 personMetatag: driver.driver_metatag || undefined,
                 team: participant?.squadra || '',
                 carNumber: participant?.numero || '',
-                descriptor: Array.from(photo.face_descriptor),
+                descriptor,
                 referencePhotoUrl: photo.photo_url,
                 source: 'preset',
                 photoType: photo.photo_type || 'reference',
@@ -3972,7 +4239,7 @@ export async function getUserGalleries() {
   if (!userId) throw new Error('Not authenticated');
   const { data, error } = await client
     .from('galleries')
-    .select('id, title, slug, status, gallery_type, access_type, project_id, total_views, total_downloads, created_at')
+    .select('id, title, slug, status, gallery_type, access_type, project_id, total_views, total_downloads, created_at, settings')
     .eq('user_id', userId)
     .neq('status', 'suspended')
     .order('created_at', { ascending: false });
@@ -4034,7 +4301,7 @@ export async function syncDeliveryRulesFromPreset(presetId: string): Promise<{ c
   const client = getSupabaseClient();
 
   // 1. Get all participants for this preset with delivery_to_client_id set
-  // v1.1.4 — Exclude soft-disabled participants: a disabled participant
+  // v1.1.4 â€” Exclude soft-disabled participants: a disabled participant
   // should not have delivery rules generated, and existing auto-rules for
   // disabled participants become "stale" and get cleaned up by step 5.
   const { data: participants, error: pErr } = await client
@@ -4159,6 +4426,61 @@ export async function syncDeliveryRulesFromPreset(presetId: string): Promise<{ c
 
 // ==================== GALLERY IMAGES ====================
 
+/**
+ * Denormalise a `gallery_images.tags` jsonb from an analysis_results row so the public
+ * gallery's IPTC filter has data. The gallery reads these EXACT camelCase keys
+ * (racetagger-gallery photos/route.ts): make, model, category, liveryPrimary,
+ * sponsors[], plateNumber, cameraModel — snake_case would silently yield null. Vehicle
+ * DNA (make/model/category/livery/plate/sponsors) is NOT a flat column; it lives inside
+ * analysis_results.raw_response.vehicles[], so we parse it here. cameraModel IS a flat
+ * column. Empty keys are omitted so the gallery's available_filters stays honest.
+ * `ar` is a loosely-typed Supabase jsonb row → `any` is intentional here.
+ */
+function buildGalleryTags(ar: any): Record<string, unknown> {
+  const tags: Record<string, unknown> = {};
+  if (!ar) return tags;
+
+  // Defensive raw_response shape: V6/V7 + ONNX-crop = { vehicles: [...] },
+  // ONNX-full = { vehicle: {...} } (singular), or (legacy) a bare array.
+  const rr = ar.raw_response;
+  const vehicles: any[] = Array.isArray(rr?.vehicles)
+    ? rr.vehicles
+    : (rr?.vehicle ? [rr.vehicle] : (Array.isArray(rr) ? rr : []));
+
+  if (vehicles.length > 0) {
+    const recNum = ar.recognized_number != null ? String(ar.recognized_number) : null;
+    const byNumber = recNum
+      ? vehicles.find((v) => String(v?.finalResult?.raceNumber ?? v?.raceNumber ?? '') === recNum)
+      : undefined;
+    // Primary vehicle: the one matching the recognised number, else highest confidence.
+    const primary = byNumber
+      ?? [...vehicles].sort((a, b) => (b?.confidence || 0) - (a?.confidence || 0))[0]
+      ?? null;
+
+    if (primary) {
+      if (primary.make) tags.make = primary.make;
+      if (primary.model) tags.model = primary.model;
+      if (primary.category) tags.category = primary.category;
+      if (primary.livery?.primary) tags.liveryPrimary = primary.livery.primary;
+      if (primary.plateNumber) tags.plateNumber = primary.plateNumber;
+    }
+
+    // Sponsors: deduped union across ALL vehicles (per-vehicle vehicles[].sponsors).
+    const sponsors = Array.from(new Set(
+      vehicles
+        .flatMap((v) => (Array.isArray(v?.sponsors) ? v.sponsors : []))
+        .map((s: any) => (typeof s === 'string' ? s.trim() : ''))
+        .filter(Boolean),
+    ));
+    if (sponsors.length > 0) tags.sponsors = sponsors;
+  }
+
+  // cameraModel is a flat analysis_results column.
+  if (ar.camera_model) tags.cameraModel = ar.camera_model;
+
+  return tags;
+}
+
 export async function addImagesToGallery(galleryId: string, images: any[]) {
   const client = getSupabaseClient();
   const rows = images.map((img: any) => ({ gallery_id: galleryId, ...img }));
@@ -4184,7 +4506,7 @@ export async function autoRouteImagesToGalleries(projectId: string, executionId:
   // Get images + analysis for this execution
   const { data: images } = await client
     .from('images')
-    .select('id, analysis_results(recognized_number), visual_tags(participant_name, participant_team)')
+    .select('id, analysis_results(recognized_number, raw_response, camera_model), visual_tags(participant_name, participant_team)')
     .eq('execution_id', executionId);
 
   if (!images) return { routed: 0, unmatched: 0 };
@@ -4217,6 +4539,7 @@ export async function autoRouteImagesToGalleries(projectId: string, executionId:
           recognized_numbers: number ? [number] : [],
           participant_name: name,
           participant_team: team,
+          tags: buildGalleryTags(ar),
         });
         matched = true;
         routed++;
@@ -4269,9 +4592,56 @@ export async function getUserPlanLimits() {
     projects_enabled: flagMap['projects_enabled'] ?? planLimits.projects_enabled ?? false,
     r2_storage_enabled: flagMap['r2_storage_enabled'] ?? planLimits.r2_storage_enabled ?? false,
     face_recognition_enabled: flagMap['face_recognition_enabled'] ?? planLimits.face_recognition_enabled ?? false,
+    // #184 Phase 1 — cross-device DB reconstruction of the review gallery.
+    // Dark-launched: per-user opt-in via feature_flags (same mechanism as
+    // face_recognition_enabled), default off.
+    db_execution_fallback: flagMap['db_execution_fallback'] ?? planLimits.db_execution_fallback ?? false,
     r2_storage_max_gb: planLimits.r2_storage_max_gb ?? 0,
     gallery_max_galleries: planLimits.gallery_max_galleries ?? 3,
   };
+}
+
+// =============================================================================
+// db_execution_fallback flag (#184 Phase 1) — lightweight, cached read.
+//
+// The cross-device gallery reconstruction (get-execution-log fallback) only
+// fires when a local JSONL is missing, but the manual "Refresh" button can be
+// clicked repeatedly, so we cache the per-user flag for 60s to avoid hammering
+// feature_flags. Reads ONLY the per-user row (user_id = me), exactly like
+// getUserPlanLimits — a global (user_id IS NULL) row is intentionally not a
+// blanket on-switch here, keeping parity with the other gated features.
+// Never throws: any failure degrades to OFF (today's behavior).
+// =============================================================================
+let _dbExecFallbackCache: { userId: string; value: boolean; at: number } | null = null;
+const DB_EXEC_FALLBACK_TTL_MS = 60_000;
+
+export async function isDbExecutionFallbackEnabled(): Promise<boolean> {
+  const userId = authService.getCurrentUserId();
+  if (!userId) return false;
+
+  const now = Date.now();
+  if (
+    _dbExecFallbackCache &&
+    _dbExecFallbackCache.userId === userId &&
+    now - _dbExecFallbackCache.at < DB_EXEC_FALLBACK_TTL_MS
+  ) {
+    return _dbExecFallbackCache.value;
+  }
+
+  try {
+    const client = getSupabaseClient();
+    const { data } = await client
+      .from('feature_flags')
+      .select('is_enabled')
+      .eq('user_id', userId)
+      .eq('feature_name', 'db_execution_fallback')
+      .maybeSingle();
+    const value = data?.is_enabled === true;
+    _dbExecFallbackCache = { userId, value, at: now };
+    return value;
+  } catch {
+    return false; // never blocks the gallery; degrade to today's behavior
+  }
 }
 
 // ==================== GALLERY UPDATES ====================
@@ -4350,14 +4720,16 @@ export async function sendExecutionToGallery(galleryId: string, executionId: str
 
   // Step 2: Get analysis_results and visual_tags separately (uses indexes)
   const [arResult, vtResult] = await Promise.all([
-    client.from('analysis_results').select('image_id, recognized_number').in('image_id', imageIds),
+    client.from('analysis_results').select('image_id, recognized_number, raw_response, camera_model').in('image_id', imageIds),
     client.from('visual_tags').select('image_id, participant_name, participant_team').in('image_id', imageIds),
   ]);
 
   // Build lookup maps
-  const arMap: Record<string, string> = {};
+  // Store the FULL analysis_results row (not just the number) so buildGalleryTags can
+  // read raw_response + camera_model for the tags jsonb. `any` = loose Supabase row.
+  const arMap: Record<string, any> = {};
   if (arResult.data) {
-    arResult.data.forEach((ar: any) => { if (ar.recognized_number) arMap[ar.image_id] = ar.recognized_number; });
+    arResult.data.forEach((ar: any) => { arMap[ar.image_id] = ar; });
   }
   const vtMap: Record<string, { name: string; team: string }> = {};
   if (vtResult.data) {
@@ -4365,7 +4737,8 @@ export async function sendExecutionToGallery(galleryId: string, executionId: str
   }
 
   const rows = imageIds.map((imgId: string) => {
-    const number = arMap[imgId] || '';
+    const ar = arMap[imgId];
+    const number = ar?.recognized_number || '';
     const vt = vtMap[imgId];
     return {
       gallery_id: galleryId,
@@ -4375,6 +4748,7 @@ export async function sendExecutionToGallery(galleryId: string, executionId: str
       recognized_numbers: number ? [number] : [],
       participant_name: vt?.name || '',
       participant_team: vt?.team || '',
+      tags: buildGalleryTags(ar),
     };
   });
 
@@ -4443,6 +4817,40 @@ export async function getGalleryExecutions(galleryId: string) {
     ...exec,
     gallery_image_count: countMap[exec.id] || 0,
   }));
+}
+
+// ==================== GALLERY HD (R2) STATUS — aggregated for cards ====================
+
+// Returns { total, completed } across the images linked to a gallery, read from
+// images.original_upload_status. HD state lives on the image row, so this reflects
+// real per-gallery HD readiness — the same R2 object is shared with any other
+// gallery referencing the same images (no duplication, no re-upload).
+export async function getGalleryHdStatus(galleryId: string) {
+  const client = getSupabaseClient();
+  const { data: links, error: linkErr } = await client
+    .from('gallery_images')
+    .select('image_id')
+    .eq('gallery_id', galleryId);
+  if (linkErr) throw new Error(linkErr.message);
+
+  const imageIds = (links || []).map((r: any) => r.image_id).filter(Boolean);
+  if (imageIds.length === 0) return { total: 0, completed: 0 };
+
+  let total = 0;
+  let completed = 0;
+  for (let i = 0; i < imageIds.length; i += 200) {
+    const chunk = imageIds.slice(i, i + 200);
+    const { data: imgs, error } = await client
+      .from('images')
+      .select('original_upload_status')
+      .in('id', chunk);
+    if (error) throw new Error(error.message);
+    for (const img of imgs || []) {
+      total++;
+      if (img.original_upload_status === 'completed') completed++;
+    }
+  }
+  return { total, completed };
 }
 
 // ==================== R2 UPLOAD: Get images needing upload for an execution ====================

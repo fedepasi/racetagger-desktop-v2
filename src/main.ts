@@ -1,10 +1,11 @@
-import { app, BrowserWindow, ipcMain, IpcMainEvent, IpcMainInvokeEvent, dialog, shell, net } from 'electron';
+import { app, BrowserWindow, ipcMain, IpcMainEvent, IpcMainInvokeEvent, dialog, shell, net, crashReporter } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { promises as fsPromises } from 'fs';
 // import * as os from 'os'; // REMOVED - unused
 import { diagnosticLogger } from './utils/diagnostic-logger';
 import { errorTelemetryService } from './utils/error-telemetry-service';
+import { crashRecovery } from './utils/crash-recovery';
 
 // --- CONSOLE LOGGING DISABLE FOR PRODUCTION ---
 // NOTE: Console logging is now CAPTURED by diagnosticLogger instead of disabled.
@@ -49,6 +50,22 @@ process.stderr.on('error', (error) => {
 // Initialize diagnostic logger EARLY - captures all subsequent console output to file
 // This MUST happen before any significant logging to ensure complete capture
 diagnosticLogger.initialize();
+
+// Start the native crash reporter (Crashpad) as early as possible so it captures
+// HARD crashes — native module segfaults, OOM, GPU process crashes — that JS
+// handlers (uncaughtException / render-process-gone) never see. We do NOT upload:
+// minidumps are written to app.getPath('crashDumps') and surfaced on the next
+// launch by crashRecovery via the existing error-telemetry pipeline.
+try {
+  crashReporter.start({
+    productName: 'RaceTagger',
+    uploadToServer: false,
+    compress: true,
+  });
+} catch (crashReporterErr) {
+  // The crash reporter must never block startup.
+  try { console.warn('[Main] crashReporter.start failed (non-critical):', crashReporterErr); } catch { /* ignore */ }
+}
 
 import {
   createExecutionOnline,
@@ -107,7 +124,7 @@ import { rawConverter } from './utils/raw-converter'; // Import for temp cleanup
 import { rawPreviewExtractor } from './utils/raw-preview-native'; // Native RAW preview extraction
 import { unifiedImageProcessor, UnifiedImageFile, UnifiedProcessingResult, UnifiedProcessorConfig } from './unified-image-processor';
 import { FolderOrganizerConfig } from './utils/folder-organizer';
-import { getFaceDetectionBridge } from './face-detection-bridge';
+// face-detection-bridge removed — ONNX pipeline runs in main process (no IPC bridge needed)
 import { getModelManager } from './model-manager';
 // Modular IPC handlers
 import { registerAllHandlers, initializeIpcContext, isForceUpdateRequired, checkAppVersion, isBatchProcessingCancelled, setBatchProcessingCancelled, setActiveProcessingExecutionId } from './ipc';
@@ -496,8 +513,7 @@ function createWindow() {
   // Set main window reference for auth service
   authService.setMainWindow(mainWindow);
 
-  // Set main window reference for face detection bridge (for IPC communication)
-  getFaceDetectionBridge().setMainWindow(mainWindow);
+  // Face recognition now runs entirely in main process via ONNX — no bridge needed
 
   // Wire R2 upload progress events to renderer (idempotent across reopens)
   bindR2UploadListenersOnce();
@@ -1645,6 +1661,16 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
             (config.participantPreset as any).allow_external_person_recognition =
               reloaded.allow_external_person_recognition;
           }
+          // ACC-01 (Gruppe C): likewise pick up the series-sponsor ignore list from
+          // the reloaded preset when the renderer didn't send an array, so the
+          // empty-participants reload path doesn't drop the filter.
+          if (
+            !Array.isArray((config.participantPreset as any).series_sponsor_ignore) &&
+            Array.isArray((reloaded as any).series_sponsor_ignore)
+          ) {
+            (config.participantPreset as any).series_sponsor_ignore =
+              (reloaded as any).series_sponsor_ignore;
+          }
           console.log(
             `[main] [Issue #104] Reloaded ${reloaded.participants.length} participants from DB for preset ${config.participantPreset.id}`
           );
@@ -1685,6 +1711,11 @@ async function handleUnifiedImageProcessing(event: IpcMainEvent, config: BatchPr
       // external (non-participant) person recognition for this batch.
       allowExternalPersonRecognition:
         (config.participantPreset as any)?.allow_external_person_recognition === true,
+      // ACC-01 (Gruppe C): propagate the preset-level series-sponsor ignore list so
+      // each worker's SmartMatcher drops those brands from SPONSOR evidence.
+      seriesSponsorIgnore: Array.isArray((config.participantPreset as any)?.series_sponsor_ignore)
+        ? (config.participantPreset as any).series_sponsor_ignore
+        : [],
       personShownTemplate: config.participantPreset?.person_shown_template || undefined, // Template for IPTC PersonInImage field
       folderOrganization: folderOrgConfig,
       keywordsMode: config.keywordsMode || 'append', // How to handle existing keywords
@@ -3361,6 +3392,14 @@ app.whenReady().then(async () => { // Added async here
     console.warn('[Main] Error telemetry init failed (non-critical):', telemetryInitError);
   }
 
+  // Surface any crash from the PREVIOUS launch (native minidump or abnormal
+  // exit) as an automatic error report → GitHub issue. Non-blocking, runs once.
+  try {
+    crashRecovery.detectAndReportPriorCrash();
+  } catch (crashRecoveryError) {
+    console.warn('[Main] Crash recovery scan failed (non-critical):', crashRecoveryError);
+  }
+
   // Track app launch for analytics (non-blocking)
   trackAppLaunch().catch(err => {
     console.warn('[AppLaunch] Failed to track launch (non-critical):', err.message);
@@ -3560,8 +3599,22 @@ app.whenReady().then(async () => { // Added async here
           }
         }
 
-        // Extract image analysis events
-        const imageAnalysisEvents = logEvents.filter((event: any) => event.type === 'IMAGE_ANALYSIS');
+        // Extract image analysis events.
+        // Sort by filename (natural, numeric-aware) so folder organization
+        // processes photos in the same order the user sees in their file
+        // explorer — NOT in JSONL analysis-completion order, which is
+        // parallel/streaming and reads as random (feedback 2026-06-18).
+        // This keeps any {seq} rename token and the per-folder write order
+        // aligned with the source folder. Destination derivation below uses
+        // imageAnalysisEvents[0].originalPath (dirname only), so reordering
+        // is safe.
+        const _fileNameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+        const imageAnalysisEvents = logEvents
+          .filter((event: any) => event.type === 'IMAGE_ANALYSIS')
+          .sort((a: any, b: any) => _fileNameCollator.compare(
+            a.fileName || a.originalFileName || '',
+            b.fileName || b.originalFileName || ''
+          ));
 
         // Build correction map from MANUAL_CORRECTION events
         const correctionMap = new Map();
@@ -4621,6 +4674,39 @@ app.whenReady().then(async () => { // Added async here
           // Manual correction confidence is 100%.
           vehicle.confidence = 1.0;
 
+          // ACC-04 Phase 3: cascade ALL preset-entry fields for review-resolved corrections
+          // (category, make/model, sponsors, metatag — fields the slim chosenCandidate omits).
+          // The renderer attaches correction.changes.chosenParticipant (full preset row + drivers)
+          // so this needs no extra DB round-trip.
+          if (correction.changes.resolvedFromReview === true && correction.changes.chosenParticipant) {
+            const { cascadeEntryToVehicle: _cascadeForReview } = await import('./matching/entry-cascade');
+            _cascadeForReview(vehicle, correction.changes.chosenParticipant, {
+              clearMissing: true, source: 'manual-review'
+            });
+            // Re-apply B1 overrides — cascade doesn't set these but be defensive
+            vehicle.matchStatus = 'matched';
+            vehicle.matchedBy = 'user_manual';
+            vehicle.confidence = 1.0;
+            vehicle.finalResult = vehicle.finalResult || {};
+            vehicle.finalResult.matchStatus = 'matched';
+            vehicle.finalResult.matchedBy = 'user_manual';
+            // Mirror cascaded fields to primaryVehicle (vehicle 0 only)
+            if (correction.vehicleIndex === 0 && imageAnalysisEvent?.primaryVehicle) {
+              const pv = imageAnalysisEvent.primaryVehicle;
+              pv.teamName = vehicle.teamName;
+              pv.drivers = vehicle.drivers;
+              pv.category = vehicle.category;
+              pv.make = vehicle.make;
+              pv.model = vehicle.model;
+              pv.sponsors = vehicle.sponsors;
+              pv.metatag = vehicle.metatag;
+              if (pv.finalResult) {
+                pv.finalResult.team = vehicle.teamName;
+                pv.finalResult.drivers = vehicle.drivers;
+              }
+            }
+          }
+
           // Append correction metadata for audit trail / training data.
           // Dedup guard: if `originalValues` deep-equals `correction.changes`,
           // the user is just re-saving an already-persisted state (e.g. via
@@ -5356,6 +5442,7 @@ app.whenReady().then(async () => { // Added async here
   }) => {
     try {
       const { presetId, executionId, participants } = data;
+      const { canonicalKey, clusterSponsors, pickDisplay, detectSeriesSponsors } = await import('./matching/sponsor-canonical');
       const { getSupabaseClient } = await import('./database-service');
       const supabase = getSupabaseClient();
       const userId = authService.getAuthState().user?.id;
@@ -5424,9 +5511,17 @@ app.whenReady().then(async () => { // Added async here
             .maybeSingle();
 
           const existingSponsors = current?.sponsor ? current.sponsor.split(',').map((s: string) => s.trim()) : [];
-          const newSponsors = participant.fields.sponsors.filter((s: string) => !existingSponsors.map((e: string) => e.toLowerCase()).includes(s.toLowerCase()));
+          const existingKeys = new Set(existingSponsors.map((s: string) => canonicalKey(s)));
+          const newSponsors = participant.fields.sponsors.filter((s: string) => {
+            const key = canonicalKey(s);
+            return key && !existingKeys.has(key);
+          });
           if (newSponsors.length > 0) {
-            directUpdate.sponsor = [...existingSponsors, ...newSponsors].join(', ');
+            const newFreq = new Map<string, number>();
+            for (const s of newSponsors) newFreq.set(s, (newFreq.get(s) || 0) + 1);
+            const newClusters = clusterSponsors(newFreq);
+            const deduped = newClusters.map(c => pickDisplay(c, newFreq));
+            directUpdate.sponsor = [...existingSponsors, ...deduped].join(', ');
           }
         }
         if (participant.fields.team) directUpdate.squadra = participant.fields.team;
@@ -5448,7 +5543,11 @@ app.whenReady().then(async () => { // Added async here
         const mergedLearned = { ...existingLearned, ...learnedData };
         // Merge sponsors arrays (union)
         if (existingLearned.sponsors && learnedData.sponsors) {
-          mergedLearned.sponsors = [...new Set([...existingLearned.sponsors, ...learnedData.sponsors])];
+          const allSponsors = [...existingLearned.sponsors, ...learnedData.sponsors];
+          const freqMap = new Map<string, number>();
+          for (const s of allSponsors) freqMap.set(s, (freqMap.get(s) || 0) + 1);
+          const clusters = clusterSponsors(freqMap);
+          mergedLearned.sponsors = clusters.map(c => pickDisplay(c, freqMap));
         }
         // Merge execution IDs
         if (existingLearned.source_execution_ids) {
@@ -5473,13 +5572,41 @@ app.whenReady().then(async () => { // Added async here
         }
       }
 
+      // Series-sponsor detection — log candidates + surface them in the Phase 4 modal UX
+      let seriesCandidates: ReturnType<typeof detectSeriesSponsors> = [];
+      if (participants.length >= 4) {
+        const batchSponsorFreq = new Map<string, number>();
+        for (const p of participants) {
+          const pSponsors = p.fields.sponsors;
+          if (Array.isArray(pSponsors)) {
+            const seen = new Set<string>();
+            for (const s of pSponsors) {
+              const key = canonicalKey(s);
+              if (key && !seen.has(key)) {
+                seen.add(key);
+                batchSponsorFreq.set(s, (batchSponsorFreq.get(s) || 0) + 1);
+              }
+            }
+          }
+        }
+        seriesCandidates = detectSeriesSponsors(batchSponsorFreq, participants.length);
+        if (seriesCandidates.length > 0) {
+          console.log(
+            `[LearnedData] Series-sponsor candidates (${participants.length} participants):`,
+            seriesCandidates
+              .map(c => `"${c.display}" ${Math.round(c.coverageFraction * 100)}%`)
+              .join(', ')
+          );
+        }
+      }
+
       // Invalidate presets cache so next fetch returns fresh data with learned fields
       if (updatedCount > 0) {
         const { invalidatePresetsCache } = await import('./database-service');
         invalidatePresetsCache();
       }
 
-      return { success: true, data: { updated: updatedCount, total: participants.length } };
+      return { success: true, data: { updated: updatedCount, total: participants.length, seriesCandidates } };
 
     } catch (error) {
       console.error('[LearnedData] Error saving learned data:', error);
@@ -5614,6 +5741,51 @@ process.on('uncaughtException', (error: Error) => {
     // Fallback if mainWindow is not available or already destroyed
     dialog.showErrorBox('Critical Application Error', `A critical unexpected error occurred before the UI could be fully initialized: ${error.message}\n\nPlease report this error.\n\n${error.stack || ''}`);
   }
+});
+
+process.on('unhandledRejection', (reason: unknown) => {
+  safeConsoleError('[Main Process] Unhandled promise rejection:', reason);
+  // Report to telemetry (best-effort, non-blocking). Recoverable severity — an
+  // unhandled rejection usually doesn't take the process down.
+  try {
+    errorTelemetryService.reportCriticalError({
+      errorType: 'uncaught',
+      severity: 'recoverable',
+      error: reason instanceof Error ? reason : new Error(String(reason)),
+      batchPhase: 'unhandled_rejection'
+    });
+  } catch { /* never let telemetry crash the handler */ }
+});
+
+// Renderer process crash (white screen / sudden window close). 'clean-exit' is
+// a normal teardown — skip it; everything else is reported.
+app.on('render-process-gone', (_event, _webContents, details) => {
+  try {
+    if (details.reason === 'clean-exit') return;
+    safeConsoleError('[Main Process] Renderer process gone:', details.reason, details.exitCode);
+    const isOom = details.reason === 'oom';
+    errorTelemetryService.reportCriticalError({
+      errorType: isOom ? 'memory' : 'render_process_gone',
+      severity: 'fatal',
+      error: new Error(`Renderer process gone: reason=${details.reason}, exitCode=${details.exitCode}`),
+      batchPhase: `render_${details.reason}`
+    });
+  } catch { /* never throw from a crash handler */ }
+});
+
+// GPU / utility child process crash.
+app.on('child-process-gone', (_event, details) => {
+  try {
+    if (details.reason === 'clean-exit') return;
+    safeConsoleError('[Main Process] Child process gone:', details.type, details.reason);
+    const isGpu = details.type === 'GPU';
+    errorTelemetryService.reportCriticalError({
+      errorType: isGpu ? 'gpu_crash' : 'render_process_gone',
+      severity: details.reason === 'killed' ? 'warning' : 'fatal',
+      error: new Error(`Child process gone: type=${details.type}, reason=${details.reason}, exitCode=${details.exitCode}`),
+      batchPhase: `child_${details.type}_${details.reason}`
+    });
+  } catch { /* never throw from a crash handler */ }
 });
 
 // --- Graceful Shutdown Handlers ---

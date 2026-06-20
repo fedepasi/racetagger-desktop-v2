@@ -151,7 +151,8 @@ export function registerFileHandlers(): void {
       }
 
       const files = await fsPromises.readdir(folderPath);
-      const imageExtensions = ['.jpg', '.jpeg', '.png', '.webp', ...RAW_EXTENSIONS];
+      // PNG excluded from import (2026-06-12) — see main.ts STANDARD_EXTENSIONS
+      const imageExtensions = ['.jpg', '.jpeg', '.webp', ...RAW_EXTENSIONS];
 
       let count = 0;
       for (const file of files) {

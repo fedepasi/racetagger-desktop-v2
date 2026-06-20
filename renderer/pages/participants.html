@@ -1,4 +1,4 @@
-<!-- Participants Page Content -->
+﻿<!-- Participants Page Content -->
 <!-- Loaded dynamically by router.js -->
 
 <div id="section-participants" class="content-section active-section">
@@ -24,13 +24,13 @@
       <!-- PDF Drop Zone -->
       <div id="pdf-drop-zone" class="pdf-drop-zone">
         <div class="drop-zone-content">
-          <div class="drop-zone-icon">📄</div>
+          <div class="drop-zone-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/></svg></div>
           <div class="drop-zone-text">
             <h4>Drop your Start List PDF here</h4>
             <p>or click to browse files</p>
           </div>
           <div class="drop-zone-hint">
-            <span class="ai-chip">🤖 AI-Powered</span>
+            <span class="ai-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4l1.6 4.4 4.4 1.6-4.4 1.6L12 16l-1.6-4.4L6 10l4.4-1.6z"/></svg>AI</span>
             Supports official FIA, FIM, and race organizer entry lists
           </div>
         </div>
@@ -134,6 +134,22 @@
                 Default OFF — strongly recommended. Only enable if you specifically want to capture VIPs / celebrities who are not participants.
               </div>
             </div>
+            <!-- ACC-01 (Gruppe C) — per-preset series-wide sponsors to ignore -->
+            <div class="form-group">
+              <label for="series-sponsor-input">Series sponsors to ignore</label>
+              <div class="sponsor-chips" id="series-sponsor-chips">
+                <!-- Sponsor chips added here dynamically -->
+              </div>
+              <input
+                type="text"
+                id="series-sponsor-input"
+                class="form-control"
+                placeholder="e.g. Michelin, Rolex — press Enter"
+              />
+              <div class="form-hint">
+                Sponsors that appear on every car or on trackside banners. RaceTagger won't use them to match — or penalize — any participant.
+              </div>
+            </div>
           </div>
 
           <!-- Folder Organization Section -->
@@ -187,6 +203,12 @@
               <span class="iptc-toggle-status" id="iptc-toggle-status">Not configured</span>
             </div>
             <div class="iptc-toggle-right">
+              <button class="btn btn-secondary btn-sm" id="iptc-apply-default-btn" onclick="event.stopPropagation(); prefillIptcFromDefaults()" title="Fill this form from your account-level default IPTC template">
+                Apply default
+              </button>
+              <button class="btn btn-secondary btn-sm" id="iptc-save-default-btn" onclick="event.stopPropagation(); saveCurrentIptcFormAsDefault()" title="Save this form as your account-level default IPTC template">
+                Save as default
+              </button>
               <button class="btn btn-secondary btn-sm iptc-import-btn" id="iptc-import-xmp-btn" onclick="event.stopPropagation(); importIptcFromXmp()">
                 <span class="btn-icon">📥</span>
                 Import .XMP
@@ -194,369 +216,19 @@
             </div>
           </div>
 
-          <div class="iptc-section-body" id="iptc-section-body" style="display: none;">
-            <div class="iptc-info-banner">
-              <span class="info-icon">💡</span>
-              <div class="info-text">
-                Configure IPTC/XMP metadata to embed into your photos when you use the <strong>Export & IPTC</strong> button in the results page. Use placeholders like <code>{name}</code>, <code>{number}</code>, <code>{team}</code>, <code>{car_model}</code>, <code>{nationality}</code>, <code>{category}</code> in <strong>Caption Template</strong>, <strong>Base Keywords</strong>, and <strong>Person Shown</strong> — they will be replaced with each participant's actual data from the table below.
-                <br><br>
-                <strong>Multi-pilot photos</strong> (WEC, IMSA, endurance, etc.): wrap the per-pilot section in <code>[[ ]]</code> to repeat it for each matched pilot. Example: <code>Race 2026 [[#{number} {name}]]</code> becomes <code>Race 2026 #1 Driver A, #2 Driver B</code> when two pilots are detected in the same frame.
-              </div>
-            </div>
-
-            <!-- First row: Event & Caption, Base Keywords, Person Shown -->
-            <div class="iptc-editor-grid iptc-editor-grid-top">
-              <!-- Event & Caption -->
-              <div class="iptc-editor-column">
-                <div class="iptc-column-header">
-                  <label class="iptc-column-checkbox">
-                    <input type="checkbox" id="iptc-section-event" checked>
-                    <span>Event & Caption</span>
-                  </label>
-                </div>
-                <div class="iptc-column-body">
-                  <div class="form-group">
-                    <label>Headline <span class="field-destination">→ IPTC:Headline</span></label>
-                    <input type="text" id="iptc-headline" class="form-input form-input-iptc" placeholder="F1 GP Sao Paulo 2025">
-                  </div>
-                  <div class="form-group">
-                    <label>Caption Template <span class="field-destination">→ IPTC:Caption</span></label>
-                    <div class="iptc-template-shortcuts">
-                      <span class="shortcuts-label">Quick add:</span>
-                      <button type="button" class="template-shortcut-btn" data-target="iptc-description" data-placeholder="{name}">{name}</button>
-                      <button type="button" class="template-shortcut-btn" data-target="iptc-description" data-placeholder="{number}">{number}</button>
-                      <button type="button" class="template-shortcut-btn" data-target="iptc-description" data-placeholder="{team}">{team}</button>
-                      <button type="button" class="template-shortcut-btn" data-target="iptc-description" data-placeholder="{car_model}">{car_model}</button>
-                      <button type="button" class="template-shortcut-btn" data-target="iptc-description" data-placeholder="{nationality}">{nationality}</button>
-                      <button type="button" class="template-shortcut-btn" data-target="iptc-description" data-placeholder="{category}">{category}</button>
-                      <button type="button" class="template-shortcut-btn template-shortcut-btn-block" data-target="iptc-description" data-action="wrap" data-wrap-before="[[" data-wrap-after="]]" title="Wrap the selected text in a per-car block. The block is repeated once per matched pilot when a photo contains multiple participants (e.g. WEC, IMSA, endurance racing).">[[ per-car ]]</button>
-                    </div>
-                    <input type="hidden" id="iptc-description">
-                    <div id="iptc-description-editor" class="form-input form-input-iptc iptc-textarea iptc-editable-template" contenteditable="true" data-target="iptc-description" data-placeholder="{name} during the Formula 1 Grande Premio..." role="textbox" aria-multiline="true"></div>
-                    <small class="form-hint iptc-caption-preview" id="iptc-caption-preview"></small>
-                  </div>
-                  <div class="form-group">
-                    <label>Event <span class="field-destination">→ XMP-iptcExt:Event</span></label>
-                    <input type="text" id="iptc-event" class="form-input form-input-iptc" placeholder="F1 GP Brasil 2025">
-                  </div>
-                  <div class="form-group">
-                    <label>Caption Writer <span class="field-destination">→ Writer-Editor</span></label>
-                    <input type="text" id="iptc-caption-writer" class="form-input form-input-iptc" placeholder="Caption writer name">
-                  </div>
-                  <div class="form-group form-group-row">
-                    <div class="form-group form-group-third">
-                      <label>Category</label>
-                      <input type="text" id="iptc-category" class="form-input form-input-iptc" placeholder="SPO">
-                    </div>
-                    <div class="form-group form-group-third">
-                      <label>Urgency</label>
-                      <select id="iptc-urgency" class="form-input form-input-iptc">
-                        <option value="">-</option>
-                        <option value="1">1 (Highest)</option>
-                        <option value="2">2</option>
-                        <option value="3">3</option>
-                        <option value="4">4</option>
-                        <option value="5">5 (Normal)</option>
-                        <option value="6">6</option>
-                        <option value="7">7</option>
-                        <option value="8">8 (Lowest)</option>
-                      </select>
-                    </div>
-                    <div class="form-group form-group-third">
-                      <label>Genre</label>
-                      <input type="text" id="iptc-genre" class="form-input form-input-iptc" placeholder="SPO">
-                    </div>
-                  </div>
-                  <div class="form-group">
-                    <label>Date Created</label>
-                    <input type="date" id="iptc-date-created" class="form-input form-input-iptc">
-                  </div>
-                </div>
-              </div>
-
-              <!-- Base Keywords + Person Shown (stacked) -->
-              <div class="iptc-stacked-column">
-                <!-- Base Keywords -->
-                <div class="iptc-editor-column">
-                  <div class="iptc-column-header">
-                    <label class="iptc-column-checkbox">
-                      <input type="checkbox" id="iptc-section-keywords" checked>
-                      <span>Base Keywords</span>
-                    </label>
-                  </div>
-                  <div class="iptc-column-body">
-                    <div class="form-group">
-                      <div class="iptc-keyword-shortcuts">
-                        <span class="shortcuts-label">Quick add:</span>
-                        <button type="button" class="keyword-shortcut-btn" data-keyword="{name}">{name}</button>
-                        <button type="button" class="keyword-shortcut-btn" data-keyword="{number}">{number}</button>
-                        <button type="button" class="keyword-shortcut-btn" data-keyword="{team}">{team}</button>
-                        <button type="button" class="keyword-shortcut-btn" data-keyword="{car_model}">{car_model}</button>
-                        <button type="button" class="keyword-shortcut-btn" data-keyword="{nationality}">{nationality}</button>
-                        <button type="button" class="keyword-shortcut-btn" data-keyword="{category}">{category}</button>
-                      </div>
-                      <div class="iptc-tags-container" id="iptc-keywords-container">
-                        <div class="iptc-tags-list" id="iptc-keywords-tags"></div>
-                        <input type="text" id="iptc-keywords-input" class="iptc-tag-input" placeholder="Type keyword and press Enter">
-                      </div>
-                      <small class="form-hint">Press Enter or comma to add. These keywords are added to every photo. Placeholders are resolved per participant.</small>
-                    </div>
-                    <div class="form-group form-group-inline">
-                      <label class="radio-label">
-                        <input type="radio" name="iptc-keywords-mode" value="append" checked>
-                        <span>Merge with existing keywords</span>
-                      </label>
-                      <label class="radio-label">
-                        <input type="radio" name="iptc-keywords-mode" value="overwrite">
-                        <span>Replace all keywords</span>
-                      </label>
-                    </div>
-                    <div class="iptc-visual-tags-option">
-                      <label class="visual-tags-toggle">
-                        <input type="checkbox" id="iptc-include-visual-tags">
-                        <span class="visual-tags-label">Include AI visual tags in keywords</span>
-                      </label>
-                      <div class="visual-tags-badges">
-                        <span class="visual-tag-badge">location</span>
-                        <span class="visual-tag-badge">weather</span>
-                        <span class="visual-tag-badge">scene</span>
-                        <span class="visual-tag-badge">subjects</span>
-                        <span class="visual-tag-badge">style</span>
-                        <span class="visual-tag-badge">emotion</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <!-- Person Shown -->
-                <div class="iptc-editor-column">
-                  <div class="iptc-column-header">
-                    <label class="iptc-column-checkbox">
-                      <input type="checkbox" id="iptc-section-person" checked>
-                      <span>Person Shown</span>
-                    </label>
-                  </div>
-                  <div class="iptc-column-body">
-                    <div class="form-group">
-                      <label>Template <span class="field-destination">→ PersonInImage</span></label>
-                      <div class="iptc-template-shortcuts">
-                        <span class="shortcuts-label">Quick add:</span>
-                        <button type="button" class="template-shortcut-btn" data-target="iptc-person-shown" data-placeholder="{name}">{name}</button>
-                        <button type="button" class="template-shortcut-btn" data-target="iptc-person-shown" data-placeholder="{number}">{number}</button>
-                        <button type="button" class="template-shortcut-btn" data-target="iptc-person-shown" data-placeholder="{team}">{team}</button>
-                        <button type="button" class="template-shortcut-btn" data-target="iptc-person-shown" data-placeholder="{nationality}">{nationality}</button>
-                      </div>
-                      <input type="hidden" id="iptc-person-shown">
-                      <div id="iptc-person-shown-editor" class="form-input form-input-iptc iptc-editable-template iptc-editable-single" contenteditable="true" data-target="iptc-person-shown" data-placeholder="{name}" role="textbox"></div>
-                      <small class="form-hint iptc-person-preview" id="iptc-person-preview"></small>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Credits & Copyright -->
-              <div class="iptc-editor-column">
-                <div class="iptc-column-header">
-                  <label class="iptc-column-checkbox">
-                    <input type="checkbox" id="iptc-section-credits" checked>
-                    <span>Credits & Copyright</span>
-                  </label>
-                </div>
-                <div class="iptc-column-body">
-                  <div class="form-group">
-                    <label>Credit <span class="field-destination">→ IPTC:Credit</span></label>
-                    <input type="text" id="iptc-credit" class="form-input form-input-iptc" placeholder="Photographer or agency name">
-                  </div>
-                  <div class="form-group">
-                    <label>Source <span class="field-destination">→ IPTC:Source</span></label>
-                    <input type="text" id="iptc-source" class="form-input form-input-iptc" placeholder="Agency or source">
-                  </div>
-                  <div class="form-group">
-                    <label>Copyright <span class="field-destination">→ IPTC:Copyright</span></label>
-                    <input type="text" id="iptc-copyright" class="form-input form-input-iptc" placeholder="© 2025 Your Name">
-                  </div>
-                  <div class="form-group">
-                    <label>Copyright Owner <span class="field-destination">→ XMP-plus</span></label>
-                    <input type="text" id="iptc-copyright-owner" class="form-input form-input-iptc" placeholder="Copyright owner name">
-                  </div>
-                  <div class="form-group form-group-inline">
-                    <label class="checkbox-label">
-                      <input type="checkbox" id="iptc-copyright-marked">
-                      <span>Copyright Marked</span>
-                    </label>
-                  </div>
-                  <div class="form-group">
-                    <label>Copyright URL <span class="field-destination">→ xmpRights</span></label>
-                    <input type="text" id="iptc-copyright-url" class="form-input form-input-iptc" placeholder="https://...">
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Second row: Creator & Contact, Location, Rights & Licensing -->
-            <div class="iptc-editor-grid iptc-editor-grid-bottom">
-              <!-- Creator & Contact -->
-              <div class="iptc-editor-column">
-                <div class="iptc-column-header">
-                  <label class="iptc-column-checkbox">
-                    <input type="checkbox" id="iptc-section-creator" checked>
-                    <span>Creator & Contact</span>
-                  </label>
-                </div>
-                <div class="iptc-column-body">
-                  <div class="form-group">
-                    <label>Creator <span class="field-destination">→ IPTC:By-line</span></label>
-                    <input type="text" id="iptc-creator" class="form-input form-input-iptc" placeholder="Photographer name">
-                  </div>
-                  <div class="form-group">
-                    <label>Position <span class="field-destination">→ By-lineTitle</span></label>
-                    <input type="text" id="iptc-authors-position" class="form-input form-input-iptc" placeholder="Photographer">
-                  </div>
-                  <div class="form-group">
-                    <label>Email</label>
-                    <input type="email" id="iptc-contact-email" class="form-input form-input-iptc" placeholder="email@example.com">
-                  </div>
-                  <div class="form-group">
-                    <label>Phone</label>
-                    <input type="tel" id="iptc-contact-phone" class="form-input form-input-iptc" placeholder="+39 ...">
-                  </div>
-                  <div class="form-group">
-                    <label>Website</label>
-                    <input type="url" id="iptc-contact-website" class="form-input form-input-iptc" placeholder="https://...">
-                  </div>
-                  <div class="form-group">
-                    <label>Address</label>
-                    <input type="text" id="iptc-contact-address" class="form-input form-input-iptc" placeholder="Street address">
-                  </div>
-                  <div class="form-group form-group-row">
-                    <div class="form-group form-group-half">
-                      <label>City</label>
-                      <input type="text" id="iptc-contact-city" class="form-input form-input-iptc" placeholder="City">
-                    </div>
-                    <div class="form-group form-group-half">
-                      <label>Postal Code</label>
-                      <input type="text" id="iptc-contact-postal-code" class="form-input form-input-iptc" placeholder="ZIP">
-                    </div>
-                  </div>
-                  <div class="form-group form-group-row">
-                    <div class="form-group form-group-half">
-                      <label>Region</label>
-                      <input type="text" id="iptc-contact-region" class="form-input form-input-iptc" placeholder="State/Region">
-                    </div>
-                    <div class="form-group form-group-half">
-                      <label>Country</label>
-                      <input type="text" id="iptc-contact-country" class="form-input form-input-iptc" placeholder="Country">
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Location -->
-              <div class="iptc-editor-column">
-                <div class="iptc-column-header">
-                  <label class="iptc-column-checkbox">
-                    <input type="checkbox" id="iptc-section-location" checked>
-                    <span>Location</span>
-                  </label>
-                </div>
-                <div class="iptc-column-body">
-                  <div class="form-group">
-                    <label>City <span class="field-destination">→ IPTC:City</span></label>
-                    <input type="text" id="iptc-city" class="form-input form-input-iptc" placeholder="Sao Paulo">
-                  </div>
-                  <div class="form-group">
-                    <label>Country <span class="field-destination">→ IPTC:Country</span></label>
-                    <input type="text" id="iptc-country" class="form-input form-input-iptc" placeholder="Brasil">
-                  </div>
-                  <div class="form-group">
-                    <label>Country Code <span class="field-destination">→ CountryCode</span></label>
-                    <input type="text" id="iptc-country-code" class="form-input form-input-iptc" placeholder="BRA" maxlength="3">
-                  </div>
-                  <div class="form-group">
-                    <label>Sub-location <span class="field-destination">→ Sub-location</span></label>
-                    <input type="text" id="iptc-location" class="form-input form-input-iptc" placeholder="Autodromo Jose Carlos Pace">
-                  </div>
-                  <div class="form-group">
-                    <label>State/Province</label>
-                    <input type="text" id="iptc-province-state" class="form-input form-input-iptc" placeholder="Sao Paulo">
-                  </div>
-                  <div class="form-group">
-                    <label>World Region</label>
-                    <input type="text" id="iptc-world-region" class="form-input form-input-iptc" placeholder="America">
-                  </div>
-                </div>
-              </div>
-
-              <!-- Rights & Licensing -->
-              <div class="iptc-editor-column">
-                <div class="iptc-column-header">
-                  <label class="iptc-column-checkbox">
-                    <input type="checkbox" id="iptc-section-rights" checked>
-                    <span>Rights & Licensing</span>
-                  </label>
-                </div>
-                <div class="iptc-column-body">
-                  <div class="form-group">
-                    <label>Digital Source Type</label>
-                    <select id="iptc-digital-source" class="form-input form-input-iptc">
-                      <option value="">-</option>
-                      <option value="digitalCapture">Digital Capture</option>
-                      <option value="negativeFilm">Negative Film</option>
-                      <option value="positiveFilm">Positive Film</option>
-                    </select>
-                  </div>
-                  <div class="form-group">
-                    <label>Model Release</label>
-                    <select id="iptc-model-release" class="form-input form-input-iptc">
-                      <option value="">-</option>
-                      <option value="MR-NON">Not Applicable (MR-NON)</option>
-                      <option value="MR-NAP">Not Available (MR-NAP)</option>
-                      <option value="MR-UPR">Unlimited Property Release</option>
-                      <option value="MR-LPR">Limited Property Release</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- IPTC Pro Behavior Options -->
-            <div class="iptc-behavior-options">
-              <h4 class="iptc-behavior-title">Writing Behavior</h4>
-
-              <div class="iptc-behavior-row">
-                <div class="iptc-behavior-option">
-                  <label class="iptc-behavior-label">
-                    <span class="iptc-behavior-name">Metadata writing timing</span>
-                    <select id="iptc-writing-timing" class="form-input form-input-iptc iptc-behavior-select">
-                      <option value="default">Use app default</option>
-                      <option value="auto">Automatic during analysis</option>
-                      <option value="manual">Manual only (Export & IPTC)</option>
-                    </select>
-                  </label>
-                  <small class="form-hint">Controls when IPTC metadata is embedded into images for this preset</small>
-                </div>
-
-                <div class="iptc-behavior-option">
-                  <label class="iptc-behavior-label">
-                    <span class="iptc-behavior-name">Face recognition scope</span>
-                    <select id="iptc-face-scope" class="form-input form-input-iptc iptc-behavior-select">
-                      <option value="default">Use app default</option>
-                      <option value="recognized-only">Write only recognized person</option>
-                      <option value="all">Write all participants for number</option>
-                    </select>
-                  </label>
-                  <small class="form-hint">When a face is recognized, choose whether to include only that person or all linked participants</small>
-                </div>
-              </div>
-            </div>
-          </div>
+          <!-- UX-04: the full IPTC editor form lives in
+               pages/partials/iptc-editor-form.html and is mounted on demand by
+               ensureIptcFormMarkup() (preset-iptc-editor.js) so the same markup
+               can be reused in the Settings "Edit default template" modal.
+               createNewPreset()/editPreset() await the mount before loading. -->
+          <div class="iptc-section-body" id="iptc-section-body" style="display: none;"></div>
         </div>
 
         <!-- Participants Table -->
         <div class="participants-table-section">
-          <!-- V1 design: section title + active pill on left, Import CSV + Add
-               Participant on right. The "Reset all" + "Clear All" controls
-               stay reachable but secondary. -->
+          <!-- V1 design: section title + active pill on left, Add Participant +
+               Update participants (PDF entry list) on right. The "Reset all" +
+               "Clear All" controls stay reachable but secondary. -->
           <div class="table-header table-header-v1">
             <h3 class="table-header-title-v1">Participants</h3>
             <div id="active-participants-summary" class="active-participants-summary" style="display: none;">
@@ -570,17 +242,13 @@
             </div>
             <div class="table-header-spacer"></div>
             <div class="table-actions">
-              <button class="btn btn-sm" onclick="openCsvImportModal()" title="Import participants from CSV">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="margin-right: 4px;"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"/></svg>
-                Import CSV
-              </button>
-              <button class="btn btn-sm" onclick="openPdfImportModal()" title="Import / update participants from a PDF entry list">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="margin-right: 4px;"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"/></svg>
-                Import PDF
-              </button>
               <button class="btn btn-primary btn-sm" onclick="openParticipantEditModal(-1)" title="Add a new participant">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="margin-right: 4px;"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5z"/></svg>
                 Add Participant
+              </button>
+              <button class="btn btn-sm" onclick="openPdfImportModal()" title="Update participants from a PDF entry list">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="margin-right: 4px;"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"/></svg>
+                Update participants
               </button>
               <button class="btn btn-sm btn-clear-all-v1" onclick="clearAllParticipants()" title="Remove all participants">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 19a2 2 0 002 2h8a2 2 0 002-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
@@ -701,19 +369,19 @@
               </div>
               <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px;">
                 <label style="display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12px; cursor: pointer;">
-                  <input type="checkbox" id="face-interest-podium" style="accent-color: var(--accent-primary, #3b82f6); width: 14px; height: 14px;">
+                  <input type="checkbox" id="face-interest-podium" style="accent-color: var(--accent-primary, #1a9ee0); width: 14px; height: 14px;">
                   <span><strong style="color: var(--text-primary);">Podium/portrait shots</strong> — match faces in non-racing scenes</span>
                 </label>
                 <label style="display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12px; cursor: pointer;">
-                  <input type="checkbox" id="face-interest-helmet-off" style="accent-color: var(--accent-primary, #3b82f6); width: 14px; height: 14px;">
+                  <input type="checkbox" id="face-interest-helmet-off" style="accent-color: var(--accent-primary, #1a9ee0); width: 14px; height: 14px;">
                   <span><strong style="color: var(--text-primary);">Helmet-off moments</strong> — detect driver faces during pit walks, grid</span>
                 </label>
                 <label style="display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12px; cursor: pointer;">
-                  <input type="checkbox" id="face-interest-multi-driver" style="accent-color: var(--accent-primary, #3b82f6); width: 14px; height: 14px;">
+                  <input type="checkbox" id="face-interest-multi-driver" style="accent-color: var(--accent-primary, #1a9ee0); width: 14px; height: 14px;">
                   <span><strong style="color: var(--text-primary);">Multi-driver matching</strong> — identify which driver is in the car (WEC, IMSA)</span>
                 </label>
                 <label style="display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12px; cursor: pointer;">
-                  <input type="checkbox" id="face-interest-running-cycling" style="accent-color: var(--accent-primary, #3b82f6); width: 14px; height: 14px;">
+                  <input type="checkbox" id="face-interest-running-cycling" style="accent-color: var(--accent-primary, #1a9ee0); width: 14px; height: 14px;">
                   <span><strong style="color: var(--text-primary);">Running/cycling</strong> — recognize athletes without helmets</span>
                 </label>
               </div>
@@ -721,7 +389,7 @@
                 <textarea id="face-rec-comment" rows="2" placeholder="Any specific use case or sport? (optional)" style="width: 100%; padding: 8px 10px; background: var(--bg-dark, #0f172a); border: 1px solid var(--border-color, #334155); border-radius: 8px; color: var(--text-primary); font-size: 12px; resize: vertical; box-sizing: border-box; outline: none; font-family: inherit;" onfocus="this.style.borderColor='var(--accent-primary)'" onblur="this.style.borderColor='var(--border-color)'"></textarea>
               </div>
               <div style="text-align: right;">
-                <button id="btn-face-rec-survey" onclick="submitFaceRecSurvey()" style="padding: 8px 20px; background: linear-gradient(135deg, #3b82f6, #6366f1); border: none; border-radius: 8px; color: white; font-size: 12px; font-weight: 600; cursor: pointer; transition: opacity 0.2s;" onmouseenter="this.style.opacity='0.9'" onmouseleave="this.style.opacity='1'">
+                <button id="btn-face-rec-survey" onclick="submitFaceRecSurvey()" style="padding: 8px 20px; background: linear-gradient(135deg, #1a9ee0, #1a9ee0); border: none; border-radius: 8px; color: white; font-size: 12px; font-weight: 600; cursor: pointer; transition: opacity 0.2s;" onmouseenter="this.style.opacity='0.9'" onmouseleave="this.style.opacity='1'">
                   Submit Feedback
                 </button>
               </div>
@@ -1374,20 +1042,40 @@
     <div class="modal-content pdf-import-modal">
       <div class="modal-header">
         <h2>
-          <span class="ai-badge-header">🤖 AI</span>
-          Import Participants from PDF
+          <span class="ai-badge-header"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4l1.6 4.4 4.4 1.6-4.4 1.6L12 16l-1.6-4.4L6 10l4.4-1.6z"/></svg>AI</span>
+          Import participants from PDF
         </h2>
         <button class="modal-close" onclick="closePdfImportModal()">&times;</button>
       </div>
       <div class="modal-body">
+        <!-- Input State (drop / browse) — shown when the modal opens with no file yet,
+             i.e. "Update participants". The create-new flow uses the page drop-zone and
+             jumps straight to the processing state, so this stays hidden there. -->
+        <div id="pdf-input-state" class="pdf-state" style="display: none;">
+          <div id="pdf-modal-drop-zone" class="pdf-drop-zone">
+            <div class="drop-zone-content">
+              <div class="drop-zone-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/></svg></div>
+              <div class="drop-zone-text">
+                <h4>Drop your entry-list PDF here</h4>
+                <p>or click to browse files</p>
+              </div>
+              <div class="drop-zone-hint">
+                <span class="ai-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4l1.6 4.4 4.4 1.6-4.4 1.6L12 16l-1.6-4.4L6 10l4.4-1.6z"/></svg>AI</span>
+                Supports official FIA, FIM, and race organizer entry lists
+              </div>
+            </div>
+            <input type="file" id="pdf-modal-file-input" accept=".pdf" style="display: none;">
+          </div>
+        </div>
+
         <!-- Processing State -->
         <div id="pdf-processing-state" class="pdf-state" style="display: none;">
           <div class="processing-animation">
             <div class="ai-loader">
               <div class="ai-loader-ring"></div>
-              <div class="ai-loader-icon">🤖</div>
+              <div class="ai-loader-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4l1.6 4.4 4.4 1.6-4.4 1.6L12 16l-1.6-4.4L6 10l4.4-1.6z"/></svg></div>
             </div>
-            <h3>AI is analyzing your document...</h3>
+            <h3>Reading the entry list…</h3>
             <p id="pdf-processing-status">Validating document type</p>
           </div>
         </div>
@@ -1395,13 +1083,13 @@
         <!-- Validation Error State -->
         <div id="pdf-validation-error" class="pdf-state" style="display: none;">
           <div class="validation-error-content">
-            <div class="error-icon">❌</div>
+            <div class="error-icon"><svg viewBox="0 0 24 24" fill="none" stroke="var(--error-color, #ef4444)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:44px;height:44px" aria-hidden="true"><circle cx="12" cy="12" r="9"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg></div>
             <h3 id="pdf-error-title">Document Not Recognized</h3>
             <p id="pdf-error-message">The uploaded document doesn't appear to be a valid entry list or start list.</p>
             <div class="error-details" id="pdf-error-details"></div>
             <button class="btn btn-secondary" onclick="resetPdfImport()">
-              <span class="btn-icon">🔄</span>
-              Try Another File
+              <span class="btn-icon" style="display:inline-flex;vertical-align:-2px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 4v4h-4"/></svg></span>
+              Try another file
             </button>
           </div>
         </div>
@@ -1411,7 +1099,7 @@
           <!-- Preset Name Section -->
           <div class="form-group text-white" id="pdf-preset-name-group">
             <label for="pdf-preset-name">
-              📋 Preset Name *
+              Preset name *
             </label>
             <input
               type="text"
@@ -1424,18 +1112,23 @@
             </small>
           </div>
 
-          <!-- BUG-03 — round-to-round handling (merge mode only) -->
-          <div class="form-group" id="pdf-missing-action-group" style="display: none;">
+          <!-- Merge impact + round-to-round handling (merge mode only). Impact
+               first (it carries the count that matters), then — right beneath it,
+               and only when there actually are participants not in this PDF — the
+               action to apply to them (BUG-03). -->
+          <div id="pdf-merge-impact" style="display: none; margin: 0 0 0.75rem; padding: 0.6rem 0.8rem; border: 1px solid var(--border-color); border-radius: 8px; background: rgba(255,255,255,0.06); color: #e5e7eb; font-size: 0.9rem; line-height: 1.45;"></div>
+
+          <div class="form-group" id="pdf-missing-action-group" style="display: none; margin-bottom: 1.25rem;">
             <label for="pdf-missing-action" style="font-weight: 600;">
-              Participants not in this PDF
+              What to do with the ones not in this PDF
             </label>
-            <select id="pdf-missing-action" class="form-input-sm">
+            <select id="pdf-missing-action" class="form-input-sm" onchange="renderPdfMergeImpact()">
               <option value="deactivate" selected>Deactivate (keep their data &amp; photos)</option>
               <option value="remove">Remove from preset</option>
               <option value="keep">Keep unchanged</option>
             </select>
             <small class="form-hint">
-              Cars missing from this list are disabled for AI matching by default — nothing is deleted until you Save.
+              Nothing is deleted until you Save.
             </small>
           </div>
 
@@ -1462,8 +1155,9 @@
 
           <!-- Extracted Participants Preview -->
           <div class="pdf-preview-section">
-            <h4>
-              👁️ Extracted Participants (Preview):
+            <h4 class="pdf-section-title">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="9" y1="6" x2="20" y2="6"/><line x1="9" y1="12" x2="20" y2="12"/><line x1="9" y1="18" x2="20" y2="18"/><path d="M5 6h.01M5 12h.01M5 18h.01"/></svg>
+              Extracted participants
             </h4>
             <div class="pdf-preview-table-container">
               <table class="pdf-preview-table">
@@ -1487,9 +1181,9 @@
 
           <!-- Warning for partial extraction -->
           <div id="pdf-extraction-warning" class="extraction-warning" style="display: none;">
-            <span class="warning-icon">⚠️</span>
+            <span class="warning-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg></span>
             <div class="warning-content">
-              <strong>Partial Extraction</strong>
+              <strong>Partial extraction</strong>
               <p id="pdf-warning-message">Some fields could not be extracted. You can edit them after import.</p>
             </div>
           </div>
@@ -1498,8 +1192,8 @@
       <div class="modal-footer" id="pdf-modal-footer">
         <button class="btn btn-secondary" onclick="closePdfImportModal()">Cancel</button>
         <button class="btn btn-primary" onclick="importPdfPreset()" id="import-pdf-btn" disabled>
-          <span class="btn-icon">📥</span>
-          Import <span id="pdf-import-count"></span> Participants
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Import <span id="pdf-import-count" class="pdf-num"></span> participants
         </button>
       </div>
     </div>

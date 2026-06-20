@@ -9,6 +9,22 @@
  * Part of Strategy G (Feedback Learning System) — zero additional token cost.
  */
 
+/**
+ * Inline canonical key for sponsor deduplication in the renderer (plain JS, no imports).
+ * Mirrors the TypeScript `canonicalKey` in src/matching/sponsor-canonical.ts:
+ *   Step 1: expand umlauts to ASCII before NFD strips the combining marks
+ *   Step 2: NFD diacritic strip, lowercase, whitespace collapse
+ * (Generic suffix strip omitted here — aggregation only; write-time dedup in main.ts handles it.)
+ */
+function _canonicalKey(raw) {
+  if (!raw) return '';
+  let s = String(raw)
+    .replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue')
+    .replace(/Ä/g, 'ae').replace(/Ö/g, 'oe').replace(/Ü/g, 'ue').replace(/ß/g, 'ss');
+  s = s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().replace(/\s+/g, ' ').trim();
+  return s;
+}
+
 class LearnedDataModal {
   constructor() {
     this.modalElement = null;
@@ -261,19 +277,21 @@ class LearnedDataModal {
         const numStr = String(raceNumber);
 
         if (!perNumber.has(numStr)) {
-          perNumber.set(numStr, { sponsors: new Map(), teams: new Map(), makes: new Map(), models: new Map(), total: 0 });
+          perNumber.set(numStr, { sponsors: new Map(), sponsorDisplay: new Map(), teams: new Map(), makes: new Map(), models: new Map(), total: 0 });
         }
 
         const entry = perNumber.get(numStr);
         entry.total++;
 
-        // Sponsors
+        // Sponsors — aggregate by canonical key to avoid case/umlaut duplicates
         const sponsors = vehicle.otherText || vehicle.sponsors || [];
         if (Array.isArray(sponsors)) {
           sponsors.forEach(s => {
-            const normalized = String(s).trim();
-            if (normalized && normalized.length > 1) {
-              entry.sponsors.set(normalized, (entry.sponsors.get(normalized) || 0) + 1);
+            const display = String(s).trim();
+            const key = _canonicalKey(display);
+            if (key && key.length > 1) {
+              if (!entry.sponsorDisplay.has(key)) entry.sponsorDisplay.set(key, display);
+              entry.sponsors.set(key, (entry.sponsors.get(key) || 0) + 1);
             }
           });
         }
@@ -311,11 +329,13 @@ class LearnedDataModal {
 
       // Sponsors with >= 50% consistency and not already in preset
       const existingSponsor = participant?.sponsor || '';
-      const existingSponsors = existingSponsor ? existingSponsor.split(',').map(s => s.trim().toLowerCase()) : [];
+      const existingKeys = existingSponsor
+        ? new Set(existingSponsor.split(',').map(s => _canonicalKey(s.trim())))
+        : new Set();
       const consistentSponsors = [];
-      for (const [sponsor, count] of entry.sponsors) {
-        if (count >= threshold && !existingSponsors.includes(sponsor.toLowerCase())) {
-          consistentSponsors.push(sponsor);
+      for (const [sponsorKey, count] of entry.sponsors) {
+        if (count >= threshold && !existingKeys.has(sponsorKey)) {
+          consistentSponsors.push(entry.sponsorDisplay.get(sponsorKey) || sponsorKey);
         }
       }
       if (consistentSponsors.length > 0) proposal.fields.sponsors = consistentSponsors;
@@ -354,22 +374,23 @@ class LearnedDataModal {
    *
    * @param {string} presetId - The preset UUID
    * @param {string} executionId - The execution UUID
+   * @param {string[]} existingSeriesIgnore - canonical keys already ignored for series sponsors
    * @returns {Promise<boolean>} true if user accepted some data
    */
-  async show(presetId, executionId) {
+  async show(presetId, executionId, existingSeriesIgnore = []) {
     if (!this.aggregatedData || this.aggregatedData.size === 0) {
       return false;
     }
 
     return new Promise((resolve) => {
-      this._createModal(presetId, executionId, resolve);
+      this._createModal(presetId, executionId, resolve, existingSeriesIgnore);
     });
   }
 
   /**
    * Create and display the modal DOM
    */
-  _createModal(presetId, executionId, resolvePromise) {
+  _createModal(presetId, executionId, resolvePromise, existingSeriesIgnore = []) {
     // Remove any existing modal
     const existing = document.getElementById('learned-data-modal');
     if (existing) existing.remove();
@@ -507,11 +528,24 @@ class LearnedDataModal {
           this.aggregatedData = null;
           this.processedExecutions.add(executionId);
 
-          setTimeout(() => {
-            modal.remove();
-            this.modalElement = null;
-            resolvePromise(true);
-          }, 1500);
+          // ACC-04 Phase 4: if series-sponsor candidates detected, show confirmation step
+          const seriesCandidates = result.data?.seriesCandidates || [];
+          const newCandidates = seriesCandidates.filter(c => {
+            const key = c.key || c.display?.toLowerCase().replace(/\s+/g, ' ').trim() || '';
+            return !existingSeriesIgnore.includes(key);
+          });
+
+          if (newCandidates.length > 0) {
+            setTimeout(() => {
+              this._showSeriesSponsorSection(modal, presetId, newCandidates, resolvePromise, existingSeriesIgnore);
+            }, 800);
+          } else {
+            setTimeout(() => {
+              modal.remove();
+              this.modalElement = null;
+              resolvePromise(true);
+            }, 1500);
+          }
         } else {
           console.error('[LearnedDataModal] Save failed:', result.error);
           acceptBtn.textContent = '❌ Save failed';
@@ -524,6 +558,113 @@ class LearnedDataModal {
         console.error('[LearnedDataModal] Error:', error);
         acceptBtn.textContent = '❌ Error';
         acceptBtn.disabled = false;
+      }
+    });
+  }
+
+  /**
+   * ACC-04 Phase 4 — second step shown after the preset save succeeds.
+   * Replaces the modal body with a checklist of series-level sponsor candidates,
+   * pre-checked when coverage ≥ 70%. User can "Add to Ignore List" or "Skip".
+   *
+   * @param {HTMLElement} modal - The existing modal element (still visible)
+   * @param {string} presetId
+   * @param {Array} candidates - SeriesSponsorCandidate[] filtered to only new ones
+   * @param {Function} resolvePromise
+   * @param {string[]} existingSeriesIgnore - already-stored ignore keys
+   */
+  _showSeriesSponsorSection(modal, presetId, candidates, resolvePromise, existingSeriesIgnore) {
+    const body = modal.querySelector('.learned-data-body') || modal;
+
+    const rows = candidates.map((c, i) => {
+      const pct = Math.round((c.coverageFraction || 0) * 100);
+      const preChecked = pct >= 70 ? 'checked' : '';
+      const coverageLabel = pct >= 70
+        ? `<span style="color:#10b981;font-size:11px">${pct}% of cars — likely series-wide</span>`
+        : `<span style="color:#f59e0b;font-size:11px">${pct}% of cars — possible series sponsor</span>`;
+      return `
+        <label style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--rt-border,#2a3551);cursor:pointer">
+          <input type="checkbox" data-series-idx="${i}" ${preChecked}
+            style="width:16px;height:16px;flex-shrink:0;accent-color:#1a9ee0">
+          <span style="flex:1;min-width:0">
+            <span style="font-family:'JetBrains Mono',monospace;font-weight:600;font-size:13px">${c.display}</span>
+            <br>${coverageLabel}
+          </span>
+        </label>`;
+    }).join('');
+
+    body.innerHTML = `
+      <div style="padding:4px 0 12px">
+        <div style="font-size:13px;font-weight:600;color:var(--rt-text,#f1f4fa);margin-bottom:4px">Series-level sponsors detected</div>
+        <div style="font-size:12px;color:var(--rt-text-dim,#9aa5bd);margin-bottom:16px">
+          These sponsors appear on most cars in this event — they may be series or venue sponsors
+          rather than participant-specific. Add them to the ignore list so future events stay clean.
+        </div>
+        <div id="series-sponsor-rows">${rows}</div>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;padding-top:12px;border-top:1px solid var(--rt-border,#2a3551)">
+        <button id="series-sponsor-skip"
+          style="padding:8px 16px;border-radius:8px;border:1px solid var(--rt-border-strong,#3a4666);
+                 background:var(--rt-panel,#1a2236);color:var(--rt-text,#f1f4fa);font-size:13px;cursor:pointer">
+          Skip
+        </button>
+        <button id="series-sponsor-add"
+          style="padding:8px 16px;border-radius:8px;border:none;
+                 background:#1a9ee0;color:#fff;font-size:13px;font-weight:600;cursor:pointer">
+          Add to Ignore List
+        </button>
+      </div>`;
+
+    const skipBtn = body.querySelector('#series-sponsor-skip');
+    const addBtn = body.querySelector('#series-sponsor-add');
+
+    skipBtn.addEventListener('click', () => {
+      modal.remove();
+      this.modalElement = null;
+      resolvePromise(true);
+    });
+
+    addBtn.addEventListener('click', async () => {
+      const checked = Array.from(body.querySelectorAll('input[data-series-idx]:checked'));
+      const newKeys = checked.map(cb => {
+        const idx = parseInt(cb.dataset.seriesIdx, 10);
+        const c = candidates[idx];
+        return c.key || c.display?.toLowerCase().replace(/\s+/g, ' ').trim() || '';
+      }).filter(Boolean);
+
+      if (newKeys.length === 0) {
+        modal.remove();
+        this.modalElement = null;
+        resolvePromise(true);
+        return;
+      }
+
+      addBtn.disabled = true;
+      addBtn.textContent = 'Saving…';
+
+      try {
+        const merged = Array.from(new Set([...existingSeriesIgnore, ...newKeys]));
+        const updateResult = await window.api.invoke('supabase-update-participant-preset', {
+          id: presetId,
+          series_sponsor_ignore: merged,
+        });
+
+        if (updateResult.success) {
+          addBtn.textContent = `✅ ${newKeys.length} added`;
+          setTimeout(() => {
+            modal.remove();
+            this.modalElement = null;
+            resolvePromise(true);
+          }, 1000);
+        } else {
+          console.error('[LearnedDataModal] series_sponsor_ignore update failed:', updateResult.error);
+          addBtn.textContent = '❌ Save failed';
+          addBtn.disabled = false;
+        }
+      } catch (err) {
+        console.error('[LearnedDataModal] Error updating series_sponsor_ignore:', err);
+        addBtn.textContent = '❌ Error';
+        addBtn.disabled = false;
       }
     });
   }

@@ -2,17 +2,15 @@
  * Face Recognition Processor (Matching Only)
  *
  * Handles face MATCHING using pre-computed descriptors.
- * Face DETECTION is done in the renderer process (browser Canvas API).
+ * Supports both legacy 128-dim (face-api.js euclidean) and
+ * new 512-dim (AuraFace v1 cosine similarity) descriptors.
  *
- * Architecture:
- * - Renderer: Loads face-api.js, detects faces, generates descriptors
- * - Main (this file): Matches descriptors against known faces database
+ * Architecture (AuraFace v1):
+ * - Main process: YuNet detection → AuraFace embedding → this file: matching
+ * - No renderer/canvas dependencies
  *
- * This avoids the need for native 'canvas' module compilation.
+ * Dual-read mode: reads face_descriptor_512 first, falls back to face_descriptor (128-dim)
  */
-
-// NOTE: face-api.js and canvas are NOT imported here anymore
-// Face detection happens in renderer process (renderer/js/face-detector.js)
 
 // ============================================
 // Type Definitions
@@ -26,7 +24,7 @@ export interface DetectedFace {
     height: number;
   };
   landmarks?: number[][];
-  descriptor: number[];  // Changed from Float32Array for easier serialization
+  descriptor: number[];  // 128-dim (legacy) or 512-dim (AuraFace)
   confidence: number;
 }
 
@@ -40,10 +38,32 @@ export interface PersonMatch {
   confidence: number;
   source: 'global' | 'preset';
   referencePhotoUrl?: string;
+  /** Similarity metric used: 'cosine' (512-dim) or 'euclidean' (128-dim legacy) */
+  similarityMetric?: 'cosine' | 'euclidean';
 }
 
 // Alias for backward compatibility
 export type DriverMatch = PersonMatch;
+
+/**
+ * Per-face matching outcome, including faces whose best candidate fell BELOW
+ * the threshold. Used for telemetry/observability (JSONL + analysis_results),
+ * so the portal can always show how confident the offline face pipeline was —
+ * not only when a face match was accepted.
+ */
+export interface FaceMatchOutcome {
+  faceIndex: number;
+  /** True when the best candidate crossed the context threshold */
+  matched: boolean;
+  /** Best candidate (even when below threshold). Undefined if no descriptors compared. */
+  personId?: string;
+  personName?: string;
+  /** Best similarity score (cosine: higher=better; euclidean: lower=better) */
+  score: number;
+  metric: 'cosine' | 'euclidean';
+  /** Threshold that was applied for this context */
+  threshold: number;
+}
 
 export interface FaceRecognitionResult {
   success: boolean;
@@ -62,11 +82,13 @@ export interface StoredFaceDescriptor {
   personRole?: string;
   team: string;
   carNumber: string;
-  descriptor: number[];
+  descriptor: number[];  // 128-dim or 512-dim
   referencePhotoUrl?: string;
   source: 'global' | 'preset';
   photoType?: string;    // 'reference', 'action', 'podium', 'helmet_off'
   isPrimary?: boolean;   // Whether this is the primary photo for display
+  /** Descriptor dimension: 128 (face-api.js) or 512 (AuraFace v1) */
+  descriptorDim?: number;
   /** @deprecated Use personId instead */
   driverId?: string;
   /** @deprecated Use personName instead */
@@ -75,10 +97,47 @@ export interface StoredFaceDescriptor {
 
 export type FaceContext = 'portrait' | 'action' | 'podium' | 'auto';
 
+// ============================================
 // Context-specific matching configurations
-const CONTEXT_CONFIG: Record<FaceContext, {
+// ============================================
+
+// Cosine similarity thresholds for 512-dim AuraFace
+// Higher = stricter (cosine: 1.0 = identical, 0.0 = orthogonal)
+//
+// Calibration note (2026-06-11, exec 5b90d238 + 5b3cd54b, F1 test set):
+// correct candidates on real photos scored 0.508-0.588 while unrelated
+// faces stayed <= 0.461. The previous thresholds (portrait 0.60, others
+// 0.55) rejected most CORRECT matches. Lowered uniformly to 0.50 as an
+// experimental calibration while the feature is founder-only — revisit
+// with a larger roster before broad rollout (margin to false positives
+// is ~0.05 on current data).
+const COSINE_CONTEXT_CONFIG: Record<FaceContext, {
   maxFaces: number;
-  matchThreshold: number;  // Maximum euclidean distance for a match (lower = stricter)
+  matchThreshold: number;  // Minimum cosine similarity for a match
+}> = {
+  portrait: {
+    maxFaces: 1,
+    matchThreshold: 0.50
+  },
+  action: {
+    maxFaces: 3,
+    matchThreshold: 0.50
+  },
+  podium: {
+    maxFaces: 5,
+    matchThreshold: 0.50
+  },
+  auto: {
+    maxFaces: 5,
+    matchThreshold: 0.50
+  }
+};
+
+// Legacy euclidean distance thresholds for 128-dim face-api.js
+// Lower = stricter (euclidean: 0.0 = identical)
+const EUCLIDEAN_CONTEXT_CONFIG: Record<FaceContext, {
+  maxFaces: number;
+  matchThreshold: number;  // Maximum euclidean distance for a match
 }> = {
   portrait: {
     maxFaces: 1,
@@ -99,20 +158,63 @@ const CONTEXT_CONFIG: Record<FaceContext, {
 };
 
 // ============================================
-// Face Recognition Processor Class (Matching Only)
+// Similarity Functions
+// ============================================
+
+/**
+ * Cosine similarity between two vectors.
+ * Returns value in range [-1, 1] (practically [0, 1] for L2-normalized face embeddings).
+ * Higher = more similar.
+ */
+export function cosineSimilarity(d1: number[], d2: number[]): number {
+  if (d1.length !== d2.length || d1.length === 0) return 0;
+
+  let dotProduct = 0;
+  let normA = 0;
+  let normB = 0;
+
+  for (let i = 0; i < d1.length; i++) {
+    dotProduct += d1[i] * d2[i];
+    normA += d1[i] * d1[i];
+    normB += d2[i] * d2[i];
+  }
+
+  const denominator = Math.sqrt(normA) * Math.sqrt(normB);
+  if (denominator === 0) return 0;
+
+  return dotProduct / denominator;
+}
+
+/**
+ * Euclidean distance between two 128-dim vectors.
+ * Returns value >= 0. Lower = more similar.
+ */
+function euclideanDistance128(d1: number[], d2: number[]): number {
+  if (d1.length !== 128 || d2.length !== 128) return Infinity;
+
+  let sum = 0;
+  for (let i = 0; i < 128; i++) {
+    const diff = d1[i] - d2[i];
+    sum += diff * diff;
+  }
+  return Math.sqrt(sum);
+}
+
+// ============================================
+// Face Recognition Processor Class
 // ============================================
 
 export class FaceRecognitionProcessor {
   private isReady: boolean = false;
   private storedFaces: Map<string, StoredFaceDescriptor> = new Map();
   private personDescriptors: Map<string, number[][]> = new Map(); // personId -> array of descriptors
+  /** Detected dimension of loaded descriptors (128 or 512) */
+  private descriptorDimension: number = 0;
 
-  constructor() {
-    // Matching-only mode, no canvas required
-  }
+  constructor() {}
 
   /**
-   * Initialize the processor (no models to load - matching only)
+   * Initialize the processor
    */
   async initialize(): Promise<{ success: boolean; error?: string }> {
     this.isReady = true;
@@ -127,116 +229,154 @@ export class FaceRecognitionProcessor {
   }
 
   /**
-   * Load face descriptors from database results
-   * Supports multiple descriptors per driver for improved recognition accuracy
+   * Get the current descriptor dimension (128 or 512)
+   */
+  getDescriptorDimension(): number {
+    return this.descriptorDimension;
+  }
+
+  /**
+   * Detect whether we're using cosine (512-dim) or euclidean (128-dim)
+   */
+  private isCosineSimilarityMode(): boolean {
+    return this.descriptorDimension === 512;
+  }
+
+  /**
+   * Load face descriptors from database results.
+   * Supports both 128-dim and 512-dim descriptors.
+   * If mixed dimensions exist, 512-dim takes priority.
    */
   loadFaceDescriptors(faces: StoredFaceDescriptor[]): void {
     this.storedFaces.clear();
     this.personDescriptors.clear();
+    this.descriptorDimension = 0;
 
+    // Accept both 128-dim and 512-dim
     const validFaces = faces.filter(f => {
-      const isValid = f.descriptor && Array.isArray(f.descriptor) && f.descriptor.length === 128;
-      return isValid;
+      if (!f.descriptor || !Array.isArray(f.descriptor)) return false;
+      const dim = f.descriptor.length;
+      return dim === 128 || dim === 512;
     });
 
-    if (validFaces.length === 0) {
-      return;
+    if (validFaces.length === 0) return;
+
+    // Determine dominant dimension (prefer 512)
+    const has512 = validFaces.some(f => f.descriptor.length === 512);
+    const targetDim = has512 ? 512 : 128;
+    this.descriptorDimension = targetDim;
+
+    // Filter to only matching dimension
+    const matchingFaces = validFaces.filter(f => f.descriptor.length === targetDim);
+
+    if (matchingFaces.length < validFaces.length) {
+      console.log(
+        `[FaceRecognition] Using ${targetDim}-dim mode. ` +
+        `${matchingFaces.length}/${validFaces.length} descriptors match.`
+      );
     }
 
-    // Group descriptors by person (supports multiple photos per person)
-    for (const face of validFaces) {
+    // Group descriptors by person
+    for (const face of matchingFaces) {
       const key = face.personId;
 
-      // Store the primary face (or first face) for reference info
       const existing = this.storedFaces.get(key);
       if (!existing || face.isPrimary) {
         this.storedFaces.set(key, face);
       }
 
-      // Add descriptor to person's array
       if (!this.personDescriptors.has(key)) {
         this.personDescriptors.set(key, []);
       }
       this.personDescriptors.get(key)!.push(face.descriptor);
     }
+
+    console.log(
+      `[FaceRecognition] Loaded ${matchingFaces.length} descriptors (${targetDim}-dim) ` +
+      `for ${this.storedFaces.size} persons. Mode: ${has512 ? 'cosine' : 'euclidean'}`
+    );
   }
 
   /**
-   * Calculate euclidean distance between two face descriptors
-   */
-  private euclideanDistance(d1: number[], d2: number[]): number {
-    if (d1.length !== 128 || d2.length !== 128) {
-      return Infinity;
-    }
-    let sum = 0;
-    for (let i = 0; i < 128; i++) {
-      const diff = d1[i] - d2[i];
-      sum += diff * diff;
-    }
-    return Math.sqrt(sum);
-  }
-
-  /**
-   * Find the best matching person for a given face descriptor
+   * Find the best matching person for a given face descriptor.
+   * Automatically uses cosine similarity (512-dim) or euclidean distance (128-dim).
    */
   findBestMatch(
     descriptor: number[],
-    threshold: number = 0.6
-  ): { personId: string; distance: number } | null {
-    if (!descriptor || descriptor.length !== 128) {
-      return null;
-    }
+    threshold: number,
+    context: FaceContext = 'auto'
+  ): { personId: string; score: number; metric: 'cosine' | 'euclidean' } | null {
+    if (!descriptor || descriptor.length === 0) return null;
+    if (this.personDescriptors.size === 0) return null;
 
-    if (this.personDescriptors.size === 0) {
-      return null;
-    }
+    const useCosine = descriptor.length === 512 && this.descriptorDimension === 512;
 
-    let bestMatch: { personId: string; distance: number } | null = null;
-    let closestDistance = Infinity;
-    let closestPersonId = '';
+    let bestPersonId = '';
+    let bestScore = useCosine ? -Infinity : Infinity;
 
     for (const [personId, descriptors] of this.personDescriptors.entries()) {
-      // Find minimum distance across all descriptors for this person
       for (const refDescriptor of descriptors) {
-        const distance = this.euclideanDistance(descriptor, refDescriptor);
+        if (refDescriptor.length !== descriptor.length) continue;
 
-        // Track closest match even if above threshold (for debugging)
-        if (distance < closestDistance) {
-          closestDistance = distance;
-          closestPersonId = personId;
-        }
-
-        if (distance < threshold && (!bestMatch || distance < bestMatch.distance)) {
-          bestMatch = { personId, distance };
+        if (useCosine) {
+          const similarity = cosineSimilarity(descriptor, refDescriptor);
+          if (similarity > bestScore) {
+            bestScore = similarity;
+            bestPersonId = personId;
+          }
+        } else {
+          const distance = euclideanDistance128(descriptor, refDescriptor);
+          if (distance < bestScore) {
+            bestScore = distance;
+            bestPersonId = personId;
+          }
         }
       }
     }
 
-    return bestMatch;
+    // Check threshold
+    if (useCosine) {
+      // Cosine: higher = better, must exceed threshold
+      if (bestScore >= threshold && bestPersonId) {
+        return { personId: bestPersonId, score: bestScore, metric: 'cosine' };
+      }
+    } else {
+      // Euclidean: lower = better, must be below threshold
+      if (bestScore <= threshold && bestPersonId) {
+        return { personId: bestPersonId, score: bestScore, metric: 'euclidean' };
+      }
+    }
+
+    return null;
   }
 
   /**
-   * Match detected faces against known faces
-   * Called by renderer after face detection
+   * Match detected faces against known faces.
+   * Supports both 128-dim (euclidean) and 512-dim (cosine) modes.
    */
   matchFaces(
     detectedFaces: DetectedFace[],
     context: FaceContext = 'auto'
   ): FaceRecognitionResult {
     const startTime = Date.now();
-    const config = CONTEXT_CONFIG[context];
+    const useCosine = this.isCosineSimilarityMode();
+    const config = useCosine ? COSINE_CONTEXT_CONFIG[context] : EUCLIDEAN_CONTEXT_CONFIG[context];
 
-    // Limit faces based on context
     const facesToProcess = detectedFaces.slice(0, config.maxFaces);
     const matchedPersons: PersonMatch[] = [];
 
     for (let i = 0; i < facesToProcess.length; i++) {
       const face = facesToProcess[i];
-      const match = this.findBestMatch(face.descriptor, config.matchThreshold);
+      const match = this.findBestMatch(face.descriptor, config.matchThreshold, context);
 
       if (match) {
         const storedFace = this.storedFaces.get(match.personId);
         if (storedFace) {
+          // Convert score to confidence (0-1 range)
+          const confidence = match.metric === 'cosine'
+            ? match.score  // Cosine similarity is already 0-1
+            : 1 - match.score;  // Euclidean: invert distance
+
           matchedPersons.push({
             faceIndex: i,
             personId: storedFace.personId,
@@ -244,9 +384,10 @@ export class FaceRecognitionProcessor {
             personRole: storedFace.personRole,
             team: storedFace.team,
             carNumber: storedFace.carNumber,
-            confidence: 1 - match.distance, // Convert distance to confidence
+            confidence,
             source: storedFace.source,
-            referencePhotoUrl: storedFace.referencePhotoUrl
+            referencePhotoUrl: storedFace.referencePhotoUrl,
+            similarityMetric: match.metric
           });
         }
       }
@@ -264,8 +405,158 @@ export class FaceRecognitionProcessor {
   }
 
   /**
-   * Legacy method - now delegates to renderer for detection
-   * Returns empty result, actual detection happens in renderer
+   * Match embeddings from ONNX processor against loaded descriptors.
+   * This is the new primary method for the AuraFace pipeline.
+   *
+   * @param embeddings Array of {faceIndex, embedding} from FaceRecognitionOnnxProcessor
+   * @param context Scene context for threshold selection
+   */
+  matchEmbeddings(
+    embeddings: Array<{ faceIndex: number; embedding: number[] }>,
+    context: FaceContext = 'auto'
+  ): PersonMatch[] {
+    return this.matchEmbeddingsDetailed(embeddings, context).matches;
+  }
+
+  /**
+   * Like matchEmbeddings(), but also returns a per-face outcome for every
+   * embedding — including below-threshold best candidates — so callers can
+   * persist face telemetry (JSONL + analysis_results) regardless of whether
+   * the match was accepted.
+   */
+  matchEmbeddingsDetailed(
+    embeddings: Array<{ faceIndex: number; embedding: number[] }>,
+    context: FaceContext = 'auto',
+    /** Per-category override of the cosine MATCH threshold
+     *  (matching_config.thresholds.faceMatchThreshold). Ignored in legacy
+     *  euclidean mode where score semantics are inverted. */
+    matchThresholdOverride?: number
+  ): { matches: PersonMatch[]; outcomes: FaceMatchOutcome[] } {
+    if (this.personDescriptors.size === 0) return { matches: [], outcomes: [] };
+
+    const useCosine = this.isCosineSimilarityMode();
+    const baseConfig = useCosine
+      ? COSINE_CONTEXT_CONFIG[context]
+      : EUCLIDEAN_CONTEXT_CONFIG[context];
+    const config =
+      useCosine && typeof matchThresholdOverride === 'number' && matchThresholdOverride > 0 && matchThresholdOverride <= 1
+        ? { ...baseConfig, matchThreshold: matchThresholdOverride }
+        : baseConfig;
+
+    const matches: PersonMatch[] = [];
+    const outcomes: FaceMatchOutcome[] = [];
+
+    for (const { faceIndex, embedding } of embeddings) {
+      // First, get best score WITHOUT threshold to log diagnostics
+      const bestNoThreshold = this.findBestScoreNoThreshold(embedding);
+      const match = this.findBestMatch(embedding, config.matchThreshold, context);
+
+      if (match) {
+        const storedFace = this.storedFaces.get(match.personId);
+        if (storedFace) {
+          const confidence = match.metric === 'cosine'
+            ? match.score
+            : 1 - match.score;
+
+          console.log(
+            `[FaceRecognition] ✅ Face ${faceIndex} MATCHED → ${storedFace.personName} ` +
+            `(${match.metric}: ${match.score.toFixed(3)}, threshold: ${config.matchThreshold})`
+          );
+
+          matches.push({
+            faceIndex,
+            personId: storedFace.personId,
+            personName: storedFace.personName,
+            personRole: storedFace.personRole,
+            team: storedFace.team,
+            carNumber: storedFace.carNumber,
+            confidence,
+            source: storedFace.source,
+            referencePhotoUrl: storedFace.referencePhotoUrl,
+            similarityMetric: match.metric
+          });
+          outcomes.push({
+            faceIndex,
+            matched: true,
+            personId: storedFace.personId,
+            personName: storedFace.personName,
+            score: match.score,
+            metric: match.metric,
+            threshold: config.matchThreshold
+          });
+          continue;
+        }
+      }
+
+      if (bestNoThreshold) {
+        // Log the best score even when below threshold (diagnostic)
+        const storedFace = this.storedFaces.get(bestNoThreshold.personId);
+        const personName = storedFace?.personName || bestNoThreshold.personId;
+        console.log(
+          `[FaceRecognition] ❌ Face ${faceIndex} NO MATCH - best: ${personName} ` +
+          `(${bestNoThreshold.metric}: ${bestNoThreshold.score.toFixed(3)}, threshold: ${config.matchThreshold})`
+        );
+        outcomes.push({
+          faceIndex,
+          matched: false,
+          personId: bestNoThreshold.personId,
+          personName,
+          score: bestNoThreshold.score,
+          metric: bestNoThreshold.metric,
+          threshold: config.matchThreshold
+        });
+      } else {
+        outcomes.push({
+          faceIndex,
+          matched: false,
+          score: 0,
+          metric: useCosine ? 'cosine' : 'euclidean',
+          threshold: config.matchThreshold
+        });
+      }
+    }
+
+    return { matches, outcomes };
+  }
+
+  /**
+   * Find the best matching score without applying threshold (for diagnostics).
+   */
+  private findBestScoreNoThreshold(
+    descriptor: number[]
+  ): { personId: string; score: number; metric: 'cosine' | 'euclidean' } | null {
+    if (!descriptor || descriptor.length === 0) return null;
+    if (this.personDescriptors.size === 0) return null;
+
+    const useCosine = descriptor.length === 512 && this.descriptorDimension === 512;
+    let bestPersonId = '';
+    let bestScore = useCosine ? -Infinity : Infinity;
+
+    for (const [personId, descriptors] of this.personDescriptors.entries()) {
+      for (const refDescriptor of descriptors) {
+        if (refDescriptor.length !== descriptor.length) continue;
+        if (useCosine) {
+          const similarity = cosineSimilarity(descriptor, refDescriptor);
+          if (similarity > bestScore) {
+            bestScore = similarity;
+            bestPersonId = personId;
+          }
+        } else {
+          const distance = euclideanDistance128(descriptor, refDescriptor);
+          if (distance < bestScore) {
+            bestScore = distance;
+            bestPersonId = personId;
+          }
+        }
+      }
+    }
+
+    if (!bestPersonId) return null;
+    return { personId: bestPersonId, score: bestScore, metric: useCosine ? 'cosine' : 'euclidean' };
+  }
+
+  /**
+   * Legacy method - no longer needed with ONNX pipeline
    */
   async detectAndRecognize(
     _imagePath: string,
@@ -277,12 +568,12 @@ export class FaceRecognitionProcessor {
       matchedPersons: [],
       matchedDrivers: [],
       inferenceTimeMs: 0,
-      error: 'Face detection must be done in renderer process. Use IPC channel "face-detection-request".'
+      error: 'Use FaceRecognitionOnnxProcessor.detectAndEmbed() + matchFaces() instead.'
     };
   }
 
   /**
-   * Legacy method - descriptor generation must be done in renderer or Management Portal
+   * Legacy method - descriptor generation now done by ONNX
    */
   async generateDescriptor(_imagePath: string): Promise<{
     success: boolean;
@@ -293,7 +584,7 @@ export class FaceRecognitionProcessor {
   }> {
     return {
       success: false,
-      error: 'Descriptor generation must be done in renderer process (browser Canvas API) or Management Portal'
+      error: 'Use FaceRecognitionOnnxProcessor.detectAndEmbed() for descriptor generation'
     };
   }
 
@@ -301,11 +592,7 @@ export class FaceRecognitionProcessor {
    * Get the best match from detection results
    */
   getBestMatch(result: FaceRecognitionResult): PersonMatch | null {
-    if (!result.success || result.matchedPersons.length === 0) {
-      return null;
-    }
-
-    // Return the match with highest confidence
+    if (!result.success || result.matchedPersons.length === 0) return null;
     return result.matchedPersons.reduce((best, current) =>
       current.confidence > best.confidence ? current : best
     );
@@ -317,6 +604,7 @@ export class FaceRecognitionProcessor {
   clearDescriptors(): void {
     this.storedFaces.clear();
     this.personDescriptors.clear();
+    this.descriptorDimension = 0;
   }
 
   /**
@@ -336,8 +624,9 @@ export class FaceRecognitionProcessor {
     /** @deprecated Use personCount instead */
     driverCount: number;
     totalDescriptors: number;
+    descriptorDimension: number;
+    matchingMode: 'cosine' | 'euclidean' | 'none';
   } {
-    // Count total descriptors across all persons
     let totalDescriptors = 0;
     for (const descriptors of this.personDescriptors.values()) {
       totalDescriptors += descriptors.length;
@@ -345,10 +634,14 @@ export class FaceRecognitionProcessor {
 
     return {
       isLoaded: this.isReady,
-      modelsPath: '(not used - matching only)',
+      modelsPath: '(ONNX - main process)',
       personCount: this.storedFaces.size,
-      driverCount: this.storedFaces.size, // Backward compatibility
-      totalDescriptors
+      driverCount: this.storedFaces.size,
+      totalDescriptors,
+      descriptorDimension: this.descriptorDimension,
+      matchingMode: this.descriptorDimension === 512 ? 'cosine'
+        : this.descriptorDimension === 128 ? 'euclidean'
+        : 'none'
     };
   }
 
@@ -361,24 +654,57 @@ export class FaceRecognitionProcessor {
     /** @deprecated Use personCount instead */
     driverCount: number;
     totalDescriptors: number;
+    descriptorDimension: number;
+    matchingMode: string;
   } {
     const info = this.getModelInfo();
     return {
       isReady: this.isReady,
       personCount: info.personCount,
-      driverCount: info.personCount, // Backward compatibility
-      totalDescriptors: info.totalDescriptors
+      driverCount: info.personCount,
+      totalDescriptors: info.totalDescriptors,
+      descriptorDimension: info.descriptorDimension,
+      matchingMode: info.matchingMode
     };
   }
 
+  // Cache to prevent redundant DB loads when multiple workers call loadFromPreset
+  private _loadedPresetId: string | null = null;
+  private _loadingPromise: Promise<number> | null = null;
+
   /**
-   * Load face descriptors from a participant preset
-   * Queries preset_participant_face_photos for all participants in the preset
-   * These descriptors are added with source='preset' and have priority over global faces
+   * Load face descriptors from a participant preset.
+   * Dual-read: prefers face_descriptor_512, falls back to face_descriptor.
+   * Cached: if already loaded for the same presetId, returns immediately.
+   * Deduped: if loading is in progress, waits for the same promise.
    */
   async loadFromPreset(presetId: string): Promise<number> {
+    // Already loaded for this preset - return cached count
+    if (this._loadedPresetId === presetId && this.storedFaces.size > 0) {
+      const totalDescriptors = this.storedFaces.size;
+      console.log(`[FaceRecognition] Descriptors already loaded for preset ${presetId}: ${totalDescriptors} descriptors (cached)`);
+      return totalDescriptors;
+    }
+
+    // Loading in progress - wait for it
+    if (this._loadingPromise) {
+      console.log(`[FaceRecognition] Waiting for in-progress descriptor load...`);
+      return this._loadingPromise;
+    }
+
+    // Start loading and cache the promise
+    this._loadingPromise = this._doLoadFromPreset(presetId);
     try {
-      // Import database function dynamically to avoid circular dependencies
+      const result = await this._loadingPromise;
+      this._loadedPresetId = presetId;
+      return result;
+    } finally {
+      this._loadingPromise = null;
+    }
+  }
+
+  private async _doLoadFromPreset(presetId: string): Promise<number> {
+    try {
       const { loadPresetFaceDescriptors } = await import('./database-service');
 
       const descriptors = await loadPresetFaceDescriptors(presetId);
@@ -399,18 +725,21 @@ export class FaceRecognitionProcessor {
         referencePhotoUrl: d.referencePhotoUrl,
         source: 'preset' as const,
         photoType: d.photoType,
-        isPrimary: d.isPrimary
+        isPrimary: d.isPrimary,
+        descriptorDim: d.descriptor.length
       }));
 
-      // Load into processor (this will add to existing descriptors)
       this.loadFaceDescriptors(storedDescriptors);
 
       console.log(`[FaceRecognition] Loaded ${storedDescriptors.length} face descriptors from preset ${presetId}`);
       return storedDescriptors.length;
-
     } catch (error) {
+      // FAIL LOUD (2026-06-11): a network/DB failure here used to return 0,
+      // indistinguishable from a genuinely empty preset — the batch then ran
+      // without face recognition and the user was never told. Rethrow so the
+      // caller (initializeFaceRecognition) can surface the failure.
       console.error('[FaceRecognition] Failed to load from preset:', error);
-      return 0;
+      throw error instanceof Error ? error : new Error(String(error));
     }
   }
 
@@ -418,12 +747,8 @@ export class FaceRecognitionProcessor {
    * Parse descriptor from various formats (array, string JSON, etc.)
    */
   private parseDescriptor(descriptor: any, personName: string): number[] | null {
-    if (!descriptor) {
-      return null;
-    }
-    if (Array.isArray(descriptor)) {
-      return descriptor;
-    }
+    if (!descriptor) return null;
+    if (Array.isArray(descriptor)) return descriptor;
     if (typeof descriptor === 'string') {
       try {
         return JSON.parse(descriptor);

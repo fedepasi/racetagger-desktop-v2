@@ -106,10 +106,51 @@ export type HandlerError = {
 
 export type HandlerResult<T> = HandlerSuccess<T> | HandlerError;
 
+// ==================== Preset Participants (single-row persist, BUG-02) ====================
+
+/**
+ * Payload for the `supabase-upsert-preset-participant` channel — one participant
+ * row persisted immediately from the participant editor ("Save & Next" / "Save
+ * Changes"). Field set mirrors the per-row mapping built in
+ * participants-manager.js → buildParticipantSavePayload(), which in turn mirrors
+ * savePreset's bulk mapping field-for-field (the two MUST stay in lockstep).
+ *
+ * `id` present → upsert (UPDATE the existing row by primary key).
+ * `id` absent  → insert (Postgres assigns a fresh uuid; FIX #78 applies).
+ */
+export interface SinglePresetParticipantPayload {
+  id?: string;
+  numero: string;
+  nome?: string;
+  categoria?: string;
+  squadra?: string;
+  plate_number?: string;
+  sponsor?: string;
+  metatag?: string;
+  // 1.2.0 canonical folder array — drives the dual-write at the DB layer.
+  folders?: { name: string; path?: string }[];
+  include_default_folder?: boolean;
+  // Legacy folder slots — only forwarded when folders[] is absent.
+  folder_1?: string;
+  folder_2?: string;
+  folder_3?: string;
+  folder_1_path?: string;
+  folder_2_path?: string;
+  folder_3_path?: string;
+  delivery_to_client_id?: string | null;
+  is_active?: boolean;
+}
+
+export interface UpsertPresetParticipantParams {
+  presetId: string;
+  participant: SinglePresetParticipantPayload;
+}
+
 // ==================== File Extensions ====================
 
 export const RAW_EXTENSIONS = ['.nef', '.arw', '.cr2', '.cr3', '.orf', '.raw', '.rw2', '.dng'];
-export const STANDARD_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp'];
+// PNG excluded from import (2026-06-12) — see main.ts STANDARD_EXTENSIONS
+export const STANDARD_EXTENSIONS = ['.jpg', '.jpeg', '.webp'];
 export const ALL_SUPPORTED_EXTENSIONS = [...STANDARD_EXTENSIONS, ...RAW_EXTENSIONS];
 
 // ==================== Support Feedback System ====================

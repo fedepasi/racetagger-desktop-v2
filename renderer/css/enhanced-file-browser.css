@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Racetagger Desktop - Enhanced File Browser
  * Native-feeling file management with drag & drop and previews
  */
@@ -28,7 +28,7 @@
   left: -100%;
   width: 100%;
   height: 100%;
-  background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.1), transparent);
+  background: linear-gradient(90deg, transparent, rgba(26, 158, 224, 0.1), transparent);
   transition: left 2s;
 }
 
@@ -38,15 +38,15 @@
 
 .enhanced-file-browser:hover {
   border-color: var(--accent-primary);
-  background: rgba(59, 130, 246, 0.05);
+  background: rgba(26, 158, 224, 0.05);
   transform: scale(1.02);
 }
 
 .enhanced-file-browser.drag-over {
   border-color: var(--accent-primary);
-  background: rgba(59, 130, 246, 0.1);
+  background: rgba(26, 158, 224, 0.1);
   transform: scale(1.05);
-  box-shadow: 0 8px 25px rgba(59, 130, 246, 0.2);
+  box-shadow: 0 8px 25px rgba(26, 158, 224, 0.2);
 }
 
 .enhanced-file-browser.has-files {
@@ -133,12 +133,12 @@
 .btn-browse-folder {
   background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
   color: white;
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+  box-shadow: 0 4px 12px rgba(26, 158, 224, 0.3);
 }
 
 .btn-browse-folder:hover {
   transform: translateY(-2px);
-  box-shadow: 0 8px 25px rgba(59, 130, 246, 0.4);
+  box-shadow: 0 8px 25px rgba(26, 158, 224, 0.4);
 }
 
 .btn-browse-files {
@@ -176,8 +176,8 @@
 }
 
 .format-tag {
-  background: rgba(59, 130, 246, 0.2);
-  border: 1px solid rgba(59, 130, 246, 0.3);
+  background: rgba(26, 158, 224, 0.2);
+  border: 1px solid rgba(26, 158, 224, 0.3);
   color: #93c5fd;
   padding: 0.25rem 0.75rem;
   border-radius: 1rem;
@@ -270,7 +270,7 @@
 .summary-action-btn:hover {
   border-color: var(--accent-primary);
   color: var(--accent-primary);
-  background: rgba(59, 130, 246, 0.1);
+  background: rgba(26, 158, 224, 0.1);
 }
 
 .summary-action-btn.danger:hover {
@@ -314,8 +314,8 @@
 
 .file-item.selected {
   border-color: var(--accent-primary);
-  background: rgba(59, 130, 246, 0.1);
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+  background: rgba(26, 158, 224, 0.1);
+  box-shadow: 0 0 0 2px rgba(26, 158, 224, 0.2);
 }
 
 /* File Preview */
@@ -423,14 +423,14 @@
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  background: rgba(59, 130, 246, 0.9);
+  background: rgba(26, 158, 224, 0.9);
   color: white;
   padding: 1rem 2rem;
   border-radius: 0.75rem;
   font-weight: 600;
   font-size: 1.125rem;
   backdrop-filter: blur(10px);
-  box-shadow: 0 8px 25px rgba(59, 130, 246, 0.3);
+  box-shadow: 0 8px 25px rgba(26, 158, 224, 0.3);
   opacity: 0;
   transition: all 0.3s ease;
   pointer-events: none;
@@ -518,7 +518,7 @@
 .file-type-filter:hover:not(.active) {
   border-color: var(--accent-primary);
   color: var(--accent-primary);
-  background: rgba(59, 130, 246, 0.1);
+  background: rgba(26, 158, 224, 0.1);
 }
 
 /* Bulk Selection */
@@ -624,7 +624,7 @@
   left: -10px;
   width: 24px;
   height: 24px;
-  background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+  background: linear-gradient(135deg, #1a9ee0, #0e7ab4);
   color: white;
   border-radius: 50%;
   display: flex;
@@ -632,7 +632,7 @@
   justify-content: center;
   font-size: 12px;
   font-weight: 700;
-  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+  box-shadow: 0 2px 8px rgba(26, 158, 224, 0.3);
   z-index: 100;
 }
 
@@ -648,8 +648,8 @@
 }
 
 .folder-selector-enhanced {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.08), rgba(37, 99, 235, 0.06));
-  border: 2px solid rgba(59, 130, 246, 0.2);
+  background: linear-gradient(135deg, rgba(26, 158, 224, 0.08), rgba(37, 99, 235, 0.06));
+  border: 2px solid rgba(26, 158, 224, 0.2);
   border-radius: 12px;
   padding: 1rem;
   margin-top: 8px;
@@ -660,18 +660,18 @@
 }
 
 .folder-selector-enhanced:hover {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.12), rgba(37, 99, 235, 0.1));
-  border-color: rgba(59, 130, 246, 0.4);
+  background: linear-gradient(135deg, rgba(26, 158, 224, 0.12), rgba(37, 99, 235, 0.1));
+  border-color: rgba(26, 158, 224, 0.4);
   transform: translateY(-2px);
-  box-shadow: 0 4px 20px rgba(59, 130, 246, 0.15);
+  box-shadow: 0 4px 20px rgba(26, 158, 224, 0.15);
 }
 
 .folder-selector-enhanced.drag-over {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.18), rgba(37, 99, 235, 0.14));
-  border-color: rgba(59, 130, 246, 0.6);
+  background: linear-gradient(135deg, rgba(26, 158, 224, 0.18), rgba(37, 99, 235, 0.14));
+  border-color: rgba(26, 158, 224, 0.6);
   border-style: dashed;
   transform: translateY(-2px);
-  box-shadow: 0 4px 24px rgba(59, 130, 246, 0.25);
+  box-shadow: 0 4px 24px rgba(26, 158, 224, 0.25);
 }
 
 /* During drag-over, make children transparent to pointer events so the drop
@@ -698,24 +698,24 @@
 .folder-btn {
   width: 100%;
   margin: 0.5rem 0;
-  background: rgba(59, 130, 246, 0.1);
-  border-color: rgba(59, 130, 246, 0.3);
-  color: rgba(59, 130, 246, 0.9);
+  background: rgba(26, 158, 224, 0.1);
+  border-color: rgba(26, 158, 224, 0.3);
+  color: rgba(26, 158, 224, 0.9);
 }
 
 .folder-btn:hover {
-  background: rgba(59, 130, 246, 0.2);
-  border-color: rgba(59, 130, 246, 0.5);
+  background: rgba(26, 158, 224, 0.2);
+  border-color: rgba(26, 158, 224, 0.5);
 }
 
 .folder-selected {
-  color: rgba(59, 130, 246, 0.8);
+  color: rgba(26, 158, 224, 0.8);
   font-weight: 500;
   margin-top: 0.5rem;
 }
 
 .folder-hint {
-  color: rgba(59, 130, 246, 0.7);
+  color: rgba(26, 158, 224, 0.7);
   font-size: 0.75rem;
   margin-top: 0.25rem;
   line-height: 1.4;
@@ -752,7 +752,7 @@
 }
 
 .preset-selector-enhanced:hover {
-  background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(59, 130, 246, 0.1));
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(26, 158, 224, 0.1));
   border-color: rgba(16, 185, 129, 0.4);
   /* No transform — it creates a new stacking context that breaks dropdown z-index */
   box-shadow: 0 4px 20px rgba(16, 185, 129, 0.25);

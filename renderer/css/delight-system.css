@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Racetagger Desktop - Delight System
  * Transform potentially frustrating moments into positive, memorable experiences
  * 
@@ -15,7 +15,7 @@
   --delight-success: #10b981;
   --delight-warning: #f59e0b;
   --delight-error: #ef4444;
-  --delight-info: #3b82f6;
+  --delight-info: #1a9ee0;
   --delight-racing-orange: #ff6b35;
   --delight-racing-blue: #4c9aff;
   --delight-racing-yellow: #ffcc02;
@@ -1479,7 +1479,7 @@ body.dragover::after {
 }
 
 .theme-winter .delight-confetti {
-  background: #3b82f6;
+  background: #1a9ee0;
 }
 
 /* =================================
@@ -1664,8 +1664,8 @@ body.dragover::after {
 }
 
 .quality-good .delight-image-preview {
-  border: 2px solid #3b82f6;
-  box-shadow: 0 0 10px rgba(59, 130, 246, 0.2);
+  border: 2px solid #1a9ee0;
+  box-shadow: 0 0 10px rgba(26, 158, 224, 0.2);
 }
 
 .quality-needs-work .delight-image-preview {
@@ -1998,8 +1998,8 @@ body.dragover::after {
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .analysis-completion-card .acc-name-input:focus {
-  border-color: var(--accent-primary, #3b82f6);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+  border-color: var(--accent-primary, #1a9ee0);
+  box-shadow: 0 0 0 3px rgba(26, 158, 224, 0.18);
 }
 
 .analysis-completion-card .acc-chips {
@@ -2019,8 +2019,8 @@ body.dragover::after {
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 .analysis-completion-card .acc-chip:hover {
-  background: rgba(59, 130, 246, 0.12);
-  border-color: var(--accent-primary, #3b82f6);
+  background: rgba(26, 158, 224, 0.12);
+  border-color: var(--accent-primary, #1a9ee0);
   color: var(--text-primary, #f1f5f9);
 }
 
@@ -2076,7 +2076,7 @@ body.dragover::after {
 }
 
 .analysis-completion-card .acc-btn-save {
-  background: var(--accent-primary, #3b82f6);
+  background: var(--accent-primary, #1a9ee0);
   color: #fff;
 }
 .analysis-completion-card .acc-btn-save:hover {

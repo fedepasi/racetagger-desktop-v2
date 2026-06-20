@@ -1,12 +1,12 @@
-<div class="delivery-page" style="padding: 24px; max-width: 1200px;">
+﻿<div class="delivery-page" style="padding: 24px; max-width: 1200px;">
 
   <!-- Page Header (hidden when inside client detail) -->
-  <div id="delivery-page-header" style="margin-bottom: 32px;">
-    <h1 style="font-size: 24px; font-weight: 700; color: var(--text-primary); margin: 0 0 8px 0;">
-      📦 Delivery & Galleries
+  <div id="delivery-page-header" style="margin-bottom: 24px;">
+    <h1 style="font-size: 20px; font-weight: 600; letter-spacing: -0.3px; color: var(--text-primary); margin: 0 0 4px 0;">
+      Delivery
     </h1>
-    <p style="color: var(--text-muted); font-size: 14px; margin: 0;">
-      Manage your photo galleries and delivery rules for clients.
+    <p style="color: var(--text-muted); font-size: 13px; margin: 0;">
+      Share race photos with your clients.
     </p>
   </div>
 
@@ -15,7 +15,9 @@
 
     <!-- Already submitted state -->
     <div id="survey-submitted" style="display: none; text-align: center; padding: 40px 24px;">
-      <div style="font-size: 48px; margin-bottom: 16px;">🙏</div>
+      <div style="width: 56px; height: 56px; border-radius: 16px; background: var(--dl-green-bg); color: var(--dl-green); display: flex; align-items: center; justify-content: center; margin: 0 auto 16px;">
+        <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L20 7"/></svg>
+      </div>
       <h3 style="color: var(--text-primary); margin: 0 0 8px; font-size: 20px;">Thanks for your feedback!</h3>
       <p style="color: var(--text-muted); font-size: 14px; margin: 0;">We'll notify you when Delivery & Galleries becomes available for your account.</p>
     </div>
@@ -23,7 +25,9 @@
     <!-- Survey form -->
     <div id="survey-form">
       <div style="text-align: center; margin-bottom: 24px;">
-        <div style="font-size: 48px; margin-bottom: 12px;">📦</div>
+        <div style="width: 56px; height: 56px; border-radius: 16px; background: var(--dl-blue-bg); color: var(--dl-blue); display: flex; align-items: center; justify-content: center; margin: 0 auto 12px;">
+          <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+        </div>
         <h3 style="color: var(--text-primary); margin: 0 0 8px; font-size: 20px;">Photo Delivery & Galleries</h3>
         <p style="color: var(--text-muted); font-size: 14px; margin: 0; line-height: 1.5;">
           We're building a system to deliver photos directly to your clients via beautiful galleries.
@@ -36,23 +40,23 @@
         <p style="color: var(--text-primary); font-size: 14px; font-weight: 600; margin: 0 0 12px;">What would be most useful to you?</p>
         <div style="display: flex; flex-direction: column; gap: 10px;">
           <label style="display: flex; align-items: center; gap: 10px; color: var(--text-muted); font-size: 13px; cursor: pointer;">
-            <input type="checkbox" id="interest-single-gallery" style="accent-color: var(--accent-primary, #3b82f6); width: 16px; height: 16px;">
+            <input type="checkbox" id="interest-single-gallery" style="accent-color: var(--accent-primary, #1a9ee0); width: 16px; height: 16px;">
             <span>A <strong style="color: var(--text-primary);">public gallery</strong> where runners/riders find their photos by bib number</span>
           </label>
           <label style="display: flex; align-items: center; gap: 10px; color: var(--text-muted); font-size: 13px; cursor: pointer;">
-            <input type="checkbox" id="interest-multi-client" style="accent-color: var(--accent-primary, #3b82f6); width: 16px; height: 16px;">
+            <input type="checkbox" id="interest-multi-client" style="accent-color: var(--accent-primary, #1a9ee0); width: 16px; height: 16px;">
             <span><strong style="color: var(--text-primary);">Multi-client delivery</strong> — auto-route photos to different teams/clients</span>
           </label>
           <label style="display: flex; align-items: center; gap: 10px; color: var(--text-muted); font-size: 13px; cursor: pointer;">
-            <input type="checkbox" id="interest-hd-download" style="accent-color: var(--accent-primary, #3b82f6); width: 16px; height: 16px;">
+            <input type="checkbox" id="interest-hd-download" style="accent-color: var(--accent-primary, #1a9ee0); width: 16px; height: 16px;">
             <span><strong style="color: var(--text-primary);">HD originals</strong> — clients download full-resolution files (not just previews)</span>
           </label>
           <label style="display: flex; align-items: center; gap: 10px; color: var(--text-muted); font-size: 13px; cursor: pointer;">
-            <input type="checkbox" id="interest-watermark" style="accent-color: var(--accent-primary, #3b82f6); width: 16px; height: 16px;">
+            <input type="checkbox" id="interest-watermark" style="accent-color: var(--accent-primary, #1a9ee0); width: 16px; height: 16px;">
             <span><strong style="color: var(--text-primary);">Watermarking</strong> — preview with watermark, clean download after purchase/code</span>
           </label>
           <label style="display: flex; align-items: center; gap: 10px; color: var(--text-muted); font-size: 13px; cursor: pointer;">
-            <input type="checkbox" id="interest-payment" style="accent-color: var(--accent-primary, #3b82f6); width: 16px; height: 16px;">
+            <input type="checkbox" id="interest-payment" style="accent-color: var(--accent-primary, #1a9ee0); width: 16px; height: 16px;">
             <span><strong style="color: var(--text-primary);">Sell photos</strong> — payment integration for direct photo sales</span>
           </label>
         </div>
@@ -80,8 +84,8 @@
 
       <!-- Submit -->
       <div style="text-align: center;">
-        <button id="btn-submit-interest" style="padding: 12px 32px; background: linear-gradient(135deg, #3b82f6, #6366f1); border: none; border-radius: 10px; color: white; font-size: 14px; font-weight: 600; cursor: pointer; transition: opacity 0.2s;" onmouseenter="this.style.opacity='0.9'" onmouseleave="this.style.opacity='1'">
-          Submit Feedback
+        <button id="btn-submit-interest" class="dl-btn dl-btn--primary" style="padding: 12px 32px; font-size: 14px;">
+          Submit feedback
         </button>
         <p style="color: var(--text-muted); font-size: 11px; margin: 8px 0 0;">Your responses help us prioritize what to build next.</p>
       </div>
@@ -91,18 +95,18 @@
   <!-- HD Uploads Section -->
   <div id="delivery-uploads-section" style="display: none; margin-bottom: 32px;">
     <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
-      <h2 style="font-size: 18px; font-weight: 600; color: var(--text-primary); margin: 0;">☁️ HD Uploads</h2>
+      <h2 style="font-size: 18px; font-weight: 600; color: var(--text-primary); margin: 0;">HD uploads</h2>
     </div>
 
     <!-- Active upload card -->
-    <div id="upload-active-card" style="display: none; background: var(--bg-card, #1e293b); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 12px; padding: 16px; margin-bottom: 12px;">
+    <div id="upload-active-card" style="display: none; background: var(--bg-card, #1e293b); border: 1px solid rgba(26, 158, 224, 0.3); border-radius: 12px; padding: 16px; margin-bottom: 12px;">
       <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-        <span id="upload-active-title" style="font-size: 14px; font-weight: 600; color: var(--text-primary);">Uploading...</span>
-        <span style="font-size: 10px; padding: 3px 10px; border-radius: 12px; background: rgba(59, 130, 246, 0.15); color: #60a5fa; font-weight: 600;">⟳ Uploading</span>
+        <span id="upload-active-title" style="font-size: 14px; font-weight: 600; color: var(--text-primary);">Uploading…</span>
+        <span style="font-size: 10px; padding: 3px 10px; border-radius: 999px; background: rgba(26, 158, 224, 0.15); color: #1a9ee0; font-weight: 600;">Uploading</span>
       </div>
       <div id="upload-active-meta" style="font-size: 11px; color: var(--text-muted); margin-bottom: 8px;"></div>
       <div style="background: rgba(255,255,255,0.06); border-radius: 6px; height: 6px; overflow: hidden; margin-bottom: 6px;">
-        <div id="upload-active-progress" style="height: 100%; border-radius: 6px; background: linear-gradient(90deg, #3b82f6, #60a5fa); width: 0%; transition: width 0.4s ease;"></div>
+        <div id="upload-active-progress" style="height: 100%; border-radius: 6px; background: var(--accent-primary, #1a9ee0); width: 0%; transition: width 0.4s ease;"></div>
       </div>
       <div id="upload-active-stats" style="display: flex; gap: 16px; font-size: 11px; color: var(--text-muted);"></div>
     </div>
@@ -113,8 +117,8 @@
     <!-- Per-Execution R2 Status (DB-backed) -->
     <div id="r2-execution-status" style="margin-top: 16px;">
       <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-        <span style="font-size: 13px; font-weight: 600; color: var(--text-secondary);">Upload Status by Execution</span>
-        <button id="btn-refresh-r2-status" style="background: none; border: 1px solid var(--border-color); color: var(--text-muted); padding: 4px 10px; border-radius: 6px; font-size: 11px; cursor: pointer;" title="Refresh upload status">↻ Refresh</button>
+        <span style="font-size: 13px; font-weight: 600; color: var(--text-secondary);">Upload status by execution</span>
+        <button id="btn-refresh-r2-status" class="dl-btn dl-btn--ghost dl-btn--sm" title="Refresh upload status"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>Refresh</button>
       </div>
       <div id="r2-execution-list" style="display: flex; flex-direction: column; gap: 8px;"></div>
       <div id="r2-execution-empty" style="display: none; text-align: center; padding: 16px; color: var(--text-muted); font-size: 12px;">
@@ -124,39 +128,67 @@
 
     <!-- Empty state -->
     <div id="upload-history-empty" style="display: none; text-align: center; padding: 24px; color: var(--text-muted); font-size: 13px;">
-      No HD uploads yet. Use the "📦 Deliver" button on the Results page to start uploading originals.
+      No HD uploads yet. Use the "Deliver" button on the Results page to start uploading originals.
     </div>
   </div>
 
   <!-- Galleries Section -->
-  <div id="delivery-galleries-section" style="display: none; margin-bottom: 32px;">
-    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
-      <h2 style="font-size: 18px; font-weight: 600; color: var(--text-primary); margin: 0;">🖼️ Your Galleries</h2>
-      <button id="btn-create-gallery" style="background: var(--accent-primary); color: white; border: none; padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: opacity 0.2s;" onmouseenter="this.style.opacity='0.85'" onmouseleave="this.style.opacity='1'">
-        + New Gallery
+  <div id="delivery-galleries-section" style="display: none; margin-bottom: 28px;">
+
+    <!-- Primary action — one clear thing to do -->
+    <div class="dl-create-band" style="margin-bottom: 22px;">
+      <div class="dl-create-band__icon">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+      </div>
+      <div class="dl-create-band__text">
+        <div class="dl-create-band__title">Create a client gallery</div>
+        <div class="dl-create-band__sub">Turn an analyzed batch into a link clients browse by race number.</div>
+      </div>
+      <button id="btn-create-gallery" class="dl-btn dl-btn--primary">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        New gallery
       </button>
     </div>
-    <div id="galleries-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px;">
+
+    <!-- Section head (hidden until there are galleries) -->
+    <div id="delivery-galleries-head" class="dl-section-head" style="display: none;">
+      <div class="dl-section-head__left">
+        <span class="dl-section-head__title">Your galleries</span>
+        <span id="galleries-count" class="dl-section-head__count dl-num">0</span>
+      </div>
     </div>
-    <div id="galleries-empty" style="display: none; text-align: center; padding: 40px; color: var(--text-muted); font-size: 14px;">
-      No galleries yet. Create your first gallery to start sharing photos.
+
+    <div id="galleries-grid" class="dl-grid"></div>
+
+    <!-- Empty / first-run state -->
+    <div id="galleries-empty" class="dl-empty" style="display: none;">
+      <div class="dl-empty__icon">
+        <svg viewBox="0 0 24 24" width="27" height="27" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+      </div>
+      <div class="dl-empty__title">Create your first gallery</div>
+      <div class="dl-empty__sub">Turn an analyzed batch into one shareable link. Clients find their own photos by race number — no folders, no WeTransfer.</div>
+      <div class="dl-steps">
+        <div class="dl-step"><span class="dl-step__n dl-step__n--blue dl-num">1</span>Pick a batch</div>
+        <div class="dl-step"><span class="dl-step__n dl-step__n--amber dl-num">2</span>Set who can see it</div>
+        <div class="dl-step"><span class="dl-step__n dl-step__n--green dl-num">3</span>Share the link</div>
+      </div>
     </div>
   </div>
 
-  <!-- Clients Section (formerly "Projects") -->
-  <div id="delivery-projects-section" style="display: none; margin-bottom: 32px;">
-    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-      <h2 style="font-size: 18px; font-weight: 600; color: var(--text-primary); margin: 0;">👥 Clients</h2>
-      <button id="btn-create-project" style="background: var(--accent-primary); color: white; border: none; padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: opacity 0.2s;" onmouseenter="this.style.opacity='0.85'" onmouseleave="this.style.opacity='1'">
-        + New Client
+  <!-- Clients Section (optional grouping) -->
+  <div id="delivery-projects-section" style="display: none; margin-bottom: 28px; padding: 14px 16px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px;">
+    <div class="dl-section-head" style="margin-bottom: 11px;">
+      <div class="dl-section-head__left" style="flex-wrap: wrap;">
+        <span style="font-size: 13px; font-weight: 600; color: var(--text-primary);">Clients</span>
+        <span id="projects-count" class="dl-num" style="font-size: 12px; color: var(--text-muted);">0</span>
+        <span style="font-size: 11px; color: var(--text-muted);">· optional — group galleries by team or sponsor</span>
+      </div>
+      <button id="btn-create-project" class="dl-btn dl-btn--ghost dl-btn--sm">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        New client
       </button>
     </div>
-    <p style="color: var(--text-muted); font-size: 12px; margin: 0 0 12px; line-height: 1.4;">
-      Each client has their own galleries and delivery rules. Photos are auto-routed to the right gallery after each execution.
-    </p>
-
-    <div id="projects-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px;">
-    </div>
+    <div id="projects-grid" style="display: flex; gap: 9px; flex-wrap: wrap;"></div>
   </div>
 
   <!-- Client Detail (shown when client selected) -->
@@ -166,10 +198,10 @@
 
     <div style="margin-bottom: 24px;">
       <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
-        <h3 style="font-size: 16px; font-weight: 600; color: var(--text-primary); margin: 0;">🖼️ Galleries</h3>
+        <h3 style="font-size: 16px; font-weight: 600; color: var(--text-primary); margin: 0;">Galleries</h3>
         <div style="display: flex; gap: 6px;">
-          <button id="btn-link-gallery-to-project" style="background: var(--bg-light); color: var(--text-primary); border: 1px solid var(--border-color); padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer;">+ Link Existing</button>
-          <button id="btn-add-gallery-to-project" style="background: var(--bg-light); color: var(--text-primary); border: 1px solid var(--border-color); padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer;">+ New Gallery</button>
+          <button id="btn-link-gallery-to-project" class="dl-btn dl-btn--ghost dl-btn--sm"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Link existing</button>
+          <button id="btn-add-gallery-to-project" class="dl-btn dl-btn--ghost dl-btn--sm"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New gallery</button>
         </div>
       </div>
       <div id="project-galleries-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px;"></div>
@@ -177,7 +209,7 @@
 
     <!-- Shareable Links Section -->
     <div id="shareable-links-section" style="margin-bottom: 24px;">
-      <h3 style="font-size: 16px; font-weight: 600; color: var(--text-primary); margin: 0 0 8px;">🔗 Shareable Links</h3>
+      <h3 style="font-size: 16px; font-weight: 600; color: var(--text-primary); margin: 0 0 8px;">Shareable links</h3>
       <p style="color: var(--text-muted); font-size: 12px; margin: 0 0 12px; line-height: 1.4;">
         Share this link with your client to give them access to their photos.
       </p>
@@ -185,8 +217,8 @@
       <!-- READ MODE: show link as copyable text -->
       <div id="slug-read-mode" style="background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 10px; padding: 12px; display: flex; align-items: center; gap: 8px;">
         <span id="slug-link-display" style="flex: 1; font-size: 13px; font-family: 'Monaco', monospace; color: var(--accent-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"></span>
-        <button id="btn-copy-client-link" title="Copy link" style="background: none; border: 1px solid var(--border-color); border-radius: 6px; padding: 5px 8px; cursor: pointer; color: var(--text-muted); font-size: 13px; flex-shrink: 0;">📋</button>
-        <button id="btn-edit-client-slug" title="Edit slug" style="background: none; border: 1px solid var(--border-color); border-radius: 6px; padding: 5px 8px; cursor: pointer; color: var(--text-muted); font-size: 13px; flex-shrink: 0;">✏️</button>
+        <button id="btn-copy-client-link" title="Copy link" style="background: none; border: 1px solid var(--border-color); border-radius: 6px; padding: 5px 8px; cursor: pointer; color: var(--text-muted); font-size: 13px; flex-shrink: 0;"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+        <button id="btn-edit-client-slug" title="Edit slug" style="background: none; border: 1px solid var(--border-color); border-radius: 6px; padding: 5px 8px; cursor: pointer; color: var(--text-muted); font-size: 13px; flex-shrink: 0;"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></button>
       </div>
 
       <!-- EDIT MODE: inline slug editor (hidden by default) -->
@@ -203,8 +235,8 @@
     <!-- Client Access Credentials -->
     <div id="client-auth-section" style="margin-bottom: 24px;">
       <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
-        <h3 style="font-size: 16px; font-weight: 600; color: var(--text-primary); margin: 0;">🔐 Access Credentials</h3>
-        <button id="btn-add-client-user" style="background: var(--bg-light); color: var(--text-primary); border: 1px solid var(--border-color); padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer;">+ Invite User</button>
+        <h3 style="font-size: 16px; font-weight: 600; color: var(--text-primary); margin: 0;">Access credentials</h3>
+        <button id="btn-add-client-user" class="dl-btn dl-btn--ghost dl-btn--sm"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Invite user</button>
       </div>
       <p style="color: var(--text-muted); font-size: 12px; margin: 0 0 12px; line-height: 1.4;">
         Invite people to access this client's portal and galleries. They'll receive an email to complete their registration.
@@ -217,11 +249,11 @@
 
     <div id="delivery-rules-section" style="display: none;">
       <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
-        <h3 style="font-size: 16px; font-weight: 600; color: var(--text-primary); margin: 0;">🔀 Delivery Rules</h3>
-        <button id="btn-add-rule" style="background: var(--bg-light); color: var(--text-primary); border: 1px solid var(--border-color); padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer;">+ Add Rule</button>
+        <h3 style="font-size: 16px; font-weight: 600; color: var(--text-primary); margin: 0;">Delivery rules</h3>
+        <button id="btn-add-rule" class="dl-btn dl-btn--ghost dl-btn--sm"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Add rule</button>
       </div>
       <p style="color: var(--text-muted); font-size: 12px; margin: 0 0 12px; line-height: 1.4;">
-        Rules automatically route photos to galleries after each execution. Rules marked <span style="color: #06b6d4; font-weight: 600;">FROM PRESET</span> are auto-generated from the "Delivery to" field in your participant presets and cannot be edited here — update them by editing the preset.
+        Rules automatically route photos to galleries after each execution. Rules marked <span style="color: var(--accent-primary); font-weight: 600;">FROM PRESET</span> are auto-generated from the "Delivery to" field in your participant presets and cannot be edited here — update them by editing the preset.
       </p>
       <div id="delivery-rules-list" style="display: flex; flex-direction: column; gap: 8px;"></div>
       <div id="delivery-rules-empty" style="display: none; text-align: center; padding: 20px; color: var(--text-muted); font-size: 13px; background: var(--bg-dark); border: 1px dashed var(--border-color); border-radius: 8px;">
@@ -235,7 +267,7 @@
 <!-- Invite Client User Modal -->
 <div id="modal-create-client-user" style="display: none; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); align-items: center; justify-content: center;">
   <div style="background: var(--bg-medium); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; width: 100%; max-width: 440px; margin: auto;">
-    <h3 style="color: var(--text-primary); margin: 0 0 4px; font-size: 18px;">✉️ Invite User</h3>
+    <h3 style="color: var(--text-primary); margin: 0 0 4px; font-size: 18px;">Invite user</h3>
     <p style="color: var(--text-muted); font-size: 12px; margin: 0 0 16px; line-height: 1.4;">
       Enter the person's name and email. They'll receive an invitation to create their account and access this client's galleries.
     </p>
@@ -250,8 +282,8 @@
       </div>
     </div>
     <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px;">
-      <button id="btn-cancel-client-user" style="background: var(--bg-light); color: var(--text-primary); border: 1px solid var(--border-color); padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px;">Cancel</button>
-      <button id="btn-save-client-user" style="background: var(--accent-primary); color: white; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">Send Invitation</button>
+      <button id="btn-cancel-client-user" class="dl-btn dl-btn--ghost">Cancel</button>
+      <button id="btn-save-client-user" class="dl-btn dl-btn--primary">Send invitation</button>
     </div>
   </div>
 </div>
@@ -259,7 +291,7 @@
 <!-- Create Gallery Modal -->
 <div id="modal-create-gallery" style="display: none; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); align-items: center; justify-content: center;">
   <div style="background: var(--bg-medium); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; width: 100%; max-width: 440px; margin: auto;">
-    <h3 style="color: var(--text-primary); margin: 0 0 16px; font-size: 18px;">Create Gallery</h3>
+    <h3 style="color: var(--text-primary); margin: 0 0 16px; font-size: 18px;">Create gallery</h3>
     <div style="display: flex; flex-direction: column; gap: 12px;">
       <div>
         <label style="display: block; color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">Gallery Title</label>
@@ -282,10 +314,14 @@
         <label style="display: block; color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">Event Date</label>
         <input id="input-gallery-event-date" type="date" style="width: 100%; padding: 8px 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); font-size: 14px; box-sizing: border-box; outline: none;" onfocus="this.style.borderColor='var(--accent-primary)'" onblur="this.style.borderColor='var(--border-color)'">
       </div>
+      <label style="display: flex; align-items: flex-start; gap: 9px; cursor: pointer; padding: 10px 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px;">
+        <input id="input-gallery-auto-hd" type="checkbox" style="width: 15px; height: 15px; accent-color: #1a9ee0; cursor: pointer; margin-top: 1px; flex-shrink: 0;">
+        <span style="color: var(--text-secondary); font-size: 12px; line-height: 1.4;">Auto-upload HD originals when I add an execution<br><span style="color: var(--text-muted); font-size: 11px;">Off by default — HD upload stays a manual choice unless you turn this on.</span></span>
+      </label>
     </div>
     <div style="display: flex; gap: 8px; margin-top: 20px; justify-content: flex-end;">
-      <button id="btn-cancel-gallery" style="padding: 8px 16px; background: var(--bg-light); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); cursor: pointer; font-size: 13px;">Cancel</button>
-      <button id="btn-save-gallery" style="padding: 8px 16px; background: var(--accent-primary); border: none; border-radius: 8px; color: white; cursor: pointer; font-size: 13px; font-weight: 600;">Create Gallery</button>
+      <button id="btn-cancel-gallery" class="dl-btn dl-btn--ghost">Cancel</button>
+      <button id="btn-save-gallery" class="dl-btn dl-btn--primary">Create gallery</button>
     </div>
   </div>
 </div>
@@ -293,7 +329,7 @@
 <!-- Link Existing Gallery Modal -->
 <div id="modal-link-gallery" style="display: none; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); align-items: center; justify-content: center;">
   <div style="background: var(--bg-medium); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; width: 100%; max-width: 440px; margin: auto;">
-    <h3 style="color: var(--text-primary); margin: 0 0 4px; font-size: 18px;">Link Existing Gallery</h3>
+    <h3 style="color: var(--text-primary); margin: 0 0 4px; font-size: 18px;">Link existing gallery</h3>
     <p style="color: var(--text-muted); font-size: 12px; margin: 0 0 16px; line-height: 1.4;">
       Select a gallery that is not yet assigned to any client.
     </p>
@@ -306,8 +342,8 @@
       All galleries are already assigned to clients. Use "+ New Gallery" to create one.
     </div>
     <div style="display: flex; gap: 8px; margin-top: 20px; justify-content: flex-end;">
-      <button id="btn-cancel-link-gallery" style="padding: 8px 16px; background: var(--bg-light); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); cursor: pointer; font-size: 13px;">Cancel</button>
-      <button id="btn-confirm-link-gallery" style="padding: 8px 16px; background: var(--accent-primary); border: none; border-radius: 8px; color: white; cursor: pointer; font-size: 13px; font-weight: 600;">Link Gallery</button>
+      <button id="btn-cancel-link-gallery" class="dl-btn dl-btn--ghost">Cancel</button>
+      <button id="btn-confirm-link-gallery" class="dl-btn dl-btn--primary">Link gallery</button>
     </div>
   </div>
 </div>
@@ -315,7 +351,7 @@
 <!-- Create Client Modal -->
 <div id="modal-create-project" style="display: none; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); align-items: center; justify-content: center;">
   <div style="background: var(--bg-medium); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; width: 100%; max-width: 480px; margin: auto; max-height: 90vh; overflow-y: auto;">
-    <h3 id="modal-project-title" style="color: var(--text-primary); margin: 0 0 16px; font-size: 18px;">New Client</h3>
+    <h3 id="modal-project-title" style="color: var(--text-primary); margin: 0 0 16px; font-size: 18px;">New client</h3>
     <div style="display: flex; flex-direction: column; gap: 12px;">
       <!-- Client identity -->
       <div>
@@ -340,8 +376,8 @@
       </div>
     </div>
     <div style="display: flex; gap: 8px; margin-top: 20px; justify-content: flex-end;">
-      <button id="btn-cancel-project" style="padding: 8px 16px; background: transparent; border: 1px solid var(--border-color); border-radius: 8px; color: inherit; cursor: pointer; font-size: 13px;">Cancel</button>
-      <button id="btn-save-project" style="padding: 8px 16px; background: var(--accent-primary); border: none; border-radius: 8px; color: white; cursor: pointer; font-size: 13px; font-weight: 600;">Create Client</button>
+      <button id="btn-cancel-project" class="dl-btn dl-btn--ghost">Cancel</button>
+      <button id="btn-save-project" class="dl-btn dl-btn--primary">Create client</button>
     </div>
   </div>
 </div>
@@ -349,7 +385,7 @@
 <!-- Create Delivery Rule Modal -->
 <div id="modal-create-rule" style="display: none; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); align-items: center; justify-content: center;">
   <div style="background: var(--bg-medium); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; width: 100%; max-width: 500px; margin: auto; max-height: 90vh; overflow-y: auto;">
-    <h3 style="color: var(--text-primary); margin: 0 0 16px; font-size: 18px;">Create Delivery Rule</h3>
+    <h3 style="color: var(--text-primary); margin: 0 0 16px; font-size: 18px;">Create delivery rule</h3>
     <div style="display: flex; flex-direction: column; gap: 12px;">
       <div>
         <label style="display: block; color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">Rule Name</label>
@@ -390,8 +426,8 @@
       </div>
     </div>
     <div style="display: flex; gap: 8px; margin-top: 20px; justify-content: flex-end;">
-      <button id="btn-cancel-rule" style="padding: 8px 16px; background: var(--bg-light); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); cursor: pointer; font-size: 13px;">Cancel</button>
-      <button id="btn-save-rule" style="padding: 8px 16px; background: var(--accent-primary); border: none; border-radius: 8px; color: white; cursor: pointer; font-size: 13px; font-weight: 600;">Create Rule</button>
+      <button id="btn-cancel-rule" class="dl-btn dl-btn--ghost">Cancel</button>
+      <button id="btn-save-rule" class="dl-btn dl-btn--primary">Create rule</button>
     </div>
   </div>
 </div>
@@ -411,18 +447,27 @@
         </div>
         <div style="margin-bottom: 8px;">
           <label style="display: block; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Gallery Link</label>
-          <div id="gallery-detail-slug-wrapper" style="display: flex; align-items: center; gap: 8px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; padding: 6px 10px; cursor: pointer; transition: border-color 0.2s;" onclick="copyGalleryLink()" onmouseenter="this.style.borderColor='#06b6d4'" onmouseleave="this.style.borderColor='var(--border-color)'">
+          <div id="gallery-detail-slug-wrapper" style="display: flex; align-items: center; gap: 8px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; padding: 6px 10px; cursor: pointer; transition: border-color 0.2s;" onclick="copyGalleryLink()" onmouseenter="this.style.borderColor='var(--accent-primary)'" onmouseleave="this.style.borderColor='var(--border-color)'">
             <span id="gallery-detail-slug" style="color: var(--text-primary); font-size: 12px; font-family: Monaco, Consolas, monospace; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"></span>
-            <span id="gallery-slug-copy-icon" style="color: var(--text-muted); font-size: 14px; flex-shrink: 0;" title="Copy link">📋</span>
+            <span id="gallery-slug-copy-icon" style="color: var(--text-muted); flex-shrink: 0; display: inline-flex;" title="Copy link"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
           </div>
         </div>
         <div style="margin-bottom: 8px;">
           <label style="display: block; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Access</label>
           <select id="gallery-detail-access-type" style="width: 100%; padding: 6px 10px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); font-size: 12px; cursor: pointer;">
-            <option value="unrestricted">🌐 Public — anyone with the link</option>
-            <option value="code">🔒 Access code required</option>
-            <option value="password">🔑 Password protected</option>
+            <option value="unrestricted">Public — anyone with the link</option>
+            <option value="code">Access code required</option>
+            <option value="password">Password protected</option>
           </select>
+        </div>
+        <div style="margin-bottom: 8px;">
+          <label style="display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer;">
+            <span>
+              <span style="display: block; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">Auto HD upload</span>
+              <span style="color: var(--text-secondary); font-size: 11px;">Upload HD originals automatically when an execution is added</span>
+            </span>
+            <input id="gallery-detail-auto-hd" type="checkbox" style="width: 16px; height: 16px; accent-color: #1a9ee0; cursor: pointer; flex-shrink: 0;">
+          </label>
         </div>
         <div>
           <label style="display: block; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Status</label>
@@ -432,15 +477,15 @@
         </div>
       </div>
       <div style="border-bottom: 1px solid var(--border-color); padding-bottom: 12px;">
-        <h4 style="color: var(--text-primary); font-size: 13px; font-weight: 600; margin: 0 0 8px;">Statistics</h4>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-          <div style="background: var(--bg-dark); padding: 8px; border-radius: 6px;">
-            <div style="color: var(--text-muted); font-size: 11px;">Views</div>
-            <div id="gallery-detail-views" style="color: var(--text-primary); font-size: 16px; font-weight: 600;">0</div>
+        <div class="dl-eyebrow" style="margin-bottom: 8px;">Statistics</div>
+        <div class="dl-stat-tower">
+          <div class="dl-stat-tower__cell">
+            <div class="dl-eyebrow">Views</div>
+            <div id="gallery-detail-views" class="dl-stat-tower__val dl-stat-tower__val--blue dl-num">0</div>
           </div>
-          <div style="background: var(--bg-dark); padding: 8px; border-radius: 6px;">
-            <div style="color: var(--text-muted); font-size: 11px;">Downloads</div>
-            <div id="gallery-detail-downloads" style="color: var(--text-primary); font-size: 16px; font-weight: 600;">0</div>
+          <div class="dl-stat-tower__cell">
+            <div class="dl-eyebrow">Downloads</div>
+            <div id="gallery-detail-downloads" class="dl-stat-tower__val dl-stat-tower__val--green dl-num">0</div>
           </div>
         </div>
       </div>
@@ -468,8 +513,8 @@
         </button>
       </div>
       <div style="display: flex; gap: 8px;">
-        <button id="btn-toggle-gallery-status" style="flex: 1; padding: 8px 12px; background: var(--bg-light); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); cursor: pointer; font-size: 13px; font-weight: 600;">Publish/Unpublish</button>
-        <button id="btn-delete-gallery" style="flex: 1; padding: 8px 12px; background: rgba(239,68,68,0.2); border: 1px solid rgba(239,68,68,0.3); border-radius: 8px; color: #ef4444; cursor: pointer; font-size: 13px; font-weight: 600;">Delete</button>
+        <button id="btn-toggle-gallery-status" class="dl-btn dl-btn--ghost" style="flex: 1; justify-content: center;">Publish / Unpublish</button>
+        <button id="btn-delete-gallery" class="dl-btn dl-btn--danger" style="flex: 1; justify-content: center;">Delete</button>
       </div>
     </div>
   </div>
@@ -479,11 +524,11 @@
 <div id="delivery-routing-banner" style="display: none; position: fixed; bottom: 20px; right: 20px; background: var(--bg-card); border: 1px solid rgba(16,185,129,0.4); border-radius: 12px; padding: 16px 20px; max-width: 380px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); z-index: 500;">
   <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
     <div style="display: flex; align-items: center; gap: 8px;">
-      <span style="font-size: 18px;">🔀</span>
-      <h4 style="color: var(--text-primary); margin: 0; font-size: 14px; font-weight: 600;">Auto-Routing Complete</h4>
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L20 7"/></svg>
+      <h4 style="color: var(--text-primary); margin: 0; font-size: 14px; font-weight: 600;">Auto-routing complete</h4>
     </div>
     <button style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 18px; padding: 0; line-height: 1;" onclick="document.getElementById('delivery-routing-banner').style.display='none';">✕</button>
   </div>
-  <p id="delivery-routing-message" style="color: var(--text-primary); font-size: 13px; margin: 0 0: 12px; line-height: 1.4;">Photos routed successfully.</p>
-  <button id="btn-routing-banner-view" style="width: 100%; padding: 8px 12px; margin-top: 12px; background: var(--accent-primary); border: none; border-radius: 8px; color: white; cursor: pointer; font-size: 13px; font-weight: 600; transition: opacity 0.2s;" onmouseenter="this.style.opacity='0.85'" onmouseleave="this.style.opacity='1'">View in Delivery Page</button>
+  <p id="delivery-routing-message" style="color: var(--text-primary); font-size: 13px; margin: 0 0 12px; line-height: 1.4;">Photos routed successfully.</p>
+  <button id="btn-routing-banner-view" class="dl-btn dl-btn--primary" style="width: 100%; justify-content: center; margin-top: 12px;">View in delivery</button>
 </div>

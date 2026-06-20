@@ -156,6 +156,8 @@
             participants: data.participants || data.preset_participants || [],
             custom_folders: data.custom_folders || [],
             allow_external_person_recognition: data.allow_external_person_recognition === true,
+            // ACC-01 (Gruppe C) — series-wide sponsors to ignore in matching
+            series_sponsor_ignore: Array.isArray(data.series_sponsor_ignore) ? data.series_sponsor_ignore : [],
           };
           // Update last-used timestamp (best-effort, fire-and-forget).
           window.api.invoke('supabase-update-preset-last-used', presetId).catch(() => {});

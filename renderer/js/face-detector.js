@@ -435,12 +435,12 @@ function setupFaceDetectionIPC() {
  * in driver-face-manager.js (loaded via delivery-get-plan-limits IPC).
  */
 function initFaceDetector() {
-  // Check the global flag set by driver-face-manager.js loadFaceRecognitionFlag()
-  // Falls back to false if the flag hasn't been loaded yet
-  const isEnabled = (typeof FACE_RECOGNITION_ENABLED !== 'undefined') ? FACE_RECOGNITION_ENABLED : false;
+  // Face recognition now runs entirely in main process via ONNX (YuNet + AuraFace)
+  // This renderer-side face-api.js detector is deprecated and no longer loaded.
+  const FACE_RECOGNITION_IN_MAIN_PROCESS = true;
 
-  if (!isEnabled) {
-    console.log('[FaceDetector] Face recognition disabled - skipping model initialization');
+  if (FACE_RECOGNITION_IN_MAIN_PROCESS) {
+    console.log('[FaceDetector] Face recognition runs in main process (ONNX) - renderer detector not needed');
     // Still export the class/functions so nothing breaks, but don't load models
     return null;
   }

@@ -7,6 +7,7 @@
 import { ipcMain } from 'electron';
 import { authService } from '../auth-service';
 import { errorTelemetryService } from '../utils/error-telemetry-service';
+import { HandlerResult } from './types';
 import {
   // Sport Categories
   getSportCategories,
@@ -21,6 +22,7 @@ import {
   getUserParticipantPresetsSupabase,
   getParticipantPresetByIdSupabase,
   savePresetParticipantsSupabase,
+  upsertSinglePresetParticipantSupabase,
   bulkAssignFoldersSupabase,
   updatePresetLastUsedSupabase,
   updateParticipantPresetSupabase,
@@ -121,6 +123,19 @@ export function registerSupabaseHandlers(): void {
     }
   });
 
+  // BUG-02 — persist a single participant row immediately (backs the editor's
+  // "Save & Next" / "Save Changes" per-row persist). Single-row upsert only:
+  // no delete-diff, no sibling rows, no updated_at bump. Returns the saved row
+  // (with its DB id) so the renderer can write the id back into the in-memory
+  // object before any later preset-level Save.
+  ipcMain.handle('supabase-upsert-preset-participant', async (_, { presetId, participant }: { presetId: string, participant: Partial<PresetParticipantSupabase> & { id?: string } }): Promise<HandlerResult<PresetParticipantSupabase>> => {
+    try {
+      const saved = await upsertSinglePresetParticipantSupabase(presetId, participant);
+      return { success: true, data: saved };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
   /**
    * Bulk-assign one or more folder names to many preset participants in a
    * single round-trip. Backbone of the split-view bulk UI (PR3) and the
@@ -158,7 +173,7 @@ export function registerSupabaseHandlers(): void {
     }
   });
 
-  ipcMain.handle('supabase-update-participant-preset', async (_, { presetId, updateData }: { presetId: string, updateData: Partial<{ name: string, description: string, category_id: string, custom_folders: (string | { name: string; path?: string })[], person_shown_template: string | null, allow_external_person_recognition: boolean }> }) => {
+  ipcMain.handle('supabase-update-participant-preset', async (_, { presetId, updateData }: { presetId: string, updateData: Partial<{ name: string, description: string, category_id: string, custom_folders: (string | { name: string; path?: string })[], person_shown_template: string | null, allow_external_person_recognition: boolean, series_sponsor_ignore: string[] }> }) => {
     try {
       await updateParticipantPresetSupabase(presetId, updateData);
       return { success: true };
@@ -433,51 +448,18 @@ export function registerSupabaseHandlers(): void {
       const supabase = getSupabaseClient();
       const userId = authService.getAuthState().user?.id;
 
-      // Try to extract PDF text locally first (fast path).
-      //
-      // The edge function supports two ingestion paths:
-      //   1) `pdfText` (preferred) — we extract text here with pdf-parse and
-      //      send the plain-text dump. The edge function chunks on entry-header
-      //      boundaries and runs Gemini Flash-Lite in parallel; full 161-entry
-      //      lists complete in ~12s instead of 130-150s.
-      //   2) `pdfBase64` (legacy fallback) — we send the raw PDF; the edge
-      //      function uses Gemini Pro Vision. Slow on long lists but works
-      //      for any PDF, including image-only/scanned PDFs that pdf-parse
-      //      can't decode.
-      //
-      // We try (1) first; if pdf-parse fails (corrupted PDF, image-only PDF,
-      // edge case parse error), we silently fall back to (2). If text extraction
-      // succeeds but yields too little content (e.g. a scan with OCR'd text but
-      // missing structure), the edge function will detect the empty participant
-      // list and return its standard 400 error — no different from a vision-mode
-      // failure on the same document.
-      let pdfText: string | null = null;
-      try {
-        // Lazy require: avoid loading pdf-parse on app start. The dynamic
-        // form (vs. ES import) also keeps TypeScript out of the typecheck
-        // of pdf-parse's untyped JS.
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const pdfParse: (data: Buffer) => Promise<{ text: string }> = require('pdf-parse');
-        const pdfBuffer = Buffer.from(pdfBase64, 'base64');
-        const result = await pdfParse(pdfBuffer);
-        if (result?.text && result.text.trim().length >= 100) {
-          // Sanity threshold: a real entry list extracted as text always has
-          // hundreds of chars at minimum. Anything below 100 chars is almost
-          // certainly an image-only PDF where pdf-parse returned essentially
-          // nothing — fall back to vision so Gemini OCRs it.
-          pdfText = result.text;
-          console.log(`[PDF Parser] Text extracted locally: ${pdfText.length} chars (${result.text.split('\n').length} lines)`);
-        } else {
-          console.log(`[PDF Parser] Local extraction yielded too little text (${result?.text?.length ?? 0} chars), falling back to vision path`);
-        }
-      } catch (extractErr: any) {
-        // pdf-parse can fail on encrypted PDFs, malformed PDFs, or when the
-        // bundled pdfjs hits an unsupported feature. Don't surface this to
-        // the user — just fall back to vision mode.
-        console.warn(`[PDF Parser] Local text extraction failed (${extractErr?.message ?? extractErr}), falling back to vision path`);
-      }
-
-      const pathUsed = pdfText ? 'text' : 'vision';
+      // VISION-FIRST (2026-06-19): send the raw PDF and let Gemini read the
+      // rendered table. We used to pdf-parse the PDF locally and send the text
+      // (faster on long lists), but pdf-parse DROPS/DETACHES the race-number
+      // column on column-heavy layouts (e.g. the ACO Le Mans entry list) — the
+      // numbers came out as a separate block, so the model couldn't associate
+      // them and invented canonical numbers, and the layout-specific prompt
+      // scrambled driver names. The edge function's vision path
+      // (gemini-3.1-flash-lite) reads the real number column in ~16-25s, so the
+      // old Pro-vision timeout that motivated text-mode no longer applies; vision
+      // also handles image-only/scanned PDFs that pdf-parse can't decode at all.
+      // (The edge function still accepts `pdfText` for older clients.)
+      const pathUsed = 'vision';
       console.log(`[PDF Parser] Calling edge function (path: ${pathUsed})...`);
 
       // Friendly user-facing message that hides edge-function/Gemini stack traces.
@@ -514,9 +496,7 @@ export function registerSupabaseHandlers(): void {
       };
 
       const { data, error } = await supabase.functions.invoke('parsePdfEntryList', {
-        body: pdfText
-          ? { pdfText, userId }
-          : { pdfBase64, userId }
+        body: { pdfBase64, userId }
       });
 
       if (error) {

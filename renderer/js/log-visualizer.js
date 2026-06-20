@@ -484,6 +484,9 @@ class LogVisualizer {
 
         <!-- Quick actions -->
         <div class="lv-footer">
+          <button id="lv-refresh-cloud" class="lv-action-btn lv-btn-secondary" title="Re-pull this analysis from the cloud (e.g. corrections made on another device)">
+            🔄 Refresh
+          </button>
           <button id="lv-export-csv" class="lv-action-btn lv-btn-secondary">
             📊 Export Results
           </button>
@@ -890,6 +893,42 @@ class LogVisualizer {
   }
 
   /**
+   * Manual "Refresh" — re-pull this execution's events from the cloud DB
+   * (#184 Phase 1). With ENABLE_DB_EXECUTION_FALLBACK off this just reloads the
+   * local copy (a safe no-op). Re-extracts results, re-enriches, re-renders.
+   * Resets the active filter; the user can re-filter after.
+   */
+  async refreshFromCloud() {
+    if (!this.executionId) return;
+    const btn = document.getElementById('lv-refresh-cloud');
+    const prevLabel = btn ? btn.innerHTML : null;
+    if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Refreshing…'; }
+    try {
+      const response = await window.api.invoke('get-execution-log', this.executionId, { preferRemote: true });
+      if (response && response.success && Array.isArray(response.data)) {
+        this.logData = response.data;
+        if (response.data.length > 0) {
+          this.imageResults = await this.extractResultsFromLogs(response.data);
+          this.filteredResults = [...this.imageResults];
+          this.enrichResultsWithLogData();
+          this.renderResults();
+          this.updateStatistics();
+          this.showNotification(response.source === 'db' ? '✅ Refreshed from cloud' : '✅ Refreshed', 'success');
+        } else {
+          this.showNotification('No cloud data found for this analysis', 'info');
+        }
+      } else {
+        this.showNotification("Couldn't refresh — check your connection", 'error');
+      }
+    } catch (err) {
+      console.error('[LogVisualizer] refreshFromCloud failed:', err);
+      this.showNotification("Couldn't refresh — check your connection", 'error');
+    } finally {
+      if (btn) { btn.disabled = false; if (prevLabel !== null) btn.innerHTML = prevLabel; }
+    }
+  }
+
+  /**
    * Setup action button listeners
    */
   setupActionButtons() {
@@ -922,6 +961,12 @@ class LogVisualizer {
 
     if (exportTagsBtn) {
       exportTagsBtn.addEventListener('click', () => this.exportTagsAsCSV());
+    }
+
+    // #184 Phase 1 — manual cloud refresh (re-pull events from the DB).
+    const refreshBtn = document.getElementById('lv-refresh-cloud');
+    if (refreshBtn) {
+      refreshBtn.addEventListener('click', () => this.refreshFromCloud());
     }
 
     // Post-analysis folder organization buttons
@@ -1368,9 +1413,17 @@ class LogVisualizer {
         // Try Supabase URLs as fallback when local files are missing
         if (result.supabaseUrl) {
           console.log(`[LogVisualizer] Using Supabase fallback for ${fileName}: ${result.supabaseUrl}`);
-          await this.loadImageWithIPC(imgElement, result.supabaseUrl);
-          this.preloadedImages.add(fileName);
-          return;
+          try {
+            await this.loadImageWithIPC(imgElement, result.supabaseUrl);
+            this.preloadedImages.add(fileName);
+            return;
+          } catch (serverError) {
+            // Local copy missing AND server copy gone → archived by the retention
+            // sweep. Show the "archived" placeholder instead of hiding the card.
+            this.failedImages.add(fileName);
+            this.applyArchivedPlaceholder(imgElement);
+            return;
+          }
         }
 
         // Try other thumbnail generation methods
@@ -1518,6 +1571,30 @@ class LogVisualizer {
    */
   getPlaceholderUrl() {
     return 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjgwIiBoZWlnaHQ9IjI4MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZjVmNWY1Ii8+PGNpcmNsZSBjeD0iNTAlIiBjeT0iNTAlIiByPSIyMCIgZmlsbD0iI2RkZCIgb3BhY2l0eT0iMC42Ii8+PHRleHQgeD0iNTAlIiB5PSI2NSUiIGZvbnQtZmFtaWx5PSJBcmlhbCwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+TG9hZGluZy4uLjwvdGV4dD48L3N2Zz4=';
+  }
+
+  /**
+   * Placeholder shown when a server image is gone (archived by the storage
+   * retention sweep). Calm "Photo archived / Original safe on your disk" card.
+   */
+  getArchivedImagePlaceholder() {
+    return 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyODAiIGhlaWdodD0iMjgwIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZjVmNWY1Ii8+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTE2LDkyKSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjYzRjNGM0IiBzdHJva2Utd2lkdGg9IjIuNSIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHJlY3QgeD0iMiIgeT0iMTAiIHdpZHRoPSI0NCIgaGVpZ2h0PSIzMCIgcng9IjMiLz48cmVjdCB4PSItMiIgeT0iMiIgd2lkdGg9IjUyIiBoZWlnaHQ9IjEwIiByeD0iMiIvPjxsaW5lIHgxPSIxOCIgeTE9IjIyIiB4Mj0iMzAiIHkyPSIyMiIvPjwvZz48dGV4dCB4PSI1MCUiIHk9IjYzJSIgZm9udC1mYW1pbHk9IkFyaWFsLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjE1IiBmaWxsPSIjN2E3YTdhIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj5QaG90byBhcmNoaXZlZDwvdGV4dD48dGV4dCB4PSI1MCUiIHk9IjcxJSIgZm9udC1mYW1pbHk9IkFyaWFsLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjExLjUiIGZpbGw9IiNhOGE4YTgiIHRleHQtYW5jaG9yPSJtaWRkbGUiPk9yaWdpbmFsIHNhZmUgb24geW91ciBkaXNrPC90ZXh0Pjwvc3ZnPg==';
+  }
+
+  /**
+   * A server (Supabase) image failed to load. Because the local copy was already
+   * missing (the server URL is only the last-resort fallback), the object has
+   * almost certainly been removed by the storage-retention sweep. Show a calm
+   * "archived" placeholder instead of a broken/hidden image — the analysis data
+   * (numbers, matches) is unaffected and the photographer still holds the
+   * original on their own disk. Per the Offline Capability Policy: fail clearly.
+   */
+  applyArchivedPlaceholder(imgElement) {
+    if (!imgElement) return;
+    imgElement.src = this.getArchivedImagePlaceholder();
+    imgElement.title = 'Photo archived — your original is safe on your own disk';
+    imgElement.classList.add('lv-archived-image');
+    imgElement.style.opacity = '1';
   }
 
   /**
@@ -2599,6 +2676,14 @@ class LogVisualizer {
     correction.changes.matchStatus = 'matched';
     correction.changes.resolvedFromReview = true;
     correction.changes.chosenCandidate = chosenCandidate;
+    // ACC-04 Phase 3: attach the full preset entry so main can cascade ALL fields
+    // (category, make/model, sponsors, metatag — not just name+team from the slim candidate).
+    if (chosenCandidate && this.presetParticipants && this.presetParticipants.length > 0) {
+      const fullEntry = this.presetParticipants.find(p =>
+        String(p.numero || p.number || '') === String(chosenCandidate.participantNumber || '')
+      );
+      if (fullEntry) correction.changes.chosenParticipant = fullEntry;
+    }
     if (chosenCandidate?.participantName) {
       correction.changes.drivers = [chosenCandidate.participantName];
     }
@@ -3015,6 +3100,11 @@ class LogVisualizer {
         if (loadingDiv) {
           loadingDiv.style.display = 'none';
         }
+        // Server image gone (local already missing) → archived by the retention
+        // sweep. Show the "archived" placeholder instead of a broken image.
+        if (newImg.src && newImg.src.includes('/storage/v1/object/')) {
+          this.applyArchivedPlaceholder(img);
+        }
         this.logImageError(result.fileName, new Error('Gallery image load failed'), 'gallery');
       };
 
@@ -3410,14 +3500,20 @@ class LogVisualizer {
       });
     }
 
-    // Keyboard shortcuts on the Race Number input:
-    //   Enter → apply best match (exact or prefix), save async, navigate to next image
+    // Keyboard shortcuts on the editable vehicle fields (Race Number AND Drivers):
+    //   Enter → (race number) apply best match, then save async + navigate to next image
+    //   Enter → (drivers) save async + navigate to next image (the field already
+    //           autocompletes on input, so no extra matching needed here)
     //   Empty Enter → save async, navigate to next image
     //   Shift+Enter is handled by the gallery-level listener (goes back), so we ignore it here.
+    // #236: Enter used to fire ONLY on the raceNumber field, so assigning a driver
+    // (e.g. tagging one driver of a 3-driver car) and pressing Enter did nothing —
+    // it neither saved nor advanced, forcing the user onto the mouse.
     newContainer.addEventListener('keydown', (event) => {
       if (event.key !== 'Enter' || event.shiftKey) return;
       const input = event.target;
-      if (input.tagName !== 'INPUT' || input.dataset.field !== 'raceNumber') return;
+      if (input.tagName !== 'INPUT') return;
+      if (input.dataset.field !== 'raceNumber' && input.dataset.field !== 'drivers') return;
 
       event.preventDefault();
       this._handleRaceNumberEnter(input);
@@ -3463,8 +3559,12 @@ class LogVisualizer {
 
     const value = input.value.trim();
 
-    // 1) If the user typed something, apply the first useful match
-    if (value && this.presetParticipants && this.presetParticipants.length > 0 && vehicleEditor) {
+    // 1) If the user typed a RACE NUMBER, apply the first useful number match.
+    //    Gated to the raceNumber field: Enter can now also come from the drivers
+    //    field (#236), where the value is a name — running number-prefix matching
+    //    on it would be wrong. The drivers field already autocompletes on input,
+    //    so it just falls through to the save + advance below.
+    if (input.dataset.field === 'raceNumber' && value && this.presetParticipants && this.presetParticipants.length > 0 && vehicleEditor) {
       const participant = this.findBestMatchByNumberPrefix(value);
       if (participant) {
         if (participant.numero) {
@@ -4810,7 +4910,7 @@ class LogVisualizer {
       return;
     }
 
-    const accepted = await window.learnedDataModal.show(presetId, this.executionId);
+    const accepted = await window.learnedDataModal.show(presetId, this.executionId, this.participantPresetData?.series_sponsor_ignore || []);
     if (accepted) {
       console.log('[LogVisualizer] User accepted learned data updates');
       this.showNotification('✅ Preset updated with learned data', 'success');

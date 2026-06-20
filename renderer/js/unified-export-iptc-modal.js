@@ -29,6 +29,9 @@ let unifiedModal = null;
 let unifiedIsProcessing = false;
 let unifiedPresetData = null;
 let unifiedIptcMetadata = null;
+// UX-04: true when unifiedIptcMetadata came from the account-level default
+// template (not from the preset profile). Drives the 3-state hint + telemetry.
+let unifiedIptcFromDefaults = false;
 let unifiedKeywordsList = [];
 let unifiedCurrentMode = 'export'; // 'export' or 'write-originals'
 
@@ -116,6 +119,7 @@ async function openUnifiedExportModal() {
   }
 
   // 3) Adopt the (possibly refreshed) preset into the modal's local state.
+  unifiedIptcFromDefaults = false;
   if (lv.participantPresetData) {
     unifiedPresetData = lv.participantPresetData;
     unifiedIptcMetadata = (unifiedPresetData.iptc_metadata &&
@@ -127,6 +131,39 @@ async function openUnifiedExportModal() {
     // back to window.currentPresetParticipants.
     if (Array.isArray(unifiedPresetData.participants)) {
       window.currentPresetParticipants = unifiedPresetData.participants;
+    }
+  }
+
+  // 3b) UX-04 fallback: when the preset has NO IPTC profile, fall back to the
+  //     account-level default template. Precedence is always
+  //     preset profile > user default > empty (the preset, if present, wins).
+  //
+  //     results.html is a SEPARATE document and does NOT load
+  //     preset-iptc-editor.js — so we fetch the default via the IPC channel
+  //     directly (window.getIptcDefaultsCached / prefillIptcFromDefaults are
+  //     undefined here). If the network is down (offline export — a permitted
+  //     offline flow), we fall back to the localStorage mirror, which is shared
+  //     across documents on the same file:// origin.
+  if (!unifiedIptcMetadata) {
+    try {
+      const r = await window.api.invoke('iptc-defaults-get');
+      if (r && r.success && r.data) {
+        unifiedIptcMetadata = r.data;
+        unifiedIptcFromDefaults = true;
+      }
+    } catch (e) {
+      // offline / IPC failure — fall through to the mirror below.
+    }
+    if (!unifiedIptcMetadata) {
+      try {
+        const raw = localStorage.getItem('iptc-default-template-mirror');
+        if (raw) {
+          unifiedIptcMetadata = JSON.parse(raw);
+          unifiedIptcFromDefaults = true;
+        }
+      } catch (e) {
+        // never block the modal on a bad mirror.
+      }
     }
   }
 
@@ -142,6 +179,7 @@ async function openUnifiedExportModal() {
     ).length;
     window.logUserAction('UNIFIED_EXPORT_MODAL_OPENED', 'VIEW', {
       presetHasIptc: !!unifiedIptcMetadata,
+      iptcFromDefaults: unifiedIptcFromDefaults,
       includeVisualTagsInPreset: !!(unifiedIptcMetadata && unifiedIptcMetadata.includeVisualTags),
       totalCount: allResults.length,
       matchedCount
@@ -168,7 +206,7 @@ function getUnifiedSampleParticipant() {
         if (v.raceNumber && v.raceNumber !== 'N/A') {
           const presetParticipants = window.currentPresetParticipants ||
             (unifiedPresetData?.participants || []);
-          const presetMatch = presetParticipants.find(p => p.numero === v.raceNumber);
+          const presetMatch = presetParticipants.find(p => String(p.numero) === String(v.raceNumber));
 
           return {
             number: v.raceNumber || '10',
@@ -454,7 +492,7 @@ function createUnifiedModal() {
         <div class="unified-iptc-section">
           <div class="unified-iptc-section-header">
             <h3>📋 IPTC Metadata</h3>
-            <span class="unified-iptc-hint">${unifiedIptcMetadata ? 'From preset profile' : 'No preset profile — fill in manually'}</span>
+            <span class="unified-iptc-hint">${unifiedIptcMetadata ? (unifiedIptcFromDefaults ? 'Prefilled from your default template' : 'From preset profile') : 'No template — fill in manually'}</span>
           </div>
 
           <div class="iptc-pro-grid">
@@ -1065,13 +1103,14 @@ function buildUnifiedImages(scope) {
             team: vehicle.team || ''
           };
 
-          const presetMatch = presetParticipants.find(p => p.numero === vehicle.raceNumber);
+          const presetMatch = presetParticipants.find(p => String(p.numero) === String(vehicle.raceNumber));
           if (presetMatch) {
-            if (!participant.name && presetMatch.nome) participant.name = presetMatch.nome;
+            // Entry-first: preset is authoritative — always overwrite name and team
+            if (presetMatch.nome) participant.name = presetMatch.nome;
             if (presetMatch.car_model) participant.car_model = presetMatch.car_model;
             if (presetMatch.metatag) participant.metatag = presetMatch.metatag;
             if (presetMatch.nationality) participant.nationality = presetMatch.nationality;
-            if (!participant.team && presetMatch.squadra) participant.team = presetMatch.squadra;
+            if (presetMatch.squadra) participant.team = presetMatch.squadra;
 
             if (!participant.nationality && presetMatch.preset_participant_drivers?.length > 0) {
               const firstDriver = presetMatch.preset_participant_drivers[0];
