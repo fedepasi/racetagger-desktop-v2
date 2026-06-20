@@ -81,6 +81,7 @@
       "node_modules/tunnel-agent/**/*",
       "node_modules/raw-preview-extractor/**/*",
       "node_modules/pdf-parse/**/*",
+      "!node_modules/pdf-parse/**/web/**",
       "node_modules/node-ensure/**/*"
     ],
     "icon": "racetagger-logo.icns",
