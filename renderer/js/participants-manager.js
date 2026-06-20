@@ -6914,10 +6914,16 @@ function populatePdfPreviewTable(participants) {
 
   previewParticipants.forEach(p => {
     const row = document.createElement('tr');
-    // One chip per driver (from the structured drivers array) so a name that
-    // itself contains a comma — "Kaya, Mustafa Mehmet" — stays ONE person and
-    // the driver count is unambiguous at a glance.
-    const names = getDriverNamesFromParticipant(p);
+    // One chip per driver, taken from the Edge Function's structured `drivers`
+    // array — each element is already one whole driver, so a name that itself
+    // contains a comma ("Kaya, Mustafa Mehmet") stays ONE person. Only fall back
+    // to the generic helper when the array is absent (e.g. a legacy CSV preview):
+    // getDriverNamesFromParticipant alone splits the comma-joined `nome` and would
+    // tear "Lastname, Firstname" in two (the EF participant has no
+    // preset_participant_drivers, so the helper hits its nome.split fallback).
+    const names = (Array.isArray(p.drivers) && p.drivers.length > 0)
+      ? p.drivers.map(s => String(s).trim()).filter(Boolean)
+      : getDriverNamesFromParticipant(p);
     const driversCell = names.length
       ? names.map(n => `<span class="pdf-dchip">${escapeHtml(n)}</span>`).join('')
       : '<span class="pdf-muted">—</span>';
