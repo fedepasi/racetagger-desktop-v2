@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### 🐛 Fix: PDF import preview split "Lastname, Firstname" drivers into two
+
+- **The PDF-import preview table no longer splits a `Lastname, Firstname` driver name into two people.** The redesigned preview derived its driver chips from `getDriverNamesFromParticipant(p)`, which — for the freshly-extracted Edge Function participant (no `preset_participant_drivers` yet) — falls back to splitting the comma-joined `nome`, tearing `Kaya, Mustafa Mehmet` into `Kaya` + `Mustafa Mehmet`. It now reads the EF's **structured `drivers[]` array** directly (each element is one whole driver), falling back to the helper only when the array is absent. Display-only — the actual import already used the structured array and was correct; this aligns the preview with it. (The extraction itself is fine: the vision-first `parsePdfEntryList` returns these names correctly grouped — verified against this exact ADAC Eifel list.)
+
 ### 🛡️ Automatic crash reporting — the app now tells us when it closes unexpectedly
 
 - **If the desktop app closes unexpectedly, the crash is now reported automatically** (anonymously) and turned into a GitHub issue — no more silent disappearances. This closes a real gap: the existing error telemetry only caught *handled* errors, but a hard crash (a native segfault in RAW/ONNX processing, an out-of-memory kill, a GPU or renderer crash, a force-quit or power loss) kills the process before any JavaScript runs, so nothing was ever reported. Now:
