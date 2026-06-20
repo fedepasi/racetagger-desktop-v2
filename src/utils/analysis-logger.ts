@@ -44,7 +44,11 @@ export interface LogEvent {
     // visual-tags box but nothing was written" without round-tripping with
     // the user. Append-only via the static appendUserAction() helper since
     // the AnalysisLogger instance is gone by then.
-    | 'USER_ACTION';
+    | 'USER_ACTION'
+    // P1 DNA-reconciliation — per-batch make-consensus + demote-to-review telemetry.
+    // Emitted in BOTH shadow and armed mode so the gate can compare demotions vs
+    // reviewer outcomes. The race number is never changed by this event.
+    | 'DNA_CONSENSUS';
   timestamp: string;
   executionId: string;
 }
@@ -958,6 +962,30 @@ export class AnalysisLogger {
         details: data.details || null
       }
     });
+  }
+
+  /**
+   * P1 DNA-reconciliation: record the per-cluster make consensus + any demotions
+   * for a batch (JSONL telemetry). Emitted in shadow AND armed mode so the gate
+   * analysis can compare demotions vs reviewer outcomes. Never throws.
+   */
+  logDnaConsensus(data: { mode: 'shadow' | 'armed'; clusters: any[]; demotions: any[] }): void {
+    try {
+      const event = {
+        type: 'DNA_CONSENSUS' as const,
+        timestamp: new Date().toISOString(),
+        executionId: this.executionId,
+        mode: data.mode,
+        clusterCount: Array.isArray(data.clusters) ? data.clusters.length : 0,
+        demotionCount: Array.isArray(data.demotions) ? data.demotions.length : 0,
+        clusters: data.clusters || [],
+        demotions: data.demotions || [],
+      };
+      this.writeLine(event);
+    } catch (e) {
+      // Never throw out of logging.
+      console.warn('[AnalysisLogger] logDnaConsensus failed (non-fatal):', e instanceof Error ? e.message : e);
+    }
   }
 
   /**

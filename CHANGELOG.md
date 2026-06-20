@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+### 🧬 Vehicle-DNA reconciliation (P1 — internal, default OFF)
+
+- **Preserve vehicle DNA through the pipeline**: the desktop was discarding the
+  make/model/livery/category the V6 edge function already returns in
+  `crop_analysis`. The Gemini-crop entries (batch + sequential paths) now carry
+  them, and the result map exposes `category_dna` (the DNA race category, kept
+  separate from the sport `category`). Additive — no schema/token/Edge-Function
+  change.
+- **Gated DNA-consensus demote-to-review scaffolding** (`matching/dna-consensus.ts`):
+  per race-number cluster, a count-based make+category consensus that can move a
+  contradicted detection to `needs_review` — it NEVER changes the race number.
+  Fully feature-gated via `sport_categories.matching_config.dnaSettings`
+  (`enableDNAContradictionDemote`, default **false** → the pass is inert), with a
+  shadow mode for measurement. Conservative by construction (multi-photo cluster
+  only, make-led — model is advisory, burst-correlated clusters shadow-only).
+  Adds `tests/dna-consensus.test.ts` (21 cases incl. the no-number-mutation invariant).
+- **Measurement + review surface**: a `DNA_CONSENSUS` JSONL event records the
+  per-batch cluster verdicts + demotions (shadow *and* armed) so a shadow run is
+  measurable against reviewer outcomes; the review gallery shows a neutral
+  "🔎 Looks like {make} {category}" context line on a demoted photo (armed only —
+  shadow stays invisible), never an accusation and never changing the number.
+
 ### 🛡️ Automatic crash reporting — the app now tells us when it closes unexpectedly
 
 - **If the desktop app closes unexpectedly, the crash is now reported automatically** (anonymously) and turned into a GitHub issue — no more silent disappearances. This closes a real gap: the existing error telemetry only caught *handled* errors, but a hard crash (a native segfault in RAW/ONNX processing, an out-of-memory kill, a GPU or renderer crash, a force-quit or power loss) kills the process before any JavaScript runs, so nothing was ever reported. Now:
