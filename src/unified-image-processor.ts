@@ -10076,14 +10076,33 @@ export class UnifiedImageProcessor extends EventEmitter {
           const execSelectTimeout = new Promise<{ data: null }>((resolve) => {
             execSelectTimeoutId = setTimeout(() => { console.warn('[FINALIZE] ⚠️ Execution select timeout (10s)'); resolve({ data: null }); }, 10000);
           });
-          const { data: currentExecution } = await Promise.race([execSelectPromise, execSelectTimeout]) as any;
+          const execSelectResult = await Promise.race([execSelectPromise, execSelectTimeout]) as any;
           clearTimeout(execSelectTimeoutId!); // FIX: Cancel timeout to prevent false warning
+          const currentExecution = execSelectResult?.data ?? null;
+          const execSelectError = execSelectResult?.error ?? null;
 
-          // Update execution_settings with final recognition method
-          const updatedExecutionSettings = {
-            ...(currentExecution?.execution_settings || {}),
-            recognition_method: this.recognitionMethod
-          };
+          // BUGFIX (exec-settings clobber): only MERGE recognition_method into
+          // execution_settings when we actually read back the existing blob.
+          // The pre-read above resolves to { data: null } on timeout, and a
+          // .single() DB error also yields a null row. Previously we spread
+          // `...(currentExecution?.execution_settings || {})`, so a failed read
+          // overwrote the ENTIRE JSONB with just { recognition_method } — wiping
+          // participantPresetId/participantCount/category. That silently breaks
+          // driver suggestions on the Results screen (loadParticipantPresetData
+          // bails when participantPresetId is gone). recognition_method is only
+          // telemetry, so dropping it on a rare read failure is the safe choice;
+          // never clobber the real settings.
+          const existingSettings =
+            currentExecution?.execution_settings && typeof currentExecution.execution_settings === 'object'
+              ? currentExecution.execution_settings
+              : null;
+          if (!existingSettings) {
+            console.warn(
+              `[FINALIZE] ⚠️ Skipping execution_settings merge for ${this.config.executionId} — ` +
+              `pre-read unavailable (${execSelectError ? 'db error' : 'timeout/null'}); ` +
+              `preserving existing settings to avoid clobbering participantPresetId`
+            );
+          }
 
           const executionUpdate = {
             processed_images: successful,
@@ -10096,8 +10115,11 @@ export class UnifiedImageProcessor extends EventEmitter {
             error_summary: errorSummary,
             // Update system_environment with final network speed (backward compatibility)
             system_environment: this.systemEnvironment,
-            // Update execution_settings with final recognition method
-            execution_settings: updatedExecutionSettings
+            // Update execution_settings with final recognition method ONLY when the
+            // pre-read succeeded — otherwise omit the field entirely (no clobber).
+            ...(existingSettings
+              ? { execution_settings: { ...existingSettings, recognition_method: this.recognitionMethod } }
+              : {})
           };
 
           const execUpdatePromise = supabase

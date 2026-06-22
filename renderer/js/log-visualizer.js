@@ -194,19 +194,25 @@ class LogVisualizer {
    */
   async loadParticipantPresetData() {
     try {
-      // Check if execution has preset information
-      if (!this.execution || !this.execution.execution_settings) {
-        console.log('[LogVisualizer] No execution settings available for preset data');
-        return;
-      }
-
-      const executionSettings = this.execution.execution_settings;
+      const executionSettings = (this.execution && this.execution.execution_settings) || {};
 
       // Check if preset was used during analysis
       // The preset data might be stored in different formats depending on the version
-      const presetId = executionSettings.participantPresetId ||
+      let presetId = executionSettings.participantPresetId ||
                       executionSettings.preset_id ||
                       (executionSettings.participantPreset && executionSettings.participantPreset.id);
+
+      // Defense-in-depth: execution_settings can lose participantPresetId if the
+      // desktop finalize step clobbered the JSONB (a failed read overwrote it —
+      // see the exec-settings clobber bug). The JSONL EXECUTION_START event always
+      // records the preset id, so recover it from the log before giving up. This
+      // also auto-heals already-damaged executions with no DB repair needed.
+      if (!presetId && this.executionId) {
+        presetId = await this._resolvePresetIdFromLog();
+        if (presetId) {
+          console.warn(`[LogVisualizer] participantPresetId missing from execution_settings — recovered ${presetId} from EXECUTION_START log`);
+        }
+      }
 
       if (!presetId) {
         console.log('[LogVisualizer] No participant preset was used during this analysis');
@@ -229,6 +235,30 @@ class LogVisualizer {
     } catch (error) {
       console.warn('[LogVisualizer] Error loading participant preset data:', error);
       // Continue without autocomplete - not a critical error
+    }
+  }
+
+  /**
+   * Recover the participant preset id from the JSONL EXECUTION_START event.
+   *
+   * Used as a fallback when execution_settings has no participantPresetId (e.g.
+   * the desktop finalize step clobbered the settings JSONB). Prefers the already
+   * loaded this.logData; fetches the log on demand if it isn't loaded yet (this
+   * method can run before init() loads the log). Returns null if unavailable.
+   */
+  async _resolvePresetIdFromLog() {
+    try {
+      let log = Array.isArray(this.logData) ? this.logData : [];
+      if (log.length === 0 && this.executionId) {
+        const response = await window.api.invoke('get-execution-log', this.executionId);
+        log = (response && response.data) || [];
+      }
+      const startEvent = log.find(e => e && e.type === 'EXECUTION_START');
+      return (startEvent && (startEvent.participantPresetId ||
+        (startEvent.participantPreset && startEvent.participantPreset.id))) || null;
+    } catch (error) {
+      console.warn('[LogVisualizer] Could not resolve preset id from log:', error);
+      return null;
     }
   }
 
