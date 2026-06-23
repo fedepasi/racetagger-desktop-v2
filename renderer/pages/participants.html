@@ -291,6 +291,14 @@
             <button type="button" class="btn btn-sm" onclick="openCreateFolderPanel()" title="Create a new folder for this preset">
               <span style="margin-right: 4px;">+</span> Add Folder
             </button>
+            <!-- Columns picker — show/hide table columns; choice is saved per device -->
+            <div class="columns-picker-wrap">
+              <button type="button" id="columns-picker-btn" class="btn btn-sm" onclick="toggleColumnsPicker()" title="Show or hide table columns" aria-haspopup="true" aria-expanded="false">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="margin-right: 4px;"><path d="M4 4h4v16H4V4zm6 0h4v16h-4V4zm6 0h4v16h-4V4z"/></svg>
+                Columns
+              </button>
+              <div id="columns-picker-menu" class="columns-picker-menu" role="menu" style="display: none;"></div>
+            </div>
           </div>
 
           <!-- Bulk action bar — only visible when ≥1 row selected -->
@@ -325,19 +333,20 @@
             <table id="participants-table" class="participants-table sortable asc">
               <thead>
                 <tr>
-                  <th class="row-select-th-v1 no-sort" title="Select rows for bulk actions">
+                  <th class="row-select-th-v1 no-sort" data-col-id="select" title="Select rows for bulk actions">
                     <input type="checkbox" id="select-all-participants" class="row-select-input-v1" onchange="onSelectAllParticipantsToggle(this)" aria-label="Select all">
                   </th>
-                  <th id="th-active" class="no-sort" title="Disable/Re-enable participant for AI matching" style="width: 60px;">Active</th>
-                  <th>Num</th>
-                  <th>Person</th>
-                  <th>Category</th>
-                  <th>Team</th>
-                  <th>Plate</th>
-                  <th id="th-delivery-to" style="display: none;">Delivery to</th>
-                  <th id="th-face-status" class="no-sort" style="display: none;" title="Face Recognition Status">Face</th>
-                  <th class="no-sort" title="Custom folders assigned to this participant">Folders</th>
-                  <th class="no-sort">Actions</th>
+                  <th id="th-active" class="no-sort" data-col-id="active" title="Disable/Re-enable participant for AI matching" style="width: 60px;">Active</th>
+                  <th data-col-id="num">Num</th>
+                  <th data-col-id="person">Person</th>
+                  <th data-col-id="category">Category</th>
+                  <th data-col-id="team">Team</th>
+                  <th data-col-id="car">Car</th>
+                  <th data-col-id="plate">Plate</th>
+                  <th id="th-delivery-to" data-col-id="delivery" style="display: none;">Delivery to</th>
+                  <th id="th-face-status" class="no-sort" data-col-id="face" style="display: none;" title="Face Recognition Status">Face</th>
+                  <th class="no-sort" data-col-id="folders" title="Custom folders assigned to this participant">Folders</th>
+                  <th class="no-sort" data-col-id="actions">Actions</th>
                 </tr>
               </thead>
               <tbody id="participants-tbody">
