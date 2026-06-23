@@ -308,6 +308,10 @@ async function initParticipantsManager() {
   // Setup event listeners
   setupEventListeners();
 
+  // Apply the saved show/hide column choices and build the Columns picker.
+  applyColumnVisibility();
+  renderColumnsPickerMenu();
+
   // Initialize face manager if available
   if (typeof presetFaceManager !== 'undefined' && presetFaceManager.initialize) {
     presetFaceManager.initialize();
@@ -2617,6 +2621,158 @@ function updateSaveAndPreviousAvailability(rowIndex) {
   btn.title = hasPrev ? '' : 'No participants above';
 }
 
+// ============================================================
+// Configurable participant table columns (per-device preference)
+// ------------------------------------------------------------
+// The data columns between the fixed "Active" control and the fixed
+// "Delivery / Face / Folders / Actions" columns are user-toggleable.
+// Visibility is stored in localStorage — per device, GLOBAL across
+// presets (a viewing preference, not a per-event one).
+//
+// Show/hide is done by toggling `hide-<id>` classes on the table, so
+// every <th>/<td> stays in the DOM: cellIndex stays stable and the
+// existing sortable.js + applySortState machinery keeps working
+// untouched. "Car" (car_model) ships VISIBLE by default, which answers
+// the original feature request out of the box; users on small screens
+// can hide whatever they don't need (the table also scrolls
+// horizontally as a fallback).
+// ============================================================
+const PARTICIPANT_COLUMN_PREFS_KEY = 'participant-columns-v1';
+
+// Order here = left-to-right display order. `locked` columns can't be
+// hidden (Num is the participant's identity — always shown).
+const PARTICIPANT_DATA_COLUMNS = [
+  { id: 'num',      label: 'Num',      locked: true },
+  { id: 'person',   label: 'Person' },
+  { id: 'category', label: 'Category' },
+  { id: 'team',     label: 'Team' },
+  { id: 'car',      label: 'Car' },
+  { id: 'plate',    label: 'Plate' },
+];
+
+const TOGGLEABLE_COLUMN_IDS = PARTICIPANT_DATA_COLUMNS.filter(c => !c.locked).map(c => c.id);
+const DEFAULT_VISIBLE_COLUMN_IDS = PARTICIPANT_DATA_COLUMNS.map(c => c.id);
+
+function loadVisibleColumnIds() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(PARTICIPANT_COLUMN_PREFS_KEY) || 'null');
+    if (Array.isArray(saved)) {
+      const known = new Set(PARTICIPANT_DATA_COLUMNS.map(c => c.id));
+      const ids = saved.filter(id => known.has(id));
+      // Locked columns are always visible, regardless of saved state.
+      PARTICIPANT_DATA_COLUMNS.forEach(c => { if (c.locked && !ids.includes(c.id)) ids.push(c.id); });
+      return ids;
+    }
+  } catch (e) { /* ignore malformed prefs */ }
+  return [...DEFAULT_VISIBLE_COLUMN_IDS];
+}
+
+let visibleColumnIds = loadVisibleColumnIds();
+
+function saveVisibleColumnIds() {
+  try {
+    localStorage.setItem(PARTICIPANT_COLUMN_PREFS_KEY, JSON.stringify(visibleColumnIds));
+  } catch (e) { /* ignore storage errors */ }
+}
+
+function isColumnVisible(id) { return visibleColumnIds.includes(id); }
+
+/**
+ * Reflect `visibleColumnIds` onto the table by toggling `hide-<id>`
+ * classes. CSS hides both the <th> and its <td>s. Cells stay in the
+ * DOM so cellIndex / sortable.js are unaffected.
+ */
+function applyColumnVisibility() {
+  const table = document.getElementById('participants-table');
+  if (!table) return;
+  TOGGLEABLE_COLUMN_IDS.forEach(id => {
+    table.classList.toggle('hide-' + id, !visibleColumnIds.includes(id));
+  });
+}
+
+/** Build the Columns dropdown (one checkbox per toggleable column). */
+function renderColumnsPickerMenu() {
+  const menu = document.getElementById('columns-picker-menu');
+  if (!menu) return;
+  menu.innerHTML = PARTICIPANT_DATA_COLUMNS.map(col => {
+    const checked = isColumnVisible(col.id) ? 'checked' : '';
+    const disabled = col.locked ? 'disabled' : '';
+    const lock = col.locked ? ' <span class="columns-picker-lock" title="Always shown">●</span>' : '';
+    return '<label class="columns-picker-item">'
+      + '<input type="checkbox" data-col-id="' + col.id + '" ' + checked + ' ' + disabled
+      + ' onchange="onColumnToggle(this)">'
+      + '<span>' + col.label + '</span>' + lock
+      + '</label>';
+  }).join('');
+}
+
+/** Open/close the Columns dropdown. */
+function toggleColumnsPicker() {
+  const menu = document.getElementById('columns-picker-menu');
+  const btn = document.getElementById('columns-picker-btn');
+  if (!menu) return;
+  const isOpen = menu.style.display !== 'none';
+  if (isOpen) {
+    menu.style.display = 'none';
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+  } else {
+    renderColumnsPickerMenu();
+    menu.style.display = 'block';
+    if (btn) btn.setAttribute('aria-expanded', 'true');
+  }
+}
+
+/** Handle a column checkbox toggle from the picker. */
+function onColumnToggle(input) {
+  const id = input.getAttribute('data-col-id');
+  if (!id || !TOGGLEABLE_COLUMN_IDS.includes(id)) return;
+  if (input.checked) {
+    if (!visibleColumnIds.includes(id)) visibleColumnIds.push(id);
+  } else {
+    visibleColumnIds = visibleColumnIds.filter(x => x !== id);
+  }
+  saveVisibleColumnIds();
+  applyColumnVisibility();
+  // If we just hid the column the table is currently sorted by, re-sort
+  // by Num so rows aren't left ordered by an invisible column.
+  if (!input.checked) {
+    const sortState = getCurrentSortState();
+    if (sortState && sortState.columnId === id) {
+      applySortState({ columnId: 'num', direction: sortState.direction || 'asc' });
+      saveSortPreference();
+    }
+  }
+}
+
+// Close the Columns dropdown on any outside click.
+document.addEventListener('click', function(e) {
+  const menu = document.getElementById('columns-picker-menu');
+  if (!menu || menu.style.display === 'none') return;
+  if (e.target.closest('#columns-picker-menu') || e.target.closest('#columns-picker-btn')) return;
+  menu.style.display = 'none';
+  const btn = document.getElementById('columns-picker-btn');
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+});
+
+/**
+ * Resolve a saved/active sort state to the current physical column
+ * index. Prefers the stable `columnId` (robust to hidden columns);
+ * falls back to a legacy numeric `columnIndex`, then to Num.
+ */
+function resolveSortColumnIndex(state) {
+  const table = document.getElementById('participants-table');
+  if (!table) return -1;
+  if (state && state.columnId) {
+    const th = table.querySelector('th[data-col-id="' + state.columnId + '"]');
+    if (th && th.cellIndex >= 0) return th.cellIndex;
+    const numTh = table.querySelector('th[data-col-id="num"]');
+    return numTh ? numTh.cellIndex : -1;
+  }
+  if (state && typeof state.columnIndex === 'number') return state.columnIndex;
+  const numTh = table.querySelector('th[data-col-id="num"]');
+  return numTh ? numTh.cellIndex : 2;
+}
+
 /**
  * Get current sort state from table headers.
  * Checks both custom classes (asc/desc) and sortable.js classes (dir-u/dir-d).
@@ -2627,6 +2783,7 @@ function getCurrentSortState() {
   const sortableHeader = document.querySelector('#participants-table th.dir-u, #participants-table th.dir-d');
   if (sortableHeader) {
     return {
+      columnId: sortableHeader.getAttribute('data-col-id') || null,
       columnIndex: sortableHeader.cellIndex,
       direction: sortableHeader.classList.contains('dir-u') ? 'asc' : 'desc'
     };
@@ -2635,6 +2792,7 @@ function getCurrentSortState() {
   const customHeader = document.querySelector('#participants-table th.asc, #participants-table th.desc');
   if (customHeader) {
     return {
+      columnId: customHeader.getAttribute('data-col-id') || null,
       columnIndex: customHeader.cellIndex,
       direction: customHeader.classList.contains('asc') ? 'asc' : 'desc'
     };
@@ -2643,7 +2801,7 @@ function getCurrentSortState() {
   // BUG-02 fix — la colonna 0 è la checkbox di selezione (no-sort), la 1 è
   // "Active": la colonna "Num" è la 2. Prima il default 0 ri-ordinava per
   // stato di selezione ad ogni salvataggio, rimescolando le righe.
-  return { columnIndex: 2, direction: 'asc' };
+  return { columnId: 'num', columnIndex: 2, direction: 'asc' };
 }
 
 /**
@@ -2659,7 +2817,8 @@ function applySortState(state) {
   const headers = table.querySelectorAll('th');
   if (!headers || headers.length === 0) return;
 
-  const header = headers[state.columnIndex];
+  const colIndex = resolveSortColumnIndex(state);
+  const header = headers[colIndex];
   if (!header) return;
 
   // Rimuovi tutte le classi di ordinamento da tutti gli header
@@ -2674,8 +2833,8 @@ function applySortState(state) {
   const rows = Array.from(tbody.querySelectorAll('tr'));
 
   rows.sort((rowA, rowB) => {
-    const cellA = rowA.querySelectorAll('td')[state.columnIndex];
-    const cellB = rowB.querySelectorAll('td')[state.columnIndex];
+    const cellA = rowA.querySelectorAll('td')[colIndex];
+    const cellB = rowB.querySelectorAll('td')[colIndex];
 
     if (!cellA || !cellB) return 0;
 
@@ -2728,16 +2887,17 @@ function loadSortPreference(presetId) {
     const saved = localStorage.getItem(`preset-sort-${presetId}`);
     if (saved) {
       const state = JSON.parse(saved);
-      if (typeof state.columnIndex === 'number' && (state.direction === 'asc' || state.direction === 'desc')) {
+      const dirOk = state.direction === 'asc' || state.direction === 'desc';
+      if (dirOk && (typeof state.columnId === 'string' || typeof state.columnIndex === 'number')) {
         return state;
       }
     }
   } catch (e) {
     // Silently ignore parse errors
   }
-  // No saved preference (e.g. the very first open): default to Num (col 2)
-  // ascending. col 0 = selection checkbox, col 1 = Active.
-  return { columnIndex: 2, direction: 'asc' };
+  // No saved preference (e.g. the very first open): default to Num.
+  // Resolved to the live column index at apply time via columnId.
+  return { columnId: 'num', direction: 'asc' };
 }
 
 // Listen for sortable.js header clicks to persist sort preference.
@@ -4264,6 +4424,9 @@ function sortParticipantsByNumber(participants) {
 function loadParticipantsIntoTable(participants) {
   clearParticipantsTable();
 
+  // Keep the saved column show/hide choices applied across every re-render.
+  applyColumnVisibility();
+
   if (!participants || participants.length === 0) {
     // v1.1.4 — still refresh the counter so it hides itself on empty presets.
     updateActiveParticipantsSummary();
@@ -4342,6 +4505,8 @@ function addParticipantRow(participant, rowIndex) {
   const categoria = participant?.categoria || '';
   const squadra = escapeHtml(participant?.squadra || '');
   const plateNumber = participant?.plate_number || '';
+  const carModelRaw = participant?.car_model || '';
+  const carModel = escapeHtml(carModelRaw);
 
   // Create category badge
   const categoryDisplay = categoria ?
@@ -4351,6 +4516,11 @@ function addParticipantRow(participant, rowIndex) {
   // Create plate badge
   const plateDisplay = plateNumber ?
     `<span class="plate-badge">${escapeHtml(plateNumber)}</span>` :
+    '<span class="text-muted">-</span>';
+
+  // Create car/vehicle display (car_model — e.g. "Ferrari 296 GT3")
+  const carDisplay = carModelRaw ?
+    `<span class="car-badge">${escapeHtml(carModelRaw)}</span>` :
     '<span class="text-muted">-</span>';
 
   // Create delivery-to badge (feature-gated)
@@ -4444,11 +4614,12 @@ function addParticipantRow(participant, rowIndex) {
   row.innerHTML = `
     ${selectTd}
     ${toggleTd}
-    <td data-sort="${numero}"><span class="num-plate-v1">${numero}</span></td>
-    <td data-sort="${nome}">${nome}</td>
-    <td data-sort="${categoria}">${categoryDisplay}</td>
-    <td data-sort="${squadra}">${squadra || '<span class="text-muted">-</span>'}</td>
-    <td data-sort="${plateNumber}">${plateDisplay}</td>
+    <td data-col-id="num" data-sort="${numero}"><span class="num-plate-v1">${numero}</span></td>
+    <td data-col-id="person" data-sort="${nome}">${nome}</td>
+    <td data-col-id="category" data-sort="${categoria}">${categoryDisplay}</td>
+    <td data-col-id="team" data-sort="${squadra}">${squadra || '<span class="text-muted">-</span>'}</td>
+    <td data-col-id="car" data-sort="${carModel}">${carDisplay}</td>
+    <td data-col-id="plate" data-sort="${plateNumber}">${plateDisplay}</td>
     ${deliveryTd}
     ${faceTd}
     <td class="no-sort folders-td" data-sort="${escapeHtml(foldersSortKey)}">${foldersDisplay}</td>
