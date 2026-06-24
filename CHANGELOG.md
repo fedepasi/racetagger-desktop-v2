@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### ✨ Review gallery: add detections from the keyboard, no mouse
+
+- **Correcting a photo with more than one car (or adding a missed one) no longer needs the mouse.** The review gallery used to show a **+ Add detection** button — a click target — to add an entry. It's gone. Instead, every photo now always shows **one trailing empty entry** ready to fill: type a number and it becomes a real detection, and a fresh empty entry appears after it, so there's always exactly one blank slot at the end (for a photo with **zero** detections you just get the empty entry to fill; with one or many, the blank slot sits at the end). Move between entries with **↑/↓** (←/→ still flip between photos; Enter still confirms and advances to the next photo). The single-car flow is unchanged and just as fast: type → Enter. Edits are **auto-saved when you move off an entry** (↑/↓/Tab), so nothing is lost and you never need to click Save. Renderer-only (`log-visualizer.js` + `results-integrated.css`) — no participant data, schema, token logic or Edge Function changes.
+
 ### 🛡️ Anti-abuse: device → account limit (warn by default)
 
 - **Repeated free-credit farming with many accounts on one computer is now detected.** After login the app checks how many accounts have been used on this machine; past a configurable limit (default 3, with the earliest accounts grandfathered) the extra account is flagged for review and the administrator is notified — **login still proceeds**, with a one-time, non-blaming notice (a global server switch can escalate to blocking the over-limit account's login instead). The check is **fail-open** (any connectivity/infra hiccup never blocks a legitimate login), uses a privacy-preserving hashed device id, and does **not** touch token/credit logic or the pre-authorization path. Founder/test devices and email bases are allowlisted server-side so internal testing is never affected. Desktop adds a canonical device id (`getCanonicalMachineId` in `system-info.ts`) and a post-login check in `auth-service.ts` that calls the server-side cap function; the detection/flagging + admin email live entirely on the backend.

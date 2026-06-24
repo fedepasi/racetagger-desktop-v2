@@ -704,6 +704,19 @@
   background: rgba(26, 158, 224, 0.05) !important;
 }
 
+/* Keyboard-only review: the always-present trailing blank entry. A dashed,
+   dimmed card signals "fill me to add a detection" without a click target.
+   Promoted to a normal card (class removed) the moment the user types. */
+.lv-vehicle-editor.lv-vehicle-empty-slot {
+  border-style: dashed !important;
+  opacity: 0.75 !important;
+}
+.lv-vehicle-editor.lv-vehicle-empty-slot:focus-within {
+  opacity: 1 !important;
+  border-color: var(--accent-primary) !important;
+  border-style: solid !important;
+}
+
 .lv-vehicle-header {
   display: flex !important;
   justify-content: space-between !important;
