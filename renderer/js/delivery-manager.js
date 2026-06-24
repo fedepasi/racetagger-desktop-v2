@@ -273,6 +273,11 @@
     });
   }
 
+  // Number of published galleries for a client (the "Live" column).
+  function liveCount(p) {
+    return (p.galleries || []).filter(function(g) { return g.status === 'published'; }).length;
+  }
+
   // Apply the active filter + sort to the loaded clients.
   function getFilteredSortedClients() {
     var q = (clientsFilterText || '').toLowerCase().trim();
@@ -288,6 +293,7 @@
       var av, bv;
       if (col === 'galleries') { av = a.gallery_count || 0; bv = b.gallery_count || 0; }
       else if (col === 'photos') { av = a.photo_count || 0; bv = b.photo_count || 0; }
+      else if (col === 'live') { av = liveCount(a); bv = liveCount(b); }
       else if (col === 'type') { av = (a.client_type || ''); bv = (b.client_type || ''); }
       else { av = (a.name || '').toLowerCase(); bv = (b.name || '').toLowerCase(); }
       if (av < bv) return -1 * dir;
@@ -333,14 +339,17 @@
     tbody.innerHTML = rows.map(function(p, i) {
       var av = DL_AVATAR[i % DL_AVATAR.length];
       var galCount = p.gallery_count != null ? p.gallery_count : (p.galleries ? p.galleries.length : 0);
+      var live = liveCount(p);
       var photoCount = p.photo_count || 0;
       var typeKey = p.client_type || 'other';
       var typeLabel = typeLabels[p.client_type] || '—';
       var contact = p.client_contact_email
         ? escapeHtml(p.client_contact_email)
         : '<span style="color:var(--text-muted);">—</span>';
+      var liveCell = '<span class="dl-live' + (live > 0 ? ' dl-live--on' : '') + '">' +
+        (live > 0 ? '<span class="dl-live__dot"></span>' : '') + live + '/' + galCount + '</span>';
       var link = p.client_slug
-        ? '<span class="dl-num dl-client-link">photos.racetagger.cloud/c/' + escapeHtml(p.client_slug) + '</span>'
+        ? '<span class="dl-num dl-client-link dl-copy-link" data-copy="https://photos.racetagger.cloud/c/' + escapeHtml(p.client_slug) + '" title="Copy client link">photos.racetagger.cloud/c/' + escapeHtml(p.client_slug) + '</span>'
         : '<span style="color:var(--text-muted);">not shared</span>';
       return '<tr class="dl-client-row" data-id="' + p.id + '">' +
         '<td class="dl-td">' +
@@ -352,6 +361,7 @@
         '<td class="dl-td"><span class="dl-type-pill dl-type-pill--' + typeKey + '">' + escapeHtml(typeLabel) + '</span></td>' +
         '<td class="dl-td dl-td--contact">' + contact + '</td>' +
         '<td class="dl-td dl-td--num dl-num">' + galCount + '</td>' +
+        '<td class="dl-td dl-td--num">' + liveCell + '</td>' +
         '<td class="dl-td dl-td--num dl-num">' + photoCount + '</td>' +
         '<td class="dl-td dl-td--link">' + link + '</td>' +
       '</tr>';
@@ -359,6 +369,18 @@
 
     tbody.querySelectorAll('.dl-client-row').forEach(function(row) {
       row.addEventListener('click', function() { openProjectDetail(this.dataset.id); });
+    });
+
+    // Copy the client's shareable link without opening the detail.
+    tbody.querySelectorAll('.dl-copy-link').forEach(function(el) {
+      el.addEventListener('click', function(ev) {
+        ev.stopPropagation();
+        var url = this.dataset.copy;
+        if (!url) return;
+        navigator.clipboard.writeText(url)
+          .then(function() { dlNotify('Client link copied.', 'success'); })
+          .catch(function() { dlNotify('Couldn\'t copy the link.', 'error'); });
+      });
     });
   }
 

@@ -447,3 +447,24 @@
 .dl-type-pill--organizer { background: rgba(16,185,129,0.14);  color: #10b981; border-color: rgba(16,185,129,0.4); }
 .dl-type-pill--media     { background: rgba(167,139,250,0.14); color: #a78bfa; border-color: rgba(167,139,250,0.4); }
 .dl-type-pill--other     { background: rgba(148,163,184,0.12); color: #94a3b8; border-color: rgba(148,163,184,0.35); }
+
+.dl-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted, #94a3b8);
+}
+.dl-live--on { color: var(--text-primary, #f1f5f9); }
+.dl-live__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 6px rgba(16,185,129,0.6);
+  flex-shrink: 0;
+}
+.dl-copy-link { cursor: pointer; }
+.dl-copy-link:hover { text-decoration: underline; }
