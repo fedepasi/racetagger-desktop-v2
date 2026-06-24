@@ -1,0 +1,203 @@
+/* ==================== Satisfaction Survey / Referral Modal ==================== */
+/* Dark-first, on-brand (accent #1a9ee0 via --accent-primary). Numbers in mono. */
+
+.survey-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  z-index: 10050;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  animation: surveyFadeIn 0.2s ease;
+}
+
+@keyframes surveyFadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes surveySlideUp { from { transform: translateY(18px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+.survey-modal {
+  background: var(--bg-card, #1e293b);
+  color: var(--text-primary, #f8fafc);
+  border: 1px solid var(--border-color, #334155);
+  border-radius: var(--radius-lg, 12px);
+  box-shadow: var(--shadow-lg, 0 12px 40px rgba(0, 0, 0, 0.4));
+  width: 100%;
+  max-width: 440px;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: surveySlideUp 0.25s ease;
+}
+
+.survey-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-color, #334155);
+}
+
+.survey-modal-header h2 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0;
+  color: var(--text-primary, #f8fafc);
+}
+
+.survey-modal-close {
+  background: none;
+  border: none;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--text-secondary, #94a3b8);
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+.survey-modal-close:hover { background: rgba(255, 255, 255, 0.06); color: var(--text-primary, #f8fafc); }
+
+.survey-modal-body { padding: 18px; overflow-y: auto; }
+
+.survey-lead {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-secondary, #cbd5e1);
+  margin: 0 0 14px;
+}
+.survey-lead strong { color: var(--text-primary, #f8fafc); font-weight: 600; }
+
+/* ---- Rating ---- */
+.survey-rate { display: flex; gap: 8px; justify-content: space-between; margin: 4px 0 6px; }
+.survey-rate-dot {
+  flex: 1;
+  height: 44px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color, #334155);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-secondary, #94a3b8);
+  font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+.survey-rate-dot:hover { border-color: var(--accent-primary, #1a9ee0); color: var(--text-primary, #f8fafc); }
+.survey-rate-dot.selected {
+  background: var(--accent-primary, #1a9ee0);
+  border-color: var(--accent-primary, #1a9ee0);
+  color: #fff;
+}
+.survey-rate-legend {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-secondary, #94a3b8);
+  margin-bottom: 14px;
+}
+
+/* ---- Inputs ---- */
+.survey-field-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary, #cbd5e1);
+  margin: 12px 0 6px;
+}
+.survey-textarea,
+.survey-select,
+.survey-link-input {
+  width: 100%;
+  background: var(--bg-secondary, #0f172a);
+  border: 1px solid var(--border-color, #334155);
+  border-radius: 8px;
+  color: var(--text-primary, #f8fafc);
+  font-family: inherit;
+  font-size: 13px;
+  padding: 9px 11px;
+  box-sizing: border-box;
+}
+.survey-textarea { resize: vertical; min-height: 64px; }
+.survey-textarea:focus,
+.survey-select:focus,
+.survey-link-input:focus {
+  outline: none;
+  border-color: var(--accent-primary, #1a9ee0);
+  box-shadow: 0 0 0 3px rgba(26, 158, 224, 0.18);
+}
+
+/* ---- Invite link row ---- */
+.survey-link-row { display: flex; gap: 8px; align-items: stretch; }
+.survey-link-input {
+  flex: 1;
+  font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  color: var(--accent-primary, #1a9ee0);
+}
+.survey-btn-copy {
+  flex-shrink: 0;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color, #334155);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary, #f8fafc);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.survey-btn-copy:hover { border-color: var(--accent-primary, #1a9ee0); }
+.survey-btn-copy.copied { background: var(--accent-success, #10b981); border-color: var(--accent-success, #10b981); color: #fff; }
+
+/* ---- Actions ---- */
+.survey-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+.survey-btn-primary {
+  padding: 9px 18px;
+  border-radius: 8px;
+  border: none;
+  background: var(--accent-primary, #1a9ee0);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.survey-btn-primary:hover { filter: brightness(1.06); }
+.survey-btn-primary:disabled { background: var(--border-color, #334155); color: var(--text-secondary, #64748b); cursor: not-allowed; filter: none; }
+.survey-btn-ghost {
+  padding: 9px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color, #334155);
+  background: transparent;
+  color: var(--text-secondary, #cbd5e1);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.survey-btn-ghost:hover { color: var(--text-primary, #f8fafc); border-color: var(--text-secondary, #64748b); }
+
+/* ---- Misc ---- */
+.survey-error {
+  margin-top: 12px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #fca5a5;
+  font-size: 12px;
+}
+.survey-done { text-align: left; }
+
+.survey-spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  display: inline-block;
+  animation: surveySpin 0.7s linear infinite;
+}
+@keyframes surveySpin { to { transform: rotate(360deg); } }

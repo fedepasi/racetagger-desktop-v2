@@ -134,6 +134,11 @@ const validInvokeChannels: string[] = [
   'get-dependency-status',
   'get-recent-errors',
   'open-github-issues',
+  // Satisfaction survey + referral
+  'survey:get-eligibility',
+  'survey:submit',
+  'survey:ack-prompt',
+  'referral:get',
   // Diagnostic utilities (log viewer)
   'get-main-process-logs',
   'get-diagnostic-log-path',

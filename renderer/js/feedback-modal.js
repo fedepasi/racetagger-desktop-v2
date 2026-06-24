@@ -42,6 +42,9 @@
   let currentType = 'bug';
   let diagnosticsData = null;
   let isSubmitting = false;
+  // Origin tag forwarded to submitFeedback -> feedback.source. 'app' for the
+  // normal FAB/support flow, 'satisfaction_survey' when opened from the survey.
+  let currentSource = 'app';
 
   // ==================== Modal Creation ====================
 
@@ -267,6 +270,7 @@
         title: title,
         description: description,
         includeDiagnostics: true,  // Always include
+        source: currentSource,
       };
 
       // Attach basic diagnostics for GitHub Issue body
@@ -336,11 +340,14 @@
 
   // ==================== Open / Close ====================
 
-  async function openModal() {
+  async function openModal(opts) {
+    opts = opts || {};
     createModal();
 
-    // Reset state
-    currentType = 'bug';
+    // Reset state. opts lets callers (e.g. the satisfaction survey's negative
+    // branch) tag the origin, preselect a type, and prefill the title.
+    currentSource = (typeof opts.source === 'string' && opts.source) ? opts.source : 'app';
+    currentType = (opts.presetType && FEEDBACK_TYPES[opts.presetType]) ? opts.presetType : 'bug';
     isSubmitting = false;
     diagnosticsData = null;
 
@@ -349,13 +356,16 @@
     var descInput = document.getElementById('feedback-description');
     if (titleInput) titleInput.value = '';
     if (descInput) descInput.value = '';
-    updateCharCount('feedback-title-count', 0, TITLE_MAX);
+    if (titleInput && opts.titleHint) {
+      titleInput.value = String(opts.titleHint).slice(0, TITLE_MAX);
+    }
+    updateCharCount('feedback-title-count', titleInput ? titleInput.value.length : 0, TITLE_MAX);
     updateCharCount('feedback-desc-count', 0, DESC_MAX);
 
-    // Reset tabs
+    // Reset tabs (activate the preselected type)
     document.querySelectorAll('.feedback-tab').forEach(function (t) { t.classList.remove('active'); });
-    var bugTab = document.querySelector('.feedback-tab[data-type="bug"]');
-    if (bugTab) bugTab.classList.add('active');
+    var activeTab = document.querySelector('.feedback-tab[data-type="' + currentType + '"]');
+    if (activeTab) activeTab.classList.add('active');
 
     // Reset view states
     resetToForm();

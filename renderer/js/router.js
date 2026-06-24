@@ -31,7 +31,8 @@
     'destinations',
     'participants',
     'analysis',
-    'delivery'
+    'delivery',
+    'referral'
   ]);
 
   // Legacy pages still using the old section-based system
@@ -192,6 +193,13 @@
         // Also explicitly call if SettingsManager is available
         if (typeof window.SettingsManager !== 'undefined' && window.SettingsManager.initialize) {
           window.SettingsManager.initialize();
+        }
+        break;
+
+      case 'referral':
+        // Referral page: fetch the user's code + stats and render.
+        if (typeof window.ReferralPage !== 'undefined' && window.ReferralPage.initialize) {
+          window.ReferralPage.initialize();
         }
         break;
 
@@ -368,6 +376,10 @@
         updateNavActiveState('delivery');
         loadPage('delivery');
       })
+      .on('/referral', () => {
+        updateNavActiveState('referral');
+        loadPage('referral');
+      })
       .notFound(() => {
         router.navigate('/');
       });
@@ -400,7 +412,8 @@
           'participants': '/participants',
           'destinations': '/destinations',
           'settings': '/settings',
-          'delivery': '/delivery'
+          'delivery': '/delivery',
+          'referral': '/referral'
         };
 
         const route = routeMap[section] || '/';
