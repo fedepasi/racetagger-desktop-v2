@@ -33,6 +33,27 @@ class LearnedDataModal {
   }
 
   /**
+   * Per-execution "skipped" flag, persisted in localStorage so it survives page
+   * reloads. Deliberately SEPARATE from processedExecutions: accepting data
+   * hides the button entirely, but skipping must only stop the *auto*-popup
+   * (shown when the user clicks DONE / New Analysis) — the "✨ Improve Preset"
+   * button stays available so they can reopen the suggestions on demand.
+   */
+  _skipKey(executionId) {
+    return `rt_learned_skipped_${executionId}`;
+  }
+
+  markExecutionSkipped(executionId) {
+    if (!executionId) return;
+    try { localStorage.setItem(this._skipKey(executionId), '1'); } catch (_) { /* storage disabled — non-critical */ }
+  }
+
+  isExecutionSkipped(executionId) {
+    if (!executionId) return false;
+    try { return localStorage.getItem(this._skipKey(executionId)) === '1'; } catch (_) { return false; }
+  }
+
+  /**
    * Analyze corrections and determine if there's useful data to propose.
    * Call this after corrections have been saved (saveAllChanges or closeGallery).
    *
@@ -461,6 +482,11 @@ class LearnedDataModal {
     const acceptBtn = modal.querySelector('#learned-data-accept');
 
     const dismiss = (via) => {
+      // Remember the skip for this execution so the auto-popup (DONE / New
+      // Analysis) won't nag again — the ✨ Improve Preset button still reopens
+      // it on demand. Any close-without-save counts (skip, ✕, outside click).
+      this.markExecutionSkipped(executionId);
+
       // Telemetry: LEARNED_DATA_DISMISSED — user closed without accepting.
       // The `via` field lets us distinguish "explicit Skip click" from
       // "clicked the X" from "clicked outside" — different intents.
