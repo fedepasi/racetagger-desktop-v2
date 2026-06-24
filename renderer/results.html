@@ -214,13 +214,17 @@
             }
           }
 
-          // Strategy G: Show learned data modal before leaving if data is available
+          // Strategy G: Show learned data modal before leaving if data is available.
+          // Skip is remembered per execution (isExecutionSkipped) so this auto-popup
+          // doesn't nag on every DONE — the ✨ Improve Preset button stays as the
+          // on-demand way to reopen it.
           if (window.learnedDataModal && window.learnedDataModal.aggregatedData && window.learnedDataModal.aggregatedData.size > 0) {
             try {
               const presetId = window.logVisualizer?.participantPresetData?.id;
               const executionId = window.logVisualizer?.executionId;
-              if (presetId) {
-                await window.learnedDataModal.show(presetId, executionId);
+              if (presetId && !window.learnedDataModal.isExecutionSkipped(executionId)) {
+                const seriesIgnore = window.logVisualizer?.participantPresetData?.series_sponsor_ignore || [];
+                await window.learnedDataModal.show(presetId, executionId, seriesIgnore);
               }
             } catch (e) {
               console.warn('[Results] Learned data modal error (non-critical):', e);
@@ -262,13 +266,17 @@
             }
           }
 
-          // Strategy G: Show learned data modal before leaving if data is available
+          // Strategy G: Show learned data modal before leaving if data is available.
+          // Skip is remembered per execution (isExecutionSkipped) so this auto-popup
+          // doesn't nag on every New Analysis — the ✨ Improve Preset button stays as
+          // the on-demand way to reopen it.
           if (window.learnedDataModal && window.learnedDataModal.aggregatedData && window.learnedDataModal.aggregatedData.size > 0) {
             try {
               const presetId = window.logVisualizer?.participantPresetData?.id;
               const executionId = window.logVisualizer?.executionId;
-              if (presetId) {
-                await window.learnedDataModal.show(presetId, executionId);
+              if (presetId && !window.learnedDataModal.isExecutionSkipped(executionId)) {
+                const seriesIgnore = window.logVisualizer?.participantPresetData?.series_sponsor_ignore || [];
+                await window.learnedDataModal.show(presetId, executionId, seriesIgnore);
               }
             } catch (e) {
               console.warn('[Results] Learned data modal error (non-critical):', e);
