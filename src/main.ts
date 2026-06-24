@@ -5429,6 +5429,31 @@ app.whenReady().then(async () => { // Added async here
     }
   });
 
+  // ACC-04 — dry-run series-sponsor detection (no writes). Lets the Results
+  // "Useful Data Found" modal surface a dedicated "championship / series
+  // sponsors" section up front (before any accept), reusing the canonical
+  // detector so the renderer doesn't have to mirror the fuzzy clustering.
+  ipcMain.handle('detect-series-sponsors', async (_, data: {
+    freq: Array<[string, number]>;
+    totalCars: number;
+    existingIgnore?: string[];
+  }) => {
+    try {
+      const { freq, totalCars, existingIgnore } = data || ({} as any);
+      const { detectSeriesSponsors, canonicalKey } = await import('./matching/sponsor-canonical');
+      const freqMap = new Map<string, number>(Array.isArray(freq) ? freq : []);
+      const candidates = detectSeriesSponsors(freqMap, Number(totalCars) || 0);
+      // Drop anything already in the preset's ignore list (compare on canonical key).
+      const ignoreKeys = new Set((existingIgnore || []).map(k => canonicalKey(String(k))));
+      const filtered = candidates.filter(
+        c => !ignoreKeys.has(canonicalKey(c.key)) && !ignoreKeys.has(canonicalKey(c.display))
+      );
+      return { success: true, data: { candidates: filtered } };
+    } catch (error) {
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
   ipcMain.handle('save-learned-participant-data', async (_, data: {
     presetId: string;
     executionId: string;
