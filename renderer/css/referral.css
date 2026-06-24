@@ -1,18 +1,17 @@
-/* ==================== Earn Free Credits — Rewards Hub (v2) ==================== */
-/* Full-width, two columns. Progress/scores grouped on the left; the referral CODE
-   gets its own purple section on the right (editable). Tower is navy, not black.
-   Numbers in JetBrains Mono + tnum. */
+/* ==================== Earn Free Credits — Rewards Hub (v3) ==================== */
+/* The referral LINK is the HERO at the top (amber, full-width, loud) — the first
+   thing the user sees. Progress/scores drop below as a secondary card. Tower is
+   navy. Numbers in JetBrains Mono + tnum. */
 
 :root {
-  --rl-purple: #a78bfa;
   --rl-sunken: #0b1222;
   --rl-tower: #0e1830;
 }
 
-.referral-page { max-width: 1280px; }
+.referral-page { max-width: 1180px; }
 
 /* ---- Header ---- */
-.rl-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
+.rl-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 22px; }
 .rl-eyebrow { font-family: var(--font-mono-rt, monospace); font-feature-settings: 'tnum'; font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent-primary, #1a9ee0); margin-bottom: 8px; }
 .rl-sub { margin: 7px 0 0; font-size: 14px; line-height: 1.5; color: var(--text-muted, #94a3b8); max-width: 520px; }
 .rl-earned { flex-shrink: 0; text-align: right; background: var(--bg-card, #1e293b); border: 1px solid var(--border-color, #334155); border-radius: 10px; padding: 12px 16px; min-width: 150px; }
@@ -20,20 +19,59 @@
 .rl-earned-val { font-family: var(--font-mono-rt, monospace); font-feature-settings: 'tnum'; font-size: 24px; font-weight: 700; color: var(--accent-success, #10b981); margin-top: 5px; line-height: 1; }
 .rl-earned-unit { font-size: 10px; color: var(--text-muted, #94a3b8); margin-top: 3px; }
 
-/* ---- Two-column ---- */
-.rl-cols { display: grid; grid-template-columns: 1.55fr 1fr; gap: 18px; align-items: start; }
-@media (max-width: 980px) { .rl-cols { grid-template-columns: 1fr; } }
+/* ============ HERO — your invite link (amber, the first thing) ============ */
+.rl-invite { position: relative; border-radius: 16px; padding: 24px 26px; margin-bottom: 14px; overflow: hidden;
+  background: radial-gradient(120% 140% at 0% 0%, rgba(245,158,11,0.16), rgba(245,158,11,0.03) 60%), var(--bg-card, #1e293b);
+  border: 1px solid rgba(245,158,11,0.45);
+  box-shadow: 0 0 0 1px rgba(245,158,11,0.10), 0 18px 40px rgba(0,0,0,0.35); }
+.rl-invite::after { content: ""; position: absolute; right: -60px; top: -60px; width: 240px; height: 240px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(245,158,11,0.16), transparent 70%); pointer-events: none; }
+.rl-invite-top { display: flex; align-items: center; gap: 10px; margin-bottom: 13px; position: relative; }
+.rl-invite-tab { display: inline-flex; align-items: center; gap: 7px; font-family: var(--font-mono-rt, monospace); font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent-warning, #f59e0b); background: rgba(245,158,11,0.12); border: 1px solid rgba(245,158,11,0.45); border-radius: 6px; padding: 5px 10px; }
+.rl-invite-tab svg { width: 13px; height: 13px; fill: none; stroke: var(--accent-warning, #f59e0b); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.rl-invite-top .rl-live-pill { margin-left: auto; }
+.rl-invite-title { margin: 0 0 4px; font-size: 24px; font-weight: 700; letter-spacing: -0.4px; line-height: 1.14; color: var(--text-primary, #f8fafc); position: relative; }
+.rl-invite-title .hl { color: var(--accent-warning, #f59e0b); }
+.rl-invite-say { margin: 0 0 18px; font-size: 14px; color: var(--text-muted, #94a3b8); line-height: 1.5; max-width: 640px; position: relative; }
+.rl-invite-say .hl { color: var(--accent-warning, #f59e0b); font-weight: 700; }
+.rl-mono { font-family: var(--font-mono-rt, monospace); font-feature-settings: 'tnum'; }
+
+/* the big link = the centerpiece */
+.rl-invite-linkbox { display: flex; gap: 12px; align-items: stretch; position: relative; }
+.rl-invite-field { position: relative; flex: 1; display: flex; align-items: center; gap: 12px; min-width: 0; background: var(--rl-sunken); border: 2px solid var(--accent-warning, #f59e0b); border-radius: 12px; padding: 0 8px 0 18px; height: 58px; box-shadow: 0 0 22px rgba(245,158,11,0.24); }
+.rl-invite-flabel { position: absolute; top: -9px; left: 14px; font-family: var(--font-mono-rt, monospace); font-size: 9.5px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent-warning, #f59e0b); background: var(--bg-card, #1e293b); padding: 0 7px; }
+.rl-invite-url { flex: 1; font-family: var(--font-mono-rt, monospace); font-size: 17px; font-weight: 600; color: var(--text-primary, #f8fafc); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.rl-invite-copy { flex-shrink: 0; height: 58px; padding: 0 26px; background: var(--accent-warning, #f59e0b); color: #1a1206; border: none; border-radius: 12px; font-size: 15px; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; gap: 9px; box-shadow: 0 8px 22px rgba(245,158,11,0.38); }
+.rl-invite-copy svg { width: 18px; height: 18px; fill: none; stroke: #1a1206; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.rl-invite-copy.copied { background: var(--accent-success, #10b981); color: #fff; }
+.rl-invite-copy.copied svg { stroke: #fff; }
+
+/* foot: editable code chip + reassurance */
+.rl-invite-foot { display: flex; align-items: center; gap: 14px; margin-top: 16px; flex-wrap: wrap; position: relative; }
+.rl-invite-chip { display: inline-flex; align-items: center; gap: 9px; background: rgba(245,158,11,0.10); border: 1px solid rgba(245,158,11,0.4); border-radius: 999px; padding: 6px 7px 6px 14px; }
+.rl-invite-chip .ck-label { font-size: 10px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted, #94a3b8); }
+.rl-invite-chip .rl-code-val { font-family: var(--font-mono-rt, monospace); font-size: 13.5px; font-weight: 700; color: var(--accent-warning, #f59e0b); white-space: nowrap; }
+.rl-invite-chip .rl-code-input { background: transparent; border: none; outline: none; font-family: var(--font-mono-rt, monospace); font-size: 13.5px; font-weight: 700; color: var(--text-primary, #f8fafc); width: 170px; min-width: 0; }
+.rl-edit-btn, .rl-save-btn, .rl-cancel-btn { height: 28px; padding: 0 11px; border-radius: 999px; font-size: 11.5px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; border: 1px solid transparent; }
+.rl-edit-btn { background: rgba(245,158,11,0.16); border-color: rgba(245,158,11,0.4); color: var(--accent-warning, #f59e0b); }
+.rl-save-btn { background: var(--accent-warning, #f59e0b); color: #1a1206; }
+.rl-save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.rl-cancel-btn { background: transparent; border-color: var(--border-color, #334155); color: var(--text-muted, #94a3b8); }
+.rl-invite-reassure { font-size: 12.5px; color: var(--text-muted, #94a3b8); }
+.rl-invite-reassure b { color: var(--text-primary, #f8fafc); }
+.rl-code-msg { margin-top: 10px; font-size: 12px; min-height: 14px; position: relative; }
+.rl-code-msg.err { color: var(--accent-danger, #ef4444); }
+.rl-code-msg.ok { color: var(--accent-success, #10b981); }
+
+/* ---- Secondary: progress card ---- */
 .rl-card { background: var(--bg-card, #1e293b); border: 1px solid var(--border-color, #334155); border-radius: 12px; padding: 20px 20px 22px; }
 .rl-card.rl-blue { border-top: 3px solid var(--accent-primary, #1a9ee0); }
-.rl-card.rl-purple { border-top: 3px solid var(--rl-purple); }
 .rl-qhead { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 18px; }
 .rl-qid { display: flex; align-items: center; gap: 11px; }
 .rl-qicon { width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .rl-qicon svg { width: 18px; height: 18px; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .rl-qicon.rl-blue { background: rgba(26,158,224,0.14); border: 1px solid rgba(26,158,224,0.4); }
 .rl-qicon.rl-blue svg { stroke: var(--accent-primary, #1a9ee0); }
-.rl-qicon.rl-purple { background: rgba(167,139,250,0.14); border: 1px solid rgba(167,139,250,0.4); }
-.rl-qicon.rl-purple svg { stroke: var(--rl-purple); }
 .rl-qt { font-size: 16px; font-weight: 700; color: var(--text-primary, #f8fafc); line-height: 1.2; }
 .rl-qs { font-size: 13px; color: var(--text-muted, #94a3b8); margin-top: 2px; }
 .rl-live-pill { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono-rt, monospace); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent-success, #10b981); background: rgba(16,185,129,0.12); border: 1px solid rgba(16,185,129,0.4); border-radius: 999px; padding: 5px 11px; }
@@ -64,14 +102,13 @@
 .rl-checker { width: 40px; height: 8px; border-radius: 2px; margin: 8px auto 0; overflow: hidden; opacity: 0.5; background: repeating-linear-gradient(90deg,#fff 0,#fff 6px,#1a1a1a 6px,#1a1a1a 12px); }
 .rl-node.done-ms .rl-checker { opacity: 1; }
 
-/* hero (inside the cluster) */
+/* hero (inside the cluster — next-goal callout) */
 .rl-hero { display: flex; gap: 13px; align-items: center; background: rgba(245,158,11,0.08); border: 1px solid rgba(245,158,11,0.35); border-radius: 9px; padding: 14px 16px; margin: 14px 0 16px; }
 .rl-hero.is-done { background: rgba(16,185,129,0.08); border-color: rgba(16,185,129,0.35); }
 .rl-hero svg { width: 20px; height: 20px; fill: none; stroke: var(--accent-warning, #f59e0b); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
 .rl-hero.is-done svg { stroke: var(--accent-success, #10b981); }
 .rl-hero-title { font-size: 15px; font-weight: 700; color: var(--text-primary, #f8fafc); line-height: 1.35; }
 .rl-hero-sub { font-size: 13px; color: var(--text-muted, #94a3b8); margin-top: 3px; line-height: 1.5; }
-.rl-mono { font-family: var(--font-mono-rt, monospace); font-feature-settings: 'tnum'; }
 .rl-cA { color: var(--accent-warning, #f59e0b); } .rl-cB { color: var(--accent-primary, #1a9ee0); } .rl-cG { color: var(--accent-success, #10b981); } .rl-cW { color: var(--text-primary, #f8fafc); }
 
 /* tower (navy) */
@@ -88,26 +125,6 @@
 .rl-twv { font-family: var(--font-mono-rt, monospace); font-feature-settings: 'tnum'; font-size: 18px; font-weight: 700; color: var(--text-muted, #94a3b8); }
 .rl-tw.is-now .rl-twv { color: var(--accent-primary, #1a9ee0); }
 .rl-twv span { font-size: 11px; color: #64748b; font-weight: 400; }
-
-/* ---- Referral code card (purple, editable) ---- */
-.rl-code-label { font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted, #94a3b8); margin-bottom: 9px; }
-.rl-code-field { display: flex; align-items: center; gap: 8px; background: var(--rl-sunken); border: 1px solid rgba(167,139,250,0.45); border-radius: 9px; padding: 0 6px 0 14px; height: 46px; }
-.rl-code-val { flex: 1; font-family: var(--font-mono-rt, monospace); font-size: 15px; font-weight: 600; color: var(--rl-purple); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.rl-code-input { flex: 1; background: transparent; border: none; outline: none; font-family: var(--font-mono-rt, monospace); font-size: 15px; font-weight: 600; color: var(--text-primary, #f8fafc); min-width: 0; }
-.rl-edit-btn, .rl-save-btn, .rl-cancel-btn { height: 34px; padding: 0 12px; border-radius: 7px; font-size: 12px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; border: 1px solid transparent; }
-.rl-edit-btn { background: rgba(167,139,250,0.14); border-color: rgba(167,139,250,0.4); color: var(--rl-purple); }
-.rl-save-btn { background: var(--rl-purple); color: #1a132e; }
-.rl-save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.rl-cancel-btn { background: transparent; border-color: var(--border-color, #334155); color: var(--text-muted, #94a3b8); }
-.rl-code-msg { margin-top: 8px; font-size: 12px; min-height: 14px; }
-.rl-code-msg.err { color: var(--accent-danger, #ef4444); }
-.rl-code-msg.ok { color: var(--accent-success, #10b981); }
-.rl-link-row { display: flex; gap: 9px; margin-top: 12px; }
-.rl-link-in { flex: 1; display: flex; align-items: center; background: var(--rl-sunken); border: 1px solid var(--border-color, #334155); border-radius: 8px; padding: 0 12px; height: 40px; font-family: var(--font-mono-rt, monospace); font-size: 12.5px; color: var(--text-primary, #f8fafc); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; min-width: 0; }
-.rl-copy-btn { height: 40px; padding: 0 16px; background: var(--rl-purple); color: #1a132e; border: none; border-radius: 8px; font-weight: 600; font-size: 13px; cursor: pointer; white-space: nowrap; }
-.rl-copy-btn.copied { background: var(--accent-success, #10b981); color: #fff; }
-.rl-code-note { margin-top: 12px; font-size: 12.5px; color: var(--text-muted, #94a3b8); line-height: 1.55; }
-.rl-code-note b { color: var(--text-primary, #f8fafc); }
 
 /* ---- More quests ---- */
 .rl-quests-divider { margin: 24px 0 12px; display: flex; align-items: center; gap: 10px; }

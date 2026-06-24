@@ -1,6 +1,7 @@
-<!-- Earn Free Credits — Rewards Hub (v2) -->
-<!-- Loaded dynamically by router.js into #page-content. Dynamic regions
-     (scorebox / code value / link / friends / header stat) are filled by referral.js. -->
+<!-- Earn Free Credits — Rewards Hub (v3) -->
+<!-- The referral link is the HERO at the top (amber, full-width). Progress/scores
+     drop below as secondary. Dynamic regions (link / code value / scorebox / friends /
+     header stat) are filled by referral.js — element IDs are unchanged from v2. -->
 
 <div class="referral-page">
 
@@ -9,7 +10,7 @@
     <div>
       <div class="rl-eyebrow">REWARDS HUB</div>
       <h1 class="page-title">Earn free credits</h1>
-      <p class="rl-sub">Complete quests to top up your balance. One quest is live now — more land soon.</p>
+      <p class="rl-sub">Share your link, top up your balance. One quest is live now — more land soon.</p>
     </div>
     <div class="rl-earned">
       <div class="rl-earned-label">Earned from referrals</div>
@@ -18,55 +19,56 @@
     </div>
   </div>
 
-  <div class="rl-cols">
-    <!-- LEFT: the referral quest + grouped scores -->
-    <div class="rl-card rl-blue">
-      <div class="rl-qhead">
-        <div class="rl-qid">
-          <div class="rl-qicon rl-blue">
-            <svg viewBox="0 0 24 24"><circle cx="9" cy="7" r="4"/><path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/><path d="M21 21v-2a4 4 0 0 0-3-3.87"/></svg>
-          </div>
-          <div>
-            <div class="rl-qt">Refer a fellow photographer</div>
-            <div class="rl-qs">You earn credits per friend — plus a bonus each milestone.</div>
-          </div>
-        </div>
-        <span class="rl-live-pill"><span class="dot"></span>Live</span>
+  <!-- HERO: your invite link (amber, the first thing) -->
+  <div class="rl-invite">
+    <div class="rl-invite-top">
+      <span class="rl-invite-tab"><svg viewBox="0 0 24 24"><path d="M4 12h16M14 6l6 6-6 6"/></svg> Your invite link</span>
+      <span class="rl-live-pill"><span class="dot"></span>Live</span>
+    </div>
+    <h2 class="rl-invite-title">Invite a photographer. <span class="hl">Earn credits.</span></h2>
+    <p class="rl-invite-say">Send them your link. For every photographer who joins, you get <span class="rl-mono hl">100+</span> credits — plus a <span class="rl-mono hl">+500</span> bonus at your first milestone.</p>
+
+    <div class="rl-invite-linkbox">
+      <div class="rl-invite-field">
+        <span class="rl-invite-flabel">Share this</span>
+        <span class="rl-invite-url" id="referral-invite-link">Loading…</span>
       </div>
-      <!-- Grouped scores: track + hero + tower (built by JS) -->
-      <div id="referral-scorebox"></div>
+      <button class="rl-invite-copy" id="referral-copy-btn">
+        <svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+        <span class="rl-copy-label">Copy link</span>
+      </button>
     </div>
 
-    <!-- RIGHT: the referral code (purple, editable) -->
-    <div class="rl-card rl-purple">
-      <div class="rl-qhead">
-        <div class="rl-qid">
-          <div class="rl-qicon rl-purple">
-            <svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5"/></svg>
-          </div>
-          <div>
-            <div class="rl-qt">Your referral code</div>
-            <div class="rl-qs">Make it yours — share it anywhere.</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="rl-code-label">Referral code</div>
-      <div class="rl-code-field">
+    <div class="rl-invite-foot">
+      <span class="rl-invite-chip">
+        <span class="ck-label">Your code</span>
         <span class="rl-code-val" id="referral-code-value">—</span>
         <input class="rl-code-input" id="referral-code-input" type="text" maxlength="32" autocomplete="off" spellcheck="false" style="display:none;">
         <button class="rl-edit-btn" id="referral-edit-btn">✎ Edit</button>
         <button class="rl-save-btn" id="referral-save-btn" style="display:none;">Save</button>
         <button class="rl-cancel-btn" id="referral-cancel-btn" style="display:none;">Cancel</button>
-      </div>
-      <div class="rl-code-msg" id="referral-code-msg"></div>
-
-      <div class="rl-link-row">
-        <div class="rl-link-in" id="referral-invite-link">Loading…</div>
-        <button class="rl-copy-btn" id="referral-copy-btn"><span class="rl-copy-label">Copy</span></button>
-      </div>
-      <div class="rl-code-note">Anyone who signs up with this link is credited to you. <b>Change it anytime</b> — old links keep working.</div>
+      </span>
+      <span class="rl-invite-reassure"><b>Change it anytime</b> — old links keep working.</span>
     </div>
+    <div class="rl-code-msg" id="referral-code-msg"></div>
+  </div>
+
+  <!-- Secondary: the referral quest + grouped scores -->
+  <div class="rl-quests-divider"><span class="t">Your progress</span><span class="line"></span></div>
+  <div class="rl-card rl-blue">
+    <div class="rl-qhead">
+      <div class="rl-qid">
+        <div class="rl-qicon rl-blue">
+          <svg viewBox="0 0 24 24"><circle cx="9" cy="7" r="4"/><path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/><path d="M21 21v-2a4 4 0 0 0-3-3.87"/></svg>
+        </div>
+        <div>
+          <div class="rl-qt">Refer a fellow photographer</div>
+          <div class="rl-qs">You earn credits per friend — plus a bonus each milestone.</div>
+        </div>
+      </div>
+    </div>
+    <!-- Grouped scores: track + hero + tower (built by JS) -->
+    <div id="referral-scorebox"></div>
   </div>
 
   <!-- More quests (coming soon) -->
