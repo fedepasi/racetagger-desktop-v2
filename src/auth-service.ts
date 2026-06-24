@@ -4,7 +4,7 @@ import { SUPABASE_CONFIG } from './config';
 import * as fs from 'fs';
 import * as path from 'path';
 import { errorTelemetryService } from './utils/error-telemetry-service';
-import { getMachineId } from './utils/system-info';
+import { getMachineId, getCanonicalMachineId } from './utils/system-info';
 
 // Tipi per lo stato dell'autenticazione e gestione token
 export interface AuthState {
@@ -811,6 +811,54 @@ export class AuthService {
 
         // Ripristina i dati dell'utente da Supabase
         await this.restoreUserDataOnLogin();
+
+        // Device→account cap check (Phase 3 anti-abuse). warn = allow login + a
+        // non-accusatory notice; block = deny login for the over-limit, non-
+        // grandfathered account. FAIL-OPEN on any error (mirrors checkVersionBeforeAuth)
+        // — never blocks login on an infra hiccup. Uses the Scheme-A canonical machine
+        // id (the one device_accounts is keyed on); the sacred pre_authorize_tokens /
+        // getMachineId path is untouched.
+        try {
+          const machineId = getCanonicalMachineId();
+          let deviceUsername: string | undefined;
+          try { deviceUsername = require('os').userInfo().username; } catch { deviceUsername = undefined; }
+
+          if (machineId) {
+            const { data: capVerdict } = await this.supabase.functions.invoke('check-device-limit', {
+              body: { machineId, username: deviceUsername }
+            });
+
+            if (capVerdict && capVerdict.within_cap === false) {
+              if (capVerdict.mode === 'block') {
+                // Block mode: reject this login and undo the partial session.
+                await this.supabase.auth.signOut().catch(() => {});
+                this.authState = { isAuthenticated: false, user: null, session: null, userRole: null };
+                this.clearSavedSession();
+                return {
+                  success: false,
+                  error: 'This computer has reached the maximum number of linked accounts. If it is a shared or work computer, contact info@racetagger.cloud.'
+                };
+              }
+
+              // Warn mode: login is allowed; surface a non-accusatory notice
+              // (support-voice: own the problem, never blame the user). Non-blocking.
+              try {
+                const { dialog } = require('electron');
+                dialog.showMessageBox({
+                  type: 'info',
+                  title: 'Account limit reached',
+                  message: 'You\'re signed in.',
+                  detail: 'This computer has reached the limit of linked accounts, so it has been flagged for review and the administrator has been notified. If this is a shared or work computer, just reply to info@racetagger.cloud and we\'ll sort it out.',
+                  buttons: ['OK']
+                });
+              } catch (dlgErr: any) {
+                console.warn('[Auth] device-cap notice failed (non-critical):', dlgErr?.message ?? dlgErr);
+              }
+            }
+          }
+        } catch (capErr: any) {
+          console.warn('[Auth] device-cap check failed (non-critical, fail-open):', capErr?.message ?? capErr);
+        }
 
         // Trigger JSONL upload reconciliation now that we have an
         // authenticated session — recovers any local JSONLs that failed to

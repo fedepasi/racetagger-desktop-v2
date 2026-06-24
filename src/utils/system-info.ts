@@ -52,6 +52,35 @@ function generateMachineId(): string {
 }
 
 /**
+ * Canonical machine ID for device→account abuse correlation (Phase 3 device cap).
+ *
+ * MUST match the "Scheme A" id that app_launches.machine_id and
+ * executions.system_environment.device.machineId are built from (main.ts
+ * trackAppLaunch + unified-image-processor.ts), because device_accounts — the
+ * table the cap counts — is keyed on it. It is DELIBERATELY different from
+ * getMachineId() (Scheme B: dash-joined, no totalmem) which feeds
+ * pre_authorize_tokens; that sacred path is left untouched. The fields, order,
+ * separator and totalmem here are load-bearing — keep them in sync with main.ts.
+ * Returns '' on failure so the caller can fail-open (skip the cap check).
+ */
+export function getCanonicalMachineId(): string {
+  try {
+    const cpus = os.cpus();
+    const source = [
+      os.hostname(),
+      os.platform(),
+      os.arch(),
+      cpus.length > 0 ? cpus[0].model : '',
+      os.totalmem().toString()
+    ].join('|');
+    return crypto.createHash('sha256').update(source).digest('hex').substring(0, 16);
+  } catch (error) {
+    console.warn('[SystemInfo] Failed to generate canonical machine ID:', error);
+    return '';
+  }
+}
+
+/**
  * Gets detailed operating system information
  */
 function getOperatingSystemInfo(): { name: string; version: string } {
