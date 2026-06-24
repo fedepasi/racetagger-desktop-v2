@@ -139,6 +139,7 @@ const validInvokeChannels: string[] = [
   'survey:submit',
   'survey:ack-prompt',
   'referral:get',
+  'referral:set-handle',
   // Diagnostic utilities (log viewer)
   'get-main-process-logs',
   'get-diagnostic-log-path',

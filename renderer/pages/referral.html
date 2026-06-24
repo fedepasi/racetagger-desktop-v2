@@ -1,52 +1,111 @@
-<!-- Earn Free Credits (Referral) Page -->
-<!-- Loaded dynamically by router.js into #page-content -->
+<!-- Earn Free Credits — Rewards Hub (v2) -->
+<!-- Loaded dynamically by router.js into #page-content. Dynamic regions
+     (scorebox / code value / link / friends / header stat) are filled by referral.js. -->
 
 <div class="referral-page">
-  <h1 class="page-title">Earn free credits</h1>
-  <p class="referral-intro">
-    Earn free credits every time a photographer signs up with your link. They get
-    RaceTagger — you get the credits, automatically.
-  </p>
 
-  <!-- Invite link -->
-  <div class="card referral-card">
-    <div class="card-header">
-      <div class="card-title">Your invite link</div>
+  <!-- Header -->
+  <div class="rl-head">
+    <div>
+      <div class="rl-eyebrow">REWARDS HUB</div>
+      <h1 class="page-title">Earn free credits</h1>
+      <p class="rl-sub">Complete quests to top up your balance. One quest is live now — more land soon.</p>
     </div>
-    <div class="card-body">
-      <div class="referral-link-row">
-        <input id="referral-invite-link" class="referral-link-input" type="text" readonly value="Loading…">
-        <button id="referral-copy-btn" class="btn btn-primary referral-copy-btn">Copy link</button>
+    <div class="rl-earned">
+      <div class="rl-earned-label">Earned from referrals</div>
+      <div class="rl-earned-val" id="referral-credits-count">—</div>
+      <div class="rl-earned-unit">credits</div>
+    </div>
+  </div>
+
+  <div class="rl-cols">
+    <!-- LEFT: the referral quest + grouped scores -->
+    <div class="rl-card rl-blue">
+      <div class="rl-qhead">
+        <div class="rl-qid">
+          <div class="rl-qicon rl-blue">
+            <svg viewBox="0 0 24 24"><circle cx="9" cy="7" r="4"/><path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/><path d="M21 21v-2a4 4 0 0 0-3-3.87"/></svg>
+          </div>
+          <div>
+            <div class="rl-qt">Refer a fellow photographer</div>
+            <div class="rl-qs">You earn credits per friend — plus a bonus each milestone.</div>
+          </div>
+        </div>
+        <span class="rl-live-pill"><span class="dot"></span>Live</span>
       </div>
-      <p class="referral-reward-note" id="referral-reward-note">
-        You earn credits for every friend who signs up.
-      </p>
+      <!-- Grouped scores: track + hero + tower (built by JS) -->
+      <div id="referral-scorebox"></div>
+    </div>
+
+    <!-- RIGHT: the referral code (purple, editable) -->
+    <div class="rl-card rl-purple">
+      <div class="rl-qhead">
+        <div class="rl-qid">
+          <div class="rl-qicon rl-purple">
+            <svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5"/></svg>
+          </div>
+          <div>
+            <div class="rl-qt">Your referral code</div>
+            <div class="rl-qs">Make it yours — share it anywhere.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="rl-code-label">Referral code</div>
+      <div class="rl-code-field">
+        <span class="rl-code-val" id="referral-code-value">—</span>
+        <input class="rl-code-input" id="referral-code-input" type="text" maxlength="32" autocomplete="off" spellcheck="false" style="display:none;">
+        <button class="rl-edit-btn" id="referral-edit-btn">✎ Edit</button>
+        <button class="rl-save-btn" id="referral-save-btn" style="display:none;">Save</button>
+        <button class="rl-cancel-btn" id="referral-cancel-btn" style="display:none;">Cancel</button>
+      </div>
+      <div class="rl-code-msg" id="referral-code-msg"></div>
+
+      <div class="rl-link-row">
+        <div class="rl-link-in" id="referral-invite-link">Loading…</div>
+        <button class="rl-copy-btn" id="referral-copy-btn"><span class="rl-copy-label">Copy</span></button>
+      </div>
+      <div class="rl-code-note">Anyone who signs up with this link is credited to you. <b>Change it anytime</b> — old links keep working.</div>
     </div>
   </div>
 
-  <!-- Stats -->
-  <div class="referral-stats">
-    <div class="referral-stat">
-      <div class="referral-stat-value" id="referral-friends-count">0</div>
-      <div class="referral-stat-label">Friends joined</div>
+  <!-- More quests (coming soon) -->
+  <div class="rl-quests-divider"><span class="t">More quests</span><span class="line"></span></div>
+  <div class="rl-quests">
+    <div class="rl-quest-soon">
+      <div class="rl-quest-soon-icon"><svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1" fill="#94a3b8" stroke="none"/></svg></div>
+      <div style="flex:1;">
+        <div class="rl-quest-soon-title">Follow on Instagram</div>
+        <div class="rl-quest-soon-sub">Follow @racetagger and grab a one-time credit drop.</div>
+      </div>
+      <span class="rl-soon-pill">Soon</span>
     </div>
-    <div class="referral-stat">
-      <div class="referral-stat-value" id="referral-credits-count">0</div>
-      <div class="referral-stat-label">Credits earned</div>
+    <div class="rl-quest-soon">
+      <div class="rl-quest-soon-icon"><svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.59 13.51 6.83 3.98M15.41 6.51l-6.82 3.98"/></svg></div>
+      <div style="flex:1;">
+        <div class="rl-quest-soon-title">Share a post</div>
+        <div class="rl-quest-soon-sub">Show your tagged delivery and earn credits when it lands.</div>
+      </div>
+      <span class="rl-soon-pill">Soon</span>
+    </div>
+    <div class="rl-quest-soon">
+      <div class="rl-quest-soon-icon"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
+      <div style="flex:1;">
+        <div class="rl-quest-soon-title">Collaborate &amp; earn</div>
+        <div class="rl-quest-soon-sub">Run an event with us — case study, beta, or feedback.</div>
+      </div>
+      <span class="rl-soon-pill">Soon</span>
     </div>
   </div>
 
-  <!-- How it works -->
-  <div class="card referral-card">
-    <div class="card-header">
-      <div class="card-title">How it works</div>
+  <!-- Friends joined table -->
+  <div class="rl-friends">
+    <div class="rl-friends-head">
+      <h2>Friends joined</h2>
+      <span class="rl-friends-meta" id="referral-friends-meta"><b id="referral-friends-count">0</b> joined</span>
     </div>
-    <div class="card-body">
-      <ol class="referral-how">
-        <li>Share your link with a photographer who shoots race events.</li>
-        <li>They sign up and download RaceTagger.</li>
-        <li>You earn credits as soon as they join — automatically.</li>
-      </ol>
-    </div>
+    <div class="rl-friends-card" id="referral-friends-body"></div>
+    <p class="rl-friends-note">Credits are added automatically when a friend signs up with your link. Milestone bonuses show as their own row once reached.</p>
   </div>
+
 </div>
