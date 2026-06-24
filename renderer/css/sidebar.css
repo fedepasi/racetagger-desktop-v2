@@ -97,6 +97,10 @@
   position: relative;
   font-weight: 500;
   letter-spacing: 0.01em;
+  /* Per-item functional colour (set inline in index.html); falls back to the
+     brand blue. Drives the icon chip + the active "card" so each section reads
+     in its meaning-colour (People=green, Extras=purple, …). */
+  --nav-c: var(--accent-primary);
 }
 
 .nav-item:hover {
@@ -104,13 +108,13 @@
   color: var(--text-primary);
 }
 
-/* Active — rich card: tinted fill + accent border + soft shadow */
+/* Active — rich card tinted with the item's own functional colour */
 .nav-item.active {
-  background: rgba(26, 158, 224, 0.16);
+  background: color-mix(in srgb, var(--nav-c) 15%, transparent);
   color: var(--text-primary);
   font-weight: 600;
-  border-color: rgba(26, 158, 224, 0.48);
-  box-shadow: 0 4px 16px rgba(26, 158, 224, 0.20);
+  border-color: color-mix(in srgb, var(--nav-c) 48%, transparent);
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--nav-c) 22%, transparent);
 }
 
 /* Icon chip — visible at rest (gives the row body + a clickable affordance),
@@ -123,9 +127,9 @@
   align-items: center;
   justify-content: center;
   border-radius: 11px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  color: inherit;
+  background: color-mix(in srgb, var(--nav-c) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--nav-c) 32%, transparent);
+  color: var(--nav-c);
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
@@ -141,9 +145,9 @@
 
 .nav-item:hover .nav-icon,
 .nav-item.active .nav-icon {
-  background: rgba(26, 158, 224, 0.20);
-  border-color: rgba(26, 158, 224, 0.45);
-  color: var(--accent-primary);
+  background: color-mix(in srgb, var(--nav-c) 24%, transparent);
+  border-color: color-mix(in srgb, var(--nav-c) 52%, transparent);
+  color: var(--nav-c);
 }
 
 /* Navigation text styling */
