@@ -30,6 +30,7 @@ class LearnedDataModal {
     this.modalElement = null;
     this.aggregatedData = null; // Map<raceNumber, LearnedFields>
     this.processedExecutions = new Set(); // Track executions already saved to prevent re-proposal
+    this.seriesSponsorCandidates = []; // SeriesSponsorCandidate[] detected up front for this execution
   }
 
   /**
@@ -51,6 +52,79 @@ class LearnedDataModal {
   isExecutionSkipped(executionId) {
     if (!executionId) return false;
     try { return localStorage.getItem(this._skipKey(executionId)) === '1'; } catch (_) { return false; }
+  }
+
+  /**
+   * Build a per-car sponsor frequency map for series-sponsor detection.
+   * De-dupes sponsors within a car by canonical key (so a car shown in 30
+   * photos counts once), then counts how many distinct cars carry each sponsor.
+   * Returns { freq: [[display, carCount], …], totalCars } ready for the
+   * detect-series-sponsors IPC.
+   */
+  _buildSeriesSponsorFrequency(imageResults) {
+    const totalCars = new Set();      // every distinct matched race number
+    const carSponsorKeys = new Map(); // raceNumber -> Set<canonicalKey>
+    const keyDisplay = new Map();     // canonicalKey -> first display seen
+
+    for (const result of imageResults || []) {
+      const vehicles = result.logEvent?.aiResponse?.vehicles;
+      if (!Array.isArray(vehicles)) continue;
+      for (const vehicle of vehicles) {
+        const raceNumber = vehicle.finalResult?.raceNumber || vehicle.raceNumber;
+        if (!raceNumber || raceNumber === 'N/A') continue;
+        const numStr = String(raceNumber);
+        totalCars.add(numStr);
+
+        const sponsors = vehicle.otherText || vehicle.sponsors || [];
+        if (!Array.isArray(sponsors)) continue;
+        if (!carSponsorKeys.has(numStr)) carSponsorKeys.set(numStr, new Set());
+        const keysForCar = carSponsorKeys.get(numStr);
+        for (const s of sponsors) {
+          const display = String(s).trim();
+          const key = _canonicalKey(display);
+          if (!key || key.length <= 1) continue;
+          keysForCar.add(key);
+          if (!keyDisplay.has(key)) keyDisplay.set(key, display);
+        }
+      }
+    }
+
+    // One vote per car per sponsor → coverage = carsWith / totalCars
+    const freq = new Map();
+    for (const keys of carSponsorKeys.values()) {
+      for (const key of keys) {
+        const display = keyDisplay.get(key) || key;
+        freq.set(display, (freq.get(display) || 0) + 1);
+      }
+    }
+
+    return { freq: Array.from(freq.entries()), totalCars: totalCars.size };
+  }
+
+  /**
+   * Detect series-wide sponsors for THIS execution, up front (before any save),
+   * by reusing the canonical TS detector via IPC (single source of truth — the
+   * fuzzy clustering is too involved to mirror in the renderer). Candidates
+   * already in the preset's ignore list are filtered out. Result is stored on
+   * this.seriesSponsorCandidates so the modal can show a dedicated section.
+   */
+  async computeSeriesSponsorCandidates(imageResults, existingSeriesIgnore = []) {
+    this.seriesSponsorCandidates = [];
+    try {
+      const { freq, totalCars } = this._buildSeriesSponsorFrequency(imageResults);
+      if (freq.length === 0 || totalCars < 4) return this.seriesSponsorCandidates;
+      const res = await window.api.invoke('detect-series-sponsors', {
+        freq,
+        totalCars,
+        existingIgnore: existingSeriesIgnore || [],
+      });
+      if (res?.success && Array.isArray(res.data?.candidates)) {
+        this.seriesSponsorCandidates = res.data.candidates;
+      }
+    } catch (e) {
+      console.warn('[LearnedDataModal] series-sponsor detection failed (non-critical):', e);
+    }
+    return this.seriesSponsorCandidates;
   }
 
   /**
@@ -399,7 +473,9 @@ class LearnedDataModal {
    * @returns {Promise<boolean>} true if user accepted some data
    */
   async show(presetId, executionId, existingSeriesIgnore = []) {
-    if (!this.aggregatedData || this.aggregatedData.size === 0) {
+    const hasProposals = this.aggregatedData && this.aggregatedData.size > 0;
+    const hasSeries = Array.isArray(this.seriesSponsorCandidates) && this.seriesSponsorCandidates.length > 0;
+    if (!hasProposals && !hasSeries) {
       return false;
     }
 
@@ -416,8 +492,21 @@ class LearnedDataModal {
     const existing = document.getElementById('learned-data-modal');
     if (existing) existing.remove();
 
-    const proposals = Array.from(this.aggregatedData.values());
+    const proposals = this.aggregatedData ? Array.from(this.aggregatedData.values()) : [];
     const totalFields = proposals.reduce((sum, p) => sum + Object.keys(p.fields).length, 0);
+    const seriesCandidates = Array.isArray(this.seriesSponsorCandidates) ? this.seriesSponsorCandidates : [];
+    const hasSeries = seriesCandidates.length > 0;
+
+    // Adaptive headline — the modal can carry per-participant data, series
+    // sponsors, or both.
+    let headlineHtml;
+    if (proposals.length > 0 && hasSeries) {
+      headlineHtml = `Found <strong>${totalFields} data point${totalFields === 1 ? '' : 's'}</strong> for <strong>${proposals.length} participant${proposals.length === 1 ? '' : 's'}</strong>, plus <strong>${seriesCandidates.length} series sponsor${seriesCandidates.length === 1 ? '' : 's'}</strong> to clean up.`;
+    } else if (proposals.length > 0) {
+      headlineHtml = `Found <strong>${totalFields} data point${totalFields === 1 ? '' : 's'}</strong> for <strong>${proposals.length} participant${proposals.length === 1 ? '' : 's'}</strong> that can improve future recognition accuracy.`;
+    } else {
+      headlineHtml = `Found <strong>${seriesCandidates.length} series sponsor${seriesCandidates.length === 1 ? '' : 's'}</strong> that appear on most cars — ignoring them keeps matching clean.`;
+    }
 
     const modal = document.createElement('div');
     modal.id = 'learned-data-modal';
@@ -428,12 +517,13 @@ class LearnedDataModal {
           <div class="learned-data-icon">&#10024;</div>
           <div class="learned-data-title">
             <h3>Useful Data Found</h3>
-            <p>Found <strong>${totalFields} data point${totalFields === 1 ? '' : 's'}</strong> for <strong>${proposals.length} participant${proposals.length === 1 ? '' : 's'}</strong> that can improve future recognition accuracy.</p>
+            <p>${headlineHtml}</p>
           </div>
           <button class="learned-data-close" id="learned-data-close">&times;</button>
         </div>
 
         <div class="learned-data-body">
+          ${hasSeries ? this._renderSeriesSection(seriesCandidates) : ''}
           ${proposals.map((proposal, idx) => this._renderProposal(proposal, idx)).join('')}
         </div>
 
@@ -472,6 +562,7 @@ class LearnedDataModal {
       window.logUserAction('LEARNED_DATA_PROPOSED', 'CORRECT', {
         proposalCount: proposals.length,
         totalFieldCount: totalFields,
+        seriesSponsorCount: seriesCandidates.length,
         fieldTypes: Array.from(__proposedFieldTypes)
       });
     }
@@ -507,10 +598,12 @@ class LearnedDataModal {
     modal.addEventListener('click', (e) => { if (e.target === modal) dismiss('outside-click'); });
 
     acceptBtn.addEventListener('click', async () => {
-      // Collect accepted fields
+      // Collect both kinds of selection: per-participant learned fields and
+      // checked series-wide sponsors. Either (or both) can be saved.
       const acceptedData = this._collectAcceptedData(modal);
+      const checkedSeries = this._collectCheckedSeries(modal, seriesCandidates);
 
-      if (acceptedData.length === 0) {
+      if (acceptedData.length === 0 && checkedSeries.length === 0) {
         dismiss('accept-but-empty');
         return;
       }
@@ -519,21 +612,28 @@ class LearnedDataModal {
       acceptBtn.textContent = 'Saving...';
 
       try {
-        const result = await window.api.invoke('save-learned-participant-data', {
-          presetId,
-          executionId,
-          participants: acceptedData,
-        });
+        let participantsUpdated = 0;
 
-        if (result.success) {
-          // Show brief success feedback
-          const count = result.data?.updated || acceptedData.length;
-          acceptBtn.textContent = `✅ ${count} participant${count === 1 ? '' : 's'} updated`;
-          acceptBtn.classList.add('learned-data-btn-success');
+        // 1) Per-participant learned data (only if any field is checked)
+        if (acceptedData.length > 0) {
+          const result = await window.api.invoke('save-learned-participant-data', {
+            presetId,
+            executionId,
+            participants: acceptedData,
+          });
+          if (!result.success) {
+            console.error('[LearnedDataModal] Save failed:', result.error);
+            acceptBtn.textContent = '❌ Save failed';
+            acceptBtn.disabled = false;
+            setTimeout(() => { acceptBtn.textContent = 'Update Preset'; }, 2000);
+            return;
+          }
+          participantsUpdated = result.data?.updated || acceptedData.length;
+          // Mark execution as processed so the per-participant proposals aren't re-shown
+          this.processedExecutions.add(executionId);
 
-          // Telemetry: LEARNED_DATA_SAVED. This is the heartbeat of the
-          // SmartMatcher "learn from corrections" loop — what % of users
-          // who SEE the proposal actually accept it.
+          // Telemetry: LEARNED_DATA_SAVED — heartbeat of the "learn from
+          // corrections" loop (what % of users who SEE the proposal accept it).
           if (window.logUserAction) {
             const acceptedFieldTypes = new Set();
             for (const p of acceptedData) {
@@ -548,38 +648,49 @@ class LearnedDataModal {
               partialAcceptance: acceptedData.length < proposals.length
             });
           }
-
-          // Clear aggregated data and mark execution as processed
-          // so _checkLearnedDataAvailability() won't re-propose the same data
-          this.aggregatedData = null;
-          this.processedExecutions.add(executionId);
-
-          // ACC-04 Phase 4: if series-sponsor candidates detected, show confirmation step
-          const seriesCandidates = result.data?.seriesCandidates || [];
-          const newCandidates = seriesCandidates.filter(c => {
-            const key = c.key || c.display?.toLowerCase().replace(/\s+/g, ' ').trim() || '';
-            return !existingSeriesIgnore.includes(key);
-          });
-
-          if (newCandidates.length > 0) {
-            setTimeout(() => {
-              this._showSeriesSponsorSection(modal, presetId, newCandidates, resolvePromise, existingSeriesIgnore);
-            }, 800);
-          } else {
-            setTimeout(() => {
-              modal.remove();
-              this.modalElement = null;
-              resolvePromise(true);
-            }, 1500);
-          }
-        } else {
-          console.error('[LearnedDataModal] Save failed:', result.error);
-          acceptBtn.textContent = '❌ Save failed';
-          acceptBtn.disabled = false;
-          setTimeout(() => {
-            acceptBtn.textContent = 'Update Preset';
-          }, 2000);
         }
+
+        // 2) Series-wide sponsors → preset.series_sponsor_ignore (only if checked)
+        if (checkedSeries.length > 0) {
+          const newKeys = checkedSeries
+            .map(c => c.key || (c.display || '').toLowerCase().replace(/\s+/g, ' ').trim())
+            .filter(Boolean);
+          const merged = Array.from(new Set([...(existingSeriesIgnore || []), ...newKeys]));
+          const upd = await window.api.invoke('supabase-update-participant-preset', {
+            id: presetId,
+            series_sponsor_ignore: merged,
+          });
+          if (!upd.success) {
+            console.error('[LearnedDataModal] series_sponsor_ignore update failed:', upd.error);
+            // Any per-participant data is already saved — report partial failure.
+            acceptBtn.textContent = participantsUpdated > 0 ? '⚠️ Sponsors not saved' : '❌ Save failed';
+            acceptBtn.disabled = false;
+            setTimeout(() => { acceptBtn.textContent = 'Update Preset'; }, 2500);
+            return;
+          }
+          if (window.logUserAction) {
+            window.logUserAction('SERIES_SPONSOR_IGNORED', 'CORRECT', {
+              addedCount: newKeys.length,
+              totalAfter: merged.length
+            });
+          }
+        }
+
+        // Success — summarize what was saved
+        const bits = [];
+        if (participantsUpdated > 0) bits.push(`${participantsUpdated} participant${participantsUpdated === 1 ? '' : 's'}`);
+        if (checkedSeries.length > 0) bits.push(`${checkedSeries.length} series sponsor${checkedSeries.length === 1 ? '' : 's'}`);
+        acceptBtn.textContent = `✅ ${bits.join(' · ')} saved`;
+        acceptBtn.classList.add('learned-data-btn-success');
+
+        this.aggregatedData = null;
+        this.seriesSponsorCandidates = [];
+
+        setTimeout(() => {
+          modal.remove();
+          this.modalElement = null;
+          resolvePromise(true);
+        }, 1400);
       } catch (error) {
         console.error('[LearnedDataModal] Error:', error);
         acceptBtn.textContent = '❌ Error';
@@ -589,19 +700,16 @@ class LearnedDataModal {
   }
 
   /**
-   * ACC-04 Phase 4 — second step shown after the preset save succeeds.
-   * Replaces the modal body with a checklist of series-level sponsor candidates,
-   * pre-checked when coverage ≥ 70%. User can "Add to Ignore List" or "Skip".
+   * Render the dedicated "Championship / series sponsors" section shown at the
+   * TOP of the modal body (ACC-04, surfaced up front). Each candidate is a
+   * checkbox; sponsors covering ≥70% of cars are pre-checked (very likely
+   * series-wide), lower coverage is suggested but unchecked. Checked entries
+   * are saved to the preset's series_sponsor_ignore on Update Preset.
    *
-   * @param {HTMLElement} modal - The existing modal element (still visible)
-   * @param {string} presetId
-   * @param {Array} candidates - SeriesSponsorCandidate[] filtered to only new ones
-   * @param {Function} resolvePromise
-   * @param {string[]} existingSeriesIgnore - already-stored ignore keys
+   * @param {Array} candidates - SeriesSponsorCandidate[] (already filtered to new ones)
+   * @returns {string} HTML for the section
    */
-  _showSeriesSponsorSection(modal, presetId, candidates, resolvePromise, existingSeriesIgnore) {
-    const body = modal.querySelector('.learned-data-body') || modal;
-
+  _renderSeriesSection(candidates) {
     const rows = candidates.map((c, i) => {
       const pct = Math.round((c.coverageFraction || 0) * 100);
       const preChecked = pct >= 70 ? 'checked' : '';
@@ -609,90 +717,39 @@ class LearnedDataModal {
         ? `<span style="color:#10b981;font-size:11px">${pct}% of cars — likely series-wide</span>`
         : `<span style="color:#f59e0b;font-size:11px">${pct}% of cars — possible series sponsor</span>`;
       return `
-        <label style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--rt-border,#2a3551);cursor:pointer">
-          <input type="checkbox" data-series-idx="${i}" ${preChecked}
+        <label class="learned-series-row" style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border-color,#2a2a4a);cursor:pointer">
+          <input type="checkbox" class="learned-series-checkbox" data-series-idx="${i}" ${preChecked}
             style="width:16px;height:16px;flex-shrink:0;accent-color:#1a9ee0">
           <span style="flex:1;min-width:0">
-            <span style="font-family:'JetBrains Mono',monospace;font-weight:600;font-size:13px">${c.display}</span>
+            <span style="font-family:'JetBrains Mono',monospace;font-weight:600;font-size:13px;color:var(--text-primary,#e0e0e0)">${c.display}</span>
             <br>${coverageLabel}
           </span>
         </label>`;
     }).join('');
 
-    body.innerHTML = `
-      <div style="padding:4px 0 12px">
-        <div style="font-size:13px;font-weight:600;color:var(--rt-text,#f1f4fa);margin-bottom:4px">Series-level sponsors detected</div>
-        <div style="font-size:12px;color:var(--rt-text-dim,#9aa5bd);margin-bottom:16px">
-          These sponsors appear on most cars in this event — they may be series or venue sponsors
-          rather than participant-specific. Add them to the ignore list so future events stay clean.
+    // Theme-aware: uses the same tokens as the rest of the modal (--text-primary,
+    // --text-secondary, --border-color), which resolve light on results.html and
+    // dark on the main window — so it never renders white-on-white.
+    return `
+      <div class="learned-series-section" style="padding:14px;background:rgba(245,158,11,0.08);border:1px solid var(--border-color,#2a2a4a);border-radius:8px;border-top:3px solid #f59e0b">
+        <div style="font-size:13px;font-weight:600;color:var(--text-primary,#e0e0e0);margin-bottom:4px">🏁 Championship / series sponsors</div>
+        <div style="font-size:12px;color:var(--text-secondary,#888);margin-bottom:12px">
+          These appear on most cars in this event — likely series or venue sponsors, not participant-specific.
+          Add them to the preset's ignore list so RaceTagger stops matching them to every car.
         </div>
-        <div id="series-sponsor-rows">${rows}</div>
-      </div>
-      <div style="display:flex;gap:8px;justify-content:flex-end;padding-top:12px;border-top:1px solid var(--rt-border,#2a3551)">
-        <button id="series-sponsor-skip"
-          style="padding:8px 16px;border-radius:8px;border:1px solid var(--rt-border-strong,#3a4666);
-                 background:var(--rt-panel,#1a2236);color:var(--rt-text,#f1f4fa);font-size:13px;cursor:pointer">
-          Skip
-        </button>
-        <button id="series-sponsor-add"
-          style="padding:8px 16px;border-radius:8px;border:none;
-                 background:#1a9ee0;color:#fff;font-size:13px;font-weight:600;cursor:pointer">
-          Add to Ignore List
-        </button>
+        ${rows}
       </div>`;
+  }
 
-    const skipBtn = body.querySelector('#series-sponsor-skip');
-    const addBtn = body.querySelector('#series-sponsor-add');
-
-    skipBtn.addEventListener('click', () => {
-      modal.remove();
-      this.modalElement = null;
-      resolvePromise(true);
-    });
-
-    addBtn.addEventListener('click', async () => {
-      const checked = Array.from(body.querySelectorAll('input[data-series-idx]:checked'));
-      const newKeys = checked.map(cb => {
-        const idx = parseInt(cb.dataset.seriesIdx, 10);
-        const c = candidates[idx];
-        return c.key || c.display?.toLowerCase().replace(/\s+/g, ' ').trim() || '';
-      }).filter(Boolean);
-
-      if (newKeys.length === 0) {
-        modal.remove();
-        this.modalElement = null;
-        resolvePromise(true);
-        return;
-      }
-
-      addBtn.disabled = true;
-      addBtn.textContent = 'Saving…';
-
-      try {
-        const merged = Array.from(new Set([...existingSeriesIgnore, ...newKeys]));
-        const updateResult = await window.api.invoke('supabase-update-participant-preset', {
-          id: presetId,
-          series_sponsor_ignore: merged,
-        });
-
-        if (updateResult.success) {
-          addBtn.textContent = `✅ ${newKeys.length} added`;
-          setTimeout(() => {
-            modal.remove();
-            this.modalElement = null;
-            resolvePromise(true);
-          }, 1000);
-        } else {
-          console.error('[LearnedDataModal] series_sponsor_ignore update failed:', updateResult.error);
-          addBtn.textContent = '❌ Save failed';
-          addBtn.disabled = false;
-        }
-      } catch (err) {
-        console.error('[LearnedDataModal] Error updating series_sponsor_ignore:', err);
-        addBtn.textContent = '❌ Error';
-        addBtn.disabled = false;
-      }
-    });
+  /**
+   * Collect the checked series-sponsor candidates from the modal.
+   * @returns {Array} the selected SeriesSponsorCandidate objects
+   */
+  _collectCheckedSeries(modal, candidates) {
+    if (!Array.isArray(candidates) || candidates.length === 0) return [];
+    return Array.from(modal.querySelectorAll('.learned-series-checkbox:checked'))
+      .map(cb => candidates[parseInt(cb.dataset.seriesIdx, 10)])
+      .filter(Boolean);
   }
 
   /**

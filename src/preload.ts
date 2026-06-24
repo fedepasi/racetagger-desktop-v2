@@ -210,6 +210,7 @@ const validInvokeChannels: string[] = [
   'update-analysis-log',
   'save-learned-participant-data',
   'check-learned-data-exists',
+  'detect-series-sponsors',
   'get-local-executions',
   'rename-execution',
   'delete-local-execution',

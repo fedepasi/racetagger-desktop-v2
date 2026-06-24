@@ -5192,14 +5192,24 @@ class LogVisualizer {
       5
     );
 
+    // ACC-04 — also detect series-wide sponsors up front, so the modal can show
+    // a dedicated "championship / series sponsors" section even when there are
+    // no per-participant proposals (and the button count reflects them too).
+    await window.learnedDataModal.computeSeriesSponsorCandidates(
+      this.imageResults,
+      this.participantPresetData?.series_sponsor_ignore || []
+    );
+
     const totalProposals = window.learnedDataModal.aggregatedData;
+    const proposalCount = totalProposals ? totalProposals.size : 0;
+    const seriesCount = (window.learnedDataModal.seriesSponsorCandidates || []).length;
     const learnedBtn = document.getElementById('lv-learned-data');
     const learnedCount = document.getElementById('lv-learned-data-count');
 
-    if (totalProposals && totalProposals.size > 0 && learnedBtn) {
+    if ((proposalCount > 0 || seriesCount > 0) && learnedBtn) {
       learnedBtn.style.display = 'inline-flex';
-      if (learnedCount) learnedCount.textContent = totalProposals.size;
-      console.log(`[LogVisualizer] Learned data available for ${totalProposals.size} participants — badge shown`);
+      if (learnedCount) learnedCount.textContent = proposalCount + seriesCount;
+      console.log(`[LogVisualizer] Learned data available — ${proposalCount} participant(s) + ${seriesCount} series sponsor(s) — badge shown`);
     } else if (learnedBtn) {
       learnedBtn.style.display = 'none';
     }
@@ -5218,7 +5228,9 @@ class LogVisualizer {
     }
 
     const totalProposals = window.learnedDataModal.aggregatedData;
-    if (!totalProposals || totalProposals.size === 0) {
+    const hasProposals = totalProposals && totalProposals.size > 0;
+    const hasSeries = (window.learnedDataModal.seriesSponsorCandidates || []).length > 0;
+    if (!hasProposals && !hasSeries) {
       this.showNotification('No learnable data available', 'info');
       return;
     }
