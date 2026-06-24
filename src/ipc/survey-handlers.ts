@@ -102,10 +102,19 @@ export function registerSurveyHandlers(): void {
     }
   );
 
-  // Referral code + stats for the sidebar "Invite friends" page.
+  // Referral code + stats for the "Earn free credits" rewards hub.
   ipcMain.handle('referral:get', async (): Promise<SurveyResult> => {
     return invokeSurvey({ action: 'referral' });
   });
 
-  if (DEBUG_MODE) console.log('[IPC] Survey handlers registered (4 handlers)');
+  // Let the user edit their own referral code (handle). The server validates
+  // format / reserved / uniqueness and keeps old links working.
+  ipcMain.handle(
+    'referral:set-handle',
+    async (_evt, payload: { handle: string }): Promise<SurveyResult> => {
+      return invokeSurvey({ action: 'set-handle', handle: payload?.handle ?? '' });
+    }
+  );
+
+  if (DEBUG_MODE) console.log('[IPC] Survey handlers registered (5 handlers)');
 }
