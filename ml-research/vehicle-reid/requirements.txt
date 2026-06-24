@@ -1,0 +1,12 @@
+# Core data layer (Fase 0) — CPU only, light.
+psycopg[binary]>=3.1
+requests>=2.31
+Pillow>=10.0
+pandas>=2.0
+pyarrow>=14.0
+numpy>=1.24
+tqdm>=4.66
+
+# ML layer (Fase 1/2) is heavier and GPU-oriented; kept separate so the data layer
+# installs cleanly on any box. Install on a GPU machine:
+#   pip install -r requirements-ml.txt

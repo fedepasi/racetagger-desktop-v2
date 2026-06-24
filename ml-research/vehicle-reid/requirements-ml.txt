@@ -1,0 +1,9 @@
+# ML layer (Fase 1/2). Install on a GPU box. Versions are minimums; pin per your CUDA.
+torch>=2.2
+torchvision>=0.17
+transformers>=4.44          # DINOv3 / SigLIP backbones from the HF hub
+faiss-cpu>=1.8              # swap for faiss-gpu on a CUDA box
+scikit-learn>=1.3
+pytorch-metric-learning>=2.5  # triplet / ArcFace miners + losses (TransReID/CLIP-ReID recipe)
+# Optional, only for --crop-source sam3 in export_dataset.py:
+# sam3 @ git+https://github.com/facebookresearch/sam3.git
