@@ -4188,6 +4188,51 @@ export async function getUserProjects() {
   return data || [];
 }
 
+/**
+ * Clients overview for the Delivery "Clients" table.
+ * Returns each active client (project) enriched with its galleries plus two
+ * aggregates the table needs: gallery_count and total photo_count. Photo counts
+ * are tallied from a single column-scoped read of gallery_images (visible rows),
+ * not SELECT * — fine at current scale; swap for an aggregate RPC if
+ * gallery_images grows large. The same per-gallery photo_count is attached to
+ * each nested gallery so the row can break the total down on expand.
+ */
+export async function getClientsOverview() {
+  const client = getSupabaseClient();
+  const userId = authService.getCurrentUserId();
+  if (!userId) throw new Error('Not authenticated');
+
+  const { data: projects, error } = await client
+    .from('projects')
+    .select('id, name, client_type, client_contact_email, client_slug, created_at, galleries!galleries_project_id_fkey(id, title, slug, status, total_views, total_downloads, event_date, season, access_type)')
+    .eq('user_id', userId)
+    .eq('status', 'active')
+    .order('created_at', { ascending: false });
+  if (error) throw new Error(error.message);
+  const list = (projects || []) as any[];
+
+  // Collect every gallery id across all clients for one photo-count query.
+  const galleryIds: string[] = [];
+  for (const p of list) for (const g of (p.galleries || [])) galleryIds.push(g.id);
+
+  const counts: Record<string, number> = {};
+  if (galleryIds.length > 0) {
+    const { data: rows, error: cErr } = await client
+      .from('gallery_images')
+      .select('gallery_id')
+      .in('gallery_id', galleryIds)
+      .eq('is_visible', true);
+    if (cErr) throw new Error(cErr.message);
+    for (const r of ((rows || []) as any[])) counts[r.gallery_id] = (counts[r.gallery_id] || 0) + 1;
+  }
+
+  return list.map((p) => {
+    const galleries = (p.galleries || []).map((g: any) => ({ ...g, photo_count: counts[g.id] || 0 }));
+    const photo_count = galleries.reduce((s: number, g: any) => s + (g.photo_count || 0), 0);
+    return { ...p, galleries, gallery_count: galleries.length, photo_count };
+  });
+}
+
 export async function getProjectById(id: string) {
   const client = getSupabaseClient();
   const { data, error } = await client

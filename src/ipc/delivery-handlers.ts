@@ -8,6 +8,7 @@ import { createHandler } from './handler-factory';
 import {
   createProject,
   getUserProjects,
+  getClientsOverview,
   getProjectById,
   updateProject,
   deleteProject,
@@ -54,6 +55,7 @@ export function registerDeliveryHandlers(): void {
   // ==================== PROJECT HANDLERS ====================
   createHandler('delivery-create-project', (data: any) => createProject(data));
   createHandler('delivery-get-projects', () => getUserProjects());
+  createHandler('delivery-get-clients-overview', () => getClientsOverview());
   createHandler('delivery-get-project', (id: string) => getProjectById(id));
   createHandler('delivery-update-project', ({ id, data }: { id: string; data: any }) => updateProject(id, data));
   createHandler('delivery-delete-project', (id: string) => deleteProject(id));
