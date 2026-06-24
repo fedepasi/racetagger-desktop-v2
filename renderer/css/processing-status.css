@@ -1914,6 +1914,32 @@
   color: var(--text-secondary);
   margin-bottom: 8px;
 }
+
+/* "Pick a suggestion" works only on needs-review photos. Tie it to the SAME
+   amber the needs-review card border + badge use (#eab308), so the cue reads as
+   "this is the needs-review action". Filled badge = dark text on amber → good
+   contrast in both the light (results) and dark (index) themes. */
+.lv-shortcuts-only {
+  display: inline-block;
+  margin-left: 6px;
+  vertical-align: middle;
+  background: #eab308;
+  color: #1a1a2e;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.lv-shortcuts-onlyhint {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+.lv-shortcuts-onlyhint strong { color: var(--text-primary); font-weight: 700; }
 .lv-shortcuts-row {
   display: grid;
   grid-template-columns: 104px 1fr;
