@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### ✨ "Earn free credits" is now a gamified rewards hub
+
+- **The referral page became a proper rewards hub built around milestones.** Instead of a flat link + two counters, the page now shows a **milestone track** (`0 → you → 5 → 10 → 25`) with your current position lit and the next checkpoint highlighted, a **next-goal banner** with honest math ("3 more friends to a +500 bonus — 300 from referrals plus the 500 bonus, 800 credits in reach"), your **invite link** with one-click copy, a **per-friend reward tower** showing the real scaling tiers (1–5 = 100, 6–15 = 150, 16+ = 200 — the current band highlighted), placeholders for **future quests** (Follow on Instagram, Share a post, Collaborate & earn), and a **Friends joined** table at the bottom (who joined, when, and the credits they earned you). The **sidebar** also gains a compact "next milestone" badge (`2/5 → +500`) so progress is visible without opening the page. Milestone math mirrors the real reward logic exactly (one-time bonuses +500 / +1,000 / +2,500 at 5 / 10 / 25). Renderer-only (`referral.html` + `referral.css` + `referral.js` + the sidebar badge in `index.html`); the friends list comes from a read-only addition to the `satisfaction-survey` Edge Function. **No token logic touched** — the page only displays the existing signup-time referral rewards.
+
 ### 🐛 Fix: sign-up password errors were in Italian; refreshed a dated sign-in feature line
 
 - **The password validation errors on the sign-up form showed in Italian** (e.g. "La password deve contenere almeno una lettera maiuscola") in an otherwise-English app. All four now read in US English ("Password must contain at least one uppercase letter", etc.), along with the login "Email and password are required" message. Also refreshed a dated line in the sign-in feature list — "CSV integration for metadata" → **"Entry lists read automatically — no manual typing"**, which reflects that RaceTagger parses the entry list (PDF/CSV) for you instead of hand-entering it. Renderer copy only (`auth.js` + `index.html`) — no logic, schema, token logic or Edge Function changes.
