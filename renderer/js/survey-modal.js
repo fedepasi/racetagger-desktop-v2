@@ -220,8 +220,8 @@
     var photos = Number(eligibility.tokens_used) || 0;
 
     var lead = fromPositive
-      ? 'Love it? Invite a friend. They get RaceTagger, and you earn <strong>' + reward + ' credits</strong> for every friend who signs up.'
-      : 'You\'ve analyzed <strong>' + photos.toLocaleString('en-US') + ' photos</strong>. Invite a friend — you earn <strong>' + reward + ' credits</strong> for every friend who signs up.';
+      ? 'Love it? Invite a friend. They get RaceTagger, and you earn <strong>from ' + reward + ' credits</strong> for every friend who signs up — and it grows the more you invite.'
+      : 'You\'ve analyzed <strong>' + photos.toLocaleString('en-US') + ' photos</strong>. Invite a friend — earn <strong>from ' + reward + ' credits</strong> per friend who signs up, and it grows the more you invite.';
 
     setBody(fromPositive ? 'Thanks — that means a lot' : 'Invite a friend',
       '<p class="survey-lead">' + lead + '</p>' +
