@@ -610,10 +610,11 @@ class LogVisualizer {
                       <div class="lv-shortcuts-row"><span class="lv-keys"><span class="lv-key">Enter</span></span><span class="lv-shortcuts-desc">Confirm &amp; next photo</span></div>
                       <div class="lv-shortcuts-row"><span class="lv-keys"><span class="lv-key">Shift</span><span class="lv-key">Enter</span></span><span class="lv-shortcuts-desc">Back one photo</span></div>
                     </div>
-                    <div class="lv-shortcuts-group">
-                      <div class="lv-shortcuts-glabel">Pick a suggestion</div>
+                    <div class="lv-shortcuts-group lv-shortcuts-group--review">
+                      <div class="lv-shortcuts-glabel">Pick a suggestion <span class="lv-shortcuts-only">needs review</span></div>
                       <div class="lv-shortcuts-row"><span class="lv-keys"><span class="lv-key">1</span><span class="lv-shortcuts-sep">–</span><span class="lv-key">9</span></span><span class="lv-shortcuts-desc">Choose that match</span></div>
                       <div class="lv-shortcuts-row"><span class="lv-keys"><span class="lv-key">0</span></span><span class="lv-shortcuts-desc">None of these</span></div>
+                      <div class="lv-shortcuts-onlyhint">Only on photos flagged <strong>needs review</strong> — that's when the AI offers candidates to pick from.</div>
                     </div>
                     <div class="lv-shortcuts-group">
                       <div class="lv-shortcuts-glabel">Done</div>
