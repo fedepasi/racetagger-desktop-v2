@@ -310,6 +310,7 @@ const validInvokeChannels: string[] = [
   // Delivery Operations
   'delivery-create-project',
   'delivery-get-projects',
+  'delivery-get-clients-overview',
   'delivery-get-project',
   'delivery-update-project',
   'delivery-delete-project',

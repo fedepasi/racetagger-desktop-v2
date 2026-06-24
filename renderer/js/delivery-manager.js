@@ -10,6 +10,11 @@
   let projects = [];
   let selectedProjectId = null;
 
+  // Clients table state (filter + sort)
+  var clientsFilterText = '';
+  var clientsTypeFilter = '';
+  var clientsSort = { col: 'name', dir: 'asc' };
+
   // ── Inline SVG icons (Tabler/Feather-style, MIT). The desktop renderer has no
   //    icon font, so the brand-aligned UI uses these instead of emoji. ──────────
   var DL_ICONS = {
@@ -153,12 +158,25 @@
 
   async function loadProjects() {
     try {
-      const result = await window.api.invoke('delivery-get-projects');
+      // Clients overview carries gallery_count + photo_count for the table.
+      const result = await window.api.invoke('delivery-get-clients-overview');
       if (result && result.success) projects = result.data || [];
-      renderProjects();
+      renderClientsTable();
     } catch (e) {
-      console.error('[Delivery] Failed to load projects:', e);
+      console.error('[Delivery] Failed to load clients:', e);
     }
+  }
+
+  // Populate a client (<select>) with the user's clients; preselect `selectedId`.
+  function populateGalleryClientSelect(selectId, selectedId) {
+    var sel = document.getElementById(selectId);
+    if (!sel) return;
+    var opts = '<option value="">No client</option>';
+    projects.forEach(function(p) {
+      opts += '<option value="' + p.id + '">' + escapeHtml(p.name || 'Untitled client') + '</option>';
+    });
+    sel.innerHTML = opts;
+    sel.value = selectedId || '';
   }
 
   function renderGalleries() {
@@ -255,30 +273,114 @@
     });
   }
 
-  function renderProjects() {
-    var grid = document.getElementById('projects-grid');
+  // Number of published galleries for a client (the "Live" column).
+  function liveCount(p) {
+    return (p.galleries || []).filter(function(g) { return g.status === 'published'; }).length;
+  }
+
+  // Apply the active filter + sort to the loaded clients.
+  function getFilteredSortedClients() {
+    var q = (clientsFilterText || '').toLowerCase().trim();
+    var rows = projects.filter(function(p) {
+      if (clientsTypeFilter && (p.client_type || '') !== clientsTypeFilter) return false;
+      if (!q) return true;
+      var hay = [(p.name || ''), (p.client_type || ''), (p.client_contact_email || ''), (p.client_slug || '')].join(' ').toLowerCase();
+      return hay.indexOf(q) !== -1;
+    });
+    var dir = clientsSort.dir === 'desc' ? -1 : 1;
+    var col = clientsSort.col;
+    rows.sort(function(a, b) {
+      var av, bv;
+      if (col === 'galleries') { av = a.gallery_count || 0; bv = b.gallery_count || 0; }
+      else if (col === 'photos') { av = a.photo_count || 0; bv = b.photo_count || 0; }
+      else if (col === 'live') { av = liveCount(a); bv = liveCount(b); }
+      else if (col === 'type') { av = (a.client_type || ''); bv = (b.client_type || ''); }
+      else { av = (a.name || '').toLowerCase(); bv = (b.name || '').toLowerCase(); }
+      if (av < bv) return -1 * dir;
+      if (av > bv) return 1 * dir;
+      return 0;
+    });
+    return rows;
+  }
+
+  function renderClientsTable() {
+    var tbody = document.getElementById('clients-tbody');
     var countEl = document.getElementById('projects-count');
-    if (!grid) return;
+    var emptyEl = document.getElementById('clients-empty');
+    var noMatchEl = document.getElementById('clients-no-match');
+    if (!tbody) return;
 
     if (countEl) countEl.textContent = projects.length;
 
+    // Reflect the active sort on the headers.
+    document.querySelectorAll('.dl-clients-table th[data-sort]').forEach(function(th) {
+      th.classList.remove('dl-th--asc', 'dl-th--desc');
+      if (th.dataset.sort === clientsSort.col) th.classList.add(clientsSort.dir === 'desc' ? 'dl-th--desc' : 'dl-th--asc');
+    });
+
     if (projects.length === 0) {
-      grid.innerHTML = '<div style="color: var(--text-muted); font-size: 12px;">No clients yet — add one to group galleries by team or sponsor.</div>';
+      tbody.innerHTML = '';
+      if (emptyEl) emptyEl.style.display = 'block';
+      if (noMatchEl) noMatchEl.style.display = 'none';
       return;
     }
+    if (emptyEl) emptyEl.style.display = 'none';
 
-    grid.innerHTML = projects.map(function(p, i) {
-      var galCount = p.galleries ? p.galleries.length : 0;
+    var rows = getFilteredSortedClients();
+    if (rows.length === 0) {
+      tbody.innerHTML = '';
+      if (noMatchEl) noMatchEl.style.display = 'block';
+      return;
+    }
+    if (noMatchEl) noMatchEl.style.display = 'none';
+
+    var typeLabels = { team: 'Team', sponsor: 'Sponsor', organizer: 'Organizer', media: 'Media', other: 'Other' };
+
+    tbody.innerHTML = rows.map(function(p, i) {
       var av = DL_AVATAR[i % DL_AVATAR.length];
-      return '<span class="dl-client-chip" data-id="' + p.id + '">' +
-        '<span class="dl-client-chip__avatar" style="background:' + av.bg + ';color:' + av.fg + ';">' + escapeHtml(dlInitials(p.name)) + '</span>' +
-        '<span style="font-size:12px;color:var(--text-primary);">' + escapeHtml(p.name) + '</span>' +
-        '<span class="dl-num" style="font-size:11px;color:var(--text-muted);">' + galCount + '</span>' +
-      '</span>';
+      var galCount = p.gallery_count != null ? p.gallery_count : (p.galleries ? p.galleries.length : 0);
+      var live = liveCount(p);
+      var photoCount = p.photo_count || 0;
+      var typeKey = p.client_type || 'other';
+      var typeLabel = typeLabels[p.client_type] || '—';
+      var contact = p.client_contact_email
+        ? escapeHtml(p.client_contact_email)
+        : '<span style="color:var(--text-muted);">—</span>';
+      var liveCell = '<span class="dl-live' + (live > 0 ? ' dl-live--on' : '') + '">' +
+        (live > 0 ? '<span class="dl-live__dot"></span>' : '') + live + '/' + galCount + '</span>';
+      var link = p.client_slug
+        ? '<span class="dl-num dl-client-link dl-copy-link" data-copy="https://photos.racetagger.cloud/c/' + escapeHtml(p.client_slug) + '" title="Copy client link">photos.racetagger.cloud/c/' + escapeHtml(p.client_slug) + '</span>'
+        : '<span style="color:var(--text-muted);">not shared</span>';
+      return '<tr class="dl-client-row" data-id="' + p.id + '">' +
+        '<td class="dl-td">' +
+          '<div class="dl-client-cell">' +
+            '<span class="dl-client-chip__avatar" style="background:' + av.bg + ';color:' + av.fg + ';">' + escapeHtml(dlInitials(p.name)) + '</span>' +
+            '<span class="dl-client-name">' + escapeHtml(p.name || 'Untitled client') + '</span>' +
+          '</div>' +
+        '</td>' +
+        '<td class="dl-td"><span class="dl-type-pill dl-type-pill--' + typeKey + '">' + escapeHtml(typeLabel) + '</span></td>' +
+        '<td class="dl-td dl-td--contact">' + contact + '</td>' +
+        '<td class="dl-td dl-td--num dl-num">' + galCount + '</td>' +
+        '<td class="dl-td dl-td--num">' + liveCell + '</td>' +
+        '<td class="dl-td dl-td--num dl-num">' + photoCount + '</td>' +
+        '<td class="dl-td dl-td--link">' + link + '</td>' +
+      '</tr>';
     }).join('');
 
-    grid.querySelectorAll('.dl-client-chip').forEach(function(card) {
-      card.addEventListener('click', function() { openProjectDetail(this.dataset.id); });
+    tbody.querySelectorAll('.dl-client-row').forEach(function(row) {
+      row.addEventListener('click', function() { openProjectDetail(this.dataset.id); });
+    });
+
+    // Copy the client's shareable link without opening the detail.
+    tbody.querySelectorAll('.dl-copy-link').forEach(function(el) {
+      el.addEventListener('click', function(ev) {
+        ev.stopPropagation();
+        var url = this.dataset.copy;
+        if (!url) return;
+        navigator.clipboard.writeText(url)
+          .then(function() { dlNotify('Client link copied.', 'success'); })
+          .catch(function() { dlNotify('Couldn\'t copy the link.', 'error'); });
+      });
     });
   }
 
@@ -386,7 +488,14 @@
   function bindEvents() {
     // Gallery modal
     var btnCreateGallery = document.getElementById('btn-create-gallery');
-    if (btnCreateGallery) btnCreateGallery.addEventListener('click', function() { showModal('modal-create-gallery'); });
+    if (btnCreateGallery) btnCreateGallery.addEventListener('click', function() {
+      // Offer a client picker — unless we're already inside a client detail,
+      // in which case the gallery is locked to that client and the field hides.
+      populateGalleryClientSelect('input-gallery-client', selectedProjectId);
+      var field = document.getElementById('gallery-client-field');
+      if (field) field.style.display = selectedProjectId ? 'none' : '';
+      showModal('modal-create-gallery');
+    });
 
     var btnCancelGallery = document.getElementById('btn-cancel-gallery');
     if (btnCancelGallery) btnCancelGallery.addEventListener('click', function() { hideModal('modal-create-gallery'); });
@@ -410,9 +519,11 @@
           // originals (decision #1). Off by default → HD stays a manual choice.
           settings: { auto_hd_upload: !!(autoHdEl && autoHdEl.checked) }
         };
-        // If we're inside a project, associate the gallery
-        if (selectedProjectId) {
-          galleryData.project_id = selectedProjectId;
+        // Associate a client: inside a client detail use that; otherwise the picker.
+        var galleryClientSel = document.getElementById('input-gallery-client');
+        var chosenClient = selectedProjectId || (galleryClientSel ? galleryClientSel.value : '') || null;
+        if (chosenClient) {
+          galleryData.project_id = chosenClient;
         }
         var result = await window.api.invoke('delivery-create-gallery', galleryData);
         if (result && result.success) {
@@ -469,6 +580,55 @@
 
     var btnCancelProject = document.getElementById('btn-cancel-project');
     if (btnCancelProject) btnCancelProject.addEventListener('click', function() { hideModal('modal-create-project'); });
+
+    // Clients table — text filter, type filter, sortable headers.
+    var clientsFilterInput = document.getElementById('clients-filter');
+    if (clientsFilterInput) clientsFilterInput.addEventListener('input', function() {
+      clientsFilterText = this.value || '';
+      renderClientsTable();
+    });
+    var clientsTypeSel = document.getElementById('clients-type-filter');
+    if (clientsTypeSel) clientsTypeSel.addEventListener('change', function() {
+      clientsTypeFilter = this.value || '';
+      renderClientsTable();
+    });
+    document.querySelectorAll('.dl-clients-table th[data-sort]').forEach(function(th) {
+      th.addEventListener('click', function() {
+        var col = this.dataset.sort;
+        if (clientsSort.col === col) {
+          clientsSort.dir = clientsSort.dir === 'asc' ? 'desc' : 'asc';
+        } else {
+          clientsSort.col = col;
+          // Numeric columns default to high→low; text to A→Z.
+          clientsSort.dir = (col === 'galleries' || col === 'photos') ? 'desc' : 'asc';
+        }
+        renderClientsTable();
+      });
+    });
+
+    // Gallery detail — assign / reassign / unassign the gallery's client.
+    var galleryDetailClientSel = document.getElementById('gallery-detail-client');
+    if (galleryDetailClientSel) galleryDetailClientSel.addEventListener('change', async function() {
+      var sel = this;
+      var modal = document.getElementById('modal-gallery-detail');
+      var gid = modal && modal.dataset ? modal.dataset.galleryId : null;
+      if (!gid) return;
+      var newProjectId = sel.value || null;
+      try {
+        var res = await window.api.invoke('delivery-update-gallery', { id: gid, data: { project_id: newProjectId } });
+        if (res && res.success) {
+          var gal = galleries.find(function(g) { return g.id === gid; });
+          if (gal) gal.project_id = newProjectId;
+          dlNotify(newProjectId ? 'Gallery assigned to client.' : 'Gallery unassigned from client.', 'success');
+          loadProjects();
+        } else {
+          sel.value = newProjectId ? '' : sel.value;
+          dlNotify('Couldn\'t update the client: ' + (res ? res.error : 'unknown error'), 'error');
+        }
+      } catch (e) {
+        dlNotify('Couldn\'t update the client.', 'error');
+      }
+    });
 
     var btnSaveProject = document.getElementById('btn-save-project');
     if (btnSaveProject) btnSaveProject.addEventListener('click', async function() {
@@ -675,6 +835,10 @@
     if (accessSelect) {
       accessSelect.value = gallery.access_type || 'unrestricted';
     }
+
+    // Populate + preselect the gallery's client (project). Programmatic value
+    // set does NOT fire 'change', so this never triggers an accidental update.
+    populateGalleryClientSelect('gallery-detail-client', gallery.project_id || '');
 
     // Reflect the per-gallery auto-HD-upload flag (settings.auto_hd_upload)
     var autoHdToggle = document.getElementById('gallery-detail-auto-hd');

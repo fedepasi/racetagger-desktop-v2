@@ -175,20 +175,55 @@
     </div>
   </div>
 
-  <!-- Clients Section (optional grouping) -->
-  <div id="delivery-projects-section" style="display: none; margin-bottom: 28px; padding: 14px 16px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px;">
-    <div class="dl-section-head" style="margin-bottom: 11px;">
-      <div class="dl-section-head__left" style="flex-wrap: wrap;">
-        <span style="font-size: 13px; font-weight: 600; color: var(--text-primary);">Clients</span>
-        <span id="projects-count" class="dl-num" style="font-size: 12px; color: var(--text-muted);">0</span>
-        <span style="font-size: 11px; color: var(--text-muted);">· optional — group galleries by team or sponsor</span>
+  <!-- Clients Section (filterable table) -->
+  <div id="delivery-projects-section" style="display: none; margin-bottom: 28px;">
+    <div class="dl-section-head" style="margin-bottom: 12px;">
+      <div class="dl-section-head__left" style="flex-wrap: wrap; gap: 8px;">
+        <span style="font-size: 15px; font-weight: 700; color: var(--text-primary);">Clients</span>
+        <span id="projects-count" class="dl-num" style="font-size: 12px; color: var(--text-muted); background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 99px; padding: 1px 9px;">0</span>
+        <span style="font-size: 11px; color: var(--text-muted);">group galleries by team or sponsor</span>
       </div>
-      <button id="btn-create-project" class="dl-btn dl-btn--ghost dl-btn--sm">
+      <button id="btn-create-project" class="dl-btn dl-btn--primary dl-btn--sm">
         <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
         New client
       </button>
     </div>
-    <div id="projects-grid" style="display: flex; gap: 9px; flex-wrap: wrap;"></div>
+
+    <!-- Filter bar -->
+    <div class="dl-clients-filterbar">
+      <div class="dl-clients-search">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+        <input id="clients-filter" type="text" placeholder="Filter clients by name, contact, link…" autocomplete="off" spellcheck="false">
+      </div>
+      <select id="clients-type-filter" class="dl-clients-typefilter">
+        <option value="">All types</option>
+        <option value="team">Team</option>
+        <option value="sponsor">Sponsor</option>
+        <option value="organizer">Organizer</option>
+        <option value="media">Media</option>
+        <option value="other">Other</option>
+      </select>
+    </div>
+
+    <!-- Table -->
+    <div class="dl-clients-tablewrap">
+      <table class="dl-clients-table">
+        <thead>
+          <tr>
+            <th class="dl-th dl-th--sortable" data-sort="name">Client</th>
+            <th class="dl-th dl-th--sortable" data-sort="type">Type</th>
+            <th class="dl-th">Contact</th>
+            <th class="dl-th dl-th--sortable dl-th--num" data-sort="galleries">Galleries</th>
+            <th class="dl-th dl-th--sortable dl-th--num" data-sort="live">Live</th>
+            <th class="dl-th dl-th--sortable dl-th--num" data-sort="photos">Photos</th>
+            <th class="dl-th">Link</th>
+          </tr>
+        </thead>
+        <tbody id="clients-tbody"></tbody>
+      </table>
+      <div id="clients-empty" style="display:none; text-align:center; padding:26px 16px; color:var(--text-muted); font-size:13px;">No clients yet — add one to group galleries by team or sponsor.</div>
+      <div id="clients-no-match" style="display:none; text-align:center; padding:26px 16px; color:var(--text-muted); font-size:13px;">No clients match your filter.</div>
+    </div>
   </div>
 
   <!-- Client Detail (shown when client selected) -->
@@ -313,6 +348,12 @@
       <div>
         <label style="display: block; color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">Event Date</label>
         <input id="input-gallery-event-date" type="date" style="width: 100%; padding: 8px 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); font-size: 14px; box-sizing: border-box; outline: none;" onfocus="this.style.borderColor='var(--accent-primary)'" onblur="this.style.borderColor='var(--border-color)'">
+      </div>
+      <div id="gallery-client-field">
+        <label style="display: block; color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">Client <span style="font-weight: 400;">(optional)</span></label>
+        <select id="input-gallery-client" style="width: 100%; padding: 8px 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); font-size: 14px;">
+          <option value="">No client</option>
+        </select>
       </div>
       <label style="display: flex; align-items: flex-start; gap: 9px; cursor: pointer; padding: 10px 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px;">
         <input id="input-gallery-auto-hd" type="checkbox" style="width: 15px; height: 15px; accent-color: #1a9ee0; cursor: pointer; margin-top: 1px; flex-shrink: 0;">
@@ -458,6 +499,12 @@
             <option value="unrestricted">Public — anyone with the link</option>
             <option value="code">Access code required</option>
             <option value="password">Password protected</option>
+          </select>
+        </div>
+        <div style="margin-bottom: 8px;">
+          <label style="display: block; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Client</label>
+          <select id="gallery-detail-client" style="width: 100%; padding: 6px 10px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); font-size: 12px; cursor: pointer;">
+            <option value="">No client</option>
           </select>
         </div>
         <div style="margin-bottom: 8px;">
