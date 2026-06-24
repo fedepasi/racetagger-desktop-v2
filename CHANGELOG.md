@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### ✨ "Earn free credits" is now a gamified rewards hub
+
+- **The referral page became a proper rewards hub built around milestones.** Instead of a flat link + two counters, the page now shows a **milestone track** (`0 → you → 5 → 10 → 25`) with your current position lit and the next checkpoint highlighted, a **next-goal banner** with honest math ("3 more friends to a +500 bonus — 300 from referrals plus the 500 bonus, 800 credits in reach"), your **invite link** with one-click copy, a **per-friend reward tower** showing the real scaling tiers (1–5 = 100, 6–15 = 150, 16+ = 200 — the current band highlighted), placeholders for **future quests** (Follow on Instagram, Share a post, Collaborate & earn), and a **Friends joined** table at the bottom (who joined, when, and the credits they earned you). The **sidebar** also gains a compact "next milestone" badge (`2/5 → +500`) so progress is visible without opening the page. Milestone math mirrors the real reward logic exactly (one-time bonuses +500 / +1,000 / +2,500 at 5 / 10 / 25). Renderer-only (`referral.html` + `referral.css` + `referral.js` + the sidebar badge in `index.html`); the friends list comes from a read-only addition to the `satisfaction-survey` Edge Function. **No token logic touched** — the page only displays the existing signup-time referral rewards.
+
 ### ✨ Sidebar redesign — unselected items now clearly look clickable
 
 - **The sidebar nav was redrawn so non-active items read as buttons, not a flat list.** Before, only the selected item looked interactive; the rest were bare emoji + text with no affordance. Now: **real line icons** (inline SVG) replace the emoji, each in a **visible rounded chip**; rows are roomier with a clear **hover** state (panel background + accent chip); the **active** item is a refined "card" (accent-tinted fill + accent border + soft glow + accent icon). Logout is tinted red, and the divider is a clean hairline (dropped the random glowing dot). Calmer overall — removed the old shimmer / slide / glassmorphism per the brand's flat, calm rule. Renderer-only (`index.html` + `css/sidebar.css`) — no logic changes.
