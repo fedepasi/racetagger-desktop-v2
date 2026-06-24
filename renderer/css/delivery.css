@@ -468,3 +468,46 @@
 }
 .dl-copy-link { cursor: pointer; }
 .dl-copy-link:hover { text-decoration: underline; }
+
+/* ── Client detail header (matches the Clients table language) ──────────── */
+.dl-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+}
+.dl-detail-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.dl-detail-title {
+  color: var(--text-primary, #f1f5f9);
+  font-size: 20px;
+  font-weight: 700;
+  margin: 0 0 5px;
+  line-height: 1.1;
+}
+.dl-detail-metarow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.dl-detail-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-muted, #94a3b8);
+  font-size: 12px;
+}
+.dl-detail-empty {
+  color: var(--text-muted, #94a3b8);
+  font-size: 13px;
+  padding: 18px 4px;
+}

@@ -402,37 +402,67 @@
       if (!result || !result.success) return;
       var project = result.data;
 
-      var clientTypeIcons = { team: '🏎️', sponsor: '💰', organizer: '🏟️', media: '📷', other: '📋' };
-      var typeIcon = clientTypeIcons[project.client_type] || '📋';
-      var metaLine = [];
-      if (project.client_type) metaLine.push('<span style="text-transform: capitalize;">' + escapeHtml(project.client_type) + '</span>');
-      if (project.client_contact_email) metaLine.push('<span>✉ ' + escapeHtml(project.client_contact_email) + '</span>');
-
+      // Header — branded to match the Clients table (avatar + type pill + icon meta).
+      var typeLabels = { team: 'Team', sponsor: 'Sponsor', organizer: 'Organizer', media: 'Media', other: 'Other' };
+      var typeKey = project.client_type || 'other';
+      var typeLabel = typeLabels[project.client_type] || '—';
+      var avatarByType = {
+        team: DL_AVATAR[0], sponsor: DL_AVATAR[3], organizer: DL_AVATAR[2],
+        media: DL_AVATAR[1], other: { bg: 'rgba(148,163,184,0.16)', fg: '#94a3b8' }
+      };
+      var hav = avatarByType[typeKey] || DL_AVATAR[0];
+      var headMeta = '<span class="dl-type-pill dl-type-pill--' + typeKey + '">' + escapeHtml(typeLabel) + '</span>';
+      if (project.client_contact_email) {
+        headMeta += '<span class="dl-detail-meta">' + dlIcon('mail', 13) + escapeHtml(project.client_contact_email) + '</span>';
+      }
       document.getElementById('project-detail-header').innerHTML =
-        '<h2 style="color: var(--text-primary); font-size: 20px; font-weight: 700; margin: 0 0 6px;">' + typeIcon + ' ' + escapeHtml(project.name) + '</h2>' +
-        (metaLine.length > 0 ? '<div style="display: flex; align-items: center; gap: 10px; color: var(--text-muted); font-size: 12px; flex-wrap: wrap;">' + metaLine.join('') + '</div>' : '');
+        '<div class="dl-detail-head">' +
+          '<span class="dl-detail-avatar" style="background:' + hav.bg + ';color:' + hav.fg + ';">' + escapeHtml(dlInitials(project.name)) + '</span>' +
+          '<div>' +
+            '<h2 class="dl-detail-title">' + escapeHtml(project.name) + '</h2>' +
+            '<div class="dl-detail-metarow">' + headMeta + '</div>' +
+          '</div>' +
+        '</div>';
 
-      // Render client galleries
+      // Render client galleries as the same dl-card used in the main grid.
+      // Photo counts come from the already-loaded clients overview (no extra query).
+      var ovClient = projects.find(function(p) { return p.id === projectId; });
+      var photoByGallery = {};
+      if (ovClient) (ovClient.galleries || []).forEach(function(g) { photoByGallery[g.id] = g.photo_count; });
+
       var pgGrid = document.getElementById('project-galleries-grid');
       var projectGalleries = project.galleries || [];
       pgGrid.innerHTML = projectGalleries.length === 0
-        ? '<div style="color: var(--text-muted); font-size: 13px;">No galleries for this client yet.</div>'
-        : projectGalleries.map(function(g) {
-            var dateStr = g.event_date ? g.event_date : '';
-            var seasonBadge = g.season ? '<span style="font-size: 10px; padding: 2px 8px; border-radius: 12px; background: rgba(99,102,241,0.15); color: #818cf8; font-weight: 600;">' + escapeHtml(g.season) + '</span>' : '';
-            var slugLine = g.slug ? '<div style="font-size: 10px; color: var(--text-muted); margin-top: 4px; font-family: Monaco, monospace; opacity: 0.7;">photos.racetagger.cloud/' + escapeHtml(g.slug) + '</div>' : '';
-            return '<div style="background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px;">' +
-              '<div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">' +
-                '<h5 style="color: var(--text-primary); font-size: 13px; margin: 0;">' + escapeHtml(g.title) + '</h5>' +
-                seasonBadge +
+        ? '<div class="dl-detail-empty">No galleries for this client yet.</div>'
+        : projectGalleries.map(function(g, i) {
+            var isLive = g.status === 'published';
+            var stripe = DL_STRIPES[i % DL_STRIPES.length];
+            var photoCount = photoByGallery[g.id] != null ? photoByGallery[g.id] : null;
+            var stats = '';
+            if (photoCount != null) stats += '<span><b>' + photoCount + '</b> photos</span>';
+            stats += '<span>' + dlIcon('eye', 13) + ' <b>' + (g.total_views || 0) + '</b></span>';
+            stats += '<span>' + dlIcon('download', 13) + ' <b>' + (g.total_downloads || 0) + '</b></span>';
+            var chips = '';
+            if (g.event_date) chips += '<span class="dl-chip dl-chip--dim">' + dlIcon('clock', 12) + escapeHtml(g.event_date) + '</span>';
+            if (g.season) chips += '<span class="dl-chip dl-chip--neutral">' + escapeHtml(g.season) + '</span>';
+            return '<div class="dl-card" data-gid="' + g.id + '">' +
+              '<div class="dl-card__stripe dl-card__stripe--' + stripe + '"></div>' +
+              '<div class="dl-card__body">' +
+                '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:10px;">' +
+                  '<h4 class="dl-card__title">' + escapeHtml(g.title) + '</h4>' +
+                  '<span class="dl-pill ' + (isLive ? 'dl-pill--live' : 'dl-pill--draft') + '"><span class="dl-pill__dot"></span>' + (isLive ? 'Live' : 'Draft') + '</span>' +
+                '</div>' +
+                '<div class="dl-card__stats dl-num" style="margin-bottom:10px;">' + stats + '</div>' +
+                (g.slug ? '<div class="dl-card__url dl-num" style="margin-bottom:' + (chips ? '11px' : '0') + ';">photos.racetagger.cloud/' + escapeHtml(g.slug) + '</div>' : '') +
+                (chips ? '<div style="display:flex;flex-wrap:wrap;gap:6px;">' + chips + '</div>' : '') +
               '</div>' +
-              '<div style="color: var(--text-muted); font-size: 11px;">' +
-                (dateStr ? '📅 ' + dateStr + ' • ' : '') +
-                '👁 ' + (g.total_views || 0) + ' • ⬇ ' + (g.total_downloads || 0) +
-              '</div>' +
-              slugLine +
             '</div>';
           }).join('');
+
+      // Open the gallery detail when a client gallery card is clicked.
+      pgGrid.querySelectorAll('.dl-card').forEach(function(card) {
+        card.addEventListener('click', function() { openGalleryDetail(this.dataset.gid); });
+      });
 
       // Shareable links — auto-generate slug if missing
       if (!project.client_slug) {
