@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### ✨ Referral page reframed: "Invite friends" → "Earn free credits"
+
+- **The sidebar referral page now leads with what you get.** The sidebar entry and page heading changed from "Invite friends" to **"Earn free credits"**, and the intro now puts the benefit first (you earn free credits every time a photographer signs up with your link; they get RaceTagger). The post-analysis satisfaction check-in keeps its warmer "Invite a friend" wording on purpose — the dedicated sidebar page is the benefit-led destination. Renderer-only (`index.html` + `referral.html`) — no token logic, schema, or Edge Function changes.
+
 ### 🐛 Fix: "Useful Data Found" suggestions no longer re-pop after you skip them
 
 - **The learned-data ("Improve Preset") suggestions used to reappear every time you finished an analysis, even after clicking Skip.** They auto-open when you click **DONE** or **New Analysis** on the Results screen, but a Skip (or ✕, or clicking outside) saved nothing — so the next time you opened that same execution and left it, the identical suggestions popped again. Skip is now **remembered per execution** (a lightweight localStorage flag, survives reloads): once you skip an analysis's suggestions, the auto-popup won't nag you again for it. The **✨ Improve Preset button stays** as the on-demand way to reopen the suggestions whenever you want — nothing is hidden, it just stops interrupting. Accepting (Update Preset) still works as before and hides both the popup and the button for that execution. Also fixed a related detail: the auto-popup now passes the preset's existing `series_sponsor_ignore` list to the modal, so the series-sponsor confirmation step no longer re-proposes brands you've already chosen to ignore. Renderer-only (`learned-data-modal.js` + `results.html`) — no participant data, schema, token logic or Edge Function changes.
