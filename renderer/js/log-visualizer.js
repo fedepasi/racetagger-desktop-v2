@@ -57,6 +57,12 @@ class LogVisualizer {
     this.participantPresetData = null;
     this.presetParticipants = [];
 
+    // Keyboard-only review: index of the detection entry the user is currently
+    // on within the open photo. Drives ↑/↓ navigation between entries and makes
+    // the digit/Space/Enter fast-paths target the ACTIVE entry (not always the
+    // first), now that every photo always renders a trailing empty entry.
+    this._activeVehicleIndex = 0;
+
     console.log('[LogVisualizer] Initialized');
   }
 
@@ -820,11 +826,11 @@ class LogVisualizer {
             // accidental side-effect.
           }
         } else {
-          // (b) Type-to-edit: focus the first Race Number input and seed it
-          // with the digit the user just typed. Preserve change-tracking by
-          // dispatching an 'input' event so any listeners (auto-save, dirty
-          // flag, datalist) react as if the user typed normally.
-          const raceInput = document.querySelector('#lv-vehicles [data-field="raceNumber"]');
+          // (b) Type-to-edit: focus the ACTIVE entry's Race Number input and
+          // seed it with the digit the user just typed. Preserve change-tracking
+          // by dispatching an 'input' event so any listeners (auto-save, dirty
+          // flag, datalist, empty-slot materialize) react as if typed normally.
+          const raceInput = this._getActiveRaceNumberInput();
           if (raceInput) {
             e.preventDefault();
             raceInput.value = e.key;
@@ -882,6 +888,36 @@ class LogVisualizer {
           // otherwise: let the browser move the caret inside the text
           break;
 
+        case 'ArrowDown':
+        case 'ArrowUp': {
+          // Keyboard-only review: ↑/↓ move between detection entries WITHIN the
+          // current photo (including the trailing empty entry), so the user can
+          // reach a second car or the "add" slot without the mouse. ←/→ stay on
+          // photo navigation; ↑/↓ were previously unused here (zoom only binds
+          // +/-/0), so there's no conflict.
+          const cards = Array.from(document.querySelectorAll('#lv-vehicles .lv-vehicle-editor'));
+          if (cards.length <= 1) break; // single entry → nothing to move between
+          e.preventDefault();
+          const focusedCard = active && active.closest ? active.closest('.lv-vehicle-editor') : null;
+          let curIdx = focusedCard ? cards.indexOf(focusedCard) : (this._activeVehicleIndex || 0);
+          if (curIdx < 0) curIdx = 0;
+          const dir = e.key === 'ArrowDown' ? 1 : -1;
+          const targetIdx = Math.max(0, Math.min(cards.length - 1, curIdx + dir));
+          if (targetIdx === curIdx) break;
+          this._activeVehicleIndex = targetIdx;
+          // Keep the user on the same field type when possible (number→number),
+          // caret at end so they can keep typing.
+          const sourceField = (active && active.dataset && active.dataset.field) || 'raceNumber';
+          const targetCard = cards[targetIdx];
+          const targetInput = targetCard.querySelector(`[data-field="${sourceField}"]`) ||
+                              targetCard.querySelector('[data-field="raceNumber"]');
+          if (targetInput) {
+            targetInput.focus();
+            try { targetInput.setSelectionRange(targetInput.value.length, targetInput.value.length); } catch (_) {}
+          }
+          break;
+        }
+
         case ' ':
         case 'Spacebar': // legacy key name
           // WF-02 — Space enters "edit number" mode: focus the Race Number field
@@ -890,7 +926,7 @@ class LogVisualizer {
           // Space is for editing the existing value (backspace/append).
           if (!isInputFocused) {
             e.preventDefault(); // never let Space scroll the gallery (even on no-match photos)
-            const raceInput = document.querySelector('#lv-vehicles [data-field="raceNumber"]');
+            const raceInput = this._getActiveRaceNumberInput();
             if (raceInput) {
               raceInput.focus();
               try { raceInput.setSelectionRange(raceInput.value.length, raceInput.value.length); } catch (_) {}
@@ -913,7 +949,7 @@ class LogVisualizer {
             // advances to the next photo. Mirrors the in-field Enter so the user
             // never needs the mouse. Works for matched AND no-match photos.
             e.preventDefault(); // don't let Enter bubble to the browser (incl. empty no-match photos)
-            const raceInput = document.querySelector('#lv-vehicles [data-field="raceNumber"]');
+            const raceInput = this._getActiveRaceNumberInput();
             if (raceInput) {
               this._handleRaceNumberEnter(raceInput);
             }
@@ -3279,33 +3315,26 @@ class LogVisualizer {
     const vehicles = result.analysis || [];
     const confidence = this.getAverageConfidence(result);
 
-    if (vehicles.length > 0) {
-      // Render the existing detection cards…
-      const cardsHtml = vehicles
-        .map((vehicle, index) => this.createVehicleEditorHTML(vehicle, index, result.fileName, actualImageIndex))
-        .join('');
-      // …then ALSO expose the "add detection" action. Previously this button
-      // only lived in the empty-state branch below, so on a group photo that
-      // detected e.g. 3 of 5 plates the user had no way to add the 2 missing
-      // ones (GitHub #167). Same class + data-action as the empty-state button,
-      // so the existing delegated handler (setupVehicleEditorEvents → 'add' →
-      // addVehicleByFileName) picks it up unchanged.
-      const addDetectionHtml =
-        `<div class="lv-add-detection-row">
-          <button class="lv-add-vehicle-btn" data-action="add" data-file-name="${result.fileName}">
-            + Add detection
-          </button>
-        </div>`;
-      vehiclesContainer.innerHTML = cardsHtml + addDetectionHtml;
-    } else {
-      vehiclesContainer.innerHTML =
-        `<div class="lv-no-vehicle">
-          <p>No detections in this image</p>
-          <button class="lv-add-vehicle-btn" data-action="add" data-file-name="${result.fileName}">
-            + Add detection
-          </button>
-        </div>`;
-    }
+    // Re-rendering the editor for a (new) photo: the active entry resets to the
+    // first one (FP decision: focus starts on the existing detection; ↓ reaches
+    // the empty slot).
+    this._activeVehicleIndex = 0;
+
+    // Keyboard-only review (no mouse): we no longer show a "+ Add detection"
+    // button (a click target). Instead we ALWAYS render one trailing EMPTY entry
+    // the user can fill straight from the keyboard. When they start typing into
+    // it, _materializeEmptySlot promotes it to a real detection and appends a
+    // fresh empty entry, so there is always exactly one blank slot at the end —
+    // for 0 detections (just the slot), 1, or many. The empty slot is NOT backed
+    // by a result.analysis object until edited, so blank slots never persist.
+    const cardsHtml = vehicles
+      .map((vehicle, index) => this.createVehicleEditorHTML(vehicle, index, result.fileName, actualImageIndex))
+      .join('');
+    const emptySlotHtml = this.createVehicleEditorHTML(
+      { raceNumber: '', team: '', drivers: [], confidence: 1.0 },
+      vehicles.length, result.fileName, actualImageIndex, { isEmptySlot: true }
+    );
+    vehiclesContainer.innerHTML = cardsHtml + emptySlotHtml;
 
     // Update metadata info
     const confidenceEl = document.getElementById('lv-confidence');
@@ -3415,6 +3444,42 @@ class LogVisualizer {
     // Remove previous listeners to avoid duplicates
     vehiclesContainer.replaceWith(vehiclesContainer.cloneNode(true));
     const newContainer = document.getElementById('lv-vehicles');
+
+    // Keyboard-only review wiring (delegated, so appended entries are covered):
+    //  - focusin  → remember which entry is active (drives ↑/↓ + fast-paths)
+    //  - input    → mark the entry dirty; materialize the trailing empty slot on
+    //               first edit so there's always one blank entry at the end
+    //  - focusout → silently persist a dirty entry when focus leaves it (so
+    //               moving between entries with ↑/↓/Tab never loses edits and
+    //               never needs a Save click)
+    newContainer.addEventListener('focusin', (event) => {
+      const card = event.target.closest && event.target.closest('.lv-vehicle-editor');
+      if (!card) return;
+      const idx = parseInt(card.dataset.vehicleIndex, 10);
+      if (!Number.isNaN(idx)) this._activeVehicleIndex = idx;
+    });
+
+    newContainer.addEventListener('input', (event) => {
+      const input = event.target;
+      if (!input || input.tagName !== 'INPUT' || !input.dataset.field) return;
+      const card = input.closest('.lv-vehicle-editor');
+      if (!card) return;
+      card.dataset.dirty = '1';
+      if (card.classList.contains('lv-vehicle-empty-slot')) {
+        this._materializeEmptySlot(card);
+      }
+    });
+
+    newContainer.addEventListener('focusout', (event) => {
+      const leaving = event.target.closest && event.target.closest('.lv-vehicle-editor');
+      if (!leaving) return;
+      // Skip when focus just moves between fields of the SAME entry.
+      const goingTo = event.relatedTarget && event.relatedTarget.closest
+        ? event.relatedTarget.closest('.lv-vehicle-editor')
+        : null;
+      if (goingTo === leaving) return;
+      this._autoSaveDirtyCard(leaving);
+    });
 
     // Add event delegation for all vehicle editor buttons
     newContainer.addEventListener('click', (event) => {
@@ -3561,6 +3626,10 @@ class LogVisualizer {
     // for the same correction — exactly what we saw in the logs where the
     // first image got "Wrote USER_MANUAL" twice.
     const vehicleEditor = input.closest('.lv-vehicle-editor');
+    // Enter owns the save for this entry below; clear its dirty flag so the
+    // focusout that fires when we advance/re-render doesn't auto-save it a
+    // second time (which would write a duplicate CORRECTION event).
+    if (vehicleEditor) vehicleEditor.dataset.dirty = '';
     const guardKey = vehicleEditor
       ? `${vehicleEditor.dataset.fileName || ''}_${vehicleEditor.dataset.vehicleIndex || ''}`
       : '';
@@ -3586,8 +3655,14 @@ class LogVisualizer {
       }
     }
 
-    // 2) Fire-and-forget save for the current vehicle (do not block navigation)
-    if (vehicleEditor) {
+    // 2) Fire-and-forget save for the current vehicle (do not block navigation).
+    //    Skip the still-blank trailing slot: pressing Enter on it just means
+    //    "nothing to add here, advance" — there's no backing analysis object, so
+    //    a save would only error. (Once typed into, it's already materialized
+    //    into a real entry and no longer carries the empty-slot class.)
+    const isUntouchedEmptySlot = vehicleEditor &&
+      vehicleEditor.classList.contains('lv-vehicle-empty-slot');
+    if (vehicleEditor && !isUntouchedEmptySlot) {
       const vehicleIndex = parseInt(vehicleEditor.dataset.vehicleIndex, 10);
       const fileName = vehicleEditor.dataset.fileName;
       if (!Number.isNaN(vehicleIndex) && fileName) {
@@ -3635,10 +3710,107 @@ class LogVisualizer {
   }
 
   /**
+   * Race Number input of the ACTIVE entry (the one the user is on), used by the
+   * keyboard fast-paths (type-a-digit, Space, Enter-when-unfocused). Falls back
+   * to the tracked active index, then the first entry. Needed because every
+   * photo now renders a trailing empty entry, so "the first input" is no longer
+   * always the right target.
+   */
+  _getActiveRaceNumberInput() {
+    const active = document.activeElement;
+    const activeCard = active && active.closest ? active.closest('#lv-vehicles .lv-vehicle-editor') : null;
+    if (activeCard) {
+      const inp = activeCard.querySelector('[data-field="raceNumber"]');
+      if (inp) return inp;
+    }
+    const byIndex = document.querySelector(
+      `#lv-vehicles .lv-vehicle-editor[data-vehicle-index="${this._activeVehicleIndex || 0}"] [data-field="raceNumber"]`
+    );
+    if (byIndex) return byIndex;
+    return document.querySelector('#lv-vehicles [data-field="raceNumber"]');
+  }
+
+  /**
+   * Promote the trailing empty entry into a real detection on first edit, and
+   * append a fresh empty entry so there's always exactly one blank slot at the
+   * end. Append-only (no full re-render) so the caret/focus the user is typing
+   * into is preserved.
+   */
+  _materializeEmptySlot(card) {
+    if (!card) return;
+    const fileName = card.dataset.fileName;
+    const idx = parseInt(card.dataset.vehicleIndex, 10);
+    if (!fileName || Number.isNaN(idx)) return;
+
+    const results = this.filteredResults.length > 0 ? this.filteredResults : this.imageResults;
+    const result = results.find(r => r.fileName === fileName);
+    if (!result) return;
+    if (!Array.isArray(result.analysis)) result.analysis = [];
+
+    // Only materialize once: the empty slot's index must be the next free slot.
+    if (idx !== result.analysis.length) {
+      card.classList.remove('lv-vehicle-empty-slot');
+      return;
+    }
+
+    result.analysis.push({ raceNumber: '', team: '', drivers: [], confidence: 1.0 });
+
+    // Promote this card's chrome (drop the empty-slot styling + neutral header).
+    // The 🗑️/💾 buttons (mouse affordances) are intentionally NOT injected here —
+    // the keyboard flow doesn't need them, and a re-render on the next photo
+    // navigation restores the full card. This keeps the edit-in-progress DOM
+    // untouched so the caret never jumps.
+    card.classList.remove('lv-vehicle-empty-slot');
+    const headerH5 = card.querySelector('.lv-vehicle-header h5');
+    if (headerH5) headerH5.textContent = `Detection ${idx + 1}`;
+    const confEl = card.querySelector('.lv-confidence-display');
+    if (confEl) confEl.textContent = '100%';
+
+    // Append a new trailing empty entry after this one.
+    const imageIndex = parseInt(card.dataset.imageIndex, 10);
+    const slotHtml = this.createVehicleEditorHTML(
+      { raceNumber: '', team: '', drivers: [], confidence: 1.0 },
+      result.analysis.length, fileName,
+      Number.isNaN(imageIndex) ? this.currentImageIndex : imageIndex,
+      { isEmptySlot: true }
+    );
+    card.insertAdjacentHTML('afterend', slotHtml);
+
+    this.updateStatistics();
+  }
+
+  /**
+   * Persist an entry that has unsaved edits when focus leaves it — silently (no
+   * editor re-render, no toast) so ↑/↓/Tab navigation between entries stays
+   * smooth and nothing is lost without a Save click. Unmaterialized blank slots
+   * have nothing to save and are skipped.
+   */
+  _autoSaveDirtyCard(card) {
+    if (!card || card.dataset.dirty !== '1') return;
+    if (card.classList.contains('lv-vehicle-empty-slot')) return;
+    card.dataset.dirty = '';
+    // Don't persist a fully-empty entry (e.g. typed then cleared) — that would
+    // write a blank detection. Clearing the dirty flag above is enough.
+    const allEmpty = Array.from(card.querySelectorAll('.lv-edit-input'))
+      .every(i => !(i.value || '').trim());
+    if (allEmpty) return;
+    const fileName = card.dataset.fileName;
+    const idx = parseInt(card.dataset.vehicleIndex, 10);
+    if (!fileName || Number.isNaN(idx)) return;
+    Promise.resolve(this.saveVehicleChangesByFileName(fileName, idx, { silent: true }))
+      .catch(err => console.error('[LogVisualizer] Auto-save on entry change failed:', err));
+  }
+
+  /**
    * Create vehicle editor HTML
    */
-  createVehicleEditorHTML(vehicle, vehicleIndex, fileName, imageIndex) {
-    const isModified = this.manualCorrections.has(`${fileName}_${vehicleIndex}`);
+  createVehicleEditorHTML(vehicle, vehicleIndex, fileName, imageIndex, opts = {}) {
+    // isEmptySlot = the always-present trailing blank entry (keyboard-only "add").
+    // It has no backing result.analysis object yet, so it shows no delete/save
+    // buttons and a neutral header/confidence until the user types into it
+    // (then _materializeEmptySlot promotes it to a real detection).
+    const isEmptySlot = !!opts.isEmptySlot;
+    const isModified = !isEmptySlot && this.manualCorrections.has(`${fileName}_${vehicleIndex}`);
 
     const hasPresetData = this.presetParticipants && this.presetParticipants.length > 0;
 
@@ -3676,12 +3848,12 @@ class LogVisualizer {
     }
 
     return `
-      <div class="lv-vehicle-editor ${isModified ? 'modified' : ''}" data-vehicle-index="${vehicleIndex}" data-image-index="${imageIndex}" data-file-name="${fileName}">
+      <div class="lv-vehicle-editor ${isModified ? 'modified' : ''}${isEmptySlot ? ' lv-vehicle-empty-slot' : ''}" data-vehicle-index="${vehicleIndex}" data-image-index="${imageIndex}" data-file-name="${fileName}">
         <div class="lv-vehicle-header">
-          <h5>Detection ${vehicleIndex + 1}</h5>
+          <h5>${isEmptySlot ? 'New detection' : `Detection ${vehicleIndex + 1}`}</h5>
           ${isModified ? '<span class="lv-modified-indicator">✏️ Modified</span>' : ''}
           ${hasPresetData ? '<span class="lv-autocomplete-indicator" title="Autocomplete enabled from participant preset">🎯</span>' : ''}
-          <button class="lv-delete-vehicle" data-action="delete" data-vehicle-index="${vehicleIndex}" data-file-name="${fileName}">🗑️</button>
+          ${isEmptySlot ? '' : `<button class="lv-delete-vehicle" data-action="delete" data-vehicle-index="${vehicleIndex}" data-file-name="${fileName}">🗑️</button>`}
         </div>
 
         <div class="lv-editor-fields">
@@ -3721,18 +3893,18 @@ class LogVisualizer {
 
           <div class="lv-field-group">
             <label>Confidence:</label>
-            <span class="lv-confidence-display">${Math.round((vehicle.confidence || 0) * 100)}%</span>
+            <span class="lv-confidence-display">${isEmptySlot ? '—' : `${Math.round((vehicle.confidence || 0) * 100)}%`}</span>
           </div>
         </div>
 
-        <div class="lv-editor-actions">
+        ${isEmptySlot ? '' : `<div class="lv-editor-actions">
           <button class="lv-save-vehicle" data-action="save" data-vehicle-index="${vehicleIndex}" data-file-name="${fileName}">
             💾 Save Changes
           </button>
           <button class="lv-reset-vehicle" data-action="reset" data-vehicle-index="${vehicleIndex}" data-file-name="${fileName}">
             🔄 Reset
           </button>
-        </div>
+        </div>`}
       </div>
     `;
   }
@@ -3886,11 +4058,16 @@ class LogVisualizer {
   /**
    * Save changes for a specific vehicle using fileName (event delegation version)
    */
-  async saveVehicleChangesByFileName(fileName, vehicleIndex) {
+  async saveVehicleChangesByFileName(fileName, vehicleIndex, opts = {}) {
+    // silent = persist WITHOUT re-rendering the editor or showing a toast. Used
+    // by the auto-save-on-entry-change path (↑/↓/Tab between entries) so the
+    // user's focus/caret is never disturbed and they aren't spammed with toasts.
+    const silent = !!opts.silent;
     try {
       console.log(`[LogVisualizer] saveVehicleChangesByFileName called with:`, {
         fileName,
         vehicleIndex,
+        silent,
         filteredResultsLength: this.filteredResults.length,
         isGalleryOpen: this.isGalleryOpen
       });
@@ -3978,9 +4155,11 @@ class LogVisualizer {
       // would never tick up for needs-review or no-match edits.
       result.hasCorrection = true;
 
-      // Update UI - find the current index if in gallery
+      // Update UI - find the current index if in gallery.
+      // Skipped on silent auto-save: a re-render here would tear down the entry
+      // the user just moved focus into (↑/↓/Tab), losing their caret.
       let currentIndex = -1;
-      if (this.isGalleryOpen) {
+      if (this.isGalleryOpen && !silent) {
         currentIndex = this.filteredResults.findIndex(r => r.fileName === fileName);
         if (currentIndex >= 0) {
           this.updateVehicleEditor(result, currentIndex);
@@ -4017,9 +4196,12 @@ class LogVisualizer {
         console.warn('[LogVisualizer] updateResultCard after save failed (non-critical):', renderErr);
       }
 
-      // Show feedback
-      this.showNotification('✅ Changes saved and persisted', 'success');
-      console.log(`[LogVisualizer] Saved and persisted manual correction for ${fileName} vehicle ${vehicleIndex}:`, changes);
+      // Show feedback (suppressed on silent auto-save to avoid toast spam while
+      // the user moves between entries).
+      if (!silent) {
+        this.showNotification('✅ Changes saved and persisted', 'success');
+      }
+      console.log(`[LogVisualizer] Saved${silent ? ' (silent)' : ''} and persisted manual correction for ${fileName} vehicle ${vehicleIndex}:`, changes);
 
       // Strategy G: Recheck learned data availability after correction
       if (changes.raceNumber) {
