@@ -61,7 +61,7 @@
       var reward = Number(data.reward_display) || 0;
       if (rewardNote) {
         rewardNote.textContent = reward > 0
-          ? 'You earn ' + reward + ' credits for every friend who signs up.'
+          ? 'You earn from ' + reward + ' credits for every friend who signs up — and it grows the more you invite.'
           : 'You earn credits for every friend who signs up.';
       }
       if (friendsEl) friendsEl.textContent = fmt(data.total_referrals);
