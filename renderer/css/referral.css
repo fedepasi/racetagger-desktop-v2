@@ -1,0 +1,82 @@
+/* ==================== Invite Friends (Referral) Page ==================== */
+
+.referral-page { max-width: 720px; }
+
+.referral-intro {
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text-secondary, #cbd5e1);
+  margin: 4px 0 20px;
+  max-width: 560px;
+}
+
+.referral-card { margin-bottom: 18px; }
+
+.referral-link-row { display: flex; gap: 10px; align-items: stretch; }
+
+.referral-link-input {
+  flex: 1;
+  background: var(--bg-secondary, #0f172a);
+  border: 1px solid var(--border-color, #334155);
+  border-radius: 8px;
+  color: var(--accent-primary, #1a9ee0);
+  font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  font-size: 12.5px;
+  padding: 10px 12px;
+  box-sizing: border-box;
+}
+.referral-link-input:focus {
+  outline: none;
+  border-color: var(--accent-primary, #1a9ee0);
+  box-shadow: 0 0 0 3px rgba(26, 158, 224, 0.18);
+}
+
+.referral-copy-btn { flex-shrink: 0; white-space: nowrap; }
+.referral-copy-btn.copied {
+  background: var(--accent-success, #10b981) !important;
+  border-color: var(--accent-success, #10b981) !important;
+  color: #fff !important;
+}
+
+.referral-reward-note {
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: var(--text-secondary, #94a3b8);
+}
+
+/* Stats */
+.referral-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+.referral-stat {
+  background: var(--bg-card, #1e293b);
+  border: 1px solid var(--border-color, #334155);
+  border-radius: 10px;
+  padding: 18px;
+  text-align: left;
+}
+.referral-stat-value {
+  font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--accent-primary, #1a9ee0);
+  line-height: 1.1;
+}
+.referral-stat-label {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-secondary, #94a3b8);
+}
+
+/* How it works */
+.referral-how {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--text-secondary, #cbd5e1);
+  font-size: 13.5px;
+  line-height: 1.7;
+}
+.referral-how li { margin-bottom: 4px; }

@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="css/processing-status.css">
   <link rel="stylesheet" href="css/results-integrated.css">
   <link rel="stylesheet" href="css/feedback-modal.css">
+  <link rel="stylesheet" href="css/survey-modal.css">
 </head>
 <body>
   <div class="results-page">
@@ -185,6 +186,7 @@
   <script src="js/unified-export-iptc-modal.js"></script>
   <script src="js/results-delivery.js"></script>
   <script src="js/feedback-modal.js"></script>
+  <script src="js/survey-modal.js"></script>
 
   <script>
     // Wait for DOM to be ready before attaching event listeners
@@ -223,6 +225,18 @@
             } catch (e) {
               console.warn('[Results] Learned data modal error (non-critical):', e);
             }
+          }
+
+          // Satisfaction survey / referral nudge — the server decides whether and
+          // which prompt to show (once-ever gating, >50 photos, milestones).
+          // Awaited so the modal isn't wiped by the navigation below.
+          try {
+            const elig = await window.api.invoke('survey:get-eligibility');
+            if (elig && elig.success && elig.data && elig.data.prompt && elig.data.prompt !== 'none' && window.openSurveyModal) {
+              await window.openSurveyModal(elig.data);
+            }
+          } catch (e) {
+            console.warn('[Results] Survey check skipped (non-critical):', e);
           }
 
           console.log('[Results] Navigating to home...');

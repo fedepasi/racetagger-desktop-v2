@@ -1,0 +1,52 @@
+<!-- Invite Friends (Referral) Page -->
+<!-- Loaded dynamically by router.js into #page-content -->
+
+<div class="referral-page">
+  <h1 class="page-title">Invite friends</h1>
+  <p class="referral-intro">
+    Invite a fellow photographer to RaceTagger. They get the app, and you earn
+    credits for every friend who signs up with your link.
+  </p>
+
+  <!-- Invite link -->
+  <div class="card referral-card">
+    <div class="card-header">
+      <div class="card-title">Your invite link</div>
+    </div>
+    <div class="card-body">
+      <div class="referral-link-row">
+        <input id="referral-invite-link" class="referral-link-input" type="text" readonly value="Loading…">
+        <button id="referral-copy-btn" class="btn btn-primary referral-copy-btn">Copy link</button>
+      </div>
+      <p class="referral-reward-note" id="referral-reward-note">
+        You earn credits for every friend who signs up.
+      </p>
+    </div>
+  </div>
+
+  <!-- Stats -->
+  <div class="referral-stats">
+    <div class="referral-stat">
+      <div class="referral-stat-value" id="referral-friends-count">0</div>
+      <div class="referral-stat-label">Friends joined</div>
+    </div>
+    <div class="referral-stat">
+      <div class="referral-stat-value" id="referral-credits-count">0</div>
+      <div class="referral-stat-label">Credits earned</div>
+    </div>
+  </div>
+
+  <!-- How it works -->
+  <div class="card referral-card">
+    <div class="card-header">
+      <div class="card-title">How it works</div>
+    </div>
+    <div class="card-body">
+      <ol class="referral-how">
+        <li>Share your link with a photographer who shoots race events.</li>
+        <li>They sign up and download RaceTagger.</li>
+        <li>You earn credits as soon as they join — automatically.</li>
+      </ol>
+    </div>
+  </div>
+</div>

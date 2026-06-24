@@ -40,6 +40,7 @@ import { registerFaceRecognitionHandlers } from './face-recognition-handlers';
 import { registerPresetFaceHandlers } from './preset-face-handlers';
 import { registerVersionHandlers } from './version-handlers';
 import { registerFeedbackHandlers } from './feedback-handlers';
+import { registerSurveyHandlers } from './survey-handlers';
 import { registerDiagnosticHandlers } from './diagnostic-handlers';
 import { registerErrorTelemetryHandlers } from './error-telemetry-handlers';
 import { registerPresetIptcHandlers } from './preset-iptc-handlers';
@@ -104,6 +105,9 @@ export function registerAllHandlers(): void {
 
   // Unified support handlers: feedback + diagnostics upload (5)
   registerFeedbackHandlers();
+
+  // Satisfaction survey + referral handlers (4)
+  registerSurveyHandlers();
 
   // Diagnostic log utilities (3)
   registerDiagnosticHandlers();

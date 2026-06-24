@@ -187,6 +187,10 @@ export interface FeedbackSubmission {
   title: string;
   description: string;
   includeDiagnostics: boolean;
+  // Origin of the submission, forwarded to submitFeedback -> feedback.source.
+  // 'app' (default) for the normal support modal, 'satisfaction_survey' when
+  // routed from a dissatisfied survey respondent.
+  source?: string;
   diagnostics?: {
     system: SystemDiagnostics;
     dependencies: DependencyStatus[];
