@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### 🐛 Delivery: English placeholder names in the Invite-user form
+
+- **The "Invite user" form placeholders now use English example names.** The name field showed `e.g., Marco Rossi` and the email field `marco@porsche-motorsport.com`; they now read `e.g., John Doe` and `john.doe@example.com`, consistent with the app's US-English UI copy. Renderer copy only (`delivery.html`).
+
 ### 💅 Delivery: the client detail view now matches the new Clients table
 
 - **The client detail screen was restyled to the same visual language as the new Clients table — it no longer looks like the old UI.** The header dropped the emoji type icon and plain heading for a **colored avatar + type pill + a mail-icon contact line** (matching the table row). The client's galleries are now the **same `dl-card` used in the main galleries grid** — livery-stripe top accent, a **Live/Draft** status pill, monospace stats with eye/download icons, the **photo count** (reused from the clients overview, no extra query), and the event date/season as clean brand chips — replacing the old flat cards that used emoji (📅 👁 ⬇) and a **deprecated indigo** season badge. Each gallery card is now **clickable** and opens the gallery detail, consistent with the main grid. Renderer-only (`delivery-manager.js`, `delivery.css`) — no DB/IPC/schema/token changes.
