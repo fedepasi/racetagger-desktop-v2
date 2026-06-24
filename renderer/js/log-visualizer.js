@@ -570,13 +570,15 @@ class LogVisualizer {
               <h4>Recognition Results</h4>
               <!-- WF-02 — keyboard-correction shortcuts, communicated to the user -->
               <div class="lv-kbd-hint">
-                <strong>Fast keys:</strong>
-                <span class="lv-key">type a number</span> correct ·
-                <span class="lv-key">Enter</span> confirm &amp; next ·
-                <span class="lv-key">Space</span> edit ·
-                <span class="lv-key">← →</span> skip ·
+                <strong>Fast keys</strong> — correct from the keyboard, no mouse:
+                <span class="lv-key">type</span> set the number ·
+                <span class="lv-key">Space</span> edit the current number ·
+                <span class="lv-key">Enter</span> confirm &amp; next photo ·
+                <span class="lv-key">← →</span> previous / next photo ·
+                <span class="lv-key">↑ ↓</span> move between numbers on this photo ·
                 <span class="lv-key">Esc</span> close
-                <span class="lv-kbd-note"><span class="lv-key">Space</span> jumps straight to the race number so you can edit it fast — no mouse, just type.</span>
+                <span class="lv-kbd-note">Typing a digit <em>replaces</em> the number; <span class="lv-key">Space</span> <em>edits</em> the one that's there (fix a single digit). <span class="lv-key">↓</span> to the empty slot adds a number, <span class="lv-key">Shift</span>+<span class="lv-key">Enter</span> goes back a photo.</span>
+                <span class="lv-kbd-note">When match suggestions show: <span class="lv-key">1</span>–<span class="lv-key">9</span> pick one · <span class="lv-key">0</span> none of these.</span>
               </div>
 
               <div class="lv-vehicles-container" id="lv-vehicles">
@@ -935,10 +937,13 @@ class LogVisualizer {
           break;
 
         case 'Enter':
-          // Shift+Enter goes back one image (handy if Enter advanced too eagerly).
-          // Plain Enter on the Race Number input is handled by its own listener
-          // in setupVehicleEditorEvents.
-          if (e.shiftKey && isInputFocused && active.dataset && active.dataset.field === 'raceNumber') {
+          // Shift+Enter ALWAYS goes back one photo, regardless of focus — no field
+          // focused, or the cursor in Race Number / Drivers / Team (handy if Enter
+          // advanced too eagerly). The per-field Enter listener
+          // (setupVehicleEditorEvents) returns early on Shift+Enter, so there's no
+          // double-handling (back AND save+advance). Plain Enter inside a field is
+          // still owned by that per-field listener.
+          if (e.shiftKey) {
             e.preventDefault();
             if (this.currentImageIndex > 0) {
               this.navigateGallery(-1);
