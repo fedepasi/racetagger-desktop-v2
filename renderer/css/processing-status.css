@@ -1804,101 +1804,148 @@
   color: var(--text-primary);
 }
 
-/* Keyboard-shortcuts popover ("Want to review faster?") — discoverable, no-mouse
-   help that replaces the old always-on verbose Fast-keys hint. Theme-aware
-   tokens (this panel renders on a light bg in results.html, dark in index.html).
-   Opens on hover / click / "?"; keycap chips in JetBrains Mono. */
+/* Keyboard-shortcuts helper ("Want to review faster?") — an inviting trigger that
+   opens a centered cheat-sheet MODAL (not an anchored popover, which got clipped
+   by the narrow controls column). Theme-aware tokens (light in results.html, dark
+   in index.html); keycaps in JetBrains Mono. */
 .lv-shortcuts {
-  position: relative;
   display: inline-block;
   margin: -2px 0 12px;
 }
 
+/* Trigger — deliberately prominent: bold question + explanatory sub-line + an
+   arrow that nudges on hover, so it actually invites the click. */
 .lv-shortcuts-trigger {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--accent-primary);
-  background: rgba(26, 158, 224, 0.10);
-  border: 1px solid rgba(26, 158, 224, 0.45);
-  border-radius: 8px;
-  padding: 6px 12px;
+  gap: 10px;
+  padding: 9px 14px;
+  background: rgba(26, 158, 224, 0.12);
+  border: 1.5px solid var(--accent-primary);
+  border-radius: 10px;
   cursor: pointer;
-  transition: background 150ms ease, border-color 150ms ease;
+  text-align: left;
+  transition: background 150ms ease, transform 120ms ease;
 }
-.lv-shortcuts-trigger:hover,
-.lv-shortcuts-trigger[aria-expanded="true"] {
-  background: rgba(26, 158, 224, 0.18);
-  border-color: var(--accent-primary);
-}
-.lv-shortcuts-kbd { font-size: 14px; line-height: 1; }
+.lv-shortcuts-trigger:hover { background: rgba(26, 158, 224, 0.20); }
+.lv-shortcuts-trigger:active { transform: scale(0.99); }
+.lv-shortcuts-kbd { font-size: 18px; line-height: 1; color: var(--accent-primary); }
+.lv-shortcuts-trigger-text { display: flex; flex-direction: column; line-height: 1.25; }
+.lv-shortcuts-trigger-q { font-size: 13px; font-weight: 700; color: var(--accent-primary); }
+.lv-shortcuts-trigger-sub { font-size: 11px; font-weight: 500; color: var(--text-secondary); }
+.lv-shortcuts-trigger-arrow { margin-left: 2px; color: var(--accent-primary); font-weight: 700; transition: transform 120ms ease; }
+.lv-shortcuts-trigger:hover .lv-shortcuts-trigger-arrow { transform: translateX(3px); }
 
-.lv-shortcuts-pop {
+/* Centered modal overlay */
+.lv-shortcuts-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.lv-shortcuts-modal[hidden] { display: none; }
+.lv-shortcuts-backdrop {
   position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
-  z-index: 60;
-  width: 460px;
-  max-width: 80vw;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+}
+.lv-shortcuts-card {
+  position: relative;
+  z-index: 1;
+  width: 600px;
+  max-width: 92vw;
+  max-height: 86vh;
+  overflow: auto;
   background: var(--bg-card);
   border: 1px solid var(--border-color);
-  border-radius: 12px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
-  padding: 14px 16px;
+  border-radius: 14px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.40);
 }
-.lv-shortcuts-pop[hidden] { display: none; }
 
 .lv-shortcuts-head {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 12px;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-color);
 }
-.lv-shortcuts-title { font-size: 14px; font-weight: 600; color: var(--text-primary); }
-.lv-shortcuts-tip { font-size: 11px; color: var(--text-secondary); }
+.lv-shortcuts-head-ic {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  background: rgba(26, 158, 224, 0.14);
+  color: var(--accent-primary);
+  font-size: 19px;
+}
+.lv-shortcuts-head-text { flex: 1; min-width: 0; }
+.lv-shortcuts-title { font-size: 16px; font-weight: 700; color: var(--text-primary); }
+.lv-shortcuts-subtitle { font-size: 12px; color: var(--text-secondary); }
+.lv-shortcuts-tip { font-size: 11px; color: var(--text-secondary); white-space: nowrap; }
+.lv-shortcuts-close {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+.lv-shortcuts-close:hover { background: var(--bg-medium); color: var(--text-primary); }
 
 .lv-shortcuts-groups {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px 24px;
+  gap: 18px 28px;
+  padding: 18px 20px;
 }
 .lv-shortcuts-glabel {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-secondary);
-  margin-bottom: 4px;
+  margin-bottom: 8px;
 }
 .lv-shortcuts-row {
+  display: grid;
+  grid-template-columns: 104px 1fr;
+  align-items: center;
+  column-gap: 12px;
+  padding: 5px 0;
+}
+.lv-keys { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.lv-shortcuts-sep { color: var(--text-secondary); font-size: 11px; }
+.lv-shortcuts-desc { font-size: 13px; color: var(--text-secondary); }
+.lv-shortcuts-foot {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 3px 0;
-}
-.lv-keys { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
-.lv-shortcuts-sep { color: var(--text-secondary); font-size: 11px; }
-.lv-shortcuts-desc { font-size: 12px; color: var(--text-secondary); text-align: right; }
-.lv-shortcuts-foot {
-  margin-top: 12px;
-  padding-top: 10px;
+  gap: 8px;
+  padding: 12px 20px;
   border-top: 1px solid var(--border-color);
-  font-size: 11px;
+  background: var(--bg-medium);
+  font-size: 12px;
   color: var(--text-secondary);
-  line-height: 1.6;
+  line-height: 1.5;
 }
+.lv-shortcuts-foot-ic { color: var(--accent-primary); font-weight: 700; }
 
 .lv-key {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-primary);
   background: rgba(26, 158, 224, 0.12);
-  border: 1px solid rgba(26, 158, 224, 0.35);
-  border-radius: 4px;
-  padding: 1px 6px;
+  border: 1px solid rgba(26, 158, 224, 0.40);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  padding: 3px 7px;
   white-space: nowrap;
 }
 
