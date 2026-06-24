@@ -568,17 +568,45 @@ class LogVisualizer {
           <div class="lv-gallery-controls">
             <div class="lv-recognition-panel">
               <h4>Recognition Results</h4>
-              <!-- WF-02 — keyboard-correction shortcuts, communicated to the user -->
-              <div class="lv-kbd-hint">
-                <strong>Fast keys</strong> — correct from the keyboard, no mouse:
-                <span class="lv-key">type</span> set the number ·
-                <span class="lv-key">Space</span> edit the current number ·
-                <span class="lv-key">Enter</span> confirm &amp; next photo ·
-                <span class="lv-key">← →</span> previous / next photo ·
-                <span class="lv-key">↑ ↓</span> move between numbers on this photo ·
-                <span class="lv-key">Esc</span> close
-                <span class="lv-kbd-note">Typing a digit <em>replaces</em> the number; <span class="lv-key">Space</span> <em>edits</em> the one that's there (fix a single digit). <span class="lv-key">↓</span> to the empty slot adds a number, <span class="lv-key">Shift</span>+<span class="lv-key">Enter</span> goes back a photo.</span>
-                <span class="lv-kbd-note">When match suggestions show: <span class="lv-key">1</span>–<span class="lv-key">9</span> pick one · <span class="lv-key">0</span> none of these.</span>
+              <!-- WF-02 — keyboard shortcuts behind an inviting trigger (no mouse
+                   is the whole point). Click, hover, or press ? to open; Esc closes.
+                   Replaces the old always-on verbose hint. -->
+              <div class="lv-shortcuts" id="lv-shortcuts">
+                <button type="button" class="lv-shortcuts-trigger" id="lv-shortcuts-trigger"
+                        aria-haspopup="dialog" aria-expanded="false" aria-controls="lv-shortcuts-pop">
+                  <span class="lv-shortcuts-kbd" aria-hidden="true">⌨</span>
+                  <span>Want to review faster?</span>
+                </button>
+                <div class="lv-shortcuts-pop" id="lv-shortcuts-pop" role="dialog" aria-label="Keyboard shortcuts" hidden>
+                  <div class="lv-shortcuts-head">
+                    <span class="lv-shortcuts-title">Review without the mouse</span>
+                    <span class="lv-shortcuts-tip">press <span class="lv-key">?</span> anytime</span>
+                  </div>
+                  <div class="lv-shortcuts-groups">
+                    <div class="lv-shortcuts-group">
+                      <div class="lv-shortcuts-glabel">Move around</div>
+                      <div class="lv-shortcuts-row"><span class="lv-keys"><span class="lv-key">←</span><span class="lv-key">→</span></span><span class="lv-shortcuts-desc">Previous / next photo</span></div>
+                      <div class="lv-shortcuts-row"><span class="lv-keys"><span class="lv-key">↑</span><span class="lv-key">↓</span></span><span class="lv-shortcuts-desc">Move between detections</span></div>
+                    </div>
+                    <div class="lv-shortcuts-group">
+                      <div class="lv-shortcuts-glabel">Edit the number</div>
+                      <div class="lv-shortcuts-row"><span class="lv-keys"><span class="lv-key">type a number</span></span><span class="lv-shortcuts-desc">Set the race number</span></div>
+                      <div class="lv-shortcuts-row"><span class="lv-keys"><span class="lv-key">Space</span></span><span class="lv-shortcuts-desc">Jump to the number to edit it</span></div>
+                      <div class="lv-shortcuts-row"><span class="lv-keys"><span class="lv-key">Enter</span></span><span class="lv-shortcuts-desc">Confirm &amp; go to next photo</span></div>
+                      <div class="lv-shortcuts-row"><span class="lv-keys"><span class="lv-key">Shift</span><span class="lv-key">Enter</span></span><span class="lv-shortcuts-desc">Back to previous photo</span></div>
+                    </div>
+                    <div class="lv-shortcuts-group">
+                      <div class="lv-shortcuts-glabel">Pick a suggestion</div>
+                      <div class="lv-shortcuts-row"><span class="lv-keys"><span class="lv-key">1</span><span class="lv-shortcuts-sep">–</span><span class="lv-key">9</span></span><span class="lv-shortcuts-desc">Choose that suggested match</span></div>
+                      <div class="lv-shortcuts-row"><span class="lv-keys"><span class="lv-key">0</span></span><span class="lv-shortcuts-desc">None of these</span></div>
+                    </div>
+                    <div class="lv-shortcuts-group">
+                      <div class="lv-shortcuts-glabel">Done</div>
+                      <div class="lv-shortcuts-row"><span class="lv-keys"><span class="lv-key">Esc</span></span><span class="lv-shortcuts-desc">Close review</span></div>
+                    </div>
+                  </div>
+                  <div class="lv-shortcuts-foot">The empty entry at the bottom is always ready — just type to add a detection.</div>
+                </div>
               </div>
 
               <div class="lv-vehicles-container" id="lv-vehicles">
@@ -756,6 +784,9 @@ class LogVisualizer {
     if (prevBtn) prevBtn.addEventListener('click', () => this.navigateGallery(-1));
     if (nextBtn) nextBtn.addEventListener('click', () => this.navigateGallery(1));
 
+    // Keyboard-shortcuts popover (click / hover / "?" to open, Esc / outside to close)
+    this._setupShortcutsPopover();
+
     // Zoom controller
     this.zoomController = new GalleryZoomController();
     const zoomImg = document.getElementById('lv-gallery-img');
@@ -862,8 +893,23 @@ class LogVisualizer {
       };
 
       switch (e.key) {
+        case '?':
+          // Open/close the keyboard-shortcuts popover (discoverability — the
+          // "Want to review faster?" trigger). Skip while typing so "?" still
+          // types into a field if a user ever needs it there.
+          if (!isInputFocused) {
+            e.preventDefault();
+            this._toggleShortcuts();
+          }
+          break;
+
         case 'Escape':
-          if (isInputFocused) {
+          // Close the shortcuts popover first if it's open, before falling back
+          // to blur / close-gallery.
+          if (this._isShortcutsOpen()) {
+            e.preventDefault();
+            this._closeShortcuts();
+          } else if (isInputFocused) {
             active.blur();
           } else {
             this.closeGallery();
@@ -3695,6 +3741,66 @@ class LogVisualizer {
     //    so the user gets explicit completion feedback instead of a silent
     //    stuck-on-the-last-image state.
     this.navigateToNextReview(this.currentImageIndex);
+  }
+
+  /**
+   * Keyboard-shortcuts popover ("Want to review faster?"). Opens on hover (peek),
+   * click (pin open), or the "?" key; closes on Esc, click-outside, or clicking
+   * the trigger again. Wired once from setupGalleryListeners.
+   */
+  _setupShortcutsPopover() {
+    const wrap = document.getElementById('lv-shortcuts');
+    const trigger = document.getElementById('lv-shortcuts-trigger');
+    const pop = document.getElementById('lv-shortcuts-pop');
+    if (!wrap || !trigger || !pop) return;
+    this._shortcutsPop = pop;
+    this._shortcutsTrigger = trigger;
+    this._shortcutsPinned = false;
+
+    trigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (this._shortcutsPinned) this._closeShortcuts();
+      else this._openShortcuts(true);
+    });
+
+    let hoverTimer = null;
+    wrap.addEventListener('mouseenter', () => {
+      if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
+      this._openShortcuts(false);
+    });
+    wrap.addEventListener('mouseleave', () => {
+      if (this._shortcutsPinned) return;
+      hoverTimer = setTimeout(() => this._closeShortcuts(), 160);
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!this._isShortcutsOpen()) return;
+      if (wrap.contains(e.target)) return;
+      this._closeShortcuts();
+    });
+  }
+
+  _isShortcutsOpen() {
+    return !!(this._shortcutsPop && !this._shortcutsPop.hidden);
+  }
+
+  _openShortcuts(pin) {
+    if (!this._shortcutsPop) return;
+    if (pin) this._shortcutsPinned = true;
+    this._shortcutsPop.hidden = false;
+    if (this._shortcutsTrigger) this._shortcutsTrigger.setAttribute('aria-expanded', 'true');
+  }
+
+  _closeShortcuts() {
+    if (!this._shortcutsPop) return;
+    this._shortcutsPinned = false;
+    this._shortcutsPop.hidden = true;
+    if (this._shortcutsTrigger) this._shortcutsTrigger.setAttribute('aria-expanded', 'false');
+  }
+
+  _toggleShortcuts() {
+    if (this._isShortcutsOpen()) this._closeShortcuts();
+    else this._openShortcuts(true);
   }
 
   /**
