@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### 🐛 "Earn free credits": clearer copy for the new first-use credit timing
+
+- **The rewards hub no longer shows a misleading "+0" or implies credits land at signup.** Under the first-execution attribution, a referred friend earns you credits only once they actually use RaceTagger — so a friend who has just signed up was showing a confusing **`+0`** in the Friends-joined table (it read like an error). That cell now shows an amber **`Pending`** status (hover hint: "Credits land when they tag their first photos"); credited friends still show the green `+N`. The footer note was rewritten to match — *"A friend who signs up shows as **Pending**. The credits land automatically once they tag their first photos…"* — and the hero line now reads *"…who joins **and tags their first photos**…"*. Separately, the per-friend reward tiers drop the cryptic **`ea`** unit for **`/ friend`** (`100 / friend`, `150 / friend`, `200 / friend`). Renderer copy/markup only (`referral.html`, `referral.js`, `referral.css`) — no token logic, schema, or Edge Function changes.
+
 ### 🐛 Delivery: English placeholder names in the Invite-user form
 
 - **The "Invite user" form placeholders now use English example names.** The name field showed `e.g., Marco Rossi` and the email field `marco@porsche-motorsport.com`; they now read `e.g., John Doe` and `john.doe@example.com`, consistent with the app's US-English UI copy. Renderer copy only (`delivery.html`).

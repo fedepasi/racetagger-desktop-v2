@@ -88,7 +88,7 @@
     if (!st.next) {
       hero = '<div class="rl-hero is-done"><svg viewBox="0 0 24 24"><path d="M4 22V2l16 6-16 6"/></svg>'
         + '<div><div class="rl-hero-title">You’ve hit every milestone.</div>'
-        + '<div class="rl-hero-sub">From here you earn <span class="rl-mono rl-cG">200</span> credits for every friend who signs up.</div></div></div>';
+        + '<div class="rl-hero-sub">From here you earn <span class="rl-mono rl-cG">200</span> credits for every friend who tags their first photos.</div></div></div>';
     } else if (n === 0) {
       hero = '<div class="rl-hero"><svg viewBox="0 0 24 24"><path d="M4 22V2l16 6-16 6"/></svg>'
         + '<div><div class="rl-hero-title"><span class="rl-mono rl-cA">5</span> friends to your first <span class="rl-mono rl-cA">+500</span> bonus.</div>'
@@ -103,7 +103,7 @@
     var bands = [{ b: '1–5', v: 100 }, { b: '6–15', v: 150 }, { b: '16+', v: 200 }];
     var cols = bands.map(function (x) {
       var now = x.v === rate;
-      return '<div class="rl-tw' + (now ? ' is-now' : '') + '"><div class="rl-twb">' + (now ? 'NOW · ' : '') + x.b + '</div><div class="rl-twv">' + x.v + '<span> ea</span></div></div>';
+      return '<div class="rl-tw' + (now ? ' is-now' : '') + '"><div class="rl-twb">' + (now ? 'NOW · ' : '') + x.b + '</div><div class="rl-twv">' + x.v + '<span> / friend</span></div></div>';
     }).join('');
     var tower = '<div class="rl-tower"><div class="rl-twh"><span class="t">Per-friend reward</span><span class="s">scales as you bring more</span></div><div class="rl-twc">' + cols + '</div></div>';
 
@@ -131,8 +131,13 @@
       var mail = f.name ? esc(f.email_masked || '') : '';
       var when = (f.joined_at || '').slice(0, 10);
       var credited = Number(f.credited) || 0;
+      // Friend signed up but hasn't run their first analysis yet → credits not earned
+      // yet under first-execution attribution. Show a status, not a misleading "+0".
+      var reward = credited > 0
+        ? '<span class="rl-credp">+' + fmt(credited) + '</span>'
+        : '<span class="rl-credp pending" title="Credits land when they tag their first photos">Pending</span>';
       return '<tr><td>' + who + '</td><td class="email">' + mail + '</td><td class="date">' + esc(when) + '</td>'
-        + '<td class="r"><span class="rl-credp">+' + fmt(credited) + '</span></td></tr>';
+        + '<td class="r">' + reward + '</td></tr>';
     });
     // Milestone rows: reached ones (green) + the next one (amber). Skip far-future.
     var st = milestoneState(n);

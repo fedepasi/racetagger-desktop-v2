@@ -154,6 +154,7 @@
 .rl-friends-table td { padding: 13px 18px; color: var(--text-primary, #f8fafc); }
 .rl-friends-table td.email, .rl-friends-table td.date { font-family: var(--font-mono-rt, monospace); color: var(--text-muted, #94a3b8); }
 .rl-credp { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono-rt, monospace); font-feature-settings: 'tnum'; font-size: 10px; font-weight: 700; text-transform: uppercase; color: var(--accent-success, #10b981); background: rgba(16,185,129,0.12); border: 1px solid rgba(16,185,129,0.4); border-radius: 999px; padding: 4px 10px; }
+.rl-credp.pending { color: var(--accent-warning, #f59e0b); background: rgba(245,158,11,0.10); border-color: rgba(245,158,11,0.4); }
 .rl-msrow td { color: var(--accent-warning, #f59e0b); font-weight: 600; }
 .rl-msrow { background: rgba(245,158,11,0.06); }
 .rl-msrow .rl-credp { color: var(--accent-warning, #f59e0b); background: rgba(245,158,11,0.10); border-color: rgba(245,158,11,0.4); }
