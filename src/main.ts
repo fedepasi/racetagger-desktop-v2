@@ -3786,6 +3786,36 @@ app.whenReady().then(async () => { // Added async here
         //   nome, squadra, …) keyed by numero, then use it as the override
         //   whenever a MANUAL_CORRECTION provided a new raceNumber.
         const presetParticipantMap = new Map<string, any>();
+        // Issue #281: a participant can legitimately have NO race number — a
+        // Team Principal, a VIP, a mechanic — identified by NAME (and face)
+        // and routed to a custom folder. Those rows never make it into
+        // `presetParticipantMap` (which is keyed by numero), so we ALSO index
+        // every participant by driver name here. This lets a name-only manual
+        // correction (or a numberless AI/face match) resolve the full preset
+        // entry — folders[], include_default_folder, squadra, … — at routing
+        // time, instead of falling through to Unknown_Numbers.
+        const presetParticipantByName = new Map<string, any>();
+        // Normalized driver names for a preset row / matched entry. Reads the
+        // canonical preset_participant_drivers[] first, falling back to the
+        // legacy comma-separated `nome`. Lower-cased + trimmed to match the
+        // renderer's findParticipantByName() lookup (log-visualizer.js).
+        const extractEntryNames = (entry: any): string[] => {
+          const names: string[] = [];
+          const drivers = entry?.preset_participant_drivers;
+          if (Array.isArray(drivers)) {
+            for (const d of drivers) {
+              const n = typeof d?.driver_name === 'string' ? d.driver_name.trim() : '';
+              if (n) names.push(n.toLowerCase());
+            }
+          }
+          if (names.length === 0 && typeof entry?.nome === 'string') {
+            for (const n of entry.nome.split(',')) {
+              const t = n.trim();
+              if (t) names.push(t.toLowerCase());
+            }
+          }
+          return names;
+        };
         if (presetWasActive) {
           const allowedSet = new Set<string>();
 
@@ -3837,8 +3867,14 @@ app.whenReady().then(async () => { // Added async here
                       presetParticipantMap.set(s, row);
                     }
                   }
+                  // Issue #281: index by name too — covers numberless
+                  // participants (no `numero`) AND lets a name-only correction
+                  // resolve the correct numbered participant's folders.
+                  for (const nm of extractEntryNames(row)) {
+                    presetParticipantByName.set(nm, row);
+                  }
                 }
-                console.log(`[Main Process] Issue #105: loaded ${allowedSet.size} preset numbers from Supabase (preset_id=${presetIdFromStart})`);
+                console.log(`[Main Process] Issue #105: loaded ${allowedSet.size} preset numbers from Supabase (preset_id=${presetIdFromStart}); indexed ${presetParticipantByName.size} participant name(s) for numberless routing (#281)`);
               } else if (presetErr) {
                 console.warn(`[Main Process] Issue #105: Supabase preset lookup failed, will fall back to JSONL scan: ${presetErr.message}`);
               }
@@ -3858,6 +3894,7 @@ app.whenReady().then(async () => { // Added async here
             if (!Array.isArray(vehicles)) continue;
             for (const v of vehicles) {
               const entry = v?.participantMatch?.entry || v?.participantMatch;
+              if (!entry) continue;
               const num = entry?.numero;
               if (num != null) {
                 const s = typeof num === 'string' ? num.trim() : String(num);
@@ -3866,6 +3903,15 @@ app.whenReady().then(async () => { // Added async here
                   if (!presetParticipantMap.has(s)) {
                     presetParticipantMap.set(s, entry);
                   }
+                }
+              }
+              // Issue #281: also harvest name → entry from matched AI entries,
+              // so a numberless face/AI match keeps its folders[] when the
+              // Supabase preset fetch was unavailable. Don't clobber a richer
+              // Supabase-sourced entry already indexed under this name.
+              for (const nm of extractEntryNames(entry)) {
+                if (!presetParticipantByName.has(nm)) {
+                  presetParticipantByName.set(nm, entry);
                 }
               }
             }
@@ -3931,7 +3977,34 @@ app.whenReady().then(async () => { // Added async here
               (event.aiResponse?.totalVehicles === 0 &&
                event.aiResponse?.rawText?.startsWith('SKIPPED:'));
 
-            if (isSceneSkipped) {
+            // Issue #281: a scene-skipped frame that the photographer has since
+            // corrected — assigning a race number OR a name — is NOT generic
+            // "Others" content: they identified a subject in it. Let it flow
+            // through normal organization (number folder or the numberless
+            // participant's custom folder) instead of burying it in Others.
+            const hasUserContentCorrection = (() => {
+              const vehCount = Math.max(event.aiResponse?.vehicles?.length || 0, 1);
+              const seen = new Set<number>([...Array(vehCount).keys()]);
+              const pfx = `${fileName}_`;
+              for (const ck of correctionMap.keys()) {
+                if (typeof ck === 'string' && ck.startsWith(pfx)) {
+                  const idx = Number(ck.slice(pfx.length));
+                  if (Number.isInteger(idx) && idx >= 0) seen.add(idx);
+                }
+              }
+              for (const i of seen) {
+                const c = correctionMap.get(`${fileName}_${i}`);
+                if (!c || c.deleted) continue;
+                const hasNum = c.raceNumber != null && String(c.raceNumber).trim() !== '';
+                const hasDrv = Array.isArray(c.drivers)
+                  ? c.drivers.length > 0
+                  : (typeof c.drivers === 'string' && c.drivers.trim() !== '');
+                if (hasNum || hasDrv) return true;
+              }
+              return false;
+            })();
+
+            if (isSceneSkipped && !hasUserContentCorrection) {
               // Extract scene category from structured field or parse from rawText
               let sceneCategory = event.sceneCategory;
               if (!sceneCategory && event.aiResponse?.rawText) {
@@ -3988,15 +4061,35 @@ app.whenReady().then(async () => { // Added async here
               // undefined and the file falls back to `Organized_Photos/{number}/`
               // (default folder) ignoring the corrected participant's custom
               // folders and `include_default_folder=false` flag.
-              if (event.aiResponse?.vehicles) {
-                event.aiResponse.vehicles.forEach((vehicle: any, index: number) => {
+              {
+                // Issue #281: iterate every AI-detected vehicle AND any index
+                // that exists ONLY as a user correction (e.g. the photographer
+                // assigned a name/number to a frame the AI left empty or
+                // scene-skipped — the common case for a numberless VIP / Team
+                // Principal). A forEach over aiResponse.vehicles alone would
+                // miss those correction-only indices and the photo would never
+                // reach its custom folder.
+                const aiVehicles: any[] = Array.isArray(event.aiResponse?.vehicles)
+                  ? event.aiResponse.vehicles
+                  : [];
+                const vehicleIndices = new Set<number>();
+                aiVehicles.forEach((_: any, idx: number) => vehicleIndices.add(idx));
+                const filePrefix = `${fileName}_`;
+                for (const ck of correctionMap.keys()) {
+                  if (typeof ck === 'string' && ck.startsWith(filePrefix)) {
+                    const idx = Number(ck.slice(filePrefix.length));
+                    if (Number.isInteger(idx) && idx >= 0) vehicleIndices.add(idx);
+                  }
+                }
+                for (const index of Array.from(vehicleIndices).sort((a, b) => a - b)) {
+                  const vehicle: any = aiVehicles[index] || {};
                   const key = `${fileName}_${index}`;
                   const correction = correctionMap.get(key);
 
                   // Correction with {deleted: true} means the vehicle was removed;
                   // skip it so the image is not forced into a number folder.
                   if (correction?.deleted) {
-                    return;
+                    continue;
                   }
 
                   // Support both the canonical field name (raceNumber) and the
@@ -4053,9 +4146,49 @@ app.whenReady().then(async () => { // Added async here
                         );
                       }
                     }
-                  } else if (vehicle.participantMatch) {
-                    const match = vehicle.participantMatch;
-                    entry = match.entry || match;
+                  } else {
+                    // Issue #281: no number correction. Two numberless paths,
+                    // both keyed on NAME, plus the unchanged AI-match path.
+                    const correctionDrivers: string[] = Array.isArray(correction?.drivers)
+                      ? correction.drivers
+                      : (typeof correction?.drivers === 'string' && correction.drivers.trim()
+                          ? [correction.drivers]
+                          : []);
+
+                    if (correctionDrivers.length > 0) {
+                      // The user assigned a NAME (no number) — the canonical
+                      // signal for a Team Principal / VIP / mechanic. Resolve
+                      // them from the by-name index so their custom folder is
+                      // honoured, OVERRIDING any stale AI participantMatch
+                      // (mirrors the corrected-number override above).
+                      for (const nm of correctionDrivers) {
+                        const k = nm.toLowerCase().trim();
+                        if (k && presetParticipantByName.has(k)) {
+                          entry = presetParticipantByName.get(k);
+                          break;
+                        }
+                      }
+                      // Typed name isn't a known participant → fall back to the
+                      // AI match so we don't lose an existing routing.
+                      if (!entry && vehicle.participantMatch) {
+                        entry = vehicle.participantMatch.entry || vehicle.participantMatch;
+                      }
+                    } else if (vehicle.participantMatch) {
+                      // Unchanged legacy behaviour: trust the AI's matched entry.
+                      const match = vehicle.participantMatch;
+                      entry = match.entry || match;
+                    } else if (!finalNumber && Array.isArray(vehicle?.drivers)) {
+                      // No correction, no AI match, no number — last resort:
+                      // a numberless participant that face/AI tagged by name
+                      // on the vehicle itself (issue #281).
+                      for (const nm of vehicle.drivers) {
+                        const k = typeof nm === 'string' ? nm.toLowerCase().trim() : '';
+                        if (k && presetParticipantByName.has(k)) {
+                          entry = presetParticipantByName.get(k);
+                          break;
+                        }
+                      }
+                    }
                   }
 
                   // --- 3) Push the csvData row (skip when we have no entry) ---
@@ -4115,12 +4248,23 @@ app.whenReady().then(async () => { // Added async here
                       folder_3_path: entry.folder_3_path
                     });
                   }
-                });
+                }
               }
             }
 
             if (raceNumbers.length === 0) {
-              raceNumbers = ['unknown'];
+              // Issue #281: if we resolved a numberless participant (VIP / Team
+              // Principal) that carries custom folders, leave raceNumbers empty
+              // so FolderOrganizer routes the photo to those custom folders
+              // instead of the Unknown_Numbers fallback. Only fall back to
+              // 'unknown' when there is genuinely nothing to route by.
+              const hasCustomFolderRoute = csvDataList.some((c: any) =>
+                (c?.numero == null || String(c.numero).trim() === '') &&
+                Array.isArray(c?.folders) && c.folders.length > 0
+              );
+              if (!hasCustomFolderRoute) {
+                raceNumbers = ['unknown'];
+              }
             }
 
             // [Narrate] per-file routing decision — surfaces the
