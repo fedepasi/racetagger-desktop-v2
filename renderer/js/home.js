@@ -330,6 +330,17 @@ function renderRecentExecutions(executions) {
     // Rows with no complete, usable local result: cloud-only OR interrupted.
     const noLocalResult = exec.cloudOnly || exec.interrupted;
 
+    // Partial completion (#280): a run that finished (not interrupted, has local
+    // data) but whose gallery holds fewer photos than the folder count — i.e. some
+    // photos never produced a result (memory backpressure / worker drain dropped
+    // them). The headline "Photos" stat shows the folder count, so without this the
+    // user sees "15" but only finds 7 in the analysis ("dove sono le altre foto?").
+    // Surface the gap honestly so the discrepancy is explained and a re-run offered.
+    const totalImgs = Number(exec.totalImages) || 0;
+    const processedImgs = Number(exec.processedImages) || 0;
+    const partial = !noLocalResult && processedImgs > 0 && totalImgs > 0 && processedImgs < totalImgs;
+    const missingImgs = partial ? totalImgs - processedImgs : 0;
+
     return `
       <div class="card-b${exec.cloudOnly ? ' card-b-cloud-only' : ''}" data-execution-id="${escapeHtml(exec.id)}" ${exec.cloudOnly ? 'data-cloud-only="true"' : ''}${exec.interrupted ? ` data-interrupted="true" data-total="${Number(exec.totalImages) || 0}" data-processed="${Number(exec.processedImages) || 0}"` : ''}>
         <div class="card-b-main">
@@ -347,7 +358,9 @@ function renderRecentExecutions(executions) {
             ? `<div class="folder-line" style="font-size:11px;color:var(--text-muted,#94a3b8);">⚠️ Interrupted before finishing${(exec.processedImages && exec.totalImages) ? ` — ${exec.processedImages} of ${exec.totalImages} photos analyzed` : ''} · re-run to complete</div>`
             : exec.cloudOnly
                 ? `<div class="folder-line" style="font-size:11px;color:var(--text-muted,#94a3b8);">📡 Local data unavailable — completed on another device or after reinstall</div>`
-                : folderLine}
+                : partial
+                    ? `<div class="folder-line" style="font-size:11px;color:var(--text-muted,#94a3b8);">⚠️ ${processedImgs} of ${totalImgs} photos analyzed — ${missingImgs} couldn't be processed · re-run to complete</div>`
+                    : folderLine}
         </div>
         <div class="card-b-side">
           <div class="mini-stats">
