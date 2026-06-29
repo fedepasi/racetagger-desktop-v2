@@ -9457,31 +9457,40 @@ export class UnifiedImageProcessor extends EventEmitter {
     // exactly once, within the existing pre-authorization).
     await this.drainDeferredUploads(results, imageFiles);
 
-    // ==================== RECONCILE NEVER-PROCESSED IMAGES (#280) ====================
-    // Safety net for the "home says 15, gallery shows 7/9" discrepancy. On a
-    // memory-constrained machine the worker loop above can emergency-exit or drain
-    // with images still sitting in `this.processingQueue` (see the "EMERGENCY EXIT"
-    // and "all workers drained" paths). Those images were counted in `totalImages`
-    // (the EXECUTION_START folder count the home card shows) but never produced a
-    // result, so they got NO IMAGE_ANALYSIS event and silently vanished from the
-    // review gallery — while the run still wrote EXECUTION_COMPLETE and looked
-    // "completed". The user is left asking "where are the other photos?".
+    // ==================== RETRY NEVER-PROCESSED IMAGES (#280) ====================
+    // The goal is to analyze them ALL, not to report an error. On a memory-
+    // constrained machine the worker loop above can emergency-exit or drain with
+    // images still in `this.processingQueue` (see the "EMERGENCY EXIT" / "all
+    // workers drained" paths) — those never reach a worker, so they have no result
+    // and would otherwise vanish. Now that the high-concurrency pass is done and
+    // its memory is freed, retry each missing image one at a time with a GC
+    // between (the same "memory-recovery mode" the main loop falls back to).
+    // Recovered images become real successes here, fully logged + persisted.
+    await this.drainUnprocessedImages(results, imageFiles);
+
+    // ==================== RECONCILE STILL-UNPROCESSED IMAGES (#280) ====================
+    // Fallback after the retry pass above: if an image STILL has no result (the
+    // retry also ran out of memory and the abort-guard tripped, or the user
+    // cancelled), surface it instead of silently dropping it. This is what stops
+    // the "home says 15, gallery shows 7/9 with no explanation" confusion — the
+    // run's headline count is the folder total (EXECUTION_START), so any image with
+    // no IMAGE_ANALYSIS event is a photo missing from the gallery.
     //
-    // Here we detect any image that never produced a result and (a) log a synthetic
-    // "not analyzed" IMAGE_ANALYSIS event so it shows up in the gallery as a clearly
-    // failed photo the user can re-run, and (b) push a `success: false` result so the
-    // counts and status reconcile (the run is honestly marked completed_with_errors).
-    // No token tracking here — dropped images were never pre-auth consumed, so they
-    // are refunded by the normal finalize, not charged. Skipped on user cancellation:
-    // those images weren't lost, the user stopped on purpose.
+    // For each still-missing image we (a) log a synthetic "not analyzed"
+    // IMAGE_ANALYSIS event so it shows up in the gallery as a clearly failed photo
+    // the user can re-run, and (b) push a `success: false` result so the counts and
+    // status reconcile (the run is honestly marked completed_with_errors). No token
+    // tracking here — an image that reached this point was never analyzed, so it is
+    // refunded as `cancelled` by the normal finalize, not charged. Skipped on user
+    // cancellation: those images weren't lost, the user stopped on purpose.
     try {
       const wasCancelled = !!(this.config.isCancelled && this.config.isCancelled());
       if (this.analysisLogger && !wasCancelled) {
         const processedIds = new Set(results.map(r => r && r.fileId));
         const droppedImages = imageFiles.filter(f => f && !processedIds.has(f.id));
         if (droppedImages.length > 0) {
-          console.warn(`[FINALIZE] ⚠️ ${droppedImages.length}/${imageFiles.length} image(s) never produced a result (likely memory backpressure / worker drain). Logging them as "not analyzed" so they aren't silently dropped from the gallery (#280).`);
-          const notAnalyzedMsg = 'Not analyzed — skipped before analysis (low memory). Re-run to complete.';
+          console.warn(`[FINALIZE] ⚠️ ${droppedImages.length}/${imageFiles.length} image(s) still had no result after the retry pass (machine likely out of memory). Logging them as "not analyzed" so they aren't silently dropped from the gallery (#280).`);
+          const notAnalyzedMsg = 'Not analyzed — could not be processed (low memory) even after a retry. Re-run to complete.';
           for (const img of droppedImages) {
             this.analysisLogger.logImageAnalysis({
               imageId: img.id,
@@ -9492,7 +9501,7 @@ export class UnifiedImageProcessor extends EventEmitter {
               error: notAnalyzedMsg,
               notAnalyzed: true,
               processingErrors: [
-                { phase: 'queue', message: 'Image was dropped from the processing queue before analysis (memory backpressure / worker drain).', recoverable: true, timestamp: new Date().toISOString() }
+                { phase: 'queue', message: 'Image was dropped from the processing queue before analysis (memory backpressure / worker drain) and could not be recovered by the end-of-batch retry.', recoverable: true, timestamp: new Date().toISOString() }
               ],
             } as any);
             results.push({
@@ -10471,6 +10480,104 @@ export class UnifiedImageProcessor extends EventEmitter {
     }
 
     log.warn(`[DeferredDrain] Done: recovered ${recovered}/${candidates.length} previously-failed upload(s).`);
+  }
+
+  /**
+   * Final recovery pass for images that produced NO result at all (#280).
+   *
+   * Distinct from {@link drainDeferredUploads}, which retries images that DID
+   * produce a result but whose upload failed transiently. Here we target images
+   * that never reached a worker: on a memory-constrained machine the main loop can
+   * drain or emergency-exit with images still in `this.processingQueue`, so they
+   * have no result and no IMAGE_ANALYSIS event and would silently vanish from the
+   * gallery while the run still "completes".
+   *
+   * The goal is to analyze them ALL, not to report an error. Now that the high-
+   * concurrency pass is over and its memory is freed, retry each missing image ONE
+   * AT A TIME with a GC between — exactly the "memory-recovery mode" the main loop
+   * already falls back to. A recovered image becomes a real success:
+   * processWithWorker logs its IMAGE_ANALYSIS and persists its DB rows on the normal
+   * path, so it appears in the gallery like any other. Token accounting is done
+   * here (these images were never counted in the main loop) so a recovered image is
+   * charged exactly once and an unrecoverable one is refunded.
+   *
+   * An abort-guard stops the pass if the machine is so starved that even sequential
+   * retries keep failing — whatever is left is handled by the caller's
+   * reconciliation (surfaced as "not analyzed", visible and re-runnable). Returns
+   * early (no-op) when nothing is missing, so there is zero overhead on the happy
+   * path. Skipped on user cancellation.
+   */
+  private async drainUnprocessedImages(
+    results: UnifiedProcessingResult[],
+    imageFiles: UnifiedImageFile[]
+  ): Promise<void> {
+    if (this.config.isCancelled && this.config.isCancelled()) return;
+
+    const processedIds = new Set(results.map(r => r && r.fileId));
+    const missing = imageFiles.filter(f => f && !processedIds.has(f.id));
+    if (missing.length === 0) return;
+
+    log.warn(
+      `[UnprocessedDrain] ${missing.length}/${imageFiles.length} image(s) never produced a result ` +
+      `(memory backpressure / worker drain dropped them from the queue). Retrying now one at a time ` +
+      `with GC between — the goal is to analyze them all, not to report an error.`
+    );
+
+    const ABORT_AFTER_CONSECUTIVE_FAILURES = 5;
+    let recovered = 0;
+    let consecutiveFailures = 0;
+
+    for (let n = 0; n < missing.length; n++) {
+      if (this.config.isCancelled && this.config.isCancelled()) {
+        log.warn(`[UnprocessedDrain] Cancelled by user — stopping (${missing.length - n} image(s) left).`);
+        break;
+      }
+
+      // Free memory before each retry — a starved heap is the whole reason these
+      // images were dropped, so a clean heap maximizes the chance the retry lands.
+      if (global.gc) {
+        try {
+          global.gc();
+          await new Promise(resolve => setTimeout(resolve, 300));
+          global.gc();
+        } catch { /* gc is best-effort */ }
+      }
+
+      const img = missing[n];
+      try {
+        const retried = await this.processWithWorker(img);
+        results.push(retried);
+        // These images were never counted in the main loop's token tracking, so
+        // account for them now: a recovered image is charged, a failed one is an
+        // error. processWithWorker already wrote the IMAGE_ANALYSIS + DB rows.
+        if (retried.success) {
+          this.trackImageProcessed();
+          recovered++;
+          consecutiveFailures = 0;
+          log.info(`[UnprocessedDrain] Recovered ${img.fileName} (${recovered}/${missing.length})`);
+        } else {
+          this.trackImageError();
+          consecutiveFailures++;
+        }
+      } catch (err: any) {
+        // Thrown → no result pushed and no IMAGE_ANALYSIS logged; the caller's
+        // reconciliation will surface it as "not analyzed". Count the error here.
+        this.trackImageError();
+        consecutiveFailures++;
+        log.error(`[UnprocessedDrain] Retry failed for ${img.fileName}: ${err?.message || err}`);
+      }
+
+      if (recovered === 0 && consecutiveFailures >= ABORT_AFTER_CONSECUTIVE_FAILURES) {
+        log.warn(
+          `[UnprocessedDrain] First ${consecutiveFailures} retries all failed and nothing recovered — ` +
+          `machine likely still out of memory. Stopping; ${missing.length - (n + 1)} image(s) left for the ` +
+          `reconciliation pass / resume.`
+        );
+        break;
+      }
+    }
+
+    log.warn(`[UnprocessedDrain] Done: recovered ${recovered}/${missing.length} unprocessed image(s).`);
   }
 
   private async processWithWorker(imageFile: UnifiedImageFile): Promise<UnifiedProcessingResult> {
