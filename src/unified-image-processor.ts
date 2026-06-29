@@ -9457,6 +9457,60 @@ export class UnifiedImageProcessor extends EventEmitter {
     // exactly once, within the existing pre-authorization).
     await this.drainDeferredUploads(results, imageFiles);
 
+    // ==================== RECONCILE NEVER-PROCESSED IMAGES (#280) ====================
+    // Safety net for the "home says 15, gallery shows 7/9" discrepancy. On a
+    // memory-constrained machine the worker loop above can emergency-exit or drain
+    // with images still sitting in `this.processingQueue` (see the "EMERGENCY EXIT"
+    // and "all workers drained" paths). Those images were counted in `totalImages`
+    // (the EXECUTION_START folder count the home card shows) but never produced a
+    // result, so they got NO IMAGE_ANALYSIS event and silently vanished from the
+    // review gallery — while the run still wrote EXECUTION_COMPLETE and looked
+    // "completed". The user is left asking "where are the other photos?".
+    //
+    // Here we detect any image that never produced a result and (a) log a synthetic
+    // "not analyzed" IMAGE_ANALYSIS event so it shows up in the gallery as a clearly
+    // failed photo the user can re-run, and (b) push a `success: false` result so the
+    // counts and status reconcile (the run is honestly marked completed_with_errors).
+    // No token tracking here — dropped images were never pre-auth consumed, so they
+    // are refunded by the normal finalize, not charged. Skipped on user cancellation:
+    // those images weren't lost, the user stopped on purpose.
+    try {
+      const wasCancelled = !!(this.config.isCancelled && this.config.isCancelled());
+      if (this.analysisLogger && !wasCancelled) {
+        const processedIds = new Set(results.map(r => r && r.fileId));
+        const droppedImages = imageFiles.filter(f => f && !processedIds.has(f.id));
+        if (droppedImages.length > 0) {
+          console.warn(`[FINALIZE] ⚠️ ${droppedImages.length}/${imageFiles.length} image(s) never produced a result (likely memory backpressure / worker drain). Logging them as "not analyzed" so they aren't silently dropped from the gallery (#280).`);
+          const notAnalyzedMsg = 'Not analyzed — skipped before analysis (low memory). Re-run to complete.';
+          for (const img of droppedImages) {
+            this.analysisLogger.logImageAnalysis({
+              imageId: img.id,
+              fileName: img.fileName,
+              originalFileName: path.basename(img.originalPath || img.fileName),
+              originalPath: img.originalPath,
+              aiResponse: { totalVehicles: 0, vehicles: [], rawText: `NOT ANALYZED: ${notAnalyzedMsg}` },
+              error: notAnalyzedMsg,
+              notAnalyzed: true,
+              processingErrors: [
+                { phase: 'queue', message: 'Image was dropped from the processing queue before analysis (memory backpressure / worker drain).', recoverable: true, timestamp: new Date().toISOString() }
+              ],
+            } as any);
+            results.push({
+              fileId: img.id,
+              fileName: img.fileName,
+              originalPath: img.originalPath,
+              success: false,
+              error: notAnalyzedMsg,
+              notAnalyzed: true,
+            } as any);
+          }
+        }
+      }
+    } catch (reconcileErr) {
+      // Defensive: this is a best-effort safety net; never let it block finalize.
+      console.warn('[FINALIZE] ⚠️ Dropped-image reconciliation failed (non-fatal):', reconcileErr);
+    }
+
     console.log(`\n${'='.repeat(60)}`);
     console.log(`[FINALIZE] 🏁 Batch processing complete: ${results.length} images. Starting finalization...`);
     console.log(`${'='.repeat(60)}`);
