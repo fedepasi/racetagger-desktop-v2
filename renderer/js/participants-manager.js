@@ -4237,8 +4237,35 @@ async function exportPresetJSON(presetId) {
       drivers: allDrivers,  // Complete driver data with IDs
       custom_folders: preset.custom_folders || [],
       exported_at: new Date().toISOString(),
-      version: '2.2'  // Bump: car_model, nationality, driver_nationality support
+      version: '3.0'  // Bump: face_photos[] (real image bytes) for portable face work
     };
+
+    // v3.0: include the real face reference photos so the preset stays usable
+    // after being handed to another user. Bytes come from the main process
+    // (authenticated storage download). Privacy: faces travel — confirm first.
+    let facePhotos = [];
+    try {
+      const faceResp = await window.api.invoke('preset-face-export-for-preset', presetId);
+      if (faceResp.success) {
+        facePhotos = faceResp.facePhotos || [];
+      } else {
+        console.error('[Participants] Face photo export failed:', faceResp.error);
+      }
+    } catch (e) {
+      console.error('[Participants] Face photo export error:', e);
+    }
+
+    if (facePhotos.length > 0) {
+      const proceed = confirm(
+        `This preset includes ${facePhotos.length} uploaded face photo(s). ` +
+        `The export will contain the actual face images so another user can reuse them. Continue?`
+      );
+      if (!proceed) {
+        showNotification('Export cancelled', 'info');
+        return;
+      }
+    }
+    exportData.face_photos = facePhotos;
 
     // Convert to JSON
     const jsonString = JSON.stringify(exportData, null, 2);
