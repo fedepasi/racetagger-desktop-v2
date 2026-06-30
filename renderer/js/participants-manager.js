@@ -6000,6 +6000,7 @@ async function importJsonPreset() {
     }
 
     // NEW: Create driver records if present in JSON v2.0+
+    const driversByNewId = {};
     if (presetData.drivers && Array.isArray(presetData.drivers) && presetData.drivers.length > 0) {
       console.log(`[Participants] JSON Import: Found ${presetData.drivers.length} drivers to import`);
 
@@ -6029,6 +6030,9 @@ async function importJsonPreset() {
       for (let i = 0; i < participantsWithDrivers.length; i++) {
         const savedP = participantsWithDrivers[i];
         const driversForP = driversByParticipant[savedP.numero];
+        driversByNewId[savedP.id] = driversForP.map(d => ({
+          id: d.id, driver_order: d.driver_order, driver_name: d.driver_name
+        }));
 
         const batchResult = await window.api.invoke('preset-create-drivers-batch', {
           participantId: savedP.id,
@@ -6066,6 +6070,70 @@ async function importJsonPreset() {
         showPresetSaveSuccess(successMsg);
       } else {
         showNotification(successMsg, 'success');
+      }
+    }
+
+    // v3.0: restore uploaded face reference photos. Replay each through the
+    // existing preset-face-upload-photo handler, which re-uploads under THIS
+    // user's storage and recomputes the AuraFace embedding on this machine.
+    // Fail-clear: photos that can't be re-embedded are skipped + reported,
+    // never aborting the import.
+    if (presetData.face_photos && Array.isArray(presetData.face_photos) && presetData.face_photos.length > 0) {
+      let userId = null;
+      try {
+        const sess = await window.api.invoke('auth-get-session');
+        if (sess && sess.session && sess.session.user) userId = sess.session.user.id;
+      } catch (e) {
+        console.error('[Participants] Could not get session for face import:', e);
+      }
+
+      if (!userId) {
+        showNotification('Face photos skipped: not signed in.', 'warning');
+      } else {
+        const { resolved, skipped } = window.facePhotoHelpers.resolveFacePhotoTargets(
+          presetData.face_photos, savedParticipants, driversByNewId
+        );
+
+        if (resolved.length > 0) {
+          setPresetSavePhase({
+            title: 'Importing face photos…',
+            message: `0 / ${resolved.length}`,
+            percent: 0
+          });
+        }
+
+        let imported = 0;
+        let failed = skipped.length;
+        for (let i = 0; i < resolved.length; i++) {
+          const r = resolved[i];
+          const up = await window.api.invoke('preset-face-upload-photo', {
+            participantId: r.participantId || undefined,
+            driverId: r.driverId || undefined,
+            presetId: presetId,
+            userId: userId,
+            photoData: r.photo.image_base64,
+            fileName: `import${r.photo.ext || '.jpg'}`,
+            detectionConfidence: r.photo.detection_confidence || undefined,
+            photoType: r.photo.photo_type || 'reference',
+            isPrimary: r.photo.is_primary || false
+          });
+          if (up && up.success) {
+            imported++;
+          } else {
+            failed++;
+            console.error('[Participants] Face photo import failed:', up && up.error);
+          }
+          updatePresetSaveOverlay({
+            percent: Math.round(((i + 1) / resolved.length) * 100),
+            message: `${i + 1} / ${resolved.length}`
+          });
+        }
+
+        const total = presetData.face_photos.length;
+        const faceMsg = failed > 0
+          ? `Face photos: ${imported}/${total} imported, ${failed} skipped (face not detected / recognition unavailable).`
+          : `Face photos: ${imported}/${total} imported.`;
+        showNotification(faceMsg, failed > 0 ? 'warning' : 'success');
       }
     }
 
