@@ -131,8 +131,12 @@ import { registerAllHandlers, initializeIpcContext, isForceUpdateRequired, check
 import { loadExecutionLogIfExists } from './utils/execution-log-loader';
 
 // Definisci le estensioni supportate a livello globale per riutilizzo
+// PNG excluded from import (2026-06-12): web-sourced PNGs are often JPEGs in
+// disguise and ExifTool refuses metadata writes on extension/content mismatch.
+// (Restores 9ca1920, reverted by the #213 stale-base squash. The 3 sibling files
+//  folder-select-handler.ts / ipc/file-handlers.ts / ipc/types.ts already exclude it.)
 const RAW_EXTENSIONS = ['.nef', '.arw', '.cr2', '.cr3', '.orf', '.raw', '.rw2', '.dng'];
-const STANDARD_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp'];
+const STANDARD_EXTENSIONS = ['.jpg', '.jpeg', '.webp'];
 const ALL_SUPPORTED_EXTENSIONS = [...STANDARD_EXTENSIONS, ...RAW_EXTENSIONS];
 
 // Don't initialize @electron/remote here - will be done in app.whenReady()

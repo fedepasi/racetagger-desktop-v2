@@ -3282,6 +3282,9 @@ class UnifiedImageWorker extends EventEmitter {
    */
   async processImage(imageFile: UnifiedImageFile, processor?: UnifiedImageProcessor, temporalContext?: { imageTimestamp: ImageTimestamp; temporalNeighbors: ImageTimestamp[] } | null): Promise<UnifiedProcessingResult> {
     const startTime = Date.now();
+    // Ghost-images investigation: unconditional entry trace (see wiki/entities/ghost-images.md).
+    // Restores 16d1004, reverted by the #213 stale-base squash.
+    workerLog.info(`processImage START: ${imageFile.fileName}`);
     let uploadReadyFileId: string | null = null;
     // let compressedFileId: string | null = null; // Not used anymore - compressed files are preserved
     let thumbnailFileId: string | null = null;
@@ -3863,54 +3866,67 @@ class UnifiedImageWorker extends EventEmitter {
             // Non bloccare il processing per errori di upload
           }
 
-          // 6. Log to JSONL — ALWAYS, even if the upload/DB steps in the try
-          // above threw. Issue #136: this JSONL entry is the local source of
-          // truth for the review report. Previously it was the last step INSIDE
-          // the try, so a failed uploadToStorage()/images insert (transient
-          // "max connections" / HTML-error / network — see #144/#116/#113/#164)
-          // was swallowed by the catch and the log was skipped, making
-          // face-matched photos vanish from the report even though their
-          // metadata was already written above. Decoupled so every processed
-          // photo stays reviewable/correctable (falls back to a local:// URL
-          // when the upload didn't land).
-          if (this.analysisLogger) {
-            const { SUPABASE_CONFIG } = await import('./config');
-            const faceSupabaseUrl = faceRecognitionStoragePath
-              ? `${SUPABASE_CONFIG.url}/storage/v1/object/public/uploaded-images/${faceRecognitionStoragePath}`
-              : `local://${imageFile.originalPath}`;
+          // 6. Build the JSONL entry and honour the pendingLogEntry contract — ALWAYS,
+          // even if the upload/DB steps in the try above threw. Issue #136: this JSONL
+          // entry is the local source of truth for the review report. Previously it was
+          // the last step INSIDE the try, so a failed uploadToStorage()/images insert
+          // (transient "max connections" / HTML-error / network — see #144/#116/#113/#164)
+          // was swallowed by the catch and the log was skipped.
+          //
+          // CRITICAL (exec d2780c43 / #280): pool workers are created before the
+          // per-execution logger exists, so on the pool path `this.analysisLogger` is
+          // undefined. The DB insert above runs via `this.supabase` (always present),
+          // but the JSONL write only happens through the logger. So the entry MUST be
+          // returned as `pendingLogEntry` for the main process to write (see the
+          // `usePool && result.pendingLogEntry` consumer) — exactly like the scene-skip
+          // path. Without it, face-matched photos persist to the DB but vanish from the
+          // JSONL / review gallery (272/507 on d2780c43). This contract was added by
+          // PR #205 and silently reverted by PR #213 — guarded by
+          // tests/face-path-jsonl-contract.test.ts.
+          const { SUPABASE_CONFIG } = await import('./config');
+          const faceSupabaseUrl = faceRecognitionStoragePath
+            ? `${SUPABASE_CONFIG.url}/storage/v1/object/public/uploaded-images/${faceRecognitionStoragePath}`
+            : `local://${imageFile.originalPath}`;
 
-            const faceVehiclesForLog = matchedDrivers.map((driver, idx) => ({
-              vehicleIndex: idx,
+          const faceVehiclesForLog = matchedDrivers.map((driver, idx) => ({
+            vehicleIndex: idx,
+            raceNumber: driver.raceNumber ?? undefined,
+            drivers: driver.drivers,
+            team: driver.teamName ?? undefined,
+            confidence: driver.confidence,
+            corrections: [] as any[],
+            finalResult: {
               raceNumber: driver.raceNumber ?? undefined,
-              drivers: driver.drivers,
               team: driver.teamName ?? undefined,
-              confidence: driver.confidence,
-              corrections: [] as any[],
-              finalResult: {
-                raceNumber: driver.raceNumber ?? undefined,
-                team: driver.teamName ?? undefined,
-                drivers: driver.drivers,
-                matchedBy: 'face_recognition'
-              }
-            }));
+              drivers: driver.drivers,
+              matchedBy: 'face_recognition'
+            }
+          }));
 
-            this.analysisLogger.logImageAnalysis({
-              imageId: imageFile.id,
-              fileName: imageFile.fileName,
-              originalFileName: path.basename(imageFile.originalPath),
-              originalPath: imageFile.originalPath,
-              supabaseUrl: faceSupabaseUrl,
-              aiResponse: {
-                rawText: `FACE_RECOGNITION: ${matchedDrivers.length} drivers identified`,
-                totalVehicles: matchedDrivers.length,
-                vehicles: faceVehiclesForLog
-              },
-              thumbnailPath,
-              microThumbPath,
-              compressedPath,
-              visualTags: faceVisualTagsResult?.tags,
-              recognitionMethod: 'face_recognition'
-            });
+          const facePendingLogEntry: any = {
+            imageId: imageFile.id,
+            fileName: imageFile.fileName,
+            originalFileName: path.basename(imageFile.originalPath),
+            originalPath: imageFile.originalPath,
+            supabaseUrl: faceSupabaseUrl,
+            aiResponse: {
+              rawText: `FACE_RECOGNITION: ${matchedDrivers.length} drivers identified`,
+              totalVehicles: matchedDrivers.length,
+              vehicles: faceVehiclesForLog
+            },
+            thumbnailPath,
+            microThumbPath,
+            compressedPath,
+            visualTags: faceVisualTagsResult?.tags,
+            recognitionMethod: 'face_recognition'
+          };
+
+          // Legacy / non-pool path: this worker owns its own logger, write through it.
+          // Pool workers leave `this.analysisLogger` undefined and rely on the returned
+          // `pendingLogEntry` below (the main process writes it, guarded by `usePool` so
+          // legacy workers don't double-log).
+          if (this.analysisLogger) {
+            this.analysisLogger.logImageAnalysis(facePendingLogEntry);
             workerLog.info(`[FaceRecognition] Logged to JSONL with URL: ${faceSupabaseUrl}`);
           }
 
@@ -3927,7 +3943,10 @@ class UnifiedImageWorker extends EventEmitter {
             microThumbPath,
             sceneCategory: sceneClassification?.category,
             sceneConfidence: sceneClassification?.confidence,
-            faceRecognitionUsed: true
+            faceRecognitionUsed: true,
+            // pendingLogEntry contract — see the block comment above. Pool workers
+            // (logger undefined) depend on this so face images reach the JSONL.
+            pendingLogEntry: facePendingLogEntry
           };
         } else {
           // Face recognition found no matches - fallback to AI analysis
@@ -10237,8 +10256,18 @@ export class UnifiedImageProcessor extends EventEmitter {
     const workerConfig = { ...this.config, sportCategories: this.batchSportCategories };
     const workerPromises: Promise<UnifiedImageWorker>[] = [];
 
+    // GHOST-IMAGES FLAVOR A2 (2026-06-12, see wiki/entities/ghost-images.md):
+    // pool workers must NEVER hold an analysisLogger. The pool is created at
+    // processBatch BEFORE the per-execution logger is (re)created at
+    // processBatchInternal, so on the 2nd+ batch of an app session
+    // `this.analysisLogger` still points to the PREVIOUS execution's finalized
+    // logger. Workers saw it truthy, wrote JSONL into the dead file, and
+    // skipped the pendingLogEntry contract → face-only images vanished again.
+    // Passing `undefined` makes every batch behave like the first (validated)
+    // one: workers always return pendingLogEntry, main writes with the live logger.
+    // (Restores #210 / 110a833, reverted by the #213 stale-base squash.)
     for (let i = 0; i < poolSize; i++) {
-      workerPromises.push(UnifiedImageWorker.create(workerConfig, this.analysisLogger, this.networkMonitor));
+      workerPromises.push(UnifiedImageWorker.create(workerConfig, undefined, this.networkMonitor));
     }
 
     this.workerPool = await Promise.all(workerPromises);
@@ -10437,10 +10466,22 @@ export class UnifiedImageProcessor extends EventEmitter {
 
     this.activeWorkers++;
 
+    // Dispatch tracing (ghost-images investigation, see wiki/entities/ghost-images.md):
+    // one line per image at the dispatch boundary so silent results are impossible.
+    // Restores 16d1004, reverted by the #213 stale-base squash.
+    const dispatchStart = Date.now();
+    console.log(`[Dispatch] → ${imageFile.fileName}`);
+
     try {
       // Calculate temporal context in main process and pass to worker
       const temporalContext = this.getTemporalContext(imageFile.originalPath);
       const result = await worker.processImage(imageFile, this, temporalContext);
+
+      console.log(
+        `[Dispatch] ← ${imageFile.fileName} success=${result.success} ` +
+        `logEntry=${!!result.pendingLogEntry} url=${result.pendingLogEntry?.supabaseUrl ? 'yes' : 'NO'} ` +
+        `ms=${Date.now() - dispatchStart}${result.error ? ` error="${result.error}"` : ''}`
+      );
 
       // BATCH INSERT ACCUMULATION: Collect pending analysis_results inserts from worker (ONNX optimization)
       if (result.pendingAnalysisInsert) {
@@ -10489,7 +10530,9 @@ export class UnifiedImageProcessor extends EventEmitter {
       // FIX: Preserve supabaseUrl before clearing pendingLogEntry — the ghost image detector
       // at batch-end reads result.pendingLogEntry.supabaseUrl, but it was always undefined
       // because we clear pendingLogEntry here. This caused 100% false-positive ghost images.
-      result.supabaseUrl = result.pendingLogEntry?.supabaseUrl;
+      // The `?? result.supabaseUrl` keeps an already-assigned URL when pendingLogEntry is
+      // undefined / has none (restores 16d1004, reverted by the #213 stale-base squash).
+      result.supabaseUrl = result.pendingLogEntry?.supabaseUrl ?? result.supabaseUrl;
       result.pendingLogEntry = undefined;
       result.pendingAnalysisInsert = undefined;
       result.pendingUpdate = undefined;
