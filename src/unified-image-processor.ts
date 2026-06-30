@@ -848,6 +848,21 @@ class UnifiedImageWorker extends EventEmitter {
   }
 
   /**
+   * Per-category cosine MATCH threshold for face recognition, read from
+   * sport_categories.matching_config.thresholds.faceMatchThreshold. Returns
+   * undefined when unset/invalid so the matcher keeps its per-context default.
+   * matching_config may arrive as a JSON string or an already-parsed object.
+   */
+  private getFaceMatchThresholdOverride(): number | undefined {
+    let mc: any = this.currentSportCategory?.matching_config;
+    if (typeof mc === 'string') {
+      try { mc = JSON.parse(mc); } catch { return undefined; }
+    }
+    const t = mc?.thresholds?.faceMatchThreshold;
+    return typeof t === 'number' && t > 0 && t <= 1 ? t : undefined;
+  }
+
+  /**
    * Perform face recognition on an image
    */
   private async performFaceRecognition(imagePath: string, context: 'portrait' | 'action' | 'podium' | 'auto'): Promise<FaceRecognitionResult | null> {
@@ -891,7 +906,11 @@ class UnifiedImageWorker extends EventEmitter {
         }
       }
 
-      const personMatches = faceRecognitionProcessor.matchEmbeddings(embeddings, context as FaceContext);
+      const personMatches = faceRecognitionProcessor.matchEmbeddings(
+        embeddings,
+        context as FaceContext,
+        this.getFaceMatchThresholdOverride()
+      );
       const matchingTimeMs = Date.now() - matchStartTime;
 
       // Convert to bridge-compatible format
