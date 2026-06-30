@@ -54,3 +54,23 @@ describe('face-only path JSONL contract (regression guard for the PR #205 → PR
     expect(SRC).toContain('pendingLogEntry: skipPendingLogEntry');
   });
 });
+
+describe('pool workers must never hold an analysisLogger (ghost-images flavor A2 / #210 guard)', () => {
+  // The pool is created (initializeWorkerPool) BEFORE the per-execution logger is
+  // (re)created, so a pool worker that captured this.analysisLogger would, on the
+  // 2nd+ batch of a session, hold the PREVIOUS execution's finalized logger and
+  // write JSONL into a dead file. The pool MUST pass `undefined` so the
+  // pendingLogEntry contract is the only logging route. #213 silently reverted this
+  // (110a833) — this guard stops that recurring.
+  it('initializeWorkerPool creates pool workers with an undefined logger', () => {
+    expect(SRC).toContain('workerPromises.push(UnifiedImageWorker.create(workerConfig, undefined, this.networkMonitor))');
+    // and NOT the stale-logger form
+    expect(SRC).not.toContain('workerPromises.push(UnifiedImageWorker.create(workerConfig, this.analysisLogger');
+  });
+
+  it('the ghost-detector keeps an already-assigned supabaseUrl (?? fallback)', () => {
+    // Restores the 16d1004 sub-fix #213 reverted: without `?? result.supabaseUrl`
+    // a real photo whose pendingLogEntry has no URL is false-flagged as a ghost.
+    expect(SRC).toContain('result.supabaseUrl = result.pendingLogEntry?.supabaseUrl ?? result.supabaseUrl');
+  });
+});
