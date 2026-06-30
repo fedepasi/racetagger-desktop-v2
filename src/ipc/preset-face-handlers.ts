@@ -385,6 +385,7 @@ export function registerPresetFaceHandlers(): void {
       const supabase = authService.getSupabaseClient();
       const exportRows = await getPresetFacePhotosForExport(presetId);
       const facePhotos: Array<Record<string, unknown>> = [];
+      let skipped = 0;
 
       for (const row of exportRows) {
         const { data, error } = await supabase.storage
@@ -392,6 +393,7 @@ export function registerPresetFaceHandlers(): void {
           .download(row.storage_path);
         if (error || !data) {
           console.error('[PresetFace IPC] Export download failed for', row.storage_path, error);
+          skipped++;
           continue;
         }
         const buffer = Buffer.from(await data.arrayBuffer());
@@ -409,7 +411,7 @@ export function registerPresetFaceHandlers(): void {
         });
       }
 
-      return { success: true, facePhotos, count: facePhotos.length };
+      return { success: true, facePhotos, count: facePhotos.length, skipped };
     } catch (error) {
       console.error('[PresetFace IPC] Export for preset error:', error);
       return { success: false, error: (error as Error).message, facePhotos: [], count: 0 };

@@ -4243,22 +4243,40 @@ async function exportPresetJSON(presetId) {
     // v3.0: include the real face reference photos so the preset stays usable
     // after being handed to another user. Bytes come from the main process
     // (authenticated storage download). Privacy: faces travel — confirm first.
+    // Fail-clear: if the fetch fails or some photos can't be read, tell the
+    // user and let them decide — never write a silently face-less export.
     let facePhotos = [];
+    let faceFetchFailed = false;
+    let faceSkipped = 0;
     try {
       const faceResp = await window.api.invoke('preset-face-export-for-preset', presetId);
       if (faceResp.success) {
         facePhotos = faceResp.facePhotos || [];
+        faceSkipped = faceResp.skipped || 0;
       } else {
+        faceFetchFailed = true;
         console.error('[Participants] Face photo export failed:', faceResp.error);
       }
     } catch (e) {
+      faceFetchFailed = true;
       console.error('[Participants] Face photo export error:', e);
     }
 
-    if (facePhotos.length > 0) {
+    if (faceFetchFailed) {
+      const proceedAnyway = confirm(
+        'Could not load this preset\'s face photos (network or storage error). ' +
+        'Export the preset WITHOUT face photos anyway?'
+      );
+      if (!proceedAnyway) {
+        showNotification('Export cancelled', 'info');
+        return;
+      }
+    } else if (facePhotos.length > 0 || faceSkipped > 0) {
       const proceed = confirm(
-        `This preset includes ${facePhotos.length} uploaded face photo(s). ` +
-        `The export will contain the actual face images so another user can reuse them. Continue?`
+        faceSkipped > 0
+          ? `This preset has face photos: ${facePhotos.length} will be included, but ${faceSkipped} could NOT be read and will be missing from the export. The export contains the actual face images. Continue?`
+          : `This preset includes ${facePhotos.length} uploaded face photo(s). ` +
+            `The export will contain the actual face images so another user can reuse them. Continue?`
       );
       if (!proceed) {
         showNotification('Export cancelled', 'info');
@@ -6106,17 +6124,22 @@ async function importJsonPreset() {
         let failed = skipped.length;
         for (let i = 0; i < resolved.length; i++) {
           const r = resolved[i];
-          const up = await window.api.invoke('preset-face-upload-photo', {
-            participantId: r.participantId || undefined,
-            driverId: r.driverId || undefined,
-            presetId: presetId,
-            userId: userId,
-            photoData: r.photo.image_base64,
-            fileName: `import${r.photo.ext || '.jpg'}`,
-            detectionConfidence: r.photo.detection_confidence || undefined,
-            photoType: r.photo.photo_type || 'reference',
-            isPrimary: r.photo.is_primary || false
-          });
+          let up;
+          try {
+            up = await window.api.invoke('preset-face-upload-photo', {
+              participantId: r.participantId || undefined,
+              driverId: r.driverId || undefined,
+              presetId: presetId,
+              userId: userId,
+              photoData: r.photo.image_base64,
+              fileName: `import${r.photo.ext || '.jpg'}`,
+              detectionConfidence: r.photo.detection_confidence || undefined,
+              photoType: r.photo.photo_type || 'reference',
+              isPrimary: r.photo.is_primary || false
+            });
+          } catch (e) {
+            up = { success: false, error: (e && e.message) || 'upload threw' };
+          }
           if (up && up.success) {
             imported++;
           } else {
