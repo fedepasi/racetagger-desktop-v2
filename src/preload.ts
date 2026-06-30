@@ -242,6 +242,7 @@ const validInvokeChannels: string[] = [
   'preset-face-set-primary',
   'preset-face-update-descriptor',
   'preset-face-load-for-preset',
+  'preset-face-export-for-preset',
   'preset-face-status-batch',
   'face-rec-submit-survey',
   'face-rec-check-survey',

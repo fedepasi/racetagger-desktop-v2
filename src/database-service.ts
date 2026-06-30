@@ -3920,6 +3920,117 @@ export async function updatePresetParticipantFacePhoto(
   }
 }
 
+export interface FacePhotoExportRow {
+  participant_numero: string;
+  driver_order: number | null; // null = participant-level photo
+  driver_name: string | null;  // sanity hint for import; null when participant-level
+  photo_type: string;
+  is_primary: boolean;
+  detection_confidence: number | null;
+  storage_path: string;
+}
+
+/**
+ * Collect ALL face reference photos of a preset for a portable export.
+ * Unlike loadPresetFaceDescriptors, this does NOT filter on is_active and does
+ * NOT require a descriptor — it returns every stored photo with a portable
+ * linkage (participant numero + optional driver_order) plus its storage_path
+ * so the caller can download the bytes. The embedding is intentionally omitted:
+ * it is recomputed on import from the image.
+ */
+export async function getPresetFacePhotosForExport(presetId: string): Promise<FacePhotoExportRow[]> {
+  const supabase = authService.getSupabaseClient();
+  const rows: FacePhotoExportRow[] = [];
+
+  // 1. Participants + their direct (participant-level) face photos.
+  const { data: participants, error: pErr } = await supabase
+    .from('preset_participants')
+    .select(`
+      id,
+      numero,
+      preset_participant_face_photos!participant_id (
+        storage_path,
+        photo_type,
+        is_primary,
+        detection_confidence
+      )
+    `)
+    .eq('preset_id', presetId);
+  if (pErr) {
+    console.error('[DB] getPresetFacePhotosForExport (participants) error:', pErr);
+    throw pErr;
+  }
+
+  const numeroByParticipantId: Record<string, string> = {};
+  for (const p of participants || []) {
+    numeroByParticipantId[(p as any).id] = String((p as any).numero);
+    const photos = (p as any).preset_participant_face_photos || [];
+    for (const ph of photos) {
+      if (!ph.storage_path) continue;
+      rows.push({
+        participant_numero: String((p as any).numero),
+        driver_order: null,
+        driver_name: null,
+        photo_type: ph.photo_type || 'reference',
+        is_primary: ph.is_primary || false,
+        detection_confidence: ph.detection_confidence ?? null,
+        storage_path: ph.storage_path,
+      });
+    }
+  }
+
+  // 2. Drivers of those participants + their driver-level face photos.
+  const participantIds = Object.keys(numeroByParticipantId);
+  if (participantIds.length > 0) {
+    const { data: drivers, error: dErr } = await supabase
+      .from('preset_participant_drivers')
+      .select('id, driver_order, driver_name, participant_id')
+      .in('participant_id', participantIds);
+    if (dErr) {
+      console.error('[DB] getPresetFacePhotosForExport (drivers) error:', dErr);
+      throw dErr;
+    }
+
+    const driverMeta: Record<string, { order: number; name: string; numero: string }> = {};
+    for (const d of drivers || []) {
+      const numero = numeroByParticipantId[(d as any).participant_id];
+      if (!numero) continue;
+      driverMeta[(d as any).id] = {
+        order: (d as any).driver_order,
+        name: (d as any).driver_name,
+        numero,
+      };
+    }
+
+    const driverIds = Object.keys(driverMeta);
+    if (driverIds.length > 0) {
+      const { data: driverPhotos, error: dpErr } = await supabase
+        .from('preset_participant_face_photos')
+        .select('driver_id, storage_path, photo_type, is_primary, detection_confidence')
+        .in('driver_id', driverIds);
+      if (dpErr) {
+        console.error('[DB] getPresetFacePhotosForExport (driver photos) error:', dpErr);
+        throw dpErr;
+      }
+      for (const ph of driverPhotos || []) {
+        const meta = driverMeta[(ph as any).driver_id];
+        if (!meta || !ph.storage_path) continue;
+        rows.push({
+          participant_numero: meta.numero,
+          driver_order: meta.order,
+          driver_name: meta.name,
+          photo_type: ph.photo_type || 'reference',
+          is_primary: ph.is_primary || false,
+          detection_confidence: ph.detection_confidence ?? null,
+          storage_path: ph.storage_path,
+        });
+      }
+    }
+  }
+
+  return rows;
+}
+
 /**
  * Load all face descriptors for a preset (for face recognition during analysis)
  * Returns descriptors in the format expected by FaceRecognitionProcessor

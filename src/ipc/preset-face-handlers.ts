@@ -18,6 +18,7 @@ import {
   deletePresetParticipantFacePhoto,
   updatePresetParticipantFacePhoto,
   loadPresetFaceDescriptors,
+  getPresetFacePhotosForExport,
   getPresetParticipantFacePhotoCount,
   PresetParticipantFacePhoto,
   CreatePresetFacePhotoParams,
@@ -370,6 +371,48 @@ export function registerPresetFaceHandlers(): void {
     } catch (error) {
       console.error('[PresetFace IPC] Load for preset error:', error);
       return { success: false, error: (error as Error).message, descriptors: [], count: 0 };
+    }
+  });
+
+  /**
+   * Export all face reference photos of a preset as base64 image bytes with a
+   * portable linkage. Downloads each image via the authenticated storage client
+   * (works regardless of bucket visibility). Unreadable photos are skipped, not
+   * fatal — the export proceeds with whatever it can read.
+   */
+  ipcMain.handle('preset-face-export-for-preset', async (_, presetId: string) => {
+    try {
+      const supabase = authService.getSupabaseClient();
+      const exportRows = await getPresetFacePhotosForExport(presetId);
+      const facePhotos: Array<Record<string, unknown>> = [];
+
+      for (const row of exportRows) {
+        const { data, error } = await supabase.storage
+          .from(STORAGE_BUCKET)
+          .download(row.storage_path);
+        if (error || !data) {
+          console.error('[PresetFace IPC] Export download failed for', row.storage_path, error);
+          continue;
+        }
+        const buffer = Buffer.from(await data.arrayBuffer());
+        const ext = path.extname(row.storage_path) || '.jpg';
+        facePhotos.push({
+          participant_numero: row.participant_numero,
+          driver_order: row.driver_order,
+          driver_name: row.driver_name,
+          photo_type: row.photo_type,
+          is_primary: row.is_primary,
+          detection_confidence: row.detection_confidence,
+          image_base64: buffer.toString('base64'),
+          ext,
+          mime: `image/${ext.replace('.', '')}`,
+        });
+      }
+
+      return { success: true, facePhotos, count: facePhotos.length };
+    } catch (error) {
+      console.error('[PresetFace IPC] Export for preset error:', error);
+      return { success: false, error: (error as Error).message, facePhotos: [], count: 0 };
     }
   });
 
