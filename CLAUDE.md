@@ -37,7 +37,7 @@ Supabase PostgreSQL (**project: `taompbzifylmdzgbbrpv`**) is shared with the Nex
 - **Image Processing:** Sharp 0.34, raw-preview-extractor (custom C++ N-API in `/vendor/`) + ExifTool fallback
 - **Database:** Supabase 2.30 (cloud, source of truth) + in-memory caches (categories 60s, presets 30s)
 - **AI/ML:** Google Gemini (Flash/Pro/Lite via Edge Functions), onnxruntime-node 1.23 (local inference)
-- **Face Recognition:** face-api.js + canvas (DISABLED — Coming Soon)
+- **Face Recognition:** local ONNX — **YuNet** detection + **AuraFace v1** embedding (512-dim, cosine) — **IN TESTING** (live for a few test accounts; gated per-account by the DB plan flag `face_recognition_enabled`). face-api.js (legacy 128-dim) + canvas removed in v1.1.10.
 - **Build:** electron-builder 24, cross-platform (macOS, Windows, Linux)
 - **Testing:** Jest 29 + ts-jest
 
@@ -63,7 +63,7 @@ src/
 ├── database-service.ts          # Supabase CRUD + in-memory caches (categories, presets, CSV, export)
 ├── {user-preferences,consent,email}-service.ts
 │
-├── face-*.ts                    # Face detection pipeline [DISABLED]
+├── face-*.ts                    # Face recognition pipeline [IN TESTING] — ONNX, gated per-account
 │
 ├── ipc/                         # Modular IPC handlers, one domain per file, registered in index.ts
 │   ├── context.ts               # Shared state (mainWindow, caches, supabase singleton)
@@ -88,7 +88,7 @@ renderer/                        # Plain HTML/CSS/JS, no framework, no build ste
 ├── index.html                   # Layout shell (sidebar + content)
 ├── pages/                       # home · analysis · participants · settings · projects · destinations
 ├── js/                          # Navigo router + per-page modules. Biggest: participants-manager.js,
-│   │                            # log-visualizer.js, renderer.js. Several face-*.js are [DISABLED].
+│   │                            # log-visualizer.js, renderer.js. The face-*.js are [IN TESTING] (gated per-account).
 │   └── vendor/navigo.min.js
 └── css/                         # One stylesheet per page/feature
 
@@ -129,7 +129,7 @@ Orchestrated by `unified-image-processor.ts`:
 5. Crop Extraction  → crops per subject + "negative"/context image
 6. AI Analysis      → Edge Function V6 (Gemini Vision) or local-onnx
 7. Smart Matching   → match numbers to CSV participants (smart-matcher.ts)
-8. Face Recognition → [DISABLED]
+8. Face Recognition → [IN TESTING] ONNX face match (fast-path; gated per-account)
 9. Metadata Writing → EXIF/XMP/sidecar with matched data
 10. Folder Org.     → organize by number/team/category
 11. Export          → copy to configured export destinations
@@ -228,9 +228,9 @@ Helpers exported from `smart-matcher.ts`: `getParticipantDriverNames()` (sorted 
 
 Multi-evidence participant matching: OCR correction (6/8, 1/7 confusions), temporal clustering (same number in consecutive photos = same participant), fuzzy matching (configurable thresholds), sport-specific rules via `matching_config`, result caching (`cache-manager.ts`).
 
-## Face Recognition (DISABLED)
+## Face Recognition (IN TESTING)
 
-UI shows "Coming Soon" with blurred preview; disabled at 3 layers. To re-enable, set `FACE_RECOGNITION_ENABLED = true` in `renderer/js/face-detector.js` and `driver-face-manager.js`, and restore the UI in `renderer/pages/participants.html`. Code is intact (handlers, processor, bridge) — just gated.
+**In limited testing** as of 2026-06-30 (no longer "disabled") — live for a few test accounts, **gated per-account** by the DB plan flag `face_recognition_enabled`. The renderer reads it in `renderer/js/driver-face-manager.js` → global `FACE_RECOGNITION_ENABLED` (default `false`), which also gates the participants-page face slots; accounts without the flag never see the UI and never hit the path. The live recognition path is **local ONNX** in the main process: **YuNet** face detection (`face_detection_yunet_2023mar.onnx`, `face-detector-service.ts`) → **AuraFace v1** embedding (`auraface_v1.onnx`, 512-dim, `face-embedding-service.ts`) → cosine-similarity matching (`face-recognition-onnx-processor.ts` / `face-recognition-processor.ts`). The old **face-api.js** path is legacy — its library + canvas were removed in v1.1.10, but its 128-dim descriptors are still dual-read for migration (`descriptor_model` `'face-api-js'` vs `'auraface-v1'`; re-upload face photos to regenerate 512-dim). When a face matches, the backend fast-path in `unified-image-processor.ts` records the result (provider `face_recognition`) and short-circuits before Gemini.
 
 ## Analysis Logging
 
