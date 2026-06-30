@@ -413,9 +413,15 @@ export class FaceRecognitionProcessor {
    */
   matchEmbeddings(
     embeddings: Array<{ faceIndex: number; embedding: number[] }>,
-    context: FaceContext = 'auto'
+    context: FaceContext = 'auto',
+    /** Per-category cosine MATCH threshold override
+     *  (sport_categories.matching_config.thresholds.faceMatchThreshold). Forwarded
+     *  to matchEmbeddingsDetailed, which ignores it in legacy euclidean mode and
+     *  when out of (0,1]. Without this the live path always used the per-context
+     *  default and the per-category threshold had no effect. */
+    matchThresholdOverride?: number
   ): PersonMatch[] {
-    return this.matchEmbeddingsDetailed(embeddings, context).matches;
+    return this.matchEmbeddingsDetailed(embeddings, context, matchThresholdOverride).matches;
   }
 
   /**
