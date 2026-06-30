@@ -3863,54 +3863,67 @@ class UnifiedImageWorker extends EventEmitter {
             // Non bloccare il processing per errori di upload
           }
 
-          // 6. Log to JSONL — ALWAYS, even if the upload/DB steps in the try
-          // above threw. Issue #136: this JSONL entry is the local source of
-          // truth for the review report. Previously it was the last step INSIDE
-          // the try, so a failed uploadToStorage()/images insert (transient
-          // "max connections" / HTML-error / network — see #144/#116/#113/#164)
-          // was swallowed by the catch and the log was skipped, making
-          // face-matched photos vanish from the report even though their
-          // metadata was already written above. Decoupled so every processed
-          // photo stays reviewable/correctable (falls back to a local:// URL
-          // when the upload didn't land).
-          if (this.analysisLogger) {
-            const { SUPABASE_CONFIG } = await import('./config');
-            const faceSupabaseUrl = faceRecognitionStoragePath
-              ? `${SUPABASE_CONFIG.url}/storage/v1/object/public/uploaded-images/${faceRecognitionStoragePath}`
-              : `local://${imageFile.originalPath}`;
+          // 6. Build the JSONL entry and honour the pendingLogEntry contract — ALWAYS,
+          // even if the upload/DB steps in the try above threw. Issue #136: this JSONL
+          // entry is the local source of truth for the review report. Previously it was
+          // the last step INSIDE the try, so a failed uploadToStorage()/images insert
+          // (transient "max connections" / HTML-error / network — see #144/#116/#113/#164)
+          // was swallowed by the catch and the log was skipped.
+          //
+          // CRITICAL (exec d2780c43 / #280): pool workers are created before the
+          // per-execution logger exists, so on the pool path `this.analysisLogger` is
+          // undefined. The DB insert above runs via `this.supabase` (always present),
+          // but the JSONL write only happens through the logger. So the entry MUST be
+          // returned as `pendingLogEntry` for the main process to write (see the
+          // `usePool && result.pendingLogEntry` consumer) — exactly like the scene-skip
+          // path. Without it, face-matched photos persist to the DB but vanish from the
+          // JSONL / review gallery (272/507 on d2780c43). This contract was added by
+          // PR #205 and silently reverted by PR #213 — guarded by
+          // tests/face-path-jsonl-contract.test.ts.
+          const { SUPABASE_CONFIG } = await import('./config');
+          const faceSupabaseUrl = faceRecognitionStoragePath
+            ? `${SUPABASE_CONFIG.url}/storage/v1/object/public/uploaded-images/${faceRecognitionStoragePath}`
+            : `local://${imageFile.originalPath}`;
 
-            const faceVehiclesForLog = matchedDrivers.map((driver, idx) => ({
-              vehicleIndex: idx,
+          const faceVehiclesForLog = matchedDrivers.map((driver, idx) => ({
+            vehicleIndex: idx,
+            raceNumber: driver.raceNumber ?? undefined,
+            drivers: driver.drivers,
+            team: driver.teamName ?? undefined,
+            confidence: driver.confidence,
+            corrections: [] as any[],
+            finalResult: {
               raceNumber: driver.raceNumber ?? undefined,
-              drivers: driver.drivers,
               team: driver.teamName ?? undefined,
-              confidence: driver.confidence,
-              corrections: [] as any[],
-              finalResult: {
-                raceNumber: driver.raceNumber ?? undefined,
-                team: driver.teamName ?? undefined,
-                drivers: driver.drivers,
-                matchedBy: 'face_recognition'
-              }
-            }));
+              drivers: driver.drivers,
+              matchedBy: 'face_recognition'
+            }
+          }));
 
-            this.analysisLogger.logImageAnalysis({
-              imageId: imageFile.id,
-              fileName: imageFile.fileName,
-              originalFileName: path.basename(imageFile.originalPath),
-              originalPath: imageFile.originalPath,
-              supabaseUrl: faceSupabaseUrl,
-              aiResponse: {
-                rawText: `FACE_RECOGNITION: ${matchedDrivers.length} drivers identified`,
-                totalVehicles: matchedDrivers.length,
-                vehicles: faceVehiclesForLog
-              },
-              thumbnailPath,
-              microThumbPath,
-              compressedPath,
-              visualTags: faceVisualTagsResult?.tags,
-              recognitionMethod: 'face_recognition'
-            });
+          const facePendingLogEntry: any = {
+            imageId: imageFile.id,
+            fileName: imageFile.fileName,
+            originalFileName: path.basename(imageFile.originalPath),
+            originalPath: imageFile.originalPath,
+            supabaseUrl: faceSupabaseUrl,
+            aiResponse: {
+              rawText: `FACE_RECOGNITION: ${matchedDrivers.length} drivers identified`,
+              totalVehicles: matchedDrivers.length,
+              vehicles: faceVehiclesForLog
+            },
+            thumbnailPath,
+            microThumbPath,
+            compressedPath,
+            visualTags: faceVisualTagsResult?.tags,
+            recognitionMethod: 'face_recognition'
+          };
+
+          // Legacy / non-pool path: this worker owns its own logger, write through it.
+          // Pool workers leave `this.analysisLogger` undefined and rely on the returned
+          // `pendingLogEntry` below (the main process writes it, guarded by `usePool` so
+          // legacy workers don't double-log).
+          if (this.analysisLogger) {
+            this.analysisLogger.logImageAnalysis(facePendingLogEntry);
             workerLog.info(`[FaceRecognition] Logged to JSONL with URL: ${faceSupabaseUrl}`);
           }
 
@@ -3927,7 +3940,10 @@ class UnifiedImageWorker extends EventEmitter {
             microThumbPath,
             sceneCategory: sceneClassification?.category,
             sceneConfidence: sceneClassification?.confidence,
-            faceRecognitionUsed: true
+            faceRecognitionUsed: true,
+            // pendingLogEntry contract — see the block comment above. Pool workers
+            // (logger undefined) depend on this so face images reach the JSONL.
+            pendingLogEntry: facePendingLogEntry
           };
         } else {
           // Face recognition found no matches - fallback to AI analysis
