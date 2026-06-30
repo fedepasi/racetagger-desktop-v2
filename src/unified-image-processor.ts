@@ -863,6 +863,24 @@ class UnifiedImageWorker extends EventEmitter {
   }
 
   /**
+   * Face-recognition TRUST threshold (cosine) for this category: the bar a face
+   * match must clear to take the face-only path (skip Gemini). Stricter than the
+   * per-context MATCH threshold (0.50). Configurable per category via
+   * sport_categories.matching_config.thresholds.faceTrustThreshold; default 0.6.
+   * (Restores a61f0c0, reverted by the #213 stale-base squash.)
+   */
+  private getFaceTrustThreshold(): number {
+    try {
+      const mc: any = this.currentSportCategory?.matching_config;
+      const cfg = typeof mc === 'string' ? JSON.parse(mc) : mc;
+      const v = cfg?.thresholds?.faceTrustThreshold;
+      return typeof v === 'number' && v > 0 && v <= 1 ? v : 0.6;
+    } catch {
+      return 0.6;
+    }
+  }
+
+  /**
    * Perform face recognition on an image
    */
   private async performFaceRecognition(imagePath: string, context: 'portrait' | 'action' | 'podium' | 'auto'): Promise<FaceRecognitionResult | null> {
@@ -3679,9 +3697,29 @@ class UnifiedImageWorker extends EventEmitter {
 
       // Check if we should skip number recognition (portrait/podium scenes)
       if (!recognitionStrategy.useNumberRecognition && faceRecognitionResult?.success) {
-        // For portrait/podium scenes, we only use face recognition IF we found matches
-        const matchedDrivers = faceRecognitionResult.matches
-          .filter(m => m.matched)
+        // FACE-PRIMARY POLICY (2026-06-11, restored — reverted by #213): the
+        // face-only path (skip Gemini) requires the TRUST threshold (default 0.60,
+        // configurable via matching_config.thresholds.faceTrustThreshold), stricter
+        // than the per-context MATCH threshold (0.50). Matches in the [match, trust)
+        // band are NOT confident enough to skip Gemini: they fall through to AI
+        // analysis and contribute as FACE_MATCH evidence in SmartMatcher instead
+        // ("face incerta → Gemini decide"). Below-trust matches are already in
+        // faceRecognitionCache (set earlier for every matched face), so they survive
+        // as evidence even though they don't take the face-only path here.
+        const faceTrustThreshold = this.getFaceTrustThreshold();
+        const trustedMatches = faceRecognitionResult.matches
+          .filter(m => m.matched && typeof m.similarity === 'number' && m.similarity >= faceTrustThreshold);
+        const belowTrustCount = faceRecognitionResult.matches.filter(
+          m => m.matched && (typeof m.similarity !== 'number' || m.similarity < faceTrustThreshold)
+        ).length;
+        if (belowTrustCount > 0) {
+          workerLog.info(
+            `[FaceOnlyPath] ${belowTrustCount} face match(es) below trust threshold ${faceTrustThreshold} ` +
+            `for ${imageFile.fileName} — falling through to AI analysis (face stays as SmartMatcher evidence)`
+          );
+        }
+
+        const matchedDrivers = trustedMatches
           .map(m => ({
             raceNumber: m.driverInfo?.raceNumber || null,
             drivers: m.driverInfo?.driverName ? [m.driverInfo.driverName] : [],
@@ -3692,7 +3730,7 @@ class UnifiedImageWorker extends EventEmitter {
 
         // FIX: Only use face-only results if we actually found matches
         // Otherwise, fall through to AI analysis for number recognition
-        workerLog.info(`[FaceOnlyPath] matchedDrivers=${matchedDrivers.length}, useNumberRecognition=${recognitionStrategy.useNumberRecognition} for ${imageFile.fileName}`);
+        workerLog.info(`[FaceOnlyPath] matchedDrivers=${matchedDrivers.length} (trust>=${faceTrustThreshold}), useNumberRecognition=${recognitionStrategy.useNumberRecognition} for ${imageFile.fileName}`);
         if (matchedDrivers.length > 0) {
           const processingTimeMs = Date.now() - startTime;
           workerLog.info(`Face-only recognition: ${matchedDrivers.length} drivers identified for ${imageFile.fileName}`);
