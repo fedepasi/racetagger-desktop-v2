@@ -1160,11 +1160,41 @@ export class SmartMatcher {
     const processingTime = Date.now() - startTime;
 
     // Determine match status: needs_review when ambiguous (multiple high scores and not resolved by override)
-    const matchStatus: MatchStatus = !resolvedResult.bestMatch
+    let matchStatus: MatchStatus = !resolvedResult.bestMatch
       ? 'no_match'
       : (resolvedResult.multipleHighScores && !resolvedResult.resolvedByOverride)
         ? 'needs_review'
         : 'matched';
+
+    // FACE DIVERGENCE GUARD (2026-06-11, face-primary policy): when a face
+    // identity above the TRUST threshold contradicts the number-based winner,
+    // never pick a side silently — flag for review. This protects against the
+    // "matched but wrong" failure mode (the real trust-breaker, see Gruppe C)
+    // now that face evidence can drive matches on portraits.
+    // (Restores a61f0c0, reverted by the #213 stale-base squash.)
+    if (matchStatus === 'matched' && resolvedResult.bestMatch && this.currentFaceMatches.length > 0) {
+      const faceTrust = this.config.thresholds.faceTrustThreshold ?? 0.6;
+      const winnerDrivers = getParticipantDriverNames(resolvedResult.bestMatch.participant)
+        .map((n) => n.toLowerCase().trim());
+
+      for (const fm of this.currentFaceMatches) {
+        if (!fm?.driverName || typeof fm.confidence !== 'number' || fm.confidence < faceTrust) continue;
+        const fmName = fm.driverName.toLowerCase().trim();
+        const belongsToWinner = winnerDrivers.some(
+          (d) => d === fmName || d.includes(fmName) || fmName.includes(d) ||
+            this.calculateJaroWinklerSimilarity(d, fmName) >= this.config.thresholds.nameSimilarity
+        );
+        if (!belongsToWinner) {
+          const reason =
+            `Face divergence: confident face match "${fm.driverName}" (cosine ${fm.confidence.toFixed(2)} >= trust ${faceTrust}) ` +
+            `is not a driver of the number-matched participant — flagged for review`;
+          console.log(`[SmartMatcher] ⚠️ ${reason}`);
+          resolvedResult.bestMatch.reasoning?.push?.(reason);
+          matchStatus = 'needs_review';
+          break;
+        }
+      }
+    }
 
     return {
       bestMatch: resolvedResult.bestMatch,
